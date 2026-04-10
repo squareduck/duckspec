@@ -1,0 +1,16 @@
+[package]
+name = "duckspec"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "ds"
+path = "src/main.rs"
+
+[dependencies]
+duckpond.workspace = true
+clap = { version = "4", features = ["derive"] }
+anyhow.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
