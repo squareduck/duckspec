@@ -1,0 +1,13 @@
+# Add login form UI
+
+Build the React login form component with email and password
+fields and a submit handler.
+
+## Tasks
+
+- [ ] 1. Create `LoginForm` component in `src/components/auth/`
+  - [ ] 1.1 Email input with validation
+  - [ ] 1.2 Password input with visibility toggle
+  - [ ] 1.3 Submit button with loading state
+- [ ] 2. Wire up the form to the existing `/auth/login` API
+- [ ] 3. Handle error responses and display messages

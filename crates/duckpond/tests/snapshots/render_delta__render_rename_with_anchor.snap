@@ -1,0 +1,17 @@
+---
+source: crates/duckpond/tests/render_delta.rs
+expression: "roundtrip(\"rename_with_anchor.md\")"
+---
+# @ Authentication
+
+## = Requirement: Login
+
+Email-password login
+
+## @ Requirement: Email-password login
+
+### ~ Scenario: Valid credentials
+
+- **WHEN** the user submits correct credentials
+- **THEN** the system issues a session token
+- **AND** records the successful authentication

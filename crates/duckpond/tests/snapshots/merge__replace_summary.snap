@@ -1,0 +1,21 @@
+---
+source: crates/duckpond/tests/merge.rs
+expression: output
+---
+# Authentication
+
+Allows users to sign in with email and password.
+
+Allows users to sign in with email and password. Supports
+multi-factor authentication for high-security accounts.
+
+## Requirement: Email-password login
+
+The system SHALL allow a registered user to authenticate.
+
+> test: code
+
+### Scenario: Valid credentials
+
+- **WHEN** the user submits correct credentials
+- **THEN** the system issues a session token

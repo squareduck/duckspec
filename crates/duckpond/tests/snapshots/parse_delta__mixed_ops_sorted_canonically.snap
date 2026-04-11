@@ -1,0 +1,17 @@
+---
+source: crates/duckpond/tests/parse_delta.rs
+expression: delta
+---
+DELTA: @ Authentication
+  = ENTRY: Requirement: Login
+    RENAME_TO: Email-password login
+  - ENTRY: Requirement: Remember me
+  @ ENTRY: Requirement: Email-password login
+    + CHILD: Scenario: Account lockout
+      - **GIVEN** three consecutive failed login attempts
+      - **WHEN** the user submits a fourth incorrect password
+      - **THEN** the account is locked for 15 minutes
+      > test: code
+  + ENTRY: Requirement: Two-factor authentication
+    The system SHALL support TOTP-based 2FA for users who opt in.
+    > test: code

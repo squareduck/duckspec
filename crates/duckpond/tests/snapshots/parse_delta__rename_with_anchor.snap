@@ -1,0 +1,12 @@
+---
+source: crates/duckpond/tests/parse_delta.rs
+expression: delta
+---
+DELTA: @ Authentication
+  = ENTRY: Requirement: Login
+    RENAME_TO: Email-password login
+  @ ENTRY: Requirement: Email-password login
+    ~ CHILD: Scenario: Valid credentials
+      - **WHEN** the user submits correct credentials
+      - **THEN** the system issues a session token
+      - **AND** records the successful authentication

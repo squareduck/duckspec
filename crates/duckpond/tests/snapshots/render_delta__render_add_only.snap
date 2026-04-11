@@ -1,0 +1,25 @@
+---
+source: crates/duckpond/tests/render_delta.rs
+expression: "roundtrip(\"add_only.md\")"
+---
+# @ Authentication
+
+## + Requirement: Two-factor authentication
+
+The system SHALL support TOTP-based 2FA for users who opt in.
+
+> test: code
+
+### Scenario: 2FA enrollment
+
+- **GIVEN** a user without 2FA enabled
+- **WHEN** the user enables 2FA
+- **THEN** a TOTP secret is generated
+- **AND** a QR code is displayed for the authenticator app
+
+### Scenario: 2FA verification
+
+- **GIVEN** a user with 2FA enabled
+- **WHEN** the user logs in with valid credentials
+- **THEN** the system requests a TOTP code
+- **AND** grants access only if the code is valid

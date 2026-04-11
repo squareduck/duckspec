@@ -1,0 +1,14 @@
+---
+source: crates/duckpond/tests/parse_step.rs
+expression: step
+---
+STEP: Add login form UI (slug: add-login-form-ui)
+  SUMMARY: Build the React login form component with email and password
+    fields and a submit handler.
+  TASKS:
+    [ ] Create `LoginForm` component in `src/components/auth/`
+      [ ] Email input with validation
+      [ ] Password input with visibility toggle
+      [ ] Submit button with loading state
+    [ ] Wire up the form to the existing `/auth/login` API
+    [ ] Handle error responses and display messages

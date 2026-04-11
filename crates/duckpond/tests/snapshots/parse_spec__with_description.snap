@@ -1,0 +1,21 @@
+---
+source: crates/duckpond/tests/parse_spec.rs
+expression: spec
+---
+SPEC: Authentication
+  SUMMARY: Allows users to sign in with email and password. Primary auth
+    mechanism for consumer accounts.
+  DESCRIPTION:
+    This capability is the foundation for all user-facing access
+      control. It covers the happy path (credentials accepted) and the
+      most common failure modes (credentials rejected, account locked).
+      Delegated auth via third-party providers is a separate capability
+      under `auth/oauth/`.
+  REQUIREMENT: Email-password login
+    The system SHALL allow a registered user to authenticate.
+    MARKS: test: code
+    SCENARIO: Valid credentials
+      WHENS:
+        the user submits correct credentials
+      THENS:
+        the system issues a session token

@@ -1,0 +1,18 @@
+---
+source: crates/duckpond/tests/parse_delta.rs
+expression: delta
+---
+DELTA: @ Authentication
+  + ENTRY: Requirement: Two-factor authentication
+    The system SHALL support TOTP-based 2FA for users who opt in.
+    > test: code
+    CONTENT: Scenario: 2FA enrollment
+      - **GIVEN** a user without 2FA enabled
+      - **WHEN** the user enables 2FA
+      - **THEN** a TOTP secret is generated
+      - **AND** a QR code is displayed for the authenticator app
+    CONTENT: Scenario: 2FA verification
+      - **GIVEN** a user with 2FA enabled
+      - **WHEN** the user logs in with valid credentials
+      - **THEN** the system requests a TOTP code
+      - **AND** grants access only if the code is valid

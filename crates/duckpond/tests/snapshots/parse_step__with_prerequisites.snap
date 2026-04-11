@@ -1,0 +1,17 @@
+---
+source: crates/duckpond/tests/parse_step.rs
+expression: step
+---
+STEP: Integrate Google OAuth callback (slug: integrate-google-oauth-callback)
+  SUMMARY: Wire the OAuth callback handler into the authentication middleware
+    and session management.
+  PREREQUISITES:
+    [ ] @step add-oauth-endpoints
+    [ ] Google OAuth credentials are provisioned in the staging
+          environment
+    [ ] @step add-oauth-identities-table
+  TASKS:
+    [ ] Implement `/auth/google/callback` handler
+    [ ] Exchange authorization code for tokens
+    [ ] @spec auth/google OAuth callback: Valid callback
+    [ ] @spec auth/google OAuth callback: User denies authorization

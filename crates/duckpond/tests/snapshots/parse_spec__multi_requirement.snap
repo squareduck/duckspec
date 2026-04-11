@@ -1,0 +1,40 @@
+---
+source: crates/duckpond/tests/parse_spec.rs
+expression: spec
+---
+SPEC: Authentication
+  SUMMARY: Allows users to sign in with email and password, manages their
+    sessions, and provides logout.
+  REQUIREMENT: Email-password login
+    The system SHALL allow a registered user to authenticate using their
+      email address and password.
+    MARKS: test: code
+    SCENARIO: Valid credentials
+      WHENS:
+        the user submits correct credentials
+      THENS:
+        the system issues a session token
+    SCENARIO: Invalid password
+      WHENS:
+        the user submits an incorrect password
+      THENS:
+        the system rejects the login with a generic error
+  REQUIREMENT: Session expiration
+    The system SHALL expire idle sessions after 30 minutes.
+    MARKS: test: code
+    SCENARIO: Idle timeout
+      GIVENS:
+        an authenticated user
+      WHENS:
+        30 minutes pass with no requests
+      THENS:
+        the next request returns 401
+  REQUIREMENT: Logout
+    The system SHALL allow users to explicitly invalidate their session.
+    MARKS: test: code
+    SCENARIO: Explicit logout
+      WHENS:
+        the user submits a logout request
+      THENS:
+        the session token is invalidated
+        future requests with that token are rejected

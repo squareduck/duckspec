@@ -1,0 +1,19 @@
+---
+source: crates/duckpond/tests/parse_spec.rs
+expression: spec
+---
+SPEC: Session expiration
+  SUMMARY: Sessions expire after a period of inactivity to reduce the blast
+    radius of stolen tokens.
+  REQUIREMENT: Idle timeout
+    The system SHALL expire authenticated sessions after 30 minutes of
+      inactivity.
+    SCENARIO: Idle user
+      GIVENS:
+        an authenticated user
+      WHENS:
+        the user makes no requests for 30 minutes
+      THENS:
+        the next request returns 401
+        the session token is invalidated server-side
+      MARKS: test: code

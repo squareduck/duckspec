@@ -1,0 +1,22 @@
+---
+source: crates/duckpond/tests/render_spec.rs
+expression: "roundtrip(\"minimal.md\")"
+---
+# Session expiration
+
+Sessions expire after a period of inactivity to reduce the blast
+radius of stolen tokens.
+
+## Requirement: Idle timeout
+
+The system SHALL expire authenticated sessions after 30 minutes of
+inactivity.
+
+### Scenario: Idle user
+
+- **GIVEN** an authenticated user
+- **WHEN** the user makes no requests for 30 minutes
+- **THEN** the next request returns 401
+- **AND** the session token is invalidated server-side
+
+> test: code

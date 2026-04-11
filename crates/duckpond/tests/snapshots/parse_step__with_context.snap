@@ -1,0 +1,16 @@
+---
+source: crates/duckpond/tests/parse_step.rs
+expression: step
+---
+STEP: Implement session expiration (slug: implement-session-expiration)
+  SUMMARY: Add server-side session timeout logic and cover the scenarios with
+    tests.
+  CONTEXT:
+    The session middleware currently does not track last-access time.
+      This step adds that tracking and the expiration check.
+  TASKS:
+    [ ] Add `last_accessed_at` column to the `sessions` table
+    [ ] Update session middleware to refresh `last_accessed_at` on
+    each request
+    [ ] @spec auth Session expiration: Idle timeout
+    [ ] @spec auth Session expiration: Force logout on password change

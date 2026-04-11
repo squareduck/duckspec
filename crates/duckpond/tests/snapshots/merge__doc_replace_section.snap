@@ -1,0 +1,18 @@
+---
+source: crates/duckpond/tests/merge.rs
+expression: output
+---
+# Authentication
+
+Allows users to sign in with email and password.
+
+## Background
+
+Email-password was chosen over username-password to align with how
+users think about identity.
+
+## Design decisions
+
+- **Session duration**: 15 minutes of inactivity.
+- **Password storage**: argon2id with per-user salt.
+- **Error messages**: generic "invalid credentials" to prevent enumeration.

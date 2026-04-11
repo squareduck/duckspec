@@ -1,0 +1,32 @@
+---
+source: crates/duckpond/tests/merge.rs
+expression: output
+---
+# Authentication
+
+Allows users to sign in with email and password.
+
+## Requirement: Email-password login
+
+The system SHALL allow a registered user to authenticate using their
+email address and password.
+
+> test: code
+
+### Scenario: Valid credentials
+
+- **GIVEN** a user with a registered email and correct password
+- **WHEN** the user submits the login form
+- **THEN** the system issues a session token
+
+## Requirement: Two-factor authentication
+
+The system SHALL support TOTP-based 2FA for users who opt in.
+
+> test: code
+
+### Scenario: 2FA enrollment
+
+- **GIVEN** a user without 2FA enabled
+- **WHEN** the user enables 2FA
+- **THEN** a TOTP secret is generated

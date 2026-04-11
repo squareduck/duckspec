@@ -1,0 +1,22 @@
+---
+source: crates/duckpond/tests/render_step.rs
+expression: "roundtrip(\"with_prerequisites.md\")"
+---
+# Integrate Google OAuth callback
+
+Wire the OAuth callback handler into the authentication middleware
+and session management.
+
+## Prerequisites
+
+- [ ] @step add-oauth-endpoints
+- [ ] Google OAuth credentials are provisioned in the staging
+    environment
+- [ ] @step add-oauth-identities-table
+
+## Tasks
+
+- [ ] 1. Implement `/auth/google/callback` handler
+- [ ] 2. Exchange authorization code for tokens
+- [ ] 3. @spec auth/google OAuth callback: Valid callback
+- [ ] 4. @spec auth/google OAuth callback: User denies authorization

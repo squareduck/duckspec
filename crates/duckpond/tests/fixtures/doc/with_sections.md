@@ -1,0 +1,28 @@
+# Authentication
+
+Allows users to sign in with email and password. Primary auth
+mechanism for consumer accounts.
+
+## Background
+
+Email-password was chosen over username-password to align with how
+users think about identity and to simplify onboarding. Social login
+providers are deferred to a later phase.
+
+## User journey
+
+A new user lands on the marketing site, clicks "Sign up," enters
+their email and chooses a password, receives a verification email,
+and completes registration by clicking the verification link.
+
+## Design decisions
+
+- **Session duration**: 30 minutes of inactivity.
+- **Error messages on invalid login**: generic "invalid credentials"
+  regardless of which field was wrong.
+- **Password storage**: argon2id with per-user salt.
+
+## Open questions
+
+- Should we offer "remember me" for trusted devices?
+- What's the right lockout policy for repeated failed attempts?

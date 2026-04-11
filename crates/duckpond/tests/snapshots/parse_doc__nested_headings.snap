@@ -1,0 +1,22 @@
+---
+source: crates/duckpond/tests/parse_doc.rs
+expression: doc
+---
+DOCUMENT: Data flow architecture
+  SUMMARY: How data moves between the web client, API gateway, workers, and
+    persistent stores.
+    SECTION: Overview
+      The system uses request-response for sync operations and message
+        queues for async work.
+    SECTION: Synchronous path
+      SECTION: Step 1
+        Client request arrives at the API gateway.
+      SECTION: Step 2
+        Gateway validates auth and rate limits.
+    SECTION: Asynchronous path
+      SECTION: Step 1
+        Client request arrives at the API gateway.
+      SECTION: Step 2
+        Service enqueues a job on the message queue.
+      SECTION: Step 3
+        Worker picks up the job and processes it.
