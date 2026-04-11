@@ -2170,7 +2170,7 @@ scenarios that do not exist are also validation errors.
 Mutating (unless `--dry` is passed): rewrites spec files to include
 resolved paths.
 
-### `ds archive <name>`
+### `ds archive <name> [--dry]`
 
 Archives the change at `changes/<name>/`. The command:
 
@@ -2199,17 +2199,13 @@ lifecycle.
 A change with only a proposal can be archived: the archive step
 moves the folder without modifying the top-level directories.
 
-Mutating: writes to `caps/` and `archive/`; removes the change
-folder from `changes/`.
+**`--dry`** previews the archive without writing: validates the
+change, then prints the list of capability additions and delta
+merges that would be applied. Useful for reviewing a change before
+archiving.
 
-### `ds diff`
-
-Shows the differences that a change would introduce if archived
-now: new capabilities, modified capabilities, removed capabilities,
-and the content of each modification. Useful for reviewing a change
-before archiving.
-
-Read-only.
+Mutating (unless `--dry` is passed): writes to `caps/` and
+`archive/`; removes the change folder from `changes/`.
 
 ### `ds index [--caps] [--codex] [--project]`
 

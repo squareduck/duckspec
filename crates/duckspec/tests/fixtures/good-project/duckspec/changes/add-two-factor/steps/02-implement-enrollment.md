@@ -17,7 +17,8 @@ endpoints sit behind authentication middleware.
 
 - [ ] Implement `GET /account/2fa/setup` endpoint
 - [ ] Implement `POST /account/2fa/confirm` endpoint
-- [ ] @spec auth/two-factor/TOTP enrollment/Confirm enrollment
+- [ ] @spec auth/two-factor TOTP enrollment: Confirm enrollment
+- [ ] @spec auth Email-password login: Login with 2FA enabled
 - [ ] Add enrollment toggle to account settings page
 
 ## Outcomes

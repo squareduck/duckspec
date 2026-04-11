@@ -17,7 +17,13 @@ authorization code for tokens, and create or link the user account.
 - **THEN** the system exchanges the code for tokens
 - **AND** a session is created for the user
 
+> test: code
+> - tests/auth_test.rs:21
+
 ### Scenario: User denies authorization
 
 - **WHEN** the callback arrives with an error parameter
 - **THEN** the system redirects to the login page with a flash message
+
+> test: code
+> - tests/auth_test.rs:26

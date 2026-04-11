@@ -15,10 +15,16 @@ email address and password.
 - **WHEN** the user submits correct credentials
 - **THEN** the system issues a session token
 
+> test: code
+> - tests/auth_test.rs:1
+
 ### Scenario: Invalid password
 
 - **WHEN** the user submits an incorrect password
 - **THEN** the system rejects the login with a generic error
+
+> test: code
+> - tests/auth_test.rs:6
 
 ## Requirement: Session expiration
 
@@ -32,6 +38,9 @@ The system SHALL expire idle sessions after 30 minutes.
 - **WHEN** 30 minutes pass with no requests
 - **THEN** the next request returns 401
 
+> test: code
+> - tests/auth_test.rs:11
+
 ## Requirement: Logout
 
 The system SHALL allow users to explicitly invalidate their session.
@@ -43,3 +52,6 @@ The system SHALL allow users to explicitly invalidate their session.
 - **WHEN** the user submits a logout request
 - **THEN** the session token is invalidated
 - **AND** future requests with that token are rejected
+
+> test: code
+> - tests/auth_test.rs:16

@@ -21,10 +21,16 @@ enum Command {
         /// Harness to install templates for (claude, opencode).
         harness: Option<String>,
     },
-    /// Print active changes, capability/codex counts.
-    Status,
+    /// Print active changes, capability/codex counts, or details for a path.
+    Status {
+        /// Path to inspect (change, spec, step, or steps dir).
+        path: Option<String>,
+    },
     /// Validate whole project: backlinks, test coverage, cross-artifact integrity.
-    Audit,
+    Audit {
+        /// Change to audit (name or path). Omit for full project audit.
+        change: Option<String>,
+    },
     /// Validate artifacts against schemas.
     Check {
         /// File or directory to validate (default: duckspec/).
@@ -43,9 +49,10 @@ enum Command {
     Archive {
         /// Name of the change to archive.
         name: String,
+        /// Preview the archive without writing.
+        #[arg(long)]
+        dry: bool,
     },
-    /// Preview what a change would introduce if archived now.
-    Diff,
     /// Print artifact tree with summaries.
     Index {
         /// Show only capabilities.
@@ -77,12 +84,11 @@ fn main() -> anyhow::Result<()> {
 
     match cli.command {
         Command::Init { harness } => cmd::init::run(harness),
-        Command::Status => cmd::status::run(),
-        Command::Audit => cmd::audit::run(),
+        Command::Status { path } => cmd::status::run(path),
+        Command::Audit { change } => cmd::audit::run(change),
         Command::Check { path, format } => cmd::check::run(path, format),
         Command::Sync { dry } => cmd::sync::run(dry),
-        Command::Archive { name } => cmd::archive::run(name),
-        Command::Diff => cmd::diff::run(),
+        Command::Archive { name, dry } => cmd::archive::run(name, dry),
         Command::Index {
             caps,
             codex,

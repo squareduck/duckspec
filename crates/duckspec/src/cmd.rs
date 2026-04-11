@@ -1,7 +1,7 @@
 pub mod archive;
 pub mod audit;
 pub mod check;
-pub mod diff;
+pub mod common;
 pub mod index;
 pub mod init;
 pub mod schema;

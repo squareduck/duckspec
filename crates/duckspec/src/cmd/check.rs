@@ -7,6 +7,8 @@ use duckpond::layout::{self, ArtifactKind};
 use miette::NamedSource;
 use owo_colors::OwoColorize;
 
+use super::common::{collect_files, find_duckspec_root, resolve_path};
+
 pub fn run(path: Option<String>, format: bool) -> anyhow::Result<()> {
     let duckspec_root = find_duckspec_root()?;
     let canonical_root = duckspec_root.canonicalize()?;
@@ -32,20 +34,9 @@ enum Target {
 /// Resolve the user-provided path and detect change-level mode.
 fn resolve_target(duckspec_root: &Path, target: Option<&str>) -> anyhow::Result<Target> {
     let scan_path = match target {
-        Some(t) => {
-            let p = PathBuf::from(t);
-            if p.is_absolute() {
-                p
-            } else {
-                std::env::current_dir()?.join(p)
-            }
-        }
+        Some(t) => resolve_path(t, duckspec_root)?,
         None => return Ok(Target::FileOrDir { path: duckspec_root.to_path_buf() }),
     };
-
-    if !scan_path.exists() {
-        anyhow::bail!("path does not exist: {}", scan_path.display());
-    }
 
     // Check if this is a change directory.
     if scan_path.is_dir() {
@@ -261,32 +252,6 @@ fn scan_caps(
     Ok(())
 }
 
-/// Walk up from the current directory looking for a `duckspec/` folder.
-fn find_duckspec_root() -> anyhow::Result<PathBuf> {
-    let mut dir = std::env::current_dir()?;
-    loop {
-        let candidate = dir.join("duckspec");
-        if candidate.is_dir() {
-            return Ok(candidate);
-        }
-        if !dir.pop() {
-            anyhow::bail!("no duckspec/ directory found in any parent directory");
-        }
-    }
-}
-
-/// Collect `.md` files from a path. If it's a file, returns just that file.
-/// If it's a directory, walks it recursively.
-fn collect_files(scan_path: &Path) -> anyhow::Result<Vec<PathBuf>> {
-    if scan_path.is_file() {
-        return Ok(vec![scan_path.to_path_buf()]);
-    }
-
-    let mut files = Vec::new();
-    walk_dir(scan_path, &mut files)?;
-    files.sort();
-    Ok(files)
-}
 
 /// Print parse errors with miette source-annotated output.
 fn report_parse_errors(errors: &[ParseError], source: NamedSource<String>) {
@@ -305,19 +270,3 @@ fn report_ok() {
     eprintln!("  {} ok", "✓".green());
 }
 
-/// Recursively collect `.md` files from a directory.
-fn walk_dir(dir: &Path, out: &mut Vec<PathBuf>) -> anyhow::Result<()> {
-    let entries = std::fs::read_dir(dir)
-        .map_err(|e| anyhow::anyhow!("failed to read directory {}: {e}", dir.display()))?;
-
-    for entry in entries {
-        let entry = entry?;
-        let path = entry.path();
-        if path.is_dir() {
-            walk_dir(&path, out)?;
-        } else if path.extension().is_some_and(|ext| ext == "md") {
-            out.push(path);
-        }
-    }
-    Ok(())
-}

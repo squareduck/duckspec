@@ -1,5 +1,7 @@
 pub mod artifact;
+pub mod backlink;
 pub mod check;
+pub mod config;
 pub mod error;
 pub mod layout;
 pub mod merge;

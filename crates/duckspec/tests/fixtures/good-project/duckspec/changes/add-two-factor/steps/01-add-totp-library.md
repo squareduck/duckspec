@@ -10,4 +10,6 @@ encrypted secrets.
   encrypted_secret, verified_at
 - [ ] Implement `TotpService` struct with `generate_secret()` and
   `verify_code()` methods
-- [ ] @spec auth/two-factor/TOTP enrollment/Successful enrollment
+- [ ] @spec auth/two-factor TOTP enrollment: Successful enrollment
+- [ ] @spec auth/two-factor TOTP verification: Valid TOTP code
+- [ ] @spec auth/two-factor TOTP verification: Invalid TOTP code
