@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+miette = { workspace = true, features = ["derive"] }
 thiserror.workspace = true
 tracing.workspace = true
 

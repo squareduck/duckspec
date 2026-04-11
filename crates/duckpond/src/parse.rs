@@ -18,6 +18,12 @@ impl std::fmt::Debug for Span {
     }
 }
 
+impl From<Span> for miette::SourceSpan {
+    fn from(s: Span) -> Self {
+        (s.offset, s.length).into()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BlockKind {
     Paragraph,
