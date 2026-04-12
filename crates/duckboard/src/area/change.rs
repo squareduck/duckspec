@@ -1,12 +1,14 @@
 //! Change area — single change workspace with three-column layout.
 
 use std::collections::HashSet;
+use std::path::PathBuf;
 
 use iced::widget::{button, column, container, row, scrollable, text, Space};
 use iced::{Element, Length};
 
 use crate::data::{ChangeData, ProjectData};
 use crate::theme;
+use crate::vcs::{self, ChangedFile, FileStatus};
 use crate::widget::{collapsible, interaction_toggle, tab_bar, tree_view};
 
 // ── State ────────────────────────────────────────────────────────────────────
@@ -19,6 +21,7 @@ pub struct State {
     pub tabs: tab_bar::TabState,
     pub interaction_visible: bool,
     pub interaction_width: f32,
+    pub changed_files: Vec<ChangedFile>,
 }
 
 impl Default for State {
@@ -27,6 +30,7 @@ impl Default for State {
         sections.insert("overview".to_string());
         sections.insert("capabilities".to_string());
         sections.insert("steps".to_string());
+        sections.insert("changed_files".to_string());
         Self {
             selected_change: None,
             expanded_sections: sections,
@@ -34,6 +38,7 @@ impl Default for State {
             tabs: tab_bar::TabState::default(),
             interaction_visible: false,
             interaction_width: theme::INTERACTION_COLUMN_WIDTH,
+            changed_files: vec![],
         }
     }
 }
@@ -51,6 +56,7 @@ pub enum Message {
     TogglePin(usize),
     InteractionHandle(interaction_toggle::HandleMsg),
     TerminalScroll,
+    SelectChangedFile(PathBuf),
 }
 
 // ── Update ───────────────────────────────────────────────────────────────────
@@ -88,6 +94,18 @@ pub fn update(state: &mut State, message: Message, project: &ProjectData) {
             }
         },
         Message::TerminalScroll => {}
+        Message::SelectChangedFile(path) => {
+            if let Some(root) = &project.project_root {
+                if let Some(diff) = vcs::file_diff(root, &path) {
+                    let id = format!("vcs:{}", path.display());
+                    let title = path
+                        .file_name()
+                        .map(|n| n.to_string_lossy().to_string())
+                        .unwrap_or_else(|| path.display().to_string());
+                    state.tabs.open_diff(id, title, diff);
+                }
+            }
+        }
     }
 }
 
@@ -188,6 +206,9 @@ fn view_list<'a>(state: &'a State, project: &'a ProjectData) -> Element<'a, Mess
         );
     }
 
+    // Changed files section (always visible, independent of selected change).
+    list_col = list_col.push(view_changed_files_section(state));
+
     scrollable(list_col)
         .height(Length::Fill)
         .into()
@@ -256,6 +277,54 @@ fn view_steps_section<'a>(state: &'a State, change: &'a ChangeData) -> Element<'
         "Steps",
         state.expanded_sections.contains("steps"),
         Message::ToggleSection("steps".to_string()),
+        items.into(),
+    )
+}
+
+fn view_changed_files_section<'a>(state: &'a State) -> Element<'a, Message> {
+    let mut items = column![].spacing(theme::SPACING_XS);
+
+    if state.changed_files.is_empty() {
+        items = items.push(text("No changes").size(12).color(theme::TEXT_MUTED));
+    } else {
+        for cf in &state.changed_files {
+            let status_char = match cf.status {
+                FileStatus::Modified => "M",
+                FileStatus::Added => "A",
+                FileStatus::Deleted => "D",
+            };
+            let color = theme::vcs_status_color(&cf.status);
+            let tab_id = format!("vcs:{}", cf.path.display());
+            let is_active = state.tabs.active_tab().map_or(false, |t| t.id == tab_id);
+            let style = if is_active {
+                theme::list_item_active as fn(&iced::Theme, button::Status) -> button::Style
+            } else {
+                theme::list_item
+            };
+
+            let label = row![
+                text(status_char)
+                    .size(12)
+                    .font(iced::Font::MONOSPACE)
+                    .color(color),
+                text(cf.path.display().to_string()).size(13),
+            ]
+            .spacing(theme::SPACING_SM);
+
+            items = items.push(
+                button(label)
+                    .on_press(Message::SelectChangedFile(cf.path.clone()))
+                    .width(Length::Fill)
+                    .padding([2.0, theme::SPACING_SM])
+                    .style(style),
+            );
+        }
+    }
+
+    collapsible::view(
+        "Changed Files",
+        state.expanded_sections.contains("changed_files"),
+        Message::ToggleSection("changed_files".to_string()),
         items.into(),
     )
 }

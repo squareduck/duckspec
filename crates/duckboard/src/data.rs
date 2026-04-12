@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Default)]
 pub struct ProjectData {
+    pub project_root: Option<PathBuf>,
     pub duckspec_root: Option<PathBuf>,
     pub active_changes: Vec<ChangeData>,
     pub archived_changes: Vec<ChangeData>,
@@ -65,6 +66,7 @@ impl ProjectData {
         let archived_changes = build_changes(&root.join("archive"), "archive");
 
         Self {
+            project_root: find_repo_root(),
             duckspec_root: Some(root.to_path_buf()),
             active_changes,
             archived_changes,
@@ -90,6 +92,19 @@ impl ProjectData {
 }
 
 // ── Filesystem helpers ───────────────────────────────────────────────────────
+
+/// Find the repository root by walking up from cwd looking for `.git` or `.jj`.
+fn find_repo_root() -> Option<PathBuf> {
+    let mut dir = std::env::current_dir().ok()?;
+    loop {
+        if dir.join(".git").exists() || dir.join(".jj").exists() {
+            return Some(dir);
+        }
+        if !dir.pop() {
+            return None;
+        }
+    }
+}
 
 fn find_duckspec_root() -> Option<PathBuf> {
     let mut dir = std::env::current_dir().ok()?;

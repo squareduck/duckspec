@@ -18,3 +18,8 @@ iced = { version = "0.14", features = ["advanced", "canvas"] }
 libghostty-vt = "0.1"
 portable-pty = "0.9"
 tokio = { version = "1", features = ["sync"] }
+notify-debouncer-mini = "0.5"
+ignore.workspace = true
+gix = { version = "0.72", default-features = false, features = ["status"] }
+similar = "2"
+nucleo = "0.5"

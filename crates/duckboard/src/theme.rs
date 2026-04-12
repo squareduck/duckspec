@@ -32,6 +32,11 @@ pub const TEXT_MUTED: Color = hex(0x6e, 0x73, 0x8d);    // overlay0
 // Border
 pub const BORDER_COLOR: Color = hex(0x5b, 0x60, 0x78);  // surface2
 
+// Diff backgrounds
+pub const DIFF_ADDED_BG: Color = hex(0x1e, 0x30, 0x24);
+pub const DIFF_REMOVED_BG: Color = hex(0x30, 0x1e, 0x22);
+pub const DIFF_HUNK_BG: Color = hex(0x1e, 0x24, 0x30);
+
 // Status
 pub const SUCCESS: Color = hex(0xa6, 0xda, 0x95);       // green
 pub const WARNING: Color = hex(0xee, 0xd4, 0x9f);       // yellow
@@ -232,5 +237,36 @@ pub fn icon_button(_theme: &Theme, status: button::Status) -> button::Style {
         text_color: color,
         border: Border::default(),
         ..Default::default()
+    }
+}
+
+// ── Diff styles ─────────────────────────────────────────────────────────────
+
+pub fn diff_added(_theme: &Theme) -> container::Style {
+    container::Style {
+        background: Some(DIFF_ADDED_BG.into()),
+        ..Default::default()
+    }
+}
+
+pub fn diff_removed(_theme: &Theme) -> container::Style {
+    container::Style {
+        background: Some(DIFF_REMOVED_BG.into()),
+        ..Default::default()
+    }
+}
+
+pub fn diff_hunk_header(_theme: &Theme) -> container::Style {
+    container::Style {
+        background: Some(DIFF_HUNK_BG.into()),
+        ..Default::default()
+    }
+}
+
+pub fn vcs_status_color(status: &crate::vcs::FileStatus) -> Color {
+    match status {
+        crate::vcs::FileStatus::Modified => WARNING,
+        crate::vcs::FileStatus::Added => SUCCESS,
+        crate::vcs::FileStatus::Deleted => ERROR,
     }
 }

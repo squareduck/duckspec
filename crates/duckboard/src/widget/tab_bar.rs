@@ -4,6 +4,15 @@ use iced::widget::{button, container, row, scrollable, text, Space};
 use iced::{Center, Element, Length};
 
 use crate::theme;
+use crate::vcs::DiffData;
+
+// ── Content types ───────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone)]
+pub enum TabContent {
+    Text(String),
+    Diff(DiffData),
+}
 
 // ── State ────────────────────────────────────────────────────────────────────
 
@@ -11,7 +20,7 @@ use crate::theme;
 pub struct Tab {
     pub id: String,
     pub title: String,
-    pub content: String,
+    pub content: TabContent,
     pub pinned: bool,
 }
 
@@ -35,22 +44,31 @@ impl Default for TabState {
 impl TabState {
     pub fn open(&mut self, id: String, title: String, content: String) {
         if let Some(idx) = self.tabs.iter().position(|t| t.id == id) {
+            self.tabs[idx].content = TabContent::Text(content);
             self.active = Some(idx);
             return;
         }
-
-        while self.tabs.len() >= self.max_tabs {
-            if let Some(idx) = self.oldest_unpinned() {
-                self.remove(idx);
-            } else {
-                break;
-            }
-        }
-
+        self.evict_if_needed();
         self.tabs.push(Tab {
             id,
             title,
-            content,
+            content: TabContent::Text(content),
+            pinned: false,
+        });
+        self.active = Some(self.tabs.len() - 1);
+    }
+
+    pub fn open_diff(&mut self, id: String, title: String, diff: DiffData) {
+        if let Some(idx) = self.tabs.iter().position(|t| t.id == id) {
+            self.tabs[idx].content = TabContent::Diff(diff);
+            self.active = Some(idx);
+            return;
+        }
+        self.evict_if_needed();
+        self.tabs.push(Tab {
+            id,
+            title,
+            content: TabContent::Diff(diff),
             pinned: false,
         });
         self.active = Some(self.tabs.len() - 1);
@@ -77,6 +95,33 @@ impl TabState {
 
     pub fn active_tab(&self) -> Option<&Tab> {
         self.active.and_then(|idx| self.tabs.get(idx))
+    }
+
+    /// Close a tab by its artifact id. No-op if not found.
+    pub fn close_by_id(&mut self, id: &str) {
+        if let Some(idx) = self.tabs.iter().position(|t| t.id == id) {
+            self.remove(idx);
+        }
+    }
+
+    /// Update the content of a text tab by its artifact id. No-op if not found
+    /// or if the tab holds a diff.
+    pub fn refresh_content(&mut self, id: &str, content: String) {
+        if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == id) {
+            if matches!(tab.content, TabContent::Text(_)) {
+                tab.content = TabContent::Text(content);
+            }
+        }
+    }
+
+    fn evict_if_needed(&mut self) {
+        while self.tabs.len() >= self.max_tabs {
+            if let Some(idx) = self.oldest_unpinned() {
+                self.remove(idx);
+            } else {
+                break;
+            }
+        }
     }
 
     fn oldest_unpinned(&self) -> Option<usize> {
@@ -160,18 +205,21 @@ pub fn view_bar<'a, M: Clone + 'a>(
 
 pub fn view_content<'a, M: 'a>(state: &'a TabState) -> Element<'a, M> {
     match state.active_tab() {
-        Some(tab) => scrollable(
-            container(
-                text(&tab.content)
-                    .size(13)
-                    .font(iced::Font::MONOSPACE),
+        Some(tab) => match &tab.content {
+            TabContent::Text(s) => scrollable(
+                container(
+                    text(s)
+                        .size(13)
+                        .font(iced::Font::MONOSPACE),
+                )
+                .padding(theme::SPACING_LG)
+                .width(Length::Fill),
             )
-            .padding(theme::SPACING_LG)
-            .width(Length::Fill),
-        )
-        .height(Length::Fill)
-        .width(Length::Fill)
-        .into(),
+            .height(Length::Fill)
+            .width(Length::Fill)
+            .into(),
+            TabContent::Diff(diff) => super::diff_view::view(diff),
+        },
         None => container(
             text("Select an item to view its contents")
                 .size(14)

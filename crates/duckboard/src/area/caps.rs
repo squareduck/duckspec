@@ -2,7 +2,7 @@
 
 use std::collections::HashSet;
 
-use iced::widget::{column, container, row, scrollable, text, Space};
+use iced::widget::{Space, column, container, row, scrollable, text};
 use iced::{Element, Length};
 
 use crate::data::ProjectData;
@@ -86,8 +86,11 @@ pub fn view<'a>(
         .width(1.0)
         .style(theme::divider);
 
-    let toggle =
-        interaction_toggle::view(state.interaction_visible, state.interaction_width, Message::InteractionHandle);
+    let toggle = interaction_toggle::view(
+        state.interaction_visible,
+        state.interaction_width,
+        Message::InteractionHandle,
+    );
 
     let mut main_row = row![
         container(list)
@@ -95,9 +98,7 @@ pub fn view<'a>(
             .height(Length::Fill)
             .style(theme::surface),
         divider,
-        container(content)
-            .width(Length::Fill)
-            .height(Length::Fill),
+        container(content).width(Length::Fill).height(Length::Fill),
         toggle,
     ];
 
@@ -119,14 +120,14 @@ pub fn view<'a>(
 }
 
 fn view_list<'a>(state: &'a State, project: &'a ProjectData) -> Element<'a, Message> {
-    let header = text("Capabilities")
-        .size(14)
-        .color(theme::TEXT_SECONDARY);
+    let header = text("Capabilities").size(14).color(theme::TEXT_SECONDARY);
 
     let tree = if project.cap_tree.is_empty() {
-        column![text("No capabilities found")
-            .size(13)
-            .color(theme::TEXT_MUTED)]
+        column![
+            text("No capabilities found")
+                .size(13)
+                .color(theme::TEXT_MUTED)
+        ]
         .into()
     } else {
         tree_view::view(
@@ -162,9 +163,7 @@ fn view_content<'a>(state: &'a State) -> Element<'a, Message> {
 fn view_interaction<'a>() -> Element<'a, Message> {
     container(
         column![
-            text("Interaction")
-                .size(14)
-                .color(theme::TEXT_SECONDARY),
+            text("Interaction").size(14).color(theme::TEXT_SECONDARY),
             Space::new().height(theme::SPACING_MD),
             text("Terminal and chat will appear here.")
                 .size(13)
