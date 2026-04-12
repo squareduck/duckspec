@@ -6,12 +6,19 @@ use std::path::PathBuf;
 use iced::widget::{button, column, container, row, scrollable, text, Space};
 use iced::{Element, Length};
 
+use crate::chat_store::ChatSession;
 use crate::data::{ChangeData, ProjectData};
 use crate::theme;
 use crate::vcs::{self, ChangedFile, FileStatus};
-use crate::widget::{collapsible, interaction_toggle, tab_bar, tree_view};
+use crate::widget::{agent_chat, collapsible, interaction_toggle, tab_bar, tree_view};
 
 // ── State ────────────────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InteractionMode {
+    Terminal,
+    AgentChat,
+}
 
 #[derive(Debug, Clone)]
 pub struct State {
@@ -21,7 +28,10 @@ pub struct State {
     pub tabs: tab_bar::TabState,
     pub interaction_visible: bool,
     pub interaction_width: f32,
+    pub interaction_mode: InteractionMode,
     pub changed_files: Vec<ChangedFile>,
+    pub chat_session: Option<ChatSession>,
+    pub chat_input: String,
 }
 
 impl Default for State {
@@ -38,7 +48,10 @@ impl Default for State {
             tabs: tab_bar::TabState::default(),
             interaction_visible: false,
             interaction_width: theme::INTERACTION_COLUMN_WIDTH,
+            interaction_mode: InteractionMode::Terminal,
             changed_files: vec![],
+            chat_session: None,
+            chat_input: String::new(),
         }
     }
 }
@@ -55,6 +68,8 @@ pub enum Message {
     CloseTab(usize),
     TogglePin(usize),
     InteractionHandle(interaction_toggle::HandleMsg),
+    SwitchInteractionMode(InteractionMode),
+    AgentChat(agent_chat::Msg),
     TerminalScroll,
     SelectChangedFile(PathBuf),
     TabContent(tab_bar::TabContentMsg),
@@ -96,6 +111,17 @@ pub fn update(
             }
             interaction_toggle::HandleMsg::SetWidth(w) => {
                 state.interaction_width = w;
+            }
+        },
+        Message::SwitchInteractionMode(mode) => {
+            state.interaction_mode = mode;
+        }
+        Message::AgentChat(msg) => match msg {
+            agent_chat::Msg::InputChanged(val) => {
+                state.chat_input = val;
+            }
+            agent_chat::Msg::SendPressed | agent_chat::Msg::CancelPressed => {
+                // Handled in main.rs where we have access to AcpHandle.
             }
         },
         Message::TerminalScroll => {}
@@ -153,13 +179,31 @@ pub fn view<'a>(
     ];
 
     if state.interaction_visible {
-        let interaction: Element<'a, Message> = if let Some(ts) = terminal {
-            crate::widget::terminal::view_terminal(ts).map(|_: ()| Message::TerminalScroll)
-        } else {
-            view_interaction()
+        // Mode tabs at top of interaction column.
+        let mode_tabs = view_mode_tabs(state.interaction_mode);
+
+        // Content based on selected mode.
+        let interaction_content: Element<'a, Message> = match state.interaction_mode {
+            InteractionMode::Terminal => {
+                if let Some(ts) = terminal {
+                    crate::widget::terminal::view_terminal(ts).map(|_: ()| Message::TerminalScroll)
+                } else {
+                    view_interaction()
+                }
+            }
+            InteractionMode::AgentChat => {
+                if let Some(session) = &state.chat_session {
+                    agent_chat::view(session, &state.chat_input).map(Message::AgentChat)
+                } else {
+                    view_interaction()
+                }
+            }
         };
+
+        let interaction_col = column![mode_tabs, interaction_content].height(Length::Fill);
+
         main_row = main_row.push(
-            container(interaction)
+            container(interaction_col)
                 .width(state.interaction_width)
                 .height(Length::Fill)
                 .style(theme::surface),
@@ -378,6 +422,36 @@ fn view_content<'a>(state: &'a State) -> Element<'a, Message> {
     });
 
     column![bar, mapped_body].height(Length::Fill).into()
+}
+
+fn view_mode_tabs<'a>(active: InteractionMode) -> Element<'a, Message> {
+    let terminal_style = if active == InteractionMode::Terminal {
+        theme::list_item_active as fn(&iced::Theme, button::Status) -> button::Style
+    } else {
+        theme::list_item
+    };
+    let agent_style = if active == InteractionMode::AgentChat {
+        theme::list_item_active as fn(&iced::Theme, button::Status) -> button::Style
+    } else {
+        theme::list_item
+    };
+
+    container(
+        row![
+            button(text("Terminal").size(11))
+                .on_press(Message::SwitchInteractionMode(InteractionMode::Terminal))
+                .padding([2.0, theme::SPACING_SM])
+                .style(terminal_style),
+            button(text("Agent").size(11))
+                .on_press(Message::SwitchInteractionMode(InteractionMode::AgentChat))
+                .padding([2.0, theme::SPACING_SM])
+                .style(agent_style),
+        ]
+        .spacing(theme::SPACING_XS),
+    )
+    .padding([theme::SPACING_XS, theme::SPACING_SM])
+    .style(theme::surface)
+    .into()
 }
 
 fn view_interaction<'a>() -> Element<'a, Message> {

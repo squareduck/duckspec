@@ -7,7 +7,9 @@ use iced::keyboard;
 use iced::widget::{row, stack};
 use iced::{Element, Event, Subscription, Task};
 
+mod agent;
 mod area;
+mod chat_store;
 mod data;
 pub mod highlight;
 mod theme;
@@ -32,6 +34,7 @@ struct State {
     terminal_focused: bool,
     file_finder: widget::file_finder::FileFinderState,
     highlighter: highlight::SyntaxHighlighter,
+    agent_handle: Option<agent::AgentHandle>,
 }
 
 impl State {
@@ -60,6 +63,7 @@ impl State {
             terminal_focused: false,
             file_finder: widget::file_finder::FileFinderState::default(),
             highlighter: highlight::SyntaxHighlighter::new(),
+            agent_handle: None,
         }
     }
 }
@@ -84,6 +88,9 @@ enum Message {
     TerminalSpawn,
     TerminalScroll,
     PtyEvent(widget::terminal::PtyEvent),
+    // ACP agent chat
+    AgentEvent(agent::AgentEvent),
+    AgentSpawn,
 }
 
 // ── Update ───────────────────────────────────────────────────────────────────
@@ -234,6 +241,44 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                 let _ = update(state, Message::TerminalScroll);
                 return Task::none();
             }
+            // Handle agent chat actions that need AgentHandle.
+            if let area::change::Message::AgentChat(ref chat_msg) = msg {
+                match chat_msg {
+                    widget::agent_chat::Msg::SendPressed => {
+                        if let Some(handle) = &state.agent_handle {
+                            let text = state.change.chat_input.clone();
+                            if !text.is_empty() {
+                                // Add user message to session.
+                                if let Some(session) = &mut state.change.chat_session {
+                                    session.messages.push(chat_store::ChatMessage {
+                                        role: chat_store::Role::User,
+                                        content: vec![chat_store::ContentBlock::Text(text.clone())],
+                                        timestamp: String::new(),
+                                    });
+                                    session.is_streaming = true;
+                                    session.pending_text.clear();
+                                }
+                                let context = gather_agent_context(state);
+                                handle.send_prompt(text, context);
+                                state.change.chat_input.clear();
+                            }
+                        }
+                        return Task::none();
+                    }
+                    widget::agent_chat::Msg::CancelPressed => {
+                        if let Some(handle) = &state.agent_handle {
+                            handle.cancel();
+                        }
+                        return Task::none();
+                    }
+                    _ => {}
+                }
+            }
+            // Handle interaction mode switch — spawn ACP if needed.
+            let is_mode_switch = matches!(
+                msg,
+                area::change::Message::SwitchInteractionMode(area::change::InteractionMode::AgentChat)
+            );
             let is_toggle = matches!(
                 msg,
                 area::change::Message::InteractionHandle(
@@ -244,7 +289,12 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
             if is_toggle && state.change.interaction_visible && state.terminal.is_none() {
                 let _ = update(state, Message::TerminalSpawn);
             }
-            state.terminal_focused = state.change.interaction_visible;
+            // Auto-spawn ACP session when switching to agent chat mode.
+            if is_mode_switch && state.change.chat_session.is_none() {
+                let _ = update(state, Message::AgentSpawn);
+            }
+            state.terminal_focused = state.change.interaction_visible
+                && state.change.interaction_mode == area::change::InteractionMode::Terminal;
         }
         Message::Caps(msg) => {
             if let area::caps::Message::BacklinkClicked(ref path) = msg {
@@ -326,6 +376,84 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
         Message::TerminalScroll => {
             if let Some(ref mut ts) = state.terminal {
                 ts.apply_scroll();
+            }
+        }
+        // ACP agent chat
+        Message::AgentSpawn => {
+            if state.change.chat_session.is_none() {
+                let change_name = state
+                    .change
+                    .selected_change
+                    .clone()
+                    .unwrap_or_else(|| "default".to_string());
+
+                // Try to load persisted session, or create new.
+                let session = chat_store::load_session(&change_name)
+                    .unwrap_or_else(|| chat_store::ChatSession::new(change_name));
+                state.change.chat_session = Some(session);
+                tracing::info!("agent chat session created");
+            }
+        }
+        Message::AgentEvent(evt) => {
+            use agent::AgentEvent;
+            match evt {
+                AgentEvent::Ready(handle) => {
+                    state.agent_handle = Some(handle);
+                    tracing::info!("agent handle ready");
+                }
+                AgentEvent::ContentDelta { text } => {
+                    if let Some(session) = &mut state.change.chat_session {
+                        session.pending_text.push_str(&text);
+                    }
+                }
+                AgentEvent::ToolUse { id, name, input } => {
+                    if let Some(session) = &mut state.change.chat_session {
+                        // Flush any pending text first.
+                        flush_pending_text(session);
+                        session.messages.push(chat_store::ChatMessage {
+                            role: chat_store::Role::Assistant,
+                            content: vec![chat_store::ContentBlock::ToolUse { id, name, input }],
+                            timestamp: String::new(),
+                        });
+                    }
+                }
+                AgentEvent::ToolResult { id, name, output } => {
+                    if let Some(session) = &mut state.change.chat_session {
+                        session.messages.push(chat_store::ChatMessage {
+                            role: chat_store::Role::Assistant,
+                            content: vec![chat_store::ContentBlock::ToolResult { id, name, output }],
+                            timestamp: String::new(),
+                        });
+                    }
+                }
+                AgentEvent::TurnComplete => {
+                    if let Some(session) = &mut state.change.chat_session {
+                        flush_pending_text(session);
+                        session.is_streaming = false;
+                        // Persist to disk.
+                        if let Err(e) = chat_store::save_session(session) {
+                            tracing::error!("failed to save chat session: {e}");
+                        }
+                    }
+                }
+                AgentEvent::Error(msg) => {
+                    tracing::error!("agent error: {msg}");
+                    if let Some(session) = &mut state.change.chat_session {
+                        session.is_streaming = false;
+                        session.messages.push(chat_store::ChatMessage {
+                            role: chat_store::Role::System,
+                            content: vec![chat_store::ContentBlock::Text(format!("Error: {msg}"))],
+                            timestamp: String::new(),
+                        });
+                    }
+                }
+                AgentEvent::ProcessExited => {
+                    tracing::info!("agent process exited");
+                    state.agent_handle = None;
+                    if let Some(session) = &mut state.change.chat_session {
+                        session.is_streaming = false;
+                    }
+                }
             }
         }
         Message::KeyPress(key, mods, text) => {
@@ -647,6 +775,47 @@ pub fn open_artifact_tab(
     }
 }
 
+// ── ACP helpers ─────────────────────────────────────────────────────────────
+
+fn flush_pending_text(session: &mut chat_store::ChatSession) {
+    if !session.pending_text.is_empty() {
+        let text = std::mem::take(&mut session.pending_text);
+        session.messages.push(chat_store::ChatMessage {
+            role: chat_store::Role::Assistant,
+            content: vec![chat_store::ContentBlock::Text(text)],
+            timestamp: String::new(),
+        });
+    }
+}
+
+fn gather_agent_context(state: &State) -> Option<agent::AgentContext> {
+    let project_root = state.project.project_root.as_ref()?.clone();
+    let duckspec_root = state.project.duckspec_root.as_ref()?;
+    let change_name = state.change.selected_change.as_ref()?;
+    let change_dir = duckspec_root.join("changes").join(change_name);
+
+    let changed_files = state
+        .change
+        .changed_files
+        .iter()
+        .map(|f| f.path.clone())
+        .collect();
+
+    // Read spec content if available.
+    let spec_content = std::fs::read_to_string(change_dir.join("proposal.md")).ok();
+    let step_content = None; // Could read the latest step file.
+    let git_diff = None; // Could compute from vcs module.
+
+    Some(agent::AgentContext {
+        project_root,
+        change_dir,
+        changed_files,
+        spec_content,
+        step_content,
+        git_diff,
+    })
+}
+
 // ── View ─────────────────────────────────────────────────────────────────────
 
 fn view(state: &State) -> Element<'_, Message> {
@@ -698,6 +867,15 @@ fn subscription(state: &State) -> Subscription<Message> {
         subs.push(
             widget::terminal::pty_subscription().map(Message::PtyEvent),
         );
+    }
+
+    // ACP subscription: active when a chat session exists.
+    if state.change.chat_session.is_some() {
+        if let Some(root) = state.project.project_root.as_ref() {
+            subs.push(
+                agent::agent_subscription(root.clone()).map(Message::AgentEvent),
+            );
+        }
     }
 
     // Global keyboard events — routing happens in update based on state.

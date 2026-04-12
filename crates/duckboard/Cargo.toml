@@ -18,6 +18,10 @@ iced = { version = "0.14", features = ["advanced", "canvas"] }
 libghostty-vt = "0.1"
 portable-pty = "0.9"
 tokio = { version = "1", features = ["sync"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+directories = "6"
+time = { workspace = true, features = ["serde"] }
 notify-debouncer-mini = "0.5"
 ignore.workspace = true
 gix = { version = "0.72", default-features = false, features = ["status"] }
