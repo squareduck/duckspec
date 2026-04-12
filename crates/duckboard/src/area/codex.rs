@@ -36,6 +36,9 @@ pub enum Message {
     TogglePin(usize),
     InteractionHandle(interaction_toggle::HandleMsg),
     TerminalScroll,
+    TabContent(tab_bar::TabContentMsg),
+    ToggleEditMode,
+    BacklinkClicked(String),
 }
 
 // ── Update ───────────────────────────────────────────────────────────────────
@@ -43,15 +46,7 @@ pub enum Message {
 pub fn update(state: &mut State, message: Message, project: &ProjectData) {
     match message {
         Message::SelectItem(id) => {
-            if let Some(content) = project.read_artifact(&id) {
-                let title = id
-                    .rsplit('/')
-                    .next()
-                    .unwrap_or(&id)
-                    .trim_end_matches(".md")
-                    .to_string();
-                state.tabs.open(id, title, content);
-            }
+            open_artifact(state, &id, project);
         }
         Message::SelectTab(idx) => state.tabs.select(idx),
         Message::CloseTab(idx) => state.tabs.close(idx),
@@ -65,6 +60,16 @@ pub fn update(state: &mut State, message: Message, project: &ProjectData) {
             }
         },
         Message::TerminalScroll => {}
+        Message::TabContent(tab_bar::TabContentMsg::EditorAction(action)) => {
+            crate::handle_editor_action(&mut state.tabs, action);
+        }
+        Message::TabContent(tab_bar::TabContentMsg::Structural(
+            crate::widget::structural_view::StructMsg::BacklinkClicked(_),
+        )) => {}
+        Message::ToggleEditMode => {
+            state.tabs.toggle_edit_mode();
+        }
+        Message::BacklinkClicked(_) => {}
     }
 }
 
@@ -158,9 +163,18 @@ fn view_content<'a>(state: &'a State) -> Element<'a, Message> {
         |i| Message::CloseTab(i),
         |i| Message::TogglePin(i),
     );
-    let body = tab_bar::view_content(&state.tabs);
+    let body: Element<'a, tab_bar::TabContentMsg> =
+        tab_bar::view_content(&state.tabs);
+    let mapped_body: Element<'a, Message> = body.map(|msg| {
+        match &msg {
+            tab_bar::TabContentMsg::Structural(
+                crate::widget::structural_view::StructMsg::BacklinkClicked(path),
+            ) => Message::BacklinkClicked(path.clone()),
+            _ => Message::TabContent(msg),
+        }
+    });
 
-    column![bar, body].height(Length::Fill).into()
+    column![bar, mapped_body].height(Length::Fill).into()
 }
 
 fn view_interaction<'a>() -> Element<'a, Message> {
@@ -180,4 +194,16 @@ fn view_interaction<'a>() -> Element<'a, Message> {
     .width(Length::Fill)
     .height(Length::Fill)
     .into()
+}
+
+fn open_artifact(state: &mut State, id: &str, project: &ProjectData) {
+    if let Some(content) = project.read_artifact(id) {
+        let title = id
+            .rsplit('/')
+            .next()
+            .unwrap_or(id)
+            .trim_end_matches(".md")
+            .to_string();
+        crate::open_artifact_tab(&mut state.tabs, id.to_string(), title, content, id);
+    }
 }

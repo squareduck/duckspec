@@ -1,17 +1,40 @@
-//! Tabbed content viewer with pin support and LRU eviction.
+//! Tabbed content viewer with pin support, LRU eviction, structural views,
+//! and a custom text editor with line numbers.
 
-use iced::widget::{button, container, row, scrollable, text, Space};
+use iced::widget::{button, container, row, text, Space};
 use iced::{Center, Element, Length};
 
 use crate::theme;
 use crate::vcs::DiffData;
+use crate::widget::structural_view::{self, StructuralData};
+use crate::widget::text_edit::{self, EditorAction, EditorState};
 
 // ── Content types ───────────────────────────────────────────────────────────
 
+/// What a tab is currently showing.
 #[derive(Debug, Clone)]
-pub enum TabContent {
-    Text(String),
+pub enum TabView {
+    /// Editable text file. `structural` is `Some` when this tab can toggle
+    /// back to a structural view (i.e. the file is a known artifact).
+    Editor {
+        editor: EditorState,
+        structural: Option<StructuralData>,
+    },
+    /// Parsed artifact rendered as a navigable structure.
+    Structural {
+        data: StructuralData,
+        source: String,
+    },
+    /// VCS diff view.
     Diff(DiffData),
+}
+
+// ── Messages emitted by tab content ─────────────────────────────────────────
+
+#[derive(Debug, Clone)]
+pub enum TabContentMsg {
+    EditorAction(EditorAction),
+    Structural(structural_view::StructMsg),
 }
 
 // ── State ────────────────────────────────────────────────────────────────────
@@ -20,7 +43,7 @@ pub enum TabContent {
 pub struct Tab {
     pub id: String,
     pub title: String,
-    pub content: TabContent,
+    pub view: TabView,
     pub pinned: bool,
 }
 
@@ -42,9 +65,13 @@ impl Default for TabState {
 }
 
 impl TabState {
+    /// Open a plain text file (non-artifact) as an editor tab.
     pub fn open(&mut self, id: String, title: String, content: String) {
         if let Some(idx) = self.tabs.iter().position(|t| t.id == id) {
-            self.tabs[idx].content = TabContent::Text(content);
+            self.tabs[idx].view = TabView::Editor {
+                editor: EditorState::new(&content),
+                structural: None,
+            };
             self.active = Some(idx);
             return;
         }
@@ -52,7 +79,33 @@ impl TabState {
         self.tabs.push(Tab {
             id,
             title,
-            content: TabContent::Text(content),
+            view: TabView::Editor {
+                editor: EditorState::new(&content),
+                structural: None,
+            },
+            pinned: false,
+        });
+        self.active = Some(self.tabs.len() - 1);
+    }
+
+    /// Open a parsed artifact in structural view.
+    pub fn open_structural(
+        &mut self,
+        id: String,
+        title: String,
+        source: String,
+        data: StructuralData,
+    ) {
+        if let Some(idx) = self.tabs.iter().position(|t| t.id == id) {
+            self.tabs[idx].view = TabView::Structural { data, source };
+            self.active = Some(idx);
+            return;
+        }
+        self.evict_if_needed();
+        self.tabs.push(Tab {
+            id,
+            title,
+            view: TabView::Structural { data, source },
             pinned: false,
         });
         self.active = Some(self.tabs.len() - 1);
@@ -60,7 +113,7 @@ impl TabState {
 
     pub fn open_diff(&mut self, id: String, title: String, diff: DiffData) {
         if let Some(idx) = self.tabs.iter().position(|t| t.id == id) {
-            self.tabs[idx].content = TabContent::Diff(diff);
+            self.tabs[idx].view = TabView::Diff(diff);
             self.active = Some(idx);
             return;
         }
@@ -68,7 +121,7 @@ impl TabState {
         self.tabs.push(Tab {
             id,
             title,
-            content: TabContent::Diff(diff),
+            view: TabView::Diff(diff),
             pinned: false,
         });
         self.active = Some(self.tabs.len() - 1);
@@ -97,6 +150,10 @@ impl TabState {
         self.active.and_then(|idx| self.tabs.get(idx))
     }
 
+    pub fn active_tab_mut(&mut self) -> Option<&mut Tab> {
+        self.active.and_then(|idx| self.tabs.get_mut(idx))
+    }
+
     /// Close a tab by its artifact id. No-op if not found.
     pub fn close_by_id(&mut self, id: &str) {
         if let Some(idx) = self.tabs.iter().position(|t| t.id == id) {
@@ -106,10 +163,60 @@ impl TabState {
 
     /// Update the content of a text tab by its artifact id. No-op if not found
     /// or if the tab holds a diff.
-    pub fn refresh_content(&mut self, id: &str, content: String) {
+    pub fn refresh_content(&mut self, id: &str, new_source: String) {
         if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == id) {
-            if matches!(tab.content, TabContent::Text(_)) {
-                tab.content = TabContent::Text(content);
+            match &mut tab.view {
+                TabView::Editor { editor, .. } => {
+                    *editor = EditorState::new(&new_source);
+                }
+                TabView::Structural { source, .. } => {
+                    *source = new_source;
+                }
+                TabView::Diff(_) => {}
+            }
+        }
+    }
+
+    /// Toggle the active tab between structural and editor views.
+    /// Returns `true` if a toggle actually happened.
+    pub fn toggle_edit_mode(&mut self) -> bool {
+        let tab = match self.active.and_then(|idx| self.tabs.get_mut(idx)) {
+            Some(t) => t,
+            None => return false,
+        };
+
+        // Take ownership temporarily to restructure.
+        let old_view = std::mem::replace(
+            &mut tab.view,
+            TabView::Diff(DiffData {
+                path: std::path::PathBuf::new(),
+                status: crate::vcs::FileStatus::Modified,
+                hunks: vec![],
+            }),
+        );
+
+        match old_view {
+            TabView::Structural { data, source } => {
+                tab.view = TabView::Editor {
+                    editor: EditorState::new(&source),
+                    structural: Some(data),
+                };
+                true
+            }
+            TabView::Editor {
+                structural: Some(data),
+                editor,
+                ..
+            } => {
+                tab.view = TabView::Structural {
+                    data,
+                    source: editor.text(),
+                };
+                true
+            }
+            other => {
+                tab.view = other;
+                false
             }
         }
     }
@@ -158,6 +265,14 @@ pub fn view_bar<'a, M: Clone + 'a>(
 
     for (i, tab) in state.tabs.iter().enumerate() {
         let is_active = state.active == Some(i);
+
+        let mode_indicator = match &tab.view {
+            TabView::Structural { .. } => {
+                text("\u{25c6} ").size(8).color(theme::STRUCTURAL_HEADING)
+            }
+            _ => text("").size(8),
+        };
+
         let tab_style = if is_active {
             theme::tab_active as fn(&iced::Theme, button::Status) -> button::Style
         } else {
@@ -183,6 +298,7 @@ pub fn view_bar<'a, M: Clone + 'a>(
         let tab_btn = button(
             row![
                 pin_btn,
+                mode_indicator,
                 text(&tab.title).size(12),
                 Space::new().width(theme::SPACING_SM),
                 close_btn,
@@ -203,22 +319,16 @@ pub fn view_bar<'a, M: Clone + 'a>(
         .into()
 }
 
-pub fn view_content<'a, M: 'a>(state: &'a TabState) -> Element<'a, M> {
+pub fn view_content(state: &TabState) -> Element<'_, TabContentMsg> {
     match state.active_tab() {
-        Some(tab) => match &tab.content {
-            TabContent::Text(s) => scrollable(
-                container(
-                    text(s)
-                        .size(13)
-                        .font(iced::Font::MONOSPACE),
-                )
-                .padding(theme::SPACING_LG)
-                .width(Length::Fill),
-            )
-            .height(Length::Fill)
-            .width(Length::Fill)
-            .into(),
-            TabContent::Diff(diff) => super::diff_view::view(diff),
+        Some(tab) => match &tab.view {
+            TabView::Editor { editor, .. } => {
+                text_edit::view(editor, TabContentMsg::EditorAction)
+            }
+            TabView::Structural { data, .. } => {
+                structural_view::view(data).map(TabContentMsg::Structural)
+            }
+            TabView::Diff(diff) => super::diff_view::view(diff),
         },
         None => container(
             text("Select an item to view its contents")

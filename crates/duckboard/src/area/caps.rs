@@ -2,7 +2,7 @@
 
 use std::collections::HashSet;
 
-use iced::widget::{Space, column, container, row, scrollable, text};
+use iced::widget::{column, container, row, scrollable, text, Space};
 use iced::{Element, Length};
 
 use crate::data::ProjectData;
@@ -41,6 +41,10 @@ pub enum Message {
     TogglePin(usize),
     InteractionHandle(interaction_toggle::HandleMsg),
     TerminalScroll,
+    TabContent(tab_bar::TabContentMsg),
+    ToggleEditMode,
+    /// A backlink was clicked — path like "tests/auth_test.rs:42".
+    BacklinkClicked(String),
 }
 
 // ── Update ───────────────────────────────────────────────────────────────────
@@ -53,10 +57,7 @@ pub fn update(state: &mut State, message: Message, project: &ProjectData) {
             }
         }
         Message::SelectItem(id) => {
-            if let Some(content) = project.read_artifact(&id) {
-                let title = id.rsplit('/').next().unwrap_or(&id).to_string();
-                state.tabs.open(id, title, content);
-            }
+            open_artifact(state, &id, project);
         }
         Message::SelectTab(idx) => state.tabs.select(idx),
         Message::CloseTab(idx) => state.tabs.close(idx),
@@ -70,6 +71,20 @@ pub fn update(state: &mut State, message: Message, project: &ProjectData) {
             }
         },
         Message::TerminalScroll => {}
+        Message::TabContent(tab_bar::TabContentMsg::EditorAction(action)) => {
+            crate::handle_editor_action(&mut state.tabs, action);
+        }
+        Message::TabContent(tab_bar::TabContentMsg::Structural(
+            crate::widget::structural_view::StructMsg::BacklinkClicked(_),
+        )) => {
+            // Bubbles up — handled in main.rs via BacklinkClicked.
+        }
+        Message::ToggleEditMode => {
+            state.tabs.toggle_edit_mode();
+        }
+        Message::BacklinkClicked(_) => {
+            // Handled at the main.rs level.
+        }
     }
 }
 
@@ -155,9 +170,19 @@ fn view_content<'a>(state: &'a State) -> Element<'a, Message> {
         |i| Message::CloseTab(i),
         |i| Message::TogglePin(i),
     );
-    let body = tab_bar::view_content(&state.tabs);
+    let body: Element<'a, tab_bar::TabContentMsg> =
+        tab_bar::view_content(&state.tabs);
+    let mapped_body: Element<'a, Message> = body.map(|msg| {
+        // Intercept backlink clicks so they bubble up properly.
+        match &msg {
+            tab_bar::TabContentMsg::Structural(
+                crate::widget::structural_view::StructMsg::BacklinkClicked(path),
+            ) => Message::BacklinkClicked(path.clone()),
+            _ => Message::TabContent(msg),
+        }
+    });
 
-    column![bar, body].height(Length::Fill).into()
+    column![bar, mapped_body].height(Length::Fill).into()
 }
 
 fn view_interaction<'a>() -> Element<'a, Message> {
@@ -175,4 +200,13 @@ fn view_interaction<'a>() -> Element<'a, Message> {
     .width(Length::Fill)
     .height(Length::Fill)
     .into()
+}
+
+// ── Helpers ──────────────────────────────────────────────────────────────────
+
+fn open_artifact(state: &mut State, id: &str, project: &ProjectData) {
+    if let Some(content) = project.read_artifact(id) {
+        let title = id.rsplit('/').next().unwrap_or(id).to_string();
+        crate::open_artifact_tab(&mut state.tabs, id.to_string(), title, content, id);
+    }
 }

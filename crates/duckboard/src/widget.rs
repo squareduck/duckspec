@@ -3,6 +3,8 @@ pub mod diff_view;
 pub mod file_finder;
 pub mod interaction_toggle;
 pub mod sidebar;
+pub mod structural_view;
 pub mod tab_bar;
 pub mod terminal;
+pub mod text_edit;
 pub mod tree_view;
