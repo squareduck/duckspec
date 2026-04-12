@@ -9,6 +9,7 @@ use iced::{Element, Event, Subscription, Task};
 
 mod area;
 mod data;
+pub mod highlight;
 mod theme;
 mod vcs;
 mod watcher;
@@ -30,6 +31,7 @@ struct State {
     terminal: Option<widget::terminal::TerminalState>,
     terminal_focused: bool,
     file_finder: widget::file_finder::FileFinderState,
+    highlighter: highlight::SyntaxHighlighter,
 }
 
 impl State {
@@ -57,6 +59,7 @@ impl State {
             terminal: None,
             terminal_focused: false,
             file_finder: widget::file_finder::FileFinderState::default(),
+            highlighter: highlight::SyntaxHighlighter::new(),
         }
     }
 }
@@ -141,7 +144,13 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                                         &mut state.change.tabs
                                     }
                                 };
-                                tabs.open(id, title, content);
+                                tabs.open(id.clone(), title, content);
+                                // Highlight the newly opened file.
+                                if let Some(tab) = tabs.tabs.iter_mut().find(|t| t.id == id) {
+                                    if let tab_bar::TabView::Editor { editor, .. } = &mut tab.view {
+                                        rehighlight(editor, &id, &state.highlighter);
+                                    }
+                                }
                             }
                         }
                         state.file_finder.close();
@@ -162,9 +171,9 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                             if let Ok(rel) = path.strip_prefix(root) {
                                 let id = rel.to_string_lossy().to_string();
                                 if let Some(content) = state.project.read_artifact(&id) {
-                                    state.change.tabs.refresh_content(&id, content.clone());
-                                    state.caps.tabs.refresh_content(&id, content.clone());
-                                    state.codex.tabs.refresh_content(&id, content);
+                                    state.change.tabs.refresh_content(&id, content.clone(), &state.highlighter);
+                                    state.caps.tabs.refresh_content(&id, content.clone(), &state.highlighter);
+                                    state.codex.tabs.refresh_content(&id, content, &state.highlighter);
                                 }
                             }
                             if path.starts_with(root) {
@@ -231,7 +240,7 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                     widget::interaction_toggle::HandleMsg::Toggle
                 )
             );
-            area::change::update(&mut state.change, msg, &state.project);
+            area::change::update(&mut state.change, msg, &state.project, &state.highlighter);
             if is_toggle && state.change.interaction_visible && state.terminal.is_none() {
                 let _ = update(state, Message::TerminalSpawn);
             }
@@ -252,7 +261,7 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                     widget::interaction_toggle::HandleMsg::Toggle
                 )
             );
-            area::caps::update(&mut state.caps, msg, &state.project);
+            area::caps::update(&mut state.caps, msg, &state.project, &state.highlighter);
             if is_toggle && state.caps.interaction_visible && state.terminal.is_none() {
                 let _ = update(state, Message::TerminalSpawn);
             }
@@ -273,7 +282,7 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                     widget::interaction_toggle::HandleMsg::Toggle
                 )
             );
-            area::codex::update(&mut state.codex, msg, &state.project);
+            area::codex::update(&mut state.codex, msg, &state.project, &state.highlighter);
             if is_toggle && state.codex.interaction_visible && state.terminal.is_none() {
                 let _ = update(state, Message::TerminalSpawn);
             }
@@ -396,7 +405,7 @@ fn refresh_open_tabs(state: &mut State) {
             match &tab.view {
                 tab_bar::TabView::Editor { .. } | tab_bar::TabView::Structural { .. } => {
                     if let Some(content) = state.project.read_artifact(&tab.id) {
-                        tabs_refresh_single(tab, content);
+                        tabs_refresh_single(tab, content, &state.highlighter);
                     }
                 }
                 tab_bar::TabView::Diff(_) => {}
@@ -405,10 +414,15 @@ fn refresh_open_tabs(state: &mut State) {
     }
 }
 
-fn tabs_refresh_single(tab: &mut tab_bar::Tab, new_content: String) {
+fn tabs_refresh_single(
+    tab: &mut tab_bar::Tab,
+    new_content: String,
+    highlighter: &highlight::SyntaxHighlighter,
+) {
     match &mut tab.view {
         tab_bar::TabView::Editor { editor, .. } => {
             *editor = widget::text_edit::EditorState::new(&new_content);
+            rehighlight(editor, &tab.id, highlighter);
         }
         tab_bar::TabView::Structural { source, .. } => {
             *source = new_content;
@@ -421,6 +435,7 @@ fn tabs_refresh_single(tab: &mut tab_bar::Tab, new_content: String) {
 pub fn handle_editor_action(
     tabs: &mut tab_bar::TabState,
     action: widget::text_edit::EditorAction,
+    highlighter: &highlight::SyntaxHighlighter,
 ) {
     use widget::text_edit::EditorAction;
 
@@ -428,10 +443,22 @@ pub fn handle_editor_action(
         Some(t) => t,
         None => return,
     };
-    let editor = match &mut tab.view {
-        tab_bar::TabView::Editor { editor, .. } => editor,
+    let (editor, tab_id) = match &mut tab.view {
+        tab_bar::TabView::Editor { editor, .. } => (editor, tab.id.as_str()),
         _ => return,
     };
+
+    let mutates_text = matches!(
+        action,
+        EditorAction::Insert(_)
+            | EditorAction::Paste(_)
+            | EditorAction::Backspace
+            | EditorAction::Delete
+            | EditorAction::Enter
+            | EditorAction::Cut
+            | EditorAction::Undo
+            | EditorAction::Redo
+    );
 
     match action {
         EditorAction::Insert(ch) => editor.insert_char(ch),
@@ -475,6 +502,25 @@ pub fn handle_editor_action(
             tracing::info!("save requested (not yet implemented)");
         }
     }
+
+    if mutates_text {
+        rehighlight(editor, tab_id, highlighter);
+    }
+}
+
+/// (Re-)compute syntax highlighting for the given editor state.
+pub fn rehighlight(
+    editor: &mut widget::text_edit::EditorState,
+    tab_id: &str,
+    highlighter: &highlight::SyntaxHighlighter,
+) {
+    let path_str = tab_id.strip_prefix("file:").unwrap_or(tab_id);
+    let ext = std::path::Path::new(path_str)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("txt");
+    let syntax = highlighter.find_syntax(ext);
+    editor.highlight_spans = Some(highlighter.highlight_lines(&editor.lines, syntax));
 }
 
 /// Refresh the VCS changed files list.
@@ -526,16 +572,17 @@ fn handle_backlink_click(state: &mut State, backlink_path: &str) {
     };
     tabs.open(id.clone(), title, content);
 
-    // Scroll to the referenced line if we have one.
-    if let Some(line_num) = _line {
-        if let Some(tab) = tabs.tabs.iter_mut().find(|t| t.id == id) {
-            if let tab_bar::TabView::Editor { editor, .. } = &mut tab.view {
+    // Highlight + optionally scroll to referenced line.
+    if let Some(tab) = tabs.tabs.iter_mut().find(|t| t.id == id) {
+        if let tab_bar::TabView::Editor { editor, .. } = &mut tab.view {
+            rehighlight(editor, &id, &state.highlighter);
+            if let Some(line_num) = _line {
                 let target = line_num.saturating_sub(1);
                 editor.cursor = widget::text_edit::Pos::new(
                     target.min(editor.line_count().saturating_sub(1)),
                     0,
                 );
-                editor.scroll_to_cursor(600.0); // approximate viewport height
+                editor.scroll_to_cursor(600.0);
             }
         }
     }
@@ -551,6 +598,7 @@ pub fn open_artifact_tab(
     title: String,
     source: String,
     artifact_id: &str,
+    highlighter: &highlight::SyntaxHighlighter,
 ) {
     use duckpond::layout::{self, ArtifactKind};
     use duckpond::parse;
@@ -588,7 +636,14 @@ pub fn open_artifact_tab(
 
     match structural {
         Some(data) => tabs.open_structural(id, title, source, data),
-        None => tabs.open(id, title, source),
+        None => {
+            tabs.open(id.clone(), title, source);
+            if let Some(tab) = tabs.tabs.iter_mut().find(|t| t.id == id) {
+                if let tab_bar::TabView::Editor { editor, .. } = &mut tab.view {
+                    rehighlight(editor, &id, highlighter);
+                }
+            }
+        }
     }
 }
 

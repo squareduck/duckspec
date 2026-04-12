@@ -163,11 +163,17 @@ impl TabState {
 
     /// Update the content of a text tab by its artifact id. No-op if not found
     /// or if the tab holds a diff.
-    pub fn refresh_content(&mut self, id: &str, new_source: String) {
+    pub fn refresh_content(
+        &mut self,
+        id: &str,
+        new_source: String,
+        highlighter: &crate::highlight::SyntaxHighlighter,
+    ) {
         if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == id) {
             match &mut tab.view {
                 TabView::Editor { editor, .. } => {
                     *editor = EditorState::new(&new_source);
+                    crate::rehighlight(editor, id, highlighter);
                 }
                 TabView::Structural { source, .. } => {
                     *source = new_source;
@@ -179,13 +185,17 @@ impl TabState {
 
     /// Toggle the active tab between structural and editor views.
     /// Returns `true` if a toggle actually happened.
-    pub fn toggle_edit_mode(&mut self) -> bool {
+    pub fn toggle_edit_mode(
+        &mut self,
+        highlighter: &crate::highlight::SyntaxHighlighter,
+    ) -> bool {
         let tab = match self.active.and_then(|idx| self.tabs.get_mut(idx)) {
             Some(t) => t,
             None => return false,
         };
 
         // Take ownership temporarily to restructure.
+        let tab_id = tab.id.clone();
         let old_view = std::mem::replace(
             &mut tab.view,
             TabView::Diff(DiffData {
@@ -197,8 +207,10 @@ impl TabState {
 
         match old_view {
             TabView::Structural { data, source } => {
+                let mut editor = EditorState::new(&source);
+                crate::rehighlight(&mut editor, &tab_id, highlighter);
                 tab.view = TabView::Editor {
-                    editor: EditorState::new(&source),
+                    editor,
                     structural: Some(data),
                 };
                 true

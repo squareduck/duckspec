@@ -23,3 +23,4 @@ ignore.workspace = true
 gix = { version = "0.72", default-features = false, features = ["status"] }
 similar = "2"
 nucleo = "0.5"
+syntect = { version = "5", default-features = false, features = ["default-syntaxes", "parsing", "plist-load", "regex-fancy"] }

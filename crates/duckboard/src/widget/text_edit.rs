@@ -16,6 +16,7 @@ use iced::{
     Pixels, Point, Rectangle, Size, Theme,
 };
 
+use crate::highlight::HighlightSpan;
 use crate::theme;
 
 // ── Layout constants ───────────────────────────────────────────────────────
@@ -65,6 +66,8 @@ pub struct EditorState {
     pub dirty: bool,
     undo_stack: Vec<UndoOp>,
     redo_stack: Vec<UndoOp>,
+    /// Cached syntax-highlighted spans per line. `None` means stale/unset.
+    pub highlight_spans: Option<Vec<Vec<HighlightSpan>>>,
 }
 
 impl EditorState {
@@ -88,6 +91,7 @@ impl EditorState {
             dirty: false,
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
+            highlight_spans: None,
         }
     }
 
@@ -889,27 +893,59 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for TextEdit<'a, M> {
                     bounds,
                 );
 
-                // Line text.
+                // Line text — with syntax highlighting if available.
                 let line = &self.state.lines[i];
                 if !line.is_empty() {
-                    renderer.fill_text(
-                        iced::advanced::Text {
-                            content: line.clone(),
-                            bounds: Size::new(content_w, LINE_HEIGHT),
-                            size: Pixels(FONT_SIZE),
-                            line_height: text::LineHeight::Absolute(Pixels(
-                                LINE_HEIGHT,
-                            )),
-                            font: Font::MONOSPACE,
-                            align_x: alignment::Horizontal::Left.into(),
-                            align_y: alignment::Vertical::Top,
-                            shaping: text::Shaping::Basic,
-                            wrapping: text::Wrapping::None,
-                        },
-                        Point::new(content_x + CONTENT_PAD, y),
-                        theme::TEXT_PRIMARY,
-                        bounds,
-                    );
+                    let spans = self
+                        .state
+                        .highlight_spans
+                        .as_ref()
+                        .and_then(|cache| cache.get(i));
+
+                    if let Some(spans) = spans {
+                        let mut x_off = 0.0;
+                        for span in spans {
+                            let span_w = span.text.len() as f32 * cell_w;
+                            renderer.fill_text(
+                                iced::advanced::Text {
+                                    content: span.text.clone(),
+                                    bounds: Size::new(span_w + cell_w, LINE_HEIGHT),
+                                    size: Pixels(FONT_SIZE),
+                                    line_height: text::LineHeight::Absolute(
+                                        Pixels(LINE_HEIGHT),
+                                    ),
+                                    font: Font::MONOSPACE,
+                                    align_x: alignment::Horizontal::Left.into(),
+                                    align_y: alignment::Vertical::Top,
+                                    shaping: text::Shaping::Basic,
+                                    wrapping: text::Wrapping::None,
+                                },
+                                Point::new(content_x + CONTENT_PAD + x_off, y),
+                                span.color,
+                                bounds,
+                            );
+                            x_off += span_w;
+                        }
+                    } else {
+                        renderer.fill_text(
+                            iced::advanced::Text {
+                                content: line.clone(),
+                                bounds: Size::new(content_w, LINE_HEIGHT),
+                                size: Pixels(FONT_SIZE),
+                                line_height: text::LineHeight::Absolute(
+                                    Pixels(LINE_HEIGHT),
+                                ),
+                                font: Font::MONOSPACE,
+                                align_x: alignment::Horizontal::Left.into(),
+                                align_y: alignment::Vertical::Top,
+                                shaping: text::Shaping::Basic,
+                                wrapping: text::Wrapping::None,
+                            },
+                            Point::new(content_x + CONTENT_PAD, y),
+                            theme::TEXT_PRIMARY,
+                            bounds,
+                        );
+                    }
                 }
             }
 

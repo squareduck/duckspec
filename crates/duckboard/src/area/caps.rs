@@ -49,7 +49,12 @@ pub enum Message {
 
 // ── Update ───────────────────────────────────────────────────────────────────
 
-pub fn update(state: &mut State, message: Message, project: &ProjectData) {
+pub fn update(
+    state: &mut State,
+    message: Message,
+    project: &ProjectData,
+    highlighter: &crate::highlight::SyntaxHighlighter,
+) {
     match message {
         Message::ToggleNode(id) => {
             if !state.expanded_nodes.remove(&id) {
@@ -57,7 +62,7 @@ pub fn update(state: &mut State, message: Message, project: &ProjectData) {
             }
         }
         Message::SelectItem(id) => {
-            open_artifact(state, &id, project);
+            open_artifact(state, &id, project, highlighter);
         }
         Message::SelectTab(idx) => state.tabs.select(idx),
         Message::CloseTab(idx) => state.tabs.close(idx),
@@ -72,7 +77,7 @@ pub fn update(state: &mut State, message: Message, project: &ProjectData) {
         },
         Message::TerminalScroll => {}
         Message::TabContent(tab_bar::TabContentMsg::EditorAction(action)) => {
-            crate::handle_editor_action(&mut state.tabs, action);
+            crate::handle_editor_action(&mut state.tabs, action, highlighter);
         }
         Message::TabContent(tab_bar::TabContentMsg::Structural(
             crate::widget::structural_view::StructMsg::BacklinkClicked(_),
@@ -80,7 +85,7 @@ pub fn update(state: &mut State, message: Message, project: &ProjectData) {
             // Bubbles up — handled in main.rs via BacklinkClicked.
         }
         Message::ToggleEditMode => {
-            state.tabs.toggle_edit_mode();
+            state.tabs.toggle_edit_mode(highlighter);
         }
         Message::BacklinkClicked(_) => {
             // Handled at the main.rs level.
@@ -204,9 +209,14 @@ fn view_interaction<'a>() -> Element<'a, Message> {
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
-fn open_artifact(state: &mut State, id: &str, project: &ProjectData) {
+fn open_artifact(
+    state: &mut State,
+    id: &str,
+    project: &ProjectData,
+    highlighter: &crate::highlight::SyntaxHighlighter,
+) {
     if let Some(content) = project.read_artifact(id) {
         let title = id.rsplit('/').next().unwrap_or(id).to_string();
-        crate::open_artifact_tab(&mut state.tabs, id.to_string(), title, content, id);
+        crate::open_artifact_tab(&mut state.tabs, id.to_string(), title, content, id, highlighter);
     }
 }
