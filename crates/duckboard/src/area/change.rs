@@ -18,6 +18,7 @@ pub struct State {
     pub expanded_nodes: HashSet<String>,
     pub tabs: tab_bar::TabState,
     pub interaction_visible: bool,
+    pub interaction_width: f32,
 }
 
 impl Default for State {
@@ -32,6 +33,7 @@ impl Default for State {
             expanded_nodes: HashSet::new(),
             tabs: tab_bar::TabState::default(),
             interaction_visible: false,
+            interaction_width: theme::INTERACTION_COLUMN_WIDTH,
         }
     }
 }
@@ -47,7 +49,8 @@ pub enum Message {
     SelectTab(usize),
     CloseTab(usize),
     TogglePin(usize),
-    ToggleInteraction,
+    InteractionHandle(interaction_toggle::HandleMsg),
+    TerminalScroll,
 }
 
 // ── Update ───────────────────────────────────────────────────────────────────
@@ -76,15 +79,25 @@ pub fn update(state: &mut State, message: Message, project: &ProjectData) {
         Message::SelectTab(idx) => state.tabs.select(idx),
         Message::CloseTab(idx) => state.tabs.close(idx),
         Message::TogglePin(idx) => state.tabs.toggle_pin(idx),
-        Message::ToggleInteraction => {
-            state.interaction_visible = !state.interaction_visible;
-        }
+        Message::InteractionHandle(msg) => match msg {
+            interaction_toggle::HandleMsg::Toggle => {
+                state.interaction_visible = !state.interaction_visible;
+            }
+            interaction_toggle::HandleMsg::SetWidth(w) => {
+                state.interaction_width = w;
+            }
+        },
+        Message::TerminalScroll => {}
     }
 }
 
 // ── View ─────────────────────────────────────────────────────────────────────
 
-pub fn view<'a>(state: &'a State, project: &'a ProjectData) -> Element<'a, Message> {
+pub fn view<'a>(
+    state: &'a State,
+    project: &'a ProjectData,
+    terminal: Option<&'a crate::widget::terminal::TerminalState>,
+) -> Element<'a, Message> {
     let list = view_list(state, project);
     let content = view_content(state);
     let divider = container(Space::new().height(Length::Fill))
@@ -92,7 +105,7 @@ pub fn view<'a>(state: &'a State, project: &'a ProjectData) -> Element<'a, Messa
         .style(theme::divider);
 
     let toggle =
-        interaction_toggle::view(state.interaction_visible, Message::ToggleInteraction);
+        interaction_toggle::view(state.interaction_visible, state.interaction_width, Message::InteractionHandle);
 
     let mut main_row = row![
         container(list)
@@ -107,9 +120,14 @@ pub fn view<'a>(state: &'a State, project: &'a ProjectData) -> Element<'a, Messa
     ];
 
     if state.interaction_visible {
+        let interaction: Element<'a, Message> = if let Some(ts) = terminal {
+            crate::widget::terminal::view_terminal(ts).map(|_: ()| Message::TerminalScroll)
+        } else {
+            view_interaction()
+        };
         main_row = main_row.push(
-            container(view_interaction())
-                .width(theme::INTERACTION_COLUMN_WIDTH)
+            container(interaction)
+                .width(state.interaction_width)
                 .height(Length::Fill)
                 .style(theme::surface),
         );

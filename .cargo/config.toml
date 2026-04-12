@@ -1,0 +1,7 @@
+# Add rpath so the binary can find libghostty-vt.dylib at runtime.
+#
+# `cargo run` handles the dylib path automatically.
+# For running the binary directly, copy the dylib next to it:
+#   cp target/debug/build/libghostty-vt-sys-*/out/ghostty-install/lib/libghostty-vt.dylib target/debug/
+[target.'cfg(target_os = "macos")']
+rustflags = ["-C", "link-arg=-Wl,-rpath,@executable_path"]
