@@ -78,7 +78,8 @@ and code.
 
 ```
 /ds-explore   → orient, identify that a new change is needed
-/ds-plan      → create proposal.md and design.md
+/ds-propose   → create proposal.md
+/ds-design    → create design.md
 /ds-spec      → create new capability specs and docs in changes/<name>/
 /ds-step      → break the work into sequential steps
 /ds-apply     → implement the first step with unfinished tasks
@@ -104,7 +105,7 @@ committing to implementation.
 
 ```
 /ds-explore   → orient
-/ds-plan      → write proposal.md describing the idea
+/ds-propose   → write proposal.md describing the idea
 /ds-archive   → archive the proposal for future reference
 ```
 
@@ -153,7 +154,8 @@ any unchecked items.
 | Command       | Purpose                                                        |
 |---------------|----------------------------------------------------------------|
 | `/ds-explore` | Gather context for any duckspec activity; report current state |
-| `/ds-plan`    | Author proposal.md and design.md                               |
+| `/ds-propose` | Author proposal.md                                             |
+| `/ds-design`  | Author design.md                                               |
 | `/ds-spec`    | Author capability specs and docs (full files or deltas)        |
 | `/ds-step`    | Break the change into sequential step files                   |
 | `/ds-apply`   | Implement the first step with unfinished tasks                 |
@@ -2040,8 +2042,10 @@ contents. The derivation rules are:
 **Phase derivation.** The phase of a change is determined by which
 artifacts exist in the change folder:
 
-- **Proposal phase**: the change has only `proposal.md` and
-  optionally `design.md`.
+- **Proposal phase**: the change has `proposal.md` but no
+  `design.md`, no `caps/` entries, and no `steps/`.
+- **Design phase**: the change has `design.md` but no `caps/`
+  entries and no `steps/`. A `proposal.md` may or may not exist.
 - **Spec phase**: the change has `caps/` entries but no `steps/`
   folder, or an empty `steps/` folder.
 - **Step phase**: the change has `steps/` with at least one step
@@ -2225,6 +2229,74 @@ implementation-defined.
 
 Read-only.
 
+### `ds create <subcommand> [args] [--in <change>]`
+
+Creates a new duckspec artifact at the correct path. Each
+subcommand creates one artifact and validates invariants before
+writing. All created files are empty.
+
+Mutating: writes to `duckspec/`.
+
+**Subcommands:**
+
+**`ds create change <name>`**
+
+Creates `changes/<name>/`. Fails if:
+
+- A change with that name already exists under `changes/`.
+- An archived change with that name exists under `archive/` (name
+  is compared after stripping the `YYYY-MM-DD-NN-` prefix).
+
+**`ds create proposal --in <change>`**
+
+Creates `changes/<change>/proposal.md`. Fails if:
+
+- The change does not exist.
+- `proposal.md` already exists in the change.
+
+**`ds create design --in <change>`**
+
+Creates `changes/<change>/design.md`. Fails if:
+
+- The change does not exist.
+- `design.md` already exists in the change.
+
+**`ds create spec <cap-path> --in <change>`**
+
+Creates a spec file for the given capability path inside the
+change. If the capability already exists under top-level `caps/`,
+creates `changes/<change>/caps/<cap-path>/spec.delta.md`; otherwise
+creates `changes/<change>/caps/<cap-path>/spec.md`. Fails if:
+
+- The change does not exist.
+- The target file already exists in the change.
+- The capability path is invalid (empty segments, etc.).
+
+**`ds create doc <cap-path> --in <change>`**
+
+Creates a doc file for the given capability path inside the change.
+If the capability already exists under top-level `caps/`, creates
+`changes/<change>/caps/<cap-path>/doc.delta.md`; otherwise creates
+`changes/<change>/caps/<cap-path>/doc.md`. Fails if:
+
+- The change does not exist.
+- The target file already exists in the change.
+- The capability path is invalid (empty segments, etc.).
+
+**`ds create step <name> --in <change> [--after <step-slug>]`**
+
+Creates a step file at `changes/<change>/steps/NN-<slug>.md`,
+where `<slug>` is the kebab-case form of `<name>` and `NN` is the
+next available two-digit number.
+
+If `--after <step-slug>` is provided, the new step is inserted
+immediately after the named step and all subsequent steps are
+renumbered. Fails if:
+
+- The change does not exist.
+- The slug is not unique among existing steps.
+- The `--after` slug does not match an existing step.
+
 ### `ds template <name>`
 
 Prints the embedded agent command template named `<name>` to
@@ -2261,8 +2333,10 @@ a side operation:
 - `ds-explore` — gather context for any duckspec activity: inspect
   the current state, identify whether work is needed, decide what
   kind of change (or codex harvest) to perform next
-- `ds-plan` — planning: help author `proposal.md` and `design.md`
-  for the current change
+- `ds-propose` — proposing: help author `proposal.md` for the
+  current change
+- `ds-design` — designing: help author `design.md` for the current
+  change
 - `ds-spec` — speccing: help author capability specs and docs,
   either full new files or deltas against existing capabilities
 - `ds-step` — stepping: break the change's implementation work

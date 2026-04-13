@@ -75,6 +75,11 @@ enum Command {
         /// Schema name.
         name: String,
     },
+    /// Create a new duckspec artifact.
+    Create {
+        #[command(subcommand)]
+        command: cmd::create::CreateCommand,
+    },
 }
 
 fn main() -> anyhow::Result<()> {
@@ -96,5 +101,6 @@ fn main() -> anyhow::Result<()> {
         } => cmd::index::run(caps, codex, project),
         Command::Template { name } => cmd::template::run(name),
         Command::Schema { name } => cmd::schema::run(name),
+        Command::Create { command } => cmd::create::run(command),
     }
 }

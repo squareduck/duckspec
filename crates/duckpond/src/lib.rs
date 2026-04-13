@@ -6,4 +6,5 @@ pub mod error;
 pub mod layout;
 pub mod merge;
 pub mod parse;
+pub mod plan;
 pub mod render;
