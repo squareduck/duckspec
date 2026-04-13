@@ -1,10 +1,26 @@
 //! Narrow icon sidebar for area navigation.
 
-use iced::widget::{button, column, container, text, Space};
+use iced::widget::{button, column, container, svg, Space};
 use iced::{Center, Element, Length};
 
 use crate::area::Area;
 use crate::theme;
+
+const ICON_DASHBOARD: &[u8] = include_bytes!("../../assets/icon_dashboard.svg");
+const ICON_CHANGE: &[u8] = include_bytes!("../../assets/icon_change.svg");
+const ICON_CAPS: &[u8] = include_bytes!("../../assets/icon_caps.svg");
+const ICON_CODEX: &[u8] = include_bytes!("../../assets/icon_codex.svg");
+const ICON_REFRESH: &[u8] = include_bytes!("../../assets/icon_refresh.svg");
+
+fn area_icon(area: Area) -> svg::Handle {
+    let bytes: &'static [u8] = match area {
+        Area::Dashboard => ICON_DASHBOARD,
+        Area::Change => ICON_CHANGE,
+        Area::Caps => ICON_CAPS,
+        Area::Codex => ICON_CODEX,
+    };
+    svg::Handle::from_memory(bytes)
+}
 
 pub fn view<'a, M: Clone + 'a>(
     active: &Area,
@@ -20,19 +36,35 @@ pub fn view<'a, M: Clone + 'a>(
         } else {
             theme::nav_button
         };
-        let btn = button(text(area.label()).size(16).center().width(Length::Fill))
-            .width(36)
-            .height(36)
-            .on_press(on_area(area))
-            .style(style);
+        let icon = svg(area_icon(area)).width(20).height(20);
+        let btn = button(
+            container(icon)
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .align_x(Center)
+                .align_y(Center),
+        )
+        .width(36)
+        .height(36)
+        .on_press(on_area(area))
+        .style(style);
         nav = nav.push(btn);
     }
 
-    let refresh = button(text("\u{21bb}").size(14).center().width(Length::Fill))
-        .width(36)
-        .height(36)
-        .on_press(on_refresh)
-        .style(theme::nav_button);
+    let refresh_icon = svg(svg::Handle::from_memory(ICON_REFRESH))
+        .width(18)
+        .height(18);
+    let refresh = button(
+        container(refresh_icon)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .align_x(Center)
+            .align_y(Center),
+    )
+    .width(36)
+    .height(36)
+    .on_press(on_refresh)
+    .style(theme::nav_button);
 
     container(
         column![nav, Space::new().height(Length::Fill), refresh,]

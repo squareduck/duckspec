@@ -33,12 +33,9 @@ pub enum Message {
     SelectItem(String),
     SelectTab(usize),
     CloseTab(usize),
-    TogglePin(usize),
     InteractionHandle(interaction_toggle::HandleMsg),
     TerminalScroll,
     TabContent(tab_bar::TabContentMsg),
-    ToggleEditMode,
-    BacklinkClicked(String),
 }
 
 // ── Update ───────────────────────────────────────────────────────────────────
@@ -55,7 +52,6 @@ pub fn update(
         }
         Message::SelectTab(idx) => state.tabs.select(idx),
         Message::CloseTab(idx) => state.tabs.close(idx),
-        Message::TogglePin(idx) => state.tabs.toggle_pin(idx),
         Message::InteractionHandle(msg) => match msg {
             interaction_toggle::HandleMsg::Toggle => {
                 state.interaction_visible = !state.interaction_visible;
@@ -68,13 +64,6 @@ pub fn update(
         Message::TabContent(tab_bar::TabContentMsg::EditorAction(action)) => {
             crate::handle_editor_action(&mut state.tabs, action, highlighter);
         }
-        Message::TabContent(tab_bar::TabContentMsg::Structural(
-            crate::widget::structural_view::StructMsg::BacklinkClicked(_),
-        )) => {}
-        Message::ToggleEditMode => {
-            state.tabs.toggle_edit_mode(highlighter);
-        }
-        Message::BacklinkClicked(_) => {}
     }
 }
 
@@ -124,12 +113,12 @@ pub fn view<'a>(
 }
 
 fn view_list<'a>(state: &'a State, project: &'a ProjectData) -> Element<'a, Message> {
-    let header = text("Codex").size(14).color(theme::TEXT_SECONDARY);
+    let header = text("Codex").size(theme::FONT_MD).color(theme::TEXT_SECONDARY);
 
     let mut items = column![].spacing(theme::SPACING_XS);
 
     if project.codex_entries.is_empty() {
-        items = items.push(text("No codex entries").size(13).color(theme::TEXT_MUTED));
+        items = items.push(text("No codex entries").size(theme::FONT_MD).color(theme::TEXT_MUTED));
     } else {
         for entry in &project.codex_entries {
             let is_active = state
@@ -143,7 +132,7 @@ fn view_list<'a>(state: &'a State, project: &'a ProjectData) -> Element<'a, Mess
                 theme::list_item
             };
             items = items.push(
-                button(text(&entry.label).size(13))
+                button(text(&entry.label).size(theme::FONT_MD))
                     .on_press(Message::SelectItem(entry.id.clone()))
                     .width(Length::Fill)
                     .padding([2.0, theme::SPACING_SM])
@@ -166,31 +155,21 @@ fn view_content<'a>(state: &'a State) -> Element<'a, Message> {
         &state.tabs,
         |i| Message::SelectTab(i),
         |i| Message::CloseTab(i),
-        |i| Message::TogglePin(i),
     );
-    let body: Element<'a, tab_bar::TabContentMsg> =
-        tab_bar::view_content(&state.tabs);
-    let mapped_body: Element<'a, Message> = body.map(|msg| {
-        match &msg {
-            tab_bar::TabContentMsg::Structural(
-                crate::widget::structural_view::StructMsg::BacklinkClicked(path),
-            ) => Message::BacklinkClicked(path.clone()),
-            _ => Message::TabContent(msg),
-        }
-    });
+    let body = tab_bar::view_content(&state.tabs).map(Message::TabContent);
 
-    column![bar, mapped_body].height(Length::Fill).into()
+    column![bar, body].height(Length::Fill).into()
 }
 
 fn view_interaction<'a>() -> Element<'a, Message> {
     container(
         column![
             text("Interaction")
-                .size(14)
+                .size(theme::FONT_MD)
                 .color(theme::TEXT_SECONDARY),
             Space::new().height(theme::SPACING_MD),
             text("Terminal and chat will appear here.")
-                .size(13)
+                .size(theme::FONT_MD)
                 .color(theme::TEXT_MUTED),
         ]
         .spacing(theme::SPACING_SM)

@@ -21,7 +21,7 @@ use crate::theme;
 
 // ── Layout constants ───────────────────────────────────────────────────────
 
-const FONT_SIZE: f32 = 13.0;
+const FONT_SIZE: f32 = theme::FONT_MD;
 const LINE_HEIGHT: f32 = 20.0;
 const GUTTER_PAD: f32 = 8.0;
 const CONTENT_PAD: f32 = 8.0;

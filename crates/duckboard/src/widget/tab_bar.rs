@@ -1,30 +1,26 @@
-//! Tabbed content viewer with pin support, LRU eviction, structural views,
-//! and a custom text editor with line numbers.
+//! Tabbed content viewer with a dedicated preview tab and file tabs.
+//!
+//! The first tab slot is reserved for artifacts and diffs opened from the list
+//! column — clicking a new item replaces it in place. The remaining slots
+//! (up to `MAX_FILE_TABS`) hold files opened via the file finder (Ctrl+P),
+//! with oldest-first eviction.
 
 use iced::widget::{button, container, row, text, Space};
 use iced::{Center, Element, Length};
 
 use crate::theme;
 use crate::vcs::DiffData;
-use crate::widget::structural_view::{self, StructuralData};
 use crate::widget::text_edit::{self, EditorAction, EditorState};
+
+const MAX_FILE_TABS: usize = 5;
 
 // ── Content types ───────────────────────────────────────────────────────────
 
 /// What a tab is currently showing.
 #[derive(Debug, Clone)]
 pub enum TabView {
-    /// Editable text file. `structural` is `Some` when this tab can toggle
-    /// back to a structural view (i.e. the file is a known artifact).
-    Editor {
-        editor: EditorState,
-        structural: Option<StructuralData>,
-    },
-    /// Parsed artifact rendered as a navigable structure.
-    Structural {
-        data: StructuralData,
-        source: String,
-    },
+    /// Editable text file.
+    Editor { editor: EditorState },
     /// VCS diff view.
     Diff(DiffData),
 }
@@ -34,7 +30,6 @@ pub enum TabView {
 #[derive(Debug, Clone)]
 pub enum TabContentMsg {
     EditorAction(EditorAction),
-    Structural(structural_view::StructMsg),
 }
 
 // ── State ────────────────────────────────────────────────────────────────────
@@ -44,218 +39,188 @@ pub struct Tab {
     pub id: String,
     pub title: String,
     pub view: TabView,
-    pub pinned: bool,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct TabState {
-    pub tabs: Vec<Tab>,
-    pub active: Option<usize>,
-    pub max_tabs: usize,
+    /// Slot 0: the preview tab (artifacts / diffs). `None` when nothing has
+    /// been opened from the list yet.
+    pub preview: Option<Tab>,
+    /// File tabs opened via the file finder, ordered oldest-first.
+    pub file_tabs: Vec<Tab>,
+    /// Which tab is active: `Preview` or `File(index)`.
+    pub active: ActiveTab,
 }
 
-impl Default for TabState {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ActiveTab {
+    Preview,
+    File(usize),
+}
+
+impl Default for ActiveTab {
     fn default() -> Self {
-        Self {
-            tabs: vec![],
-            active: None,
-            max_tabs: 10,
-        }
+        ActiveTab::Preview
     }
 }
 
 impl TabState {
-    /// Open a plain text file (non-artifact) as an editor tab.
-    pub fn open(&mut self, id: String, title: String, content: String) {
-        if let Some(idx) = self.tabs.iter().position(|t| t.id == id) {
-            self.tabs[idx].view = TabView::Editor {
-                editor: EditorState::new(&content),
-                structural: None,
-            };
-            self.active = Some(idx);
-            return;
+    // ── Total tab helpers ────────────────────────────────────────────────
+
+    /// Iterate all tabs (preview first, then file tabs) with their logical
+    /// index used in view messages.
+    fn all_tabs(&self) -> Vec<(usize, &Tab)> {
+        let mut out = Vec::new();
+        if let Some(ref t) = self.preview {
+            out.push((0, t));
         }
-        self.evict_if_needed();
-        self.tabs.push(Tab {
+        for (i, t) in self.file_tabs.iter().enumerate() {
+            let idx = if self.preview.is_some() { i + 1 } else { i };
+            out.push((idx, t));
+        }
+        out
+    }
+
+    fn logical_to_active(&self, idx: usize) -> ActiveTab {
+        if self.preview.is_some() {
+            if idx == 0 {
+                ActiveTab::Preview
+            } else {
+                ActiveTab::File(idx - 1)
+            }
+        } else {
+            ActiveTab::File(idx)
+        }
+    }
+
+    // ── Public API ──────────────────────────────────────────────────────
+
+    /// Open an artifact in the preview tab (replaces existing preview).
+    pub fn open_preview(&mut self, id: String, title: String, content: String) {
+        self.preview = Some(Tab {
             id,
             title,
             view: TabView::Editor {
                 editor: EditorState::new(&content),
-                structural: None,
             },
-            pinned: false,
         });
-        self.active = Some(self.tabs.len() - 1);
+        self.active = ActiveTab::Preview;
     }
 
-    /// Open a parsed artifact in structural view.
-    pub fn open_structural(
-        &mut self,
-        id: String,
-        title: String,
-        source: String,
-        data: StructuralData,
-    ) {
-        if let Some(idx) = self.tabs.iter().position(|t| t.id == id) {
-            self.tabs[idx].view = TabView::Structural { data, source };
-            self.active = Some(idx);
-            return;
-        }
-        self.evict_if_needed();
-        self.tabs.push(Tab {
-            id,
-            title,
-            view: TabView::Structural { data, source },
-            pinned: false,
-        });
-        self.active = Some(self.tabs.len() - 1);
-    }
-
+    /// Open a diff in the preview tab.
     pub fn open_diff(&mut self, id: String, title: String, diff: DiffData) {
-        if let Some(idx) = self.tabs.iter().position(|t| t.id == id) {
-            self.tabs[idx].view = TabView::Diff(diff);
-            self.active = Some(idx);
-            return;
-        }
-        self.evict_if_needed();
-        self.tabs.push(Tab {
+        self.preview = Some(Tab {
             id,
             title,
             view: TabView::Diff(diff),
-            pinned: false,
         });
-        self.active = Some(self.tabs.len() - 1);
+        self.active = ActiveTab::Preview;
     }
 
-    pub fn close(&mut self, idx: usize) {
-        if idx >= self.tabs.len() {
+    /// Open a file tab (from file finder). Reuses existing tab with same id,
+    /// or creates a new one (evicting oldest if over limit).
+    pub fn open_file(&mut self, id: String, title: String, content: String) {
+        if let Some(idx) = self.file_tabs.iter().position(|t| t.id == id) {
+            self.file_tabs[idx].view = TabView::Editor {
+                editor: EditorState::new(&content),
+            };
+            self.active = ActiveTab::File(idx);
             return;
         }
-        self.remove(idx);
+        // Evict oldest file tab if at capacity.
+        if self.file_tabs.len() >= MAX_FILE_TABS {
+            self.file_tabs.remove(0);
+            // Fix active index if it pointed into file_tabs.
+            if let ActiveTab::File(fi) = self.active {
+                if fi > 0 {
+                    self.active = ActiveTab::File(fi - 1);
+                } else {
+                    self.active = ActiveTab::Preview;
+                }
+            }
+        }
+        self.file_tabs.push(Tab {
+            id,
+            title,
+            view: TabView::Editor {
+                editor: EditorState::new(&content),
+            },
+        });
+        self.active = ActiveTab::File(self.file_tabs.len() - 1);
     }
 
     pub fn select(&mut self, idx: usize) {
-        if idx < self.tabs.len() {
-            self.active = Some(idx);
-        }
+        self.active = self.logical_to_active(idx);
     }
 
-    pub fn toggle_pin(&mut self, idx: usize) {
-        if let Some(tab) = self.tabs.get_mut(idx) {
-            tab.pinned = !tab.pinned;
+    pub fn close(&mut self, idx: usize) {
+        let target = self.logical_to_active(idx);
+        match target {
+            ActiveTab::Preview => {
+                // Preview tab can't be closed.
+            }
+            ActiveTab::File(fi) => {
+                if fi < self.file_tabs.len() {
+                    self.file_tabs.remove(fi);
+                    // Fix active pointer.
+                    match self.active {
+                        ActiveTab::File(active_fi) if active_fi == fi => {
+                            if self.file_tabs.is_empty() {
+                                self.active = ActiveTab::Preview;
+                            } else {
+                                self.active =
+                                    ActiveTab::File(active_fi.min(self.file_tabs.len() - 1));
+                            }
+                        }
+                        ActiveTab::File(active_fi) if active_fi > fi => {
+                            self.active = ActiveTab::File(active_fi - 1);
+                        }
+                        _ => {}
+                    }
+                }
+            }
         }
     }
 
     pub fn active_tab(&self) -> Option<&Tab> {
-        self.active.and_then(|idx| self.tabs.get(idx))
-    }
-
-    pub fn active_tab_mut(&mut self) -> Option<&mut Tab> {
-        self.active.and_then(|idx| self.tabs.get_mut(idx))
-    }
-
-    /// Close a tab by its artifact id. No-op if not found.
-    pub fn close_by_id(&mut self, id: &str) {
-        if let Some(idx) = self.tabs.iter().position(|t| t.id == id) {
-            self.remove(idx);
+        match self.active {
+            ActiveTab::Preview => self.preview.as_ref(),
+            ActiveTab::File(idx) => self.file_tabs.get(idx),
         }
     }
 
-    /// Update the content of a text tab by its artifact id. No-op if not found
-    /// or if the tab holds a diff.
+    pub fn active_tab_mut(&mut self) -> Option<&mut Tab> {
+        match self.active {
+            ActiveTab::Preview => self.preview.as_mut(),
+            ActiveTab::File(idx) => self.file_tabs.get_mut(idx),
+        }
+    }
+
+    /// Close a tab by its id. No-op if not found. Does not close the preview.
+    pub fn close_by_id(&mut self, id: &str) {
+        if let Some(fi) = self.file_tabs.iter().position(|t| t.id == id) {
+            let logical = if self.preview.is_some() { fi + 1 } else { fi };
+            self.close(logical);
+        }
+    }
+
+    /// Update the content of a text tab by its id. Checks both preview and
+    /// file tabs.
     pub fn refresh_content(
         &mut self,
         id: &str,
         new_source: String,
         highlighter: &crate::highlight::SyntaxHighlighter,
     ) {
-        if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == id) {
-            match &mut tab.view {
-                TabView::Editor { editor, .. } => {
-                    *editor = EditorState::new(&new_source);
-                    crate::rehighlight(editor, id, highlighter);
-                }
-                TabView::Structural { source, .. } => {
-                    *source = new_source;
-                }
-                TabView::Diff(_) => {}
-            }
-        }
-    }
-
-    /// Toggle the active tab between structural and editor views.
-    /// Returns `true` if a toggle actually happened.
-    pub fn toggle_edit_mode(
-        &mut self,
-        highlighter: &crate::highlight::SyntaxHighlighter,
-    ) -> bool {
-        let tab = match self.active.and_then(|idx| self.tabs.get_mut(idx)) {
-            Some(t) => t,
-            None => return false,
-        };
-
-        // Take ownership temporarily to restructure.
-        let tab_id = tab.id.clone();
-        let old_view = std::mem::replace(
-            &mut tab.view,
-            TabView::Diff(DiffData {
-                path: std::path::PathBuf::new(),
-                status: crate::vcs::FileStatus::Modified,
-                hunks: vec![],
-            }),
-        );
-
-        match old_view {
-            TabView::Structural { data, source } => {
-                let mut editor = EditorState::new(&source);
-                crate::rehighlight(&mut editor, &tab_id, highlighter);
-                tab.view = TabView::Editor {
-                    editor,
-                    structural: Some(data),
-                };
-                true
-            }
-            TabView::Editor {
-                structural: Some(data),
-                editor,
-                ..
-            } => {
-                tab.view = TabView::Structural {
-                    data,
-                    source: editor.text(),
-                };
-                true
-            }
-            other => {
-                tab.view = other;
-                false
-            }
-        }
-    }
-
-    fn evict_if_needed(&mut self) {
-        while self.tabs.len() >= self.max_tabs {
-            if let Some(idx) = self.oldest_unpinned() {
-                self.remove(idx);
-            } else {
-                break;
-            }
-        }
-    }
-
-    fn oldest_unpinned(&self) -> Option<usize> {
-        self.tabs.iter().position(|t| !t.pinned)
-    }
-
-    fn remove(&mut self, idx: usize) {
-        self.tabs.remove(idx);
-        if self.tabs.is_empty() {
-            self.active = None;
-        } else if let Some(active) = self.active {
-            if active == idx {
-                self.active = Some(active.min(self.tabs.len() - 1));
-            } else if active > idx {
-                self.active = Some(active - 1);
+        let tab = self
+            .preview
+            .iter_mut()
+            .chain(self.file_tabs.iter_mut())
+            .find(|t| t.id == id);
+        if let Some(tab) = tab {
+            if let TabView::Editor { editor, .. } = &mut tab.view {
+                *editor = EditorState::new(&new_source);
+                crate::rehighlight(editor, id, highlighter);
             }
         }
     }
@@ -267,23 +232,20 @@ pub fn view_bar<'a, M: Clone + 'a>(
     state: &'a TabState,
     on_select: impl Fn(usize) -> M + 'a,
     on_close: impl Fn(usize) -> M + 'a,
-    on_pin: impl Fn(usize) -> M + 'a,
 ) -> Element<'a, M> {
-    if state.tabs.is_empty() {
+    let all = state.all_tabs();
+    if all.is_empty() {
         return Space::new().into();
     }
 
     let mut tabs_row = row![].spacing(1.0).height(34.0);
 
-    for (i, tab) in state.tabs.iter().enumerate() {
-        let is_active = state.active == Some(i);
-
-        let mode_indicator = match &tab.view {
-            TabView::Structural { .. } => {
-                text("\u{25c6} ").size(8).color(theme::STRUCTURAL_HEADING)
-            }
-            _ => text("").size(8),
+    for (logical_idx, tab) in &all {
+        let is_active = match state.active {
+            ActiveTab::Preview => state.preview.as_ref().map(|p| &p.id) == Some(&tab.id),
+            ActiveTab::File(fi) => state.file_tabs.get(fi).map(|t| &t.id) == Some(&tab.id),
         };
+        let is_preview = state.logical_to_active(*logical_idx) == ActiveTab::Preview;
 
         let tab_style = if is_active {
             theme::tab_active as fn(&iced::Theme, button::Status) -> button::Style
@@ -291,36 +253,27 @@ pub fn view_bar<'a, M: Clone + 'a>(
             theme::tab_inactive
         };
 
-        let pin_indicator = if tab.pinned {
-            text("\u{25cf} ").size(8).color(theme::ACCENT)
-        } else {
-            text("").size(8)
-        };
+        let mut tab_row = row![
+            text(&tab.title).size(theme::FONT_MD),
+        ]
+        .spacing(theme::SPACING_XS)
+        .align_y(Center);
 
-        let close_btn = button(text("\u{00d7}").size(14).color(theme::TEXT_MUTED))
-            .on_press(on_close(i))
-            .padding(0.0)
-            .style(theme::icon_button);
+        // File tabs get a close button; the preview tab doesn't.
+        if !is_preview {
+            let close_btn =
+                button(text("\u{00d7}").size(theme::FONT_MD).color(theme::TEXT_MUTED))
+                    .on_press(on_close(*logical_idx))
+                    .padding(0.0)
+                    .style(theme::icon_button);
+            tab_row = tab_row.push(Space::new().width(theme::SPACING_SM));
+            tab_row = tab_row.push(close_btn);
+        }
 
-        let pin_btn = button(pin_indicator)
-            .on_press(on_pin(i))
-            .padding(0.0)
-            .style(theme::icon_button);
-
-        let tab_btn = button(
-            row![
-                pin_btn,
-                mode_indicator,
-                text(&tab.title).size(12),
-                Space::new().width(theme::SPACING_SM),
-                close_btn,
-            ]
-            .spacing(theme::SPACING_XS)
-            .align_y(Center),
-        )
-        .on_press(on_select(i))
-        .padding([theme::SPACING_XS, theme::SPACING_SM])
-        .style(tab_style);
+        let tab_btn = button(tab_row)
+            .on_press(on_select(*logical_idx))
+            .padding([theme::SPACING_XS, theme::SPACING_SM])
+            .style(tab_style);
 
         tabs_row = tabs_row.push(tab_btn);
     }
@@ -337,14 +290,11 @@ pub fn view_content(state: &TabState) -> Element<'_, TabContentMsg> {
             TabView::Editor { editor, .. } => {
                 text_edit::view(editor, TabContentMsg::EditorAction)
             }
-            TabView::Structural { data, .. } => {
-                structural_view::view(data).map(TabContentMsg::Structural)
-            }
             TabView::Diff(diff) => super::diff_view::view(diff),
         },
         None => container(
             text("Select an item to view its contents")
-                .size(14)
+                .size(theme::FONT_MD)
                 .color(theme::TEXT_MUTED),
         )
         .width(Length::Fill)

@@ -14,7 +14,7 @@ anyhow.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 
-iced = { version = "0.14", features = ["advanced", "canvas"] }
+iced = { version = "0.14", features = ["advanced", "canvas", "svg"] }
 libghostty-vt = "0.1"
 portable-pty = "0.9"
 tokio = { version = "1", features = ["sync"] }

@@ -66,15 +66,12 @@ pub enum Message {
     SelectItem(String),
     SelectTab(usize),
     CloseTab(usize),
-    TogglePin(usize),
     InteractionHandle(interaction_toggle::HandleMsg),
     SwitchInteractionMode(InteractionMode),
     AgentChat(agent_chat::Msg),
     TerminalScroll,
     SelectChangedFile(PathBuf),
     TabContent(tab_bar::TabContentMsg),
-    ToggleEditMode,
-    BacklinkClicked(String),
 }
 
 // ── Update ───────────────────────────────────────────────────────────────────
@@ -87,7 +84,20 @@ pub fn update(
 ) {
     match message {
         Message::SelectChange(name) => {
-            state.selected_change = Some(name);
+            state.selected_change = Some(name.clone());
+            // Expand all tree nodes for the newly selected change.
+            state.expanded_nodes.clear();
+            if let Some(change) = project
+                .active_changes
+                .iter()
+                .chain(project.archived_changes.iter())
+                .find(|c| c.name == name)
+            {
+                crate::data::TreeNode::collect_parent_ids(
+                    &change.cap_tree,
+                    &mut state.expanded_nodes,
+                );
+            }
         }
         Message::ToggleSection(id) => {
             if !state.expanded_sections.remove(&id) {
@@ -104,7 +114,6 @@ pub fn update(
         }
         Message::SelectTab(idx) => state.tabs.select(idx),
         Message::CloseTab(idx) => state.tabs.close(idx),
-        Message::TogglePin(idx) => state.tabs.toggle_pin(idx),
         Message::InteractionHandle(msg) => match msg {
             interaction_toggle::HandleMsg::Toggle => {
                 state.interaction_visible = !state.interaction_visible;
@@ -140,13 +149,6 @@ pub fn update(
         Message::TabContent(tab_bar::TabContentMsg::EditorAction(action)) => {
             crate::handle_editor_action(&mut state.tabs, action, highlighter);
         }
-        Message::TabContent(tab_bar::TabContentMsg::Structural(
-            crate::widget::structural_view::StructMsg::BacklinkClicked(_),
-        )) => {}
-        Message::ToggleEditMode => {
-            state.tabs.toggle_edit_mode(highlighter);
-        }
-        Message::BacklinkClicked(_) => {}
     }
 }
 
@@ -232,7 +234,7 @@ fn view_list<'a>(state: &'a State, project: &'a ProjectData) -> Element<'a, Mess
             theme::list_item
         };
         selector = selector.push(
-            button(text(&ch.name).size(13))
+            button(text(&ch.name).size(theme::FONT_MD))
                 .on_press(Message::SelectChange(ch.name.clone()))
                 .width(Length::Fill)
                 .padding([theme::SPACING_XS, theme::SPACING_SM])
@@ -258,7 +260,7 @@ fn view_list<'a>(state: &'a State, project: &'a ProjectData) -> Element<'a, Mess
         list_col = list_col.push(
             container(
                 text("Select a change")
-                    .size(13)
+                    .size(theme::FONT_MD)
                     .color(theme::TEXT_MUTED),
             )
             .padding(theme::SPACING_LG),
@@ -285,7 +287,7 @@ fn view_overview_section<'a>(state: &'a State, change: &'a ChangeData) -> Elemen
         items = items.push(file_item("design.md", &id, state));
     }
     if !change.has_proposal && !change.has_design {
-        items = items.push(text("No overview files").size(12).color(theme::TEXT_MUTED));
+        items = items.push(text("No overview files").size(theme::FONT_MD).color(theme::TEXT_MUTED));
     }
 
     collapsible::view(
@@ -298,7 +300,7 @@ fn view_overview_section<'a>(state: &'a State, change: &'a ChangeData) -> Elemen
 
 fn view_caps_section<'a>(state: &'a State, change: &'a ChangeData) -> Element<'a, Message> {
     let content = if change.cap_tree.is_empty() {
-        column![text("No capability changes").size(12).color(theme::TEXT_MUTED)].into()
+        column![text("No capability changes").size(theme::FONT_MD).color(theme::TEXT_MUTED)].into()
     } else {
         tree_view::view(
             &change.cap_tree,
@@ -321,7 +323,7 @@ fn view_steps_section<'a>(state: &'a State, change: &'a ChangeData) -> Element<'
     let mut items = column![].spacing(theme::SPACING_XS);
 
     if change.steps.is_empty() {
-        items = items.push(text("No steps").size(12).color(theme::TEXT_MUTED));
+        items = items.push(text("No steps").size(theme::FONT_MD).color(theme::TEXT_MUTED));
     } else {
         for step in &change.steps {
             items = items.push(file_item(
@@ -344,7 +346,7 @@ fn view_changed_files_section<'a>(state: &'a State) -> Element<'a, Message> {
     let mut items = column![].spacing(theme::SPACING_XS);
 
     if state.changed_files.is_empty() {
-        items = items.push(text("No changes").size(12).color(theme::TEXT_MUTED));
+        items = items.push(text("No changes").size(theme::FONT_MD).color(theme::TEXT_MUTED));
     } else {
         for cf in &state.changed_files {
             let status_char = match cf.status {
@@ -363,10 +365,10 @@ fn view_changed_files_section<'a>(state: &'a State) -> Element<'a, Message> {
 
             let label = row![
                 text(status_char)
-                    .size(12)
+                    .size(theme::FONT_MD)
                     .font(iced::Font::MONOSPACE)
                     .color(color),
-                text(cf.path.display().to_string()).size(13),
+                text(cf.path.display().to_string()).size(theme::FONT_MD),
             ]
             .spacing(theme::SPACING_SM);
 
@@ -395,7 +397,7 @@ fn file_item<'a>(label: &str, id: &str, state: &State) -> Element<'a, Message> {
     } else {
         theme::list_item
     };
-    button(text(label.to_string()).size(13))
+    button(text(label.to_string()).size(theme::FONT_MD))
         .on_press(Message::SelectItem(id.to_string()))
         .width(Length::Fill)
         .padding([2.0, theme::SPACING_SM])
@@ -408,20 +410,10 @@ fn view_content<'a>(state: &'a State) -> Element<'a, Message> {
         &state.tabs,
         |i| Message::SelectTab(i),
         |i| Message::CloseTab(i),
-        |i| Message::TogglePin(i),
     );
-    let body: Element<'a, tab_bar::TabContentMsg> =
-        tab_bar::view_content(&state.tabs);
-    let mapped_body: Element<'a, Message> = body.map(|msg| {
-        match &msg {
-            tab_bar::TabContentMsg::Structural(
-                crate::widget::structural_view::StructMsg::BacklinkClicked(path),
-            ) => Message::BacklinkClicked(path.clone()),
-            _ => Message::TabContent(msg),
-        }
-    });
+    let body = tab_bar::view_content(&state.tabs).map(Message::TabContent);
 
-    column![bar, mapped_body].height(Length::Fill).into()
+    column![bar, body].height(Length::Fill).into()
 }
 
 fn view_mode_tabs<'a>(active: InteractionMode) -> Element<'a, Message> {
@@ -438,11 +430,11 @@ fn view_mode_tabs<'a>(active: InteractionMode) -> Element<'a, Message> {
 
     container(
         row![
-            button(text("Terminal").size(11))
+            button(text("Terminal").size(theme::FONT_SM))
                 .on_press(Message::SwitchInteractionMode(InteractionMode::Terminal))
                 .padding([2.0, theme::SPACING_SM])
                 .style(terminal_style),
-            button(text("Agent").size(11))
+            button(text("Agent").size(theme::FONT_SM))
                 .on_press(Message::SwitchInteractionMode(InteractionMode::AgentChat))
                 .padding([2.0, theme::SPACING_SM])
                 .style(agent_style),
@@ -457,10 +449,10 @@ fn view_mode_tabs<'a>(active: InteractionMode) -> Element<'a, Message> {
 fn view_interaction<'a>() -> Element<'a, Message> {
     container(
         column![
-            text("Interaction").size(14).color(theme::TEXT_SECONDARY),
+            text("Interaction").size(theme::FONT_MD).color(theme::TEXT_SECONDARY),
             Space::new().height(theme::SPACING_MD),
             text("Terminal and chat will appear here.")
-                .size(13)
+                .size(theme::FONT_MD)
                 .color(theme::TEXT_MUTED),
         ]
         .spacing(theme::SPACING_SM)

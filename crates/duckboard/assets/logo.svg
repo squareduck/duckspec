@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <!-- Duck body -->
+  <ellipse cx="46" cy="64" rx="36" ry="28" fill="#7dc4e4" opacity="0.85"/>
+
+  <!-- Duck head -->
+  <circle cx="68" cy="36" r="22" fill="#8aadf4"/>
+
+  <!-- Eye white -->
+  <circle cx="76" cy="32" r="5.5" fill="#24273a"/>
+  <!-- Eye glint -->
+  <circle cx="77.5" cy="30.5" r="2" fill="#cad3f5"/>
+
+  <!-- Beak -->
+  <path d="M 88 38 L 100 34 L 90 46 Z" fill="#f5a97f"/>
+
+  <!-- Glasses frame -->
+  <circle cx="76" cy="32" r="8.5" fill="none" stroke="#cad3f5" stroke-width="1.8" opacity="0.6"/>
+  <!-- Glasses arm -->
+  <line x1="84" y1="32" x2="90" y2="30" stroke="#cad3f5" stroke-width="1.4" opacity="0.6"/>
+  <!-- Glasses nose bridge -->
+  <line x1="67.5" y1="33" x2="62" y2="38" stroke="#cad3f5" stroke-width="1.4" opacity="0.6"/>
+
+  <!-- Wing -->
+  <path d="M 22 56 Q 38 46, 52 58 Q 44 52, 28 58 Z" fill="#8aadf4" opacity="0.5"/>
+
+  <!-- Tail feathers -->
+  <path d="M 12 52 L 2 40 L 16 48" fill="none" stroke="#8aadf4" stroke-width="2.5" stroke-linecap="round"/>
+  <path d="M 14 58 L 0 50 L 14 54" fill="none" stroke="#7dc4e4" stroke-width="2.5" stroke-linecap="round"/>
+
+  <!-- Water ripple -->
+  <path d="M 4 86 Q 20 78, 40 86 Q 58 94, 76 86 Q 88 80, 98 86" fill="none" stroke="#494d64" stroke-width="2" opacity="0.4"/>
+</svg>

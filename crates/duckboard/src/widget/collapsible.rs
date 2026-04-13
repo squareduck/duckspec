@@ -21,10 +21,10 @@ pub fn view<'a, M: Clone + 'a>(
     let header = button(
         row![
             text(title)
-                .size(11)
+                .size(theme::FONT_SM)
                 .color(theme::TEXT_SECONDARY),
             Space::new().width(Length::Fill),
-            text(arrow).size(11).color(theme::TEXT_MUTED),
+            text(arrow).size(theme::FONT_SM).color(theme::TEXT_MUTED),
         ]
         .width(Length::Fill),
     )

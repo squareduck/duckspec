@@ -20,7 +20,7 @@ use crate::theme;
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
-const FONT_SIZE: f32 = 14.0;
+const FONT_SIZE: f32 = theme::FONT_MD;
 const CELL_WIDTH: f32 = 8.4;
 const CELL_HEIGHT: f32 = 18.0;
 const DEFAULT_COLS: u16 = 80;

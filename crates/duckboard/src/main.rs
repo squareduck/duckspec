@@ -1,6 +1,5 @@
 //! duckboard — GUI for the duckspec framework, built with Iced 0.14.
 
-use std::path::Path;
 
 use iced::event;
 use iced::keyboard;
@@ -52,12 +51,18 @@ impl State {
             change.changed_files = vcs::changed_files(root);
         }
 
+        // Expand all tree nodes by default.
+        let mut caps_expanded = std::collections::HashSet::new();
+        data::TreeNode::collect_parent_ids(&project.cap_tree, &mut caps_expanded);
+        let mut caps_state = area::caps::State::default();
+        caps_state.expanded_nodes = caps_expanded;
+
         Self {
             active_area: Area::Dashboard,
             project,
             dashboard: area::dashboard::State::default(),
             change,
-            caps: area::caps::State::default(),
+            caps: caps_state,
             codex: area::codex::State::default(),
             terminal: None,
             terminal_focused: false,
@@ -151,9 +156,9 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                                         &mut state.change.tabs
                                     }
                                 };
-                                tabs.open(id.clone(), title, content);
+                                tabs.open_file(id.clone(), title, content);
                                 // Highlight the newly opened file.
-                                if let Some(tab) = tabs.tabs.iter_mut().find(|t| t.id == id) {
+                                if let Some(tab) = tabs.file_tabs.iter_mut().find(|t| t.id == id) {
                                     if let tab_bar::TabView::Editor { editor, .. } = &mut tab.view {
                                         rehighlight(editor, &id, &state.highlighter);
                                     }
@@ -214,29 +219,28 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
             refresh_changed_files(state);
         }
         Message::Dashboard(msg) => {
-            // Handle cross-area navigation before delegating.
             match &msg {
-                area::dashboard::Message::ChangeClicked(name) => {
+                area::dashboard::Message::ChangeClicked(name)
+                | area::dashboard::Message::ArchivedChangeClicked(name) => {
                     state.change.selected_change = Some(name.clone());
                     state.active_area = Area::Change;
                 }
-                area::dashboard::Message::ArchivedChangeClicked(name) => {
-                    state.change.selected_change = Some(name.clone());
-                    state.active_area = Area::Change;
+                area::dashboard::Message::FindFile => {
+                    return update(
+                        state,
+                        Message::FileFinder(widget::file_finder::Msg::Open),
+                    );
                 }
-                area::dashboard::Message::NewChange => {
-                    // Virtual change — placeholder for now.
-                    tracing::info!("new change requested (not yet implemented)");
+                area::dashboard::Message::GoToCaps => {
+                    state.active_area = Area::Caps;
+                }
+                area::dashboard::Message::GoToCodex => {
+                    state.active_area = Area::Codex;
                 }
             }
             area::dashboard::update(&mut state.dashboard, msg);
         }
         Message::Change(msg) => {
-            // Handle backlink clicks at this level.
-            if let area::change::Message::BacklinkClicked(ref path) = msg {
-                handle_backlink_click(state, path);
-                return Task::none();
-            }
             if matches!(msg, area::change::Message::TerminalScroll) {
                 let _ = update(state, Message::TerminalScroll);
                 return Task::none();
@@ -297,10 +301,6 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                 && state.change.interaction_mode == area::change::InteractionMode::Terminal;
         }
         Message::Caps(msg) => {
-            if let area::caps::Message::BacklinkClicked(ref path) = msg {
-                handle_backlink_click(state, path);
-                return Task::none();
-            }
             if matches!(msg, area::caps::Message::TerminalScroll) {
                 let _ = update(state, Message::TerminalScroll);
                 return Task::none();
@@ -318,10 +318,6 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
             state.terminal_focused = state.caps.interaction_visible;
         }
         Message::Codex(msg) => {
-            if let area::codex::Message::BacklinkClicked(ref path) = msg {
-                handle_backlink_click(state, path);
-                return Task::none();
-            }
             if matches!(msg, area::codex::Message::TerminalScroll) {
                 let _ = update(state, Message::TerminalScroll);
                 return Task::none();
@@ -462,32 +458,6 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                 return update(state, Message::FileFinder(widget::file_finder::Msg::Open));
             }
 
-            // Cmd+M: toggle edit mode on the active tab.
-            if mods.command() && key == keyboard::Key::Character("m".into()) {
-                match state.active_area {
-                    Area::Change => {
-                        let _ = update(
-                            state,
-                            Message::Change(area::change::Message::ToggleEditMode),
-                        );
-                    }
-                    Area::Caps => {
-                        let _ = update(
-                            state,
-                            Message::Caps(area::caps::Message::ToggleEditMode),
-                        );
-                    }
-                    Area::Codex => {
-                        let _ = update(
-                            state,
-                            Message::Codex(area::codex::Message::ToggleEditMode),
-                        );
-                    }
-                    Area::Dashboard => {}
-                }
-                return Task::none();
-            }
-
             // When file finder is visible, route navigation keys.
             if state.file_finder.visible {
                 use keyboard::key::Named;
@@ -529,14 +499,15 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
 /// Re-read content for all open text tabs from disk.
 fn refresh_open_tabs(state: &mut State) {
     for tabs in [&mut state.change.tabs, &mut state.caps.tabs, &mut state.codex.tabs] {
-        for tab in &mut tabs.tabs {
-            match &tab.view {
-                tab_bar::TabView::Editor { .. } | tab_bar::TabView::Structural { .. } => {
-                    if let Some(content) = state.project.read_artifact(&tab.id) {
-                        tabs_refresh_single(tab, content, &state.highlighter);
-                    }
+        let all_tabs = tabs
+            .preview
+            .iter_mut()
+            .chain(tabs.file_tabs.iter_mut());
+        for tab in all_tabs {
+            if let tab_bar::TabView::Editor { .. } = &tab.view {
+                if let Some(content) = state.project.read_artifact(&tab.id) {
+                    tabs_refresh_single(tab, content, &state.highlighter);
                 }
-                tab_bar::TabView::Diff(_) => {}
             }
         }
     }
@@ -547,15 +518,9 @@ fn tabs_refresh_single(
     new_content: String,
     highlighter: &highlight::SyntaxHighlighter,
 ) {
-    match &mut tab.view {
-        tab_bar::TabView::Editor { editor, .. } => {
-            *editor = widget::text_edit::EditorState::new(&new_content);
-            rehighlight(editor, &tab.id, highlighter);
-        }
-        tab_bar::TabView::Structural { source, .. } => {
-            *source = new_content;
-        }
-        tab_bar::TabView::Diff(_) => {}
+    if let tab_bar::TabView::Editor { editor, .. } = &mut tab.view {
+        *editor = widget::text_edit::EditorState::new(&new_content);
+        rehighlight(editor, &tab.id, highlighter);
     }
 }
 
@@ -658,118 +623,22 @@ fn refresh_changed_files(state: &mut State) {
     }
 }
 
-/// Handle a backlink click: open the referenced file in the active area's
-/// tabs and (future) scroll to the referenced line.
-fn handle_backlink_click(state: &mut State, backlink_path: &str) {
-    // Backlink paths look like "tests/auth_test.rs:42" or "src/lib.rs:10".
-    // They are relative to the project root.
-    let (file_path, _line) = match backlink_path.rsplit_once(':') {
-        Some((f, l)) => (f, l.parse::<usize>().ok()),
-        None => (backlink_path, None),
-    };
+// ── Artifact tab helper ─────────────────────────────────────────────────────
 
-    let root = match &state.project.project_root {
-        Some(r) => r.clone(),
-        None => return,
-    };
-
-    let abs = root.join(file_path);
-    let content = match std::fs::read_to_string(&abs) {
-        Ok(c) => c,
-        Err(e) => {
-            tracing::warn!("failed to open backlink target {}: {e}", abs.display());
-            return;
-        }
-    };
-
-    let id = format!("file:{file_path}");
-    let title = Path::new(file_path)
-        .file_name()
-        .map(|n| n.to_string_lossy().to_string())
-        .unwrap_or_else(|| file_path.to_string());
-
-    // Open in the active area's tabs as a plain editor (non-artifact).
-    let tabs = match state.active_area {
-        Area::Change => &mut state.change.tabs,
-        Area::Caps => &mut state.caps.tabs,
-        Area::Codex => &mut state.codex.tabs,
-        Area::Dashboard => {
-            state.active_area = Area::Change;
-            &mut state.change.tabs
-        }
-    };
-    tabs.open(id.clone(), title, content);
-
-    // Highlight + optionally scroll to referenced line.
-    if let Some(tab) = tabs.tabs.iter_mut().find(|t| t.id == id) {
-        if let tab_bar::TabView::Editor { editor, .. } = &mut tab.view {
-            rehighlight(editor, &id, &state.highlighter);
-            if let Some(line_num) = _line {
-                let target = line_num.saturating_sub(1);
-                editor.cursor = widget::text_edit::Pos::new(
-                    target.min(editor.line_count().saturating_sub(1)),
-                    0,
-                );
-                editor.scroll_to_cursor(600.0);
-            }
-        }
-    }
-}
-
-// ── Artifact classification helper ──────────────────────────────────────────
-
-/// Open a file as a tab, using structural view if it's a known artifact type.
-/// Called from area update functions.
+/// Open a file as a text editor tab. Called from area update functions.
 pub fn open_artifact_tab(
     tabs: &mut tab_bar::TabState,
     id: String,
     title: String,
     source: String,
-    artifact_id: &str,
+    _artifact_id: &str,
     highlighter: &highlight::SyntaxHighlighter,
 ) {
-    use duckpond::layout::{self, ArtifactKind};
-    use duckpond::parse;
-    use widget::structural_view::StructuralData;
-
-    let path = std::path::Path::new(artifact_id);
-    let kind = layout::classify(path);
-
-    let structural = kind.and_then(|k| {
-        let elements = parse::parse_elements(&source);
-        match k {
-            ArtifactKind::CapSpec | ArtifactKind::ChangeCapSpec => {
-                parse::spec::parse_spec(&elements)
-                    .ok()
-                    .map(StructuralData::Spec)
-            }
-            ArtifactKind::CapDoc
-            | ArtifactKind::ChangeCapDoc
-            | ArtifactKind::Proposal
-            | ArtifactKind::Design
-            | ArtifactKind::Codex
-            | ArtifactKind::Project => parse::doc::parse_document(&elements)
-                .ok()
-                .map(StructuralData::Document),
-            ArtifactKind::Step => parse::step::parse_step(&elements)
-                .ok()
-                .map(StructuralData::Step),
-            ArtifactKind::SpecDelta | ArtifactKind::DocDelta => {
-                // Delta files could get structural view later; for now
-                // fall through to editor.
-                None
-            }
-        }
-    });
-
-    match structural {
-        Some(data) => tabs.open_structural(id, title, source, data),
-        None => {
-            tabs.open(id.clone(), title, source);
-            if let Some(tab) = tabs.tabs.iter_mut().find(|t| t.id == id) {
-                if let tab_bar::TabView::Editor { editor, .. } = &mut tab.view {
-                    rehighlight(editor, &id, highlighter);
-                }
+    tabs.open_preview(id.clone(), title, source);
+    if let Some(tab) = tabs.preview.as_mut() {
+        if tab.id == id {
+            if let tab_bar::TabView::Editor { editor, .. } = &mut tab.view {
+                rehighlight(editor, &id, highlighter);
             }
         }
     }
@@ -825,7 +694,8 @@ fn view(state: &State) -> Element<'_, Message> {
     let term = state.terminal.as_ref();
     let area_content: Element<'_, Message> = match state.active_area {
         Area::Dashboard => {
-            area::dashboard::view(&state.dashboard, &state.project).map(Message::Dashboard)
+            area::dashboard::view(&state.dashboard, &state.project, &state.change.changed_files)
+                .map(Message::Dashboard)
         }
         Area::Change => {
             area::change::view(&state.change, &state.project, term).map(Message::Change)

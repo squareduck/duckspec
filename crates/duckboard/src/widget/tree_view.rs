@@ -46,14 +46,14 @@ pub fn view<'a, M: Clone + 'a>(
                 "\u{25b8}"
             };
             row![
-                text(arrow).size(11).color(theme::TEXT_MUTED),
-                text(node_label).size(13),
+                text(arrow).size(theme::FONT_SM).color(theme::TEXT_MUTED),
+                text(node_label).size(theme::FONT_MD),
             ]
             .spacing(theme::SPACING_XS)
         } else {
             row![
-                Space::new().width(11.0),
-                text(node_label).size(13),
+                Space::new().width(theme::FONT_SM),
+                text(node_label).size(theme::FONT_MD),
             ]
             .spacing(theme::SPACING_XS)
         };

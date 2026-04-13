@@ -38,13 +38,9 @@ pub enum Message {
     SelectItem(String),
     SelectTab(usize),
     CloseTab(usize),
-    TogglePin(usize),
     InteractionHandle(interaction_toggle::HandleMsg),
     TerminalScroll,
     TabContent(tab_bar::TabContentMsg),
-    ToggleEditMode,
-    /// A backlink was clicked — path like "tests/auth_test.rs:42".
-    BacklinkClicked(String),
 }
 
 // ── Update ───────────────────────────────────────────────────────────────────
@@ -66,7 +62,6 @@ pub fn update(
         }
         Message::SelectTab(idx) => state.tabs.select(idx),
         Message::CloseTab(idx) => state.tabs.close(idx),
-        Message::TogglePin(idx) => state.tabs.toggle_pin(idx),
         Message::InteractionHandle(msg) => match msg {
             interaction_toggle::HandleMsg::Toggle => {
                 state.interaction_visible = !state.interaction_visible;
@@ -78,17 +73,6 @@ pub fn update(
         Message::TerminalScroll => {}
         Message::TabContent(tab_bar::TabContentMsg::EditorAction(action)) => {
             crate::handle_editor_action(&mut state.tabs, action, highlighter);
-        }
-        Message::TabContent(tab_bar::TabContentMsg::Structural(
-            crate::widget::structural_view::StructMsg::BacklinkClicked(_),
-        )) => {
-            // Bubbles up — handled in main.rs via BacklinkClicked.
-        }
-        Message::ToggleEditMode => {
-            state.tabs.toggle_edit_mode(highlighter);
-        }
-        Message::BacklinkClicked(_) => {
-            // Handled at the main.rs level.
         }
     }
 }
@@ -140,12 +124,12 @@ pub fn view<'a>(
 }
 
 fn view_list<'a>(state: &'a State, project: &'a ProjectData) -> Element<'a, Message> {
-    let header = text("Capabilities").size(14).color(theme::TEXT_SECONDARY);
+    let header = text("Capabilities").size(theme::FONT_MD).color(theme::TEXT_SECONDARY);
 
     let tree = if project.cap_tree.is_empty() {
         column![
             text("No capabilities found")
-                .size(13)
+                .size(theme::FONT_MD)
                 .color(theme::TEXT_MUTED)
         ]
         .into()
@@ -173,30 +157,19 @@ fn view_content<'a>(state: &'a State) -> Element<'a, Message> {
         &state.tabs,
         |i| Message::SelectTab(i),
         |i| Message::CloseTab(i),
-        |i| Message::TogglePin(i),
     );
-    let body: Element<'a, tab_bar::TabContentMsg> =
-        tab_bar::view_content(&state.tabs);
-    let mapped_body: Element<'a, Message> = body.map(|msg| {
-        // Intercept backlink clicks so they bubble up properly.
-        match &msg {
-            tab_bar::TabContentMsg::Structural(
-                crate::widget::structural_view::StructMsg::BacklinkClicked(path),
-            ) => Message::BacklinkClicked(path.clone()),
-            _ => Message::TabContent(msg),
-        }
-    });
+    let body = tab_bar::view_content(&state.tabs).map(Message::TabContent);
 
-    column![bar, mapped_body].height(Length::Fill).into()
+    column![bar, body].height(Length::Fill).into()
 }
 
 fn view_interaction<'a>() -> Element<'a, Message> {
     container(
         column![
-            text("Interaction").size(14).color(theme::TEXT_SECONDARY),
+            text("Interaction").size(theme::FONT_MD).color(theme::TEXT_SECONDARY),
             Space::new().height(theme::SPACING_MD),
             text("Terminal and chat will appear here.")
-                .size(13)
+                .size(theme::FONT_MD)
                 .color(theme::TEXT_MUTED),
         ]
         .spacing(theme::SPACING_SM)

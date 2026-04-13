@@ -42,6 +42,19 @@ pub const SUCCESS: Color = hex(0xa6, 0xda, 0x95);       // green
 pub const WARNING: Color = hex(0xee, 0xd4, 0x9f);       // yellow
 pub const ERROR: Color = hex(0xed, 0x87, 0x96);          // red
 
+// Extra palette (Catppuccin Macchiato)
+pub const MAUVE: Color = hex(0xc6, 0xa0, 0xf6);
+pub const PEACH: Color = hex(0xf5, 0xa9, 0x7f);
+pub const TEAL: Color = hex(0x8b, 0xd5, 0xca);
+pub const PINK: Color = hex(0xf5, 0xbd, 0xe6);
+pub const LAVENDER: Color = hex(0xb7, 0xbd, 0xf8);
+
+// ── Font sizes ──────────────────────────────────────────────────────────────
+
+pub const FONT_SM: f32 = 11.0;
+pub const FONT_MD: f32 = 13.0;
+pub const FONT_LG: f32 = 16.0;
+
 // ── Spacing ──────────────────────────────────────────────────────────────────
 
 pub const SPACING_XS: f32 = 4.0;
@@ -121,11 +134,12 @@ pub fn divider(_theme: &Theme) -> container::Style {
 
 pub fn nav_button_active(_theme: &Theme, _status: button::Status) -> button::Style {
     button::Style {
-        background: Some(ACCENT_DIM.into()),
-        text_color: TEXT_PRIMARY,
+        background: Some(BG_ELEVATED.into()),
+        text_color: ACCENT,
         border: Border {
+            color: ACCENT,
+            width: 1.0,
             radius: BORDER_RADIUS.into(),
-            ..Default::default()
         },
         ..Default::default()
     }
@@ -273,26 +287,4 @@ pub fn vcs_status_color(status: &crate::vcs::FileStatus) -> Color {
 
 // ── Line number gutter ─────────────────────────────────────────────────────
 
-// ── Structural view styles ─────────────────────────────────────────────────
-
-pub const STRUCTURAL_HEADING: Color = hex(0xc6, 0xa0, 0xf6); // mauve
-pub const STRUCTURAL_SCENARIO: Color = hex(0x8a, 0xad, 0xf4); // blue
-pub const STRUCTURAL_CLAUSE_GIVEN: Color = hex(0xa6, 0xda, 0x95); // green
-pub const STRUCTURAL_CLAUSE_WHEN: Color = hex(0xee, 0xd4, 0x9f); // yellow
-pub const STRUCTURAL_CLAUSE_THEN: Color = hex(0xf5, 0xa9, 0x7f); // peach
-pub const STRUCTURAL_BACKLINK: Color = hex(0x7d, 0xc4, 0xe4); // sapphire
-pub const STRUCTURAL_MARKER: Color = hex(0x6e, 0x73, 0x8d); // overlay0
-pub const STRUCTURAL_TASK_DONE: Color = hex(0xa6, 0xda, 0x95); // green
-pub fn backlink_button(_theme: &Theme, status: button::Status) -> button::Style {
-    let color = match status {
-        button::Status::Hovered => TEXT_PRIMARY,
-        _ => STRUCTURAL_BACKLINK,
-    };
-    button::Style {
-        background: None,
-        text_color: color,
-        border: Border::default(),
-        ..Default::default()
-    }
-}
 

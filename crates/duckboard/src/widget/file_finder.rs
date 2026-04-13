@@ -169,7 +169,7 @@ fn walk_project_files(root: &Path, mut cb: impl FnMut(&Path)) {
 pub fn view<'a>(state: &'a FileFinderState) -> Element<'a, Msg> {
     let input = text_input("Search files...", &state.query)
         .on_input(Msg::QueryChanged)
-        .size(14)
+        .size(theme::FONT_MD)
         .padding([theme::SPACING_SM, theme::SPACING_MD])
         .width(Length::Fill)
         .id("file-finder-input");
@@ -189,7 +189,7 @@ pub fn view<'a>(state: &'a FileFinderState) -> Element<'a, Msg> {
         list = list.push(
             container(
                 text(path)
-                    .size(13)
+                    .size(theme::FONT_MD)
                     .font(iced::Font::MONOSPACE)
                     .color(text_color),
             )
@@ -206,7 +206,7 @@ pub fn view<'a>(state: &'a FileFinderState) -> Element<'a, Msg> {
         .map(|m| m.snapshot().item_count())
         .unwrap_or(0);
     let status = text(format!("{count} / {total}"))
-        .size(11)
+        .size(theme::FONT_SM)
         .color(theme::TEXT_MUTED);
 
     let panel = container(

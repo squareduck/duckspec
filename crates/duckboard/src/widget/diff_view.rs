@@ -12,7 +12,6 @@ use crate::vcs::{DiffData, DiffLine, FileStatus, LineKind};
 
 const LINENO_WIDTH: f32 = 48.0;
 const SIGN_WIDTH: f32 = 16.0;
-const FONT_SIZE: f32 = 13.0;
 const LINE_HEIGHT: f32 = 20.0;
 
 /// Render a full inline diff view.
@@ -29,7 +28,7 @@ pub fn view<'a, M: 'a>(diff: &'a DiffData) -> Element<'a, M> {
             FileStatus::Modified => "No visible changes",
         };
         col = col.push(
-            container(text(msg).size(FONT_SIZE).color(theme::TEXT_MUTED))
+            container(text(msg).size(theme::FONT_MD).color(theme::TEXT_MUTED))
                 .padding(theme::SPACING_LG),
         );
     }
@@ -58,11 +57,11 @@ fn file_header<'a, M: 'a>(diff: &'a DiffData) -> Element<'a, M> {
     container(
         row![
             text(diff.path.display().to_string())
-                .size(13)
+                .size(theme::FONT_MD)
                 .font(iced::Font::MONOSPACE)
                 .color(theme::TEXT_PRIMARY),
             Space::new().width(theme::SPACING_SM),
-            text(status_label).size(11).color(status_color),
+            text(status_label).size(theme::FONT_SM).color(status_color),
         ]
         .spacing(theme::SPACING_SM)
         .align_y(iced::Center),
@@ -76,7 +75,7 @@ fn file_header<'a, M: 'a>(diff: &'a DiffData) -> Element<'a, M> {
 fn hunk_header<'a, M: 'a>(header: &'a str) -> Element<'a, M> {
     container(
         text(header.trim_end())
-            .size(12)
+            .size(theme::FONT_MD)
             .font(iced::Font::MONOSPACE)
             .color(theme::TEXT_MUTED),
     )
@@ -112,22 +111,22 @@ fn diff_line<'a, M: 'a>(line: &'a DiffLine) -> Element<'a, M> {
 
     let row_content = row![
         text(old_no)
-            .size(11)
+            .size(theme::FONT_SM)
             .font(iced::Font::MONOSPACE)
             .color(theme::TEXT_MUTED)
             .width(LINENO_WIDTH / 2.0),
         text(new_no)
-            .size(11)
+            .size(theme::FONT_SM)
             .font(iced::Font::MONOSPACE)
             .color(theme::TEXT_MUTED)
             .width(LINENO_WIDTH / 2.0),
         text(sign)
-            .size(FONT_SIZE)
+            .size(theme::FONT_MD)
             .font(iced::Font::MONOSPACE)
             .color(sign_color)
             .width(SIGN_WIDTH),
         text(line_text)
-            .size(FONT_SIZE)
+            .size(theme::FONT_MD)
             .font(iced::Font::MONOSPACE)
             .color(text_color),
     ]

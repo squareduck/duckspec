@@ -45,6 +45,16 @@ impl TreeNode {
     pub fn is_leaf(&self) -> bool {
         self.children.is_empty()
     }
+
+    /// Collect the IDs of all non-leaf nodes in the tree (recursively).
+    pub fn collect_parent_ids(nodes: &[TreeNode], out: &mut std::collections::HashSet<String>) {
+        for node in nodes {
+            if !node.children.is_empty() {
+                out.insert(node.id.clone());
+                Self::collect_parent_ids(&node.children, out);
+            }
+        }
+    }
 }
 
 // ── Loading ──────────────────────────────────────────────────────────────────

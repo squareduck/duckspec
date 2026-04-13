@@ -26,9 +26,9 @@ pub fn view<'a>(session: &'a ChatSession, input_value: &str) -> Element<'a, Msg>
     };
     let header = container(
         row![
-            text("Agent Chat").size(13).color(theme::TEXT_PRIMARY),
+            text("Agent Chat").size(theme::FONT_MD).color(theme::TEXT_PRIMARY),
             Space::new().width(Length::Fill),
-            text(status_text).size(11).color(theme::TEXT_MUTED),
+            text(status_text).size(theme::FONT_SM).color(theme::TEXT_MUTED),
         ]
         .spacing(theme::SPACING_SM)
         .align_y(iced::Alignment::Center),
@@ -48,7 +48,7 @@ pub fn view<'a>(session: &'a ChatSession, input_value: &str) -> Element<'a, Msg>
         messages = messages.push(
             container(
                 text(&session.pending_text)
-                    .size(12)
+                    .size(theme::FONT_MD)
                     .font(iced::Font::MONOSPACE)
                     .color(theme::TEXT_PRIMARY),
             )
@@ -66,15 +66,15 @@ pub fn view<'a>(session: &'a ChatSession, input_value: &str) -> Element<'a, Msg>
     let input = text_input("Send a message…", input_value)
         .on_input(Msg::InputChanged)
         .on_submit(Msg::SendPressed)
-        .size(12)
+        .size(theme::FONT_MD)
         .id("agent-chat-input");
 
     let action_button = if session.is_streaming {
-        button(text("Cancel").size(11).color(theme::ERROR))
+        button(text("Cancel").size(theme::FONT_SM).color(theme::ERROR))
             .on_press(Msg::CancelPressed)
             .style(theme::list_item)
     } else {
-        button(text("Send").size(11).color(theme::ACCENT))
+        button(text("Send").size(theme::FONT_SM).color(theme::ACCENT))
             .on_press(Msg::SendPressed)
             .style(theme::list_item)
     };
@@ -105,7 +105,7 @@ fn view_message<'a>(msg: &'a crate::chat_store::ChatMessage) -> Element<'a, Msg>
                 };
                 blocks = blocks.push(
                     text(t.as_str())
-                        .size(12)
+                        .size(theme::FONT_MD)
                         .font(iced::Font::MONOSPACE)
                         .color(color),
                 );
@@ -113,13 +113,13 @@ fn view_message<'a>(msg: &'a crate::chat_store::ChatMessage) -> Element<'a, Msg>
             ContentBlock::ToolUse { name, input, .. } => {
                 blocks = blocks.push(
                     text(format!("⚙ {name}"))
-                        .size(11)
+                        .size(theme::FONT_SM)
                         .color(theme::ACCENT_DIM),
                 );
                 if !input.is_empty() {
                     blocks = blocks.push(
                         text(truncate(input, 200))
-                            .size(10)
+                            .size(theme::FONT_SM)
                             .font(iced::Font::MONOSPACE)
                             .color(theme::TEXT_MUTED),
                     );
@@ -133,13 +133,13 @@ fn view_message<'a>(msg: &'a crate::chat_store::ChatMessage) -> Element<'a, Msg>
                 };
                 blocks = blocks.push(
                     text(format!("✓ {label}"))
-                        .size(11)
+                        .size(theme::FONT_SM)
                         .color(theme::SUCCESS),
                 );
                 if !output.is_empty() {
                     blocks = blocks.push(
                         text(truncate(output, 200))
-                            .size(10)
+                            .size(theme::FONT_SM)
                             .font(iced::Font::MONOSPACE)
                             .color(theme::TEXT_MUTED),
                     );
