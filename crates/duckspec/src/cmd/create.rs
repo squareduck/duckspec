@@ -52,10 +52,33 @@ pub enum CreateCommand {
         #[arg(long)]
         after: Option<String>,
     },
+    /// Create a hook file for a stage.
+    Hook {
+        /// Stage name (explore, propose, design, spec, step, apply, archive, verify, codex).
+        stage: String,
+        /// Create a pre-stage hook.
+        #[arg(long, group = "position")]
+        pre: bool,
+        /// Create a post-stage hook.
+        #[arg(long, group = "position")]
+        post: bool,
+    },
 }
 
 pub fn run(cmd: CreateCommand) -> anyhow::Result<()> {
     let duckspec_root = find_duckspec_root()?;
+
+    // Capture hook info before cmd is consumed.
+    let hook_content = if let CreateCommand::Hook {
+        ref stage, pre, ..
+    } = cmd
+    {
+        let pos = if pre { "Pre" } else { "Post" };
+        let title = capitalize(stage);
+        Some(format!("# {title} - {pos}\n"))
+    } else {
+        None
+    };
 
     let plan = match cmd {
         CreateCommand::Change { name } => {
@@ -126,6 +149,17 @@ pub fn run(cmd: CreateCommand) -> anyhow::Result<()> {
                 after.as_deref(),
             )?
         }
+        CreateCommand::Hook { stage, pre, post } => {
+            let position = if pre {
+                duckpond::plan::HookPosition::Pre
+            } else if post {
+                duckpond::plan::HookPosition::Post
+            } else {
+                anyhow::bail!("exactly one of --pre or --post must be provided");
+            };
+            let existing_hooks = list_files(&duckspec_root.join("hooks"))?;
+            duckpond::plan::create_hook(&stage, position, &existing_hooks)?
+        }
     };
 
     // Execute: renames first (already in safe order), then creates.
@@ -140,8 +174,9 @@ pub fn run(cmd: CreateCommand) -> anyhow::Result<()> {
             fs::create_dir_all(parent)?;
         }
         if abs.extension().is_some() {
-            // It's a file — create empty.
-            fs::write(&abs, "")?;
+            // It's a file — write skeleton content for hooks, empty otherwise.
+            let content = hook_content.as_deref().unwrap_or("");
+            fs::write(&abs, content)?;
         } else {
             // It's a directory.
             fs::create_dir_all(&abs)?;
@@ -162,6 +197,14 @@ pub fn run(cmd: CreateCommand) -> anyhow::Result<()> {
     }
 
     Ok(())
+}
+
+fn capitalize(s: &str) -> String {
+    let mut chars = s.chars();
+    match chars.next() {
+        None => String::new(),
+        Some(c) => c.to_uppercase().to_string() + chars.as_str(),
+    }
 }
 
 /// List filenames (not directories) directly in a directory.

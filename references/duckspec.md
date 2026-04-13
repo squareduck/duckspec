@@ -36,6 +36,9 @@ duckspec/
         NN-<slug>.md
   archive/
     YYYY-MM-DD-NN-<change-name>/
+  hooks/                               (optional)
+    <stage>-pre.md
+    <stage>-post.md
 ```
 
 - **`project.md`** — optional project constitution: project-wide
@@ -53,6 +56,11 @@ duckspec/
   change contains any subset of proposal, design, capability
   modifications, and implementation steps.
 - **`archive/`** — frozen, applied changes in date-ordered folders.
+- **`hooks/`** — optional user-authored markdown files that inject
+  custom instructions into agent command templates. Each hook
+  targets a specific stage and position: `<stage>-pre.md` runs
+  before the stage's core instructions, `<stage>-post.md` runs
+  after. See **Hooks** below.
 
 `project.md` and `codex/` are never carried through a change. They
 are edited directly in the working copy, and their history is
@@ -2297,12 +2305,34 @@ renumbered. Fails if:
 - The slug is not unique among existing steps.
 - The `--after` slug does not match an existing step.
 
+**`ds create hook <stage> --pre|--post`**
+
+Creates a hook file at `hooks/<stage>-pre.md` or
+`hooks/<stage>-post.md` with a skeleton H1 heading. Exactly one of
+`--pre` or `--post` must be provided. Fails if:
+
+- The stage name is not a known stage.
+- The hook file already exists.
+
+Valid stage names: `explore`, `propose`, `design`, `spec`, `step`,
+`apply`, `archive`, `verify`, `codex`.
+
 ### `ds template <name>`
 
-Prints the embedded agent command template named `<name>` to
-standard output. Templates are the markdown files that drive the
-`/ds-*` agent workflow. Examples: `ds template ds-explore`, `ds
-template ds-spec`, `ds template ds-codex`.
+Prints the agent command template named `<name>` to standard
+output, with hooks applied. Templates are the markdown files that
+drive the `/ds-*` agent workflow. Examples: `ds template
+explore`, `ds template spec`, `ds template codex`.
+
+Each template contains `## Hook - Pre` and `## Hook - Post`
+sections. When rendering:
+
+- If `hooks/<name>-pre.md` exists, its content (everything below
+  the H1) replaces the `## Hook - Pre` section.
+- If `hooks/<name>-post.md` exists, its content replaces the
+  `## Hook - Post` section.
+- If a hook file does not exist, the corresponding section is
+  removed from the output.
 
 Read-only.
 
@@ -2354,6 +2384,38 @@ a side operation:
 Templates are idempotent: installing them multiple times overwrites
 previous versions, so `ds init <harness>` can be used to update
 templates to the latest embedded version.
+
+Each template contains two hook sections: `## Hook - Pre` and
+`## Hook - Post`. These are replaced or removed by `ds template`
+based on whether corresponding hook files exist. See **Hooks**.
+
+### Hooks
+
+Hooks are user-authored markdown files under `duckspec/hooks/`
+that inject custom instructions into agent command templates. They
+let users extend the workflow without modifying the templates
+themselves.
+
+Hook files follow the naming convention `<stage>-pre.md` and
+`<stage>-post.md`, where `<stage>` is one of: `explore`,
+`propose`, `design`, `spec`, `step`, `apply`, `archive`, `verify`,
+`codex`.
+
+Hook file schema:
+
+```markdown
+# <Stage> - Pre|Post
+
+<freeform content>
+```
+
+The H1 heading identifies the hook. Everything below the H1 is
+injected into the template at the corresponding `## Hook - Pre`
+or `## Hook - Post` position.
+
+All hook files are optional. The `hooks/` directory itself is
+optional — `ds init` does not create it. Use `ds create hook` to
+scaffold a new hook file.
 
 ## Validation rules
 

@@ -39,6 +39,33 @@ pub enum PlanError {
 
     #[error("step '--after {slug}' not found in change")]
     AfterStepNotFound { slug: String },
+
+    #[error("unknown stage '{stage}'")]
+    UnknownStage { stage: String },
+
+    #[error("hook already exists: {path}")]
+    HookExists { path: PathBuf },
+}
+
+/// Known stage names for hooks.
+pub const STAGES: &[&str] = &[
+    "explore", "propose", "design", "spec", "step", "apply", "archive", "verify", "codex",
+];
+
+/// Position of a hook relative to the stage.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HookPosition {
+    Pre,
+    Post,
+}
+
+impl HookPosition {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            HookPosition::Pre => "pre",
+            HookPosition::Post => "post",
+        }
+    }
 }
 
 /// Plan the creation of a new change directory.
@@ -253,6 +280,35 @@ pub fn create_step(
     }
 
     Ok(Plan { creates, renames })
+}
+
+/// Plan the creation of a hook file.
+///
+/// `stage` — the stage name (e.g. "explore", "spec").
+/// `position` — pre or post.
+/// `existing_hooks` — filenames in `hooks/`.
+pub fn create_hook(
+    stage: &str,
+    position: HookPosition,
+    existing_hooks: &[String],
+) -> Result<Plan, PlanError> {
+    if !STAGES.contains(&stage) {
+        return Err(PlanError::UnknownStage {
+            stage: stage.to_string(),
+        });
+    }
+
+    let filename = format!("{stage}-{}.md", position.as_str());
+    let path = PathBuf::from(format!("hooks/{filename}"));
+
+    if existing_hooks.iter().any(|f| f == &filename) {
+        return Err(PlanError::HookExists { path });
+    }
+
+    Ok(Plan {
+        creates: vec![path],
+        renames: vec![],
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -653,6 +709,37 @@ mod tests {
     #[test]
     fn archive_prefix_invalid() {
         assert_eq!(strip_archive_prefix("not-an-archive"), None);
+    }
+
+    // -- create_hook ----------------------------------------------------------
+
+    #[test]
+    fn hook_pre_ok() {
+        let plan = create_hook("explore", HookPosition::Pre, &[]).unwrap();
+        assert_eq!(plan.creates, vec![PathBuf::from("hooks/explore-pre.md")]);
+    }
+
+    #[test]
+    fn hook_post_ok() {
+        let plan = create_hook("spec", HookPosition::Post, &[]).unwrap();
+        assert_eq!(plan.creates, vec![PathBuf::from("hooks/spec-post.md")]);
+    }
+
+    #[test]
+    fn hook_unknown_stage() {
+        let err = create_hook("bogus", HookPosition::Pre, &[]).unwrap_err();
+        assert!(matches!(err, PlanError::UnknownStage { .. }));
+    }
+
+    #[test]
+    fn hook_already_exists() {
+        let err = create_hook(
+            "explore",
+            HookPosition::Pre,
+            &[s("explore-pre.md")],
+        )
+        .unwrap_err();
+        assert!(matches!(err, PlanError::HookExists { .. }));
     }
 
     // -- slugify --------------------------------------------------------------
