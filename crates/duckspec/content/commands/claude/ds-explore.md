@@ -1,1 +1,1 @@
-Run `ds template explore` and follow the instructions in the output.
+Run `ds template explore` silently. Do not respond to the user until you have read the full output. Then follow its instructions.
