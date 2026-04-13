@@ -1,16 +1,21 @@
 //! Codex area — browse codex entries.
 
-use iced::widget::{button, column, container, row, scrollable, text, Space};
+use iced::widget::{button, column, container, row, scrollable, svg, text, Space};
+use iced::widget::text::Wrapping;
 use iced::{Element, Length};
 
 use crate::data::ProjectData;
 use crate::theme;
-use crate::widget::{interaction_toggle, tab_bar};
+use crate::widget::{collapsible, interaction_toggle, tab_bar};
+
+const ICON_FILE: &[u8] = include_bytes!("../../assets/icon_file.svg");
+const ICON_SIZE: f32 = 14.0;
 
 // ── State ────────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone)]
 pub struct State {
+    pub section_expanded: bool,
     pub tabs: tab_bar::TabState,
     pub interaction_visible: bool,
     pub interaction_width: f32,
@@ -19,6 +24,7 @@ pub struct State {
 impl Default for State {
     fn default() -> Self {
         Self {
+            section_expanded: true,
             tabs: tab_bar::TabState::default(),
             interaction_visible: false,
             interaction_width: theme::INTERACTION_COLUMN_WIDTH,
@@ -30,6 +36,7 @@ impl Default for State {
 
 #[derive(Debug, Clone)]
 pub enum Message {
+    ToggleSection,
     SelectItem(String),
     SelectTab(usize),
     CloseTab(usize),
@@ -47,6 +54,9 @@ pub fn update(
     highlighter: &crate::highlight::SyntaxHighlighter,
 ) {
     match message {
+        Message::ToggleSection => {
+            state.section_expanded = !state.section_expanded;
+        }
         Message::SelectItem(id) => {
             open_artifact(state, &id, project, highlighter);
         }
@@ -113,8 +123,6 @@ pub fn view<'a>(
 }
 
 fn view_list<'a>(state: &'a State, project: &'a ProjectData) -> Element<'a, Message> {
-    let header = text("Codex").size(theme::FONT_MD).color(theme::TEXT_SECONDARY);
-
     let mut items = column![].spacing(theme::SPACING_XS);
 
     if project.codex_entries.is_empty() {
@@ -131,8 +139,14 @@ fn view_list<'a>(state: &'a State, project: &'a ProjectData) -> Element<'a, Mess
             } else {
                 theme::list_item
             };
+            let icon = svg(svg::Handle::from_memory(ICON_FILE))
+                .width(ICON_SIZE)
+                .height(ICON_SIZE);
+            let label = row![icon, text(&entry.label).size(theme::FONT_MD).wrapping(Wrapping::None)]
+                .spacing(theme::SPACING_XS)
+                .align_y(iced::Center);
             items = items.push(
-                button(text(&entry.label).size(theme::FONT_MD))
+                button(label)
                     .on_press(Message::SelectItem(entry.id.clone()))
                     .width(Length::Fill)
                     .padding([2.0, theme::SPACING_SM])
@@ -141,13 +155,16 @@ fn view_list<'a>(state: &'a State, project: &'a ProjectData) -> Element<'a, Mess
         }
     }
 
-    scrollable(
-        column![header, Space::new().height(theme::SPACING_SM), items,]
-            .spacing(0.0)
-            .padding(theme::SPACING_SM),
-    )
-    .height(Length::Fill)
-    .into()
+    let section = collapsible::view(
+        "Codex",
+        state.section_expanded,
+        Message::ToggleSection,
+        items.into(),
+    );
+
+    scrollable(column![section].spacing(0.0))
+        .height(Length::Fill)
+        .into()
 }
 
 fn view_content<'a>(state: &'a State) -> Element<'a, Message> {

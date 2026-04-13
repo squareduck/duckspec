@@ -3,8 +3,8 @@
 
 use iced::event;
 use iced::keyboard;
-use iced::widget::{row, stack};
-use iced::{Element, Event, Subscription, Task};
+use iced::widget::{container, row, stack, Space};
+use iced::{Element, Event, Length, Subscription, Task};
 
 mod agent;
 mod area;
@@ -708,7 +708,10 @@ fn view(state: &State) -> Element<'_, Message> {
         }
     };
 
-    let main_view = row![sidebar, area_content];
+    let sidebar_divider = container(Space::new().height(Length::Fill))
+        .width(1.0)
+        .style(theme::divider);
+    let main_view = row![sidebar, sidebar_divider, area_content];
 
     if state.file_finder.visible {
         let overlay = widget::file_finder::view(&state.file_finder).map(Message::FileFinder);

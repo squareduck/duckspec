@@ -88,11 +88,6 @@ pub fn app_theme() -> Theme {
 pub fn sidebar(_theme: &Theme) -> container::Style {
     container::Style {
         background: Some(BG_BASE.into()),
-        border: Border {
-            color: BORDER_COLOR,
-            width: 1.0,
-            radius: 0.0.into(),
-        },
         ..Default::default()
     }
 }
@@ -126,6 +121,13 @@ pub fn panel(_theme: &Theme) -> container::Style {
 pub fn divider(_theme: &Theme) -> container::Style {
     container::Style {
         background: Some(BORDER_COLOR.into()),
+        ..Default::default()
+    }
+}
+
+pub fn accent_bar(_theme: &Theme) -> container::Style {
+    container::Style {
+        background: Some(ACCENT.into()),
         ..Default::default()
     }
 }
@@ -169,10 +171,7 @@ pub fn list_item(_theme: &Theme, status: button::Status) -> button::Style {
     button::Style {
         background: bg,
         text_color: TEXT_PRIMARY,
-        border: Border {
-            radius: BORDER_RADIUS.into(),
-            ..Default::default()
-        },
+        border: Border::default(),
         ..Default::default()
     }
 }
@@ -181,10 +180,7 @@ pub fn list_item_active(_theme: &Theme, _status: button::Status) -> button::Styl
     button::Style {
         background: Some(BG_ELEVATED.into()),
         text_color: ACCENT,
-        border: Border {
-            radius: BORDER_RADIUS.into(),
-            ..Default::default()
-        },
+        border: Border::default(),
         ..Default::default()
     }
 }
@@ -193,23 +189,19 @@ pub fn tab_active(_theme: &Theme, _status: button::Status) -> button::Style {
     button::Style {
         background: Some(BG_SURFACE.into()),
         text_color: TEXT_PRIMARY,
-        border: Border {
-            color: ACCENT,
-            width: 0.0,
-            radius: 0.0.into(),
-        },
+        border: Border::default(),
         ..Default::default()
     }
 }
 
 pub fn tab_inactive(_theme: &Theme, status: button::Status) -> button::Style {
-    let bg = match status {
-        button::Status::Hovered => Some(BG_HOVER.into()),
-        _ => Some(BG_ELEVATED.into()),
+    let text = match status {
+        button::Status::Hovered => TEXT_PRIMARY,
+        _ => TEXT_MUTED,
     };
     button::Style {
-        background: bg,
-        text_color: TEXT_SECONDARY,
+        background: Some(BG_SURFACE.into()),
+        text_color: text,
         border: Border::default(),
         ..Default::default()
     }
@@ -217,13 +209,17 @@ pub fn tab_inactive(_theme: &Theme, status: button::Status) -> button::Style {
 
 pub fn section_header(_theme: &Theme, status: button::Status) -> button::Style {
     let bg = match status {
-        button::Status::Hovered => Some(BG_ELEVATED.into()),
-        _ => None,
+        button::Status::Hovered => Some(BG_HOVER.into()),
+        _ => Some(BG_ELEVATED.into()),
     };
     button::Style {
         background: bg,
         text_color: TEXT_SECONDARY,
-        border: Border::default(),
+        border: Border {
+            color: BORDER_COLOR,
+            width: 1.0,
+            radius: 0.0.into(),
+        },
         ..Default::default()
     }
 }

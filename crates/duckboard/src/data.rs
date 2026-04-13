@@ -27,11 +27,22 @@ pub struct ChangeData {
     pub steps: Vec<StepInfo>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StepCompletion {
+    /// No tasks defined in the step file.
+    NoTasks,
+    /// Some tasks remain (done, total).
+    Partial(usize, usize),
+    /// All tasks complete.
+    Done,
+}
+
 #[derive(Debug, Clone)]
 pub struct StepInfo {
     pub id: String,
     pub label: String,
     pub number: u32,
+    pub completion: StepCompletion,
 }
 
 #[derive(Debug, Clone)]
@@ -250,15 +261,42 @@ fn build_steps(dir: &Path, change_prefix: &str) -> Vec<StepInfo> {
         let stem = name.trim_end_matches(".md");
         if let Some((num_str, slug)) = stem.split_once('-') {
             if let Ok(number) = num_str.parse::<u32>() {
+                let completion = compute_step_completion(&entry.path());
                 steps.push(StepInfo {
                     id: format!("{}/steps/{}", change_prefix, name),
                     label: slug.replace('-', " "),
                     number,
+                    completion,
                 });
             }
         }
     }
     steps
+}
+
+fn compute_step_completion(path: &Path) -> StepCompletion {
+    let source = match fs::read_to_string(path) {
+        Ok(s) => s,
+        Err(_) => return StepCompletion::NoTasks,
+    };
+    let elements = duckpond::parse::parse_elements(&source);
+    let step = match duckpond::parse::step::parse_step(&elements) {
+        Ok(s) => s,
+        Err(_) => return StepCompletion::NoTasks,
+    };
+
+    let total = step.tasks.len()
+        + step.tasks.iter().map(|t| t.subtasks.len()).sum::<usize>();
+    if total == 0 {
+        return StepCompletion::NoTasks;
+    }
+    let done = step.tasks.iter().filter(|t| t.checked).count()
+        + step.tasks.iter().flat_map(|t| &t.subtasks).filter(|s| s.checked).count();
+    if done == total {
+        StepCompletion::Done
+    } else {
+        StepCompletion::Partial(done, total)
+    }
 }
 
 /// Count capabilities (directories that have a spec.md child).

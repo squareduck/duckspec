@@ -4,7 +4,7 @@
 //! added/removed lines, and hunk headers. Structured to support future
 //! syntax highlighting (each line's text is isolated for span replacement).
 
-use iced::widget::{column, container, row, scrollable, text, Space};
+use iced::widget::{column, container, row, scrollable, text};
 use iced::{Element, Length};
 
 use crate::theme;
@@ -17,9 +17,6 @@ const LINE_HEIGHT: f32 = 20.0;
 /// Render a full inline diff view.
 pub fn view<'a, M: 'a>(diff: &'a DiffData) -> Element<'a, M> {
     let mut col = column![].spacing(0.0);
-
-    // File header.
-    col = col.push(file_header(diff));
 
     if diff.hunks.is_empty() {
         let msg = match diff.status {
@@ -44,32 +41,6 @@ pub fn view<'a, M: 'a>(diff: &'a DiffData) -> Element<'a, M> {
         .height(Length::Fill)
         .width(Length::Fill)
         .into()
-}
-
-fn file_header<'a, M: 'a>(diff: &'a DiffData) -> Element<'a, M> {
-    let status_label = match diff.status {
-        FileStatus::Modified => "modified",
-        FileStatus::Added => "added",
-        FileStatus::Deleted => "deleted",
-    };
-    let status_color = theme::vcs_status_color(&diff.status);
-
-    container(
-        row![
-            text(diff.path.display().to_string())
-                .size(theme::FONT_MD)
-                .font(iced::Font::MONOSPACE)
-                .color(theme::TEXT_PRIMARY),
-            Space::new().width(theme::SPACING_SM),
-            text(status_label).size(theme::FONT_SM).color(status_color),
-        ]
-        .spacing(theme::SPACING_SM)
-        .align_y(iced::Center),
-    )
-    .padding([theme::SPACING_SM, theme::SPACING_LG])
-    .width(Length::Fill)
-    .style(theme::elevated)
-    .into()
 }
 
 fn hunk_header<'a, M: 'a>(header: &'a str) -> Element<'a, M> {

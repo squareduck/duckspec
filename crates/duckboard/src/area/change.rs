@@ -3,14 +3,27 @@
 use std::collections::HashSet;
 use std::path::PathBuf;
 
-use iced::widget::{button, column, container, row, scrollable, text, Space};
+use iced::widget::{button, column, container, row, scrollable, svg, text, Space};
+use iced::widget::text::Wrapping;
 use iced::{Element, Length};
 
 use crate::chat_store::ChatSession;
-use crate::data::{ChangeData, ProjectData};
+use crate::data::{ChangeData, ProjectData, StepCompletion};
 use crate::theme;
 use crate::vcs::{self, ChangedFile, FileStatus};
 use crate::widget::{agent_chat, collapsible, interaction_toggle, tab_bar, tree_view};
+
+const ICON_BRANCH: &[u8] = include_bytes!("../../assets/icon_branch.svg");
+const ICON_FILE: &[u8] = include_bytes!("../../assets/icon_file.svg");
+const ICON_SPEC: &[u8] = include_bytes!("../../assets/icon_spec.svg");
+const ICON_DOC: &[u8] = include_bytes!("../../assets/icon_doc.svg");
+const ICON_SPEC_DELTA: &[u8] = include_bytes!("../../assets/icon_spec_delta.svg");
+const ICON_DOC_DELTA: &[u8] = include_bytes!("../../assets/icon_doc_delta.svg");
+const ICON_STEP: &[u8] = include_bytes!("../../assets/icon_step.svg");
+const ICON_STEP_DONE: &[u8] = include_bytes!("../../assets/icon_step_done.svg");
+const ICON_STEP_PARTIAL: &[u8] = include_bytes!("../../assets/icon_step_partial.svg");
+
+const ICON_SIZE: f32 = 14.0;
 
 // ── State ────────────────────────────────────────────────────────────────────
 
@@ -233,8 +246,14 @@ fn view_list<'a>(state: &'a State, project: &'a ProjectData) -> Element<'a, Mess
         } else {
             theme::list_item
         };
+        let icon = svg(svg::Handle::from_memory(ICON_BRANCH))
+            .width(ICON_SIZE)
+            .height(ICON_SIZE);
+        let label = row![icon, text(&ch.name).size(theme::FONT_MD).wrapping(Wrapping::None)]
+            .spacing(theme::SPACING_XS)
+            .align_y(iced::Center);
         selector = selector.push(
-            button(text(&ch.name).size(theme::FONT_MD))
+            button(label)
                 .on_press(Message::SelectChange(ch.name.clone()))
                 .width(Length::Fill)
                 .padding([theme::SPACING_XS, theme::SPACING_SM])
@@ -326,11 +345,33 @@ fn view_steps_section<'a>(state: &'a State, change: &'a ChangeData) -> Element<'
         items = items.push(text("No steps").size(theme::FONT_MD).color(theme::TEXT_MUTED));
     } else {
         for step in &change.steps {
-            items = items.push(file_item(
-                &format!("{:02}. {}", step.number, step.label),
-                &step.id,
-                state,
-            ));
+            let is_active = state.tabs.active_tab().map_or(false, |t| t.id == step.id);
+            let style = if is_active {
+                theme::list_item_active as fn(&iced::Theme, button::Status) -> button::Style
+            } else {
+                theme::list_item
+            };
+            let icon_bytes: &[u8] = match step.completion {
+                StepCompletion::Done => ICON_STEP_DONE,
+                StepCompletion::Partial(_, _) => ICON_STEP_PARTIAL,
+                StepCompletion::NoTasks => ICON_STEP,
+            };
+            let icon = svg(svg::Handle::from_memory(icon_bytes))
+                .width(ICON_SIZE)
+                .height(ICON_SIZE);
+            let label = row![
+                icon,
+                text(format!("{:02}-{}", step.number, step.label)).size(theme::FONT_MD).wrapping(Wrapping::None),
+            ]
+            .spacing(theme::SPACING_XS)
+            .align_y(iced::Center);
+            items = items.push(
+                button(label)
+                    .on_press(Message::SelectItem(step.id.clone()))
+                    .width(Length::Fill)
+                    .padding([2.0, theme::SPACING_SM])
+                    .style(style),
+            );
         }
     }
 
@@ -368,7 +409,7 @@ fn view_changed_files_section<'a>(state: &'a State) -> Element<'a, Message> {
                     .size(theme::FONT_MD)
                     .font(iced::Font::MONOSPACE)
                     .color(color),
-                text(cf.path.display().to_string()).size(theme::FONT_MD),
+                text(cf.path.display().to_string()).size(theme::FONT_MD).wrapping(Wrapping::None),
             ]
             .spacing(theme::SPACING_SM);
 
@@ -390,6 +431,16 @@ fn view_changed_files_section<'a>(state: &'a State) -> Element<'a, Message> {
     )
 }
 
+fn icon_for_artifact(label: &str) -> &'static [u8] {
+    match label {
+        l if l.starts_with("spec.delta") => ICON_SPEC_DELTA,
+        l if l.starts_with("spec") => ICON_SPEC,
+        l if l.starts_with("doc.delta") => ICON_DOC_DELTA,
+        l if l.starts_with("doc") => ICON_DOC,
+        _ => ICON_FILE,
+    }
+}
+
 fn file_item<'a>(label: &str, id: &str, state: &State) -> Element<'a, Message> {
     let is_active = state.tabs.active_tab().map_or(false, |t| t.id == id);
     let style = if is_active {
@@ -397,7 +448,13 @@ fn file_item<'a>(label: &str, id: &str, state: &State) -> Element<'a, Message> {
     } else {
         theme::list_item
     };
-    button(text(label.to_string()).size(theme::FONT_MD))
+    let icon = svg(svg::Handle::from_memory(icon_for_artifact(label)))
+        .width(ICON_SIZE)
+        .height(ICON_SIZE);
+    let content = row![icon, text(label.to_string()).size(theme::FONT_MD).wrapping(Wrapping::None)]
+        .spacing(theme::SPACING_XS)
+        .align_y(iced::Center);
+    button(content)
         .on_press(Message::SelectItem(id.to_string()))
         .width(Length::Fill)
         .padding([2.0, theme::SPACING_SM])

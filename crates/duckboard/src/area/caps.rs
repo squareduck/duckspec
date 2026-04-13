@@ -7,13 +7,14 @@ use iced::{Element, Length};
 
 use crate::data::ProjectData;
 use crate::theme;
-use crate::widget::{interaction_toggle, tab_bar, tree_view};
+use crate::widget::{collapsible, interaction_toggle, tab_bar, tree_view};
 
 // ── State ────────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone)]
 pub struct State {
     pub expanded_nodes: HashSet<String>,
+    pub section_expanded: bool,
     pub tabs: tab_bar::TabState,
     pub interaction_visible: bool,
     pub interaction_width: f32,
@@ -23,6 +24,7 @@ impl Default for State {
     fn default() -> Self {
         Self {
             expanded_nodes: HashSet::new(),
+            section_expanded: true,
             tabs: tab_bar::TabState::default(),
             interaction_visible: false,
             interaction_width: theme::INTERACTION_COLUMN_WIDTH,
@@ -34,6 +36,7 @@ impl Default for State {
 
 #[derive(Debug, Clone)]
 pub enum Message {
+    ToggleSection,
     ToggleNode(String),
     SelectItem(String),
     SelectTab(usize),
@@ -52,6 +55,9 @@ pub fn update(
     highlighter: &crate::highlight::SyntaxHighlighter,
 ) {
     match message {
+        Message::ToggleSection => {
+            state.section_expanded = !state.section_expanded;
+        }
         Message::ToggleNode(id) => {
             if !state.expanded_nodes.remove(&id) {
                 state.expanded_nodes.insert(id);
@@ -124,8 +130,6 @@ pub fn view<'a>(
 }
 
 fn view_list<'a>(state: &'a State, project: &'a ProjectData) -> Element<'a, Message> {
-    let header = text("Capabilities").size(theme::FONT_MD).color(theme::TEXT_SECONDARY);
-
     let tree = if project.cap_tree.is_empty() {
         column![
             text("No capabilities found")
@@ -143,13 +147,16 @@ fn view_list<'a>(state: &'a State, project: &'a ProjectData) -> Element<'a, Mess
         )
     };
 
-    scrollable(
-        column![header, Space::new().height(theme::SPACING_SM), tree,]
-            .spacing(0.0)
-            .padding(theme::SPACING_SM),
-    )
-    .height(Length::Fill)
-    .into()
+    let section = collapsible::view(
+        "Capabilities",
+        state.section_expanded,
+        Message::ToggleSection,
+        tree,
+    );
+
+    scrollable(column![section].spacing(0.0))
+        .height(Length::Fill)
+        .into()
 }
 
 fn view_content<'a>(state: &'a State) -> Element<'a, Message> {

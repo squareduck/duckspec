@@ -5,12 +5,29 @@
 //! (up to `MAX_FILE_TABS`) hold files opened via the file finder (Ctrl+P),
 //! with oldest-first eviction.
 
-use iced::widget::{button, container, row, text, Space};
+use iced::widget::{button, column, container, row, svg, text, Space};
 use iced::{Center, Element, Length};
 
 use crate::theme;
 use crate::vcs::DiffData;
 use crate::widget::text_edit::{self, EditorAction, EditorState};
+
+const ICON_FILE: &[u8] = include_bytes!("../../assets/icon_file.svg");
+const ICON_SPEC: &[u8] = include_bytes!("../../assets/icon_spec.svg");
+const ICON_DOC: &[u8] = include_bytes!("../../assets/icon_doc.svg");
+const ICON_SPEC_DELTA: &[u8] = include_bytes!("../../assets/icon_spec_delta.svg");
+const ICON_DOC_DELTA: &[u8] = include_bytes!("../../assets/icon_doc_delta.svg");
+const ICON_SIZE: f32 = 14.0;
+
+fn icon_for_title(title: &str) -> &'static [u8] {
+    match title {
+        t if t.starts_with("spec.delta") => ICON_SPEC_DELTA,
+        t if t.starts_with("spec") => ICON_SPEC,
+        t if t.starts_with("doc.delta") => ICON_DOC_DELTA,
+        t if t.starts_with("doc") => ICON_DOC,
+        _ => ICON_FILE,
+    }
+}
 
 const MAX_FILE_TABS: usize = 5;
 
@@ -238,7 +255,7 @@ pub fn view_bar<'a, M: Clone + 'a>(
         return Space::new().into();
     }
 
-    let mut tabs_row = row![].spacing(1.0).height(34.0);
+    let mut tabs_row = row![].spacing(0.0).height(32.0);
 
     for (logical_idx, tab) in &all {
         let is_active = match state.active {
@@ -272,26 +289,100 @@ pub fn view_bar<'a, M: Clone + 'a>(
 
         let tab_btn = button(tab_row)
             .on_press(on_select(*logical_idx))
-            .padding([theme::SPACING_XS, theme::SPACING_SM])
+            .padding([theme::SPACING_SM, theme::SPACING_MD])
             .style(tab_style);
 
-        tabs_row = tabs_row.push(tab_btn);
+        // Active tab gets an accent underline
+        let underline_style = if is_active { theme::accent_bar } else { theme::surface };
+        let underline = container(Space::new().width(Length::Fill).height(2.0))
+            .width(Length::Fill)
+            .style(underline_style);
+
+        // Vertical separator before each tab
+        let sep = container(Space::new().width(1.0).height(Length::Fill))
+            .style(theme::divider);
+        tabs_row = tabs_row.push(sep);
+
+        tabs_row = tabs_row.push(
+            column![tab_btn, underline].width(Length::Shrink),
+        );
     }
 
-    container(tabs_row)
+    // Closing separator after the last tab
+    let sep = container(Space::new().width(1.0).height(Length::Fill))
+        .style(theme::divider);
+    tabs_row = tabs_row.push(sep);
+
+    let bar_border = container(Space::new().width(Length::Fill).height(1.0))
         .width(Length::Fill)
-        .style(theme::elevated)
-        .into()
+        .style(theme::divider);
+
+    column![
+        container(tabs_row).width(Length::Fill).style(theme::surface),
+        bar_border,
+    ]
+    .into()
 }
 
 pub fn view_content(state: &TabState) -> Element<'_, TabContentMsg> {
     match state.active_tab() {
-        Some(tab) => match &tab.view {
-            TabView::Editor { editor, .. } => {
-                text_edit::view(editor, TabContentMsg::EditorAction)
-            }
-            TabView::Diff(diff) => super::diff_view::view(diff),
-        },
+        Some(tab) => {
+            let header: Element<'_, TabContentMsg> = match &tab.view {
+                TabView::Diff(diff) => {
+                    let status_char = match diff.status {
+                        crate::vcs::FileStatus::Modified => "M",
+                        crate::vcs::FileStatus::Added => "A",
+                        crate::vcs::FileStatus::Deleted => "D",
+                    };
+                    let color = theme::vcs_status_color(&diff.status);
+                    container(
+                        row![
+                            text(status_char)
+                                .size(theme::FONT_MD)
+                                .font(iced::Font::MONOSPACE)
+                                .color(color),
+                            text(diff.path.display().to_string())
+                                .size(theme::FONT_MD)
+                                .color(theme::TEXT_SECONDARY),
+                        ]
+                        .spacing(theme::SPACING_SM)
+                        .align_y(Center),
+                    )
+                    .padding([theme::SPACING_SM, theme::SPACING_SM])
+                    .width(Length::Fill)
+                    .style(theme::surface)
+                    .into()
+                }
+                _ => {
+                    let icon = svg(svg::Handle::from_memory(icon_for_title(&tab.title)))
+                        .width(ICON_SIZE)
+                        .height(ICON_SIZE);
+                    container(
+                        row![
+                            icon,
+                            text(&tab.id)
+                                .size(theme::FONT_MD)
+                                .color(theme::TEXT_SECONDARY),
+                        ]
+                        .spacing(theme::SPACING_XS)
+                        .align_y(Center),
+                    )
+                    .padding([theme::SPACING_SM, theme::SPACING_SM])
+                    .width(Length::Fill)
+                    .style(theme::surface)
+                    .into()
+                }
+            };
+
+            let body: Element<'_, TabContentMsg> = match &tab.view {
+                TabView::Editor { editor, .. } => {
+                    text_edit::view(editor, TabContentMsg::EditorAction)
+                }
+                TabView::Diff(diff) => super::diff_view::view(diff),
+            };
+
+            column![header, body].height(Length::Fill).into()
+        }
         None => container(
             text("Select an item to view its contents")
                 .size(theme::FONT_MD)
