@@ -93,7 +93,7 @@ enum Message {
     TerminalSpawn,
     TerminalScroll,
     PtyEvent(widget::terminal::PtyEvent),
-    // ACP agent chat
+    // Agent chat
     AgentEvent(agent::AgentEvent),
     AgentSpawn,
 }
@@ -250,7 +250,8 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                 match chat_msg {
                     widget::agent_chat::Msg::SendPressed => {
                         if let Some(handle) = &state.agent_handle {
-                            let text = state.change.chat_input.clone();
+                            let text = state.change.chat_input.text();
+                            let text = text.trim().to_string();
                             if !text.is_empty() {
                                 // Add user message to session.
                                 if let Some(session) = &mut state.change.chat_session {
@@ -264,7 +265,12 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                                 }
                                 let context = gather_agent_context(state);
                                 handle.send_prompt(text, context);
-                                state.change.chat_input.clear();
+                                state.change.chat_input =
+                                    iced::widget::text_editor::Content::new();
+                                state.change.chat_completion.visible = false;
+                                area::change::rebuild_chat_editor(
+                                    &mut state.change,
+                                );
                             }
                         }
                         return Task::none();
@@ -278,7 +284,8 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                     _ => {}
                 }
             }
-            // Handle interaction mode switch — spawn ACP if needed.
+            // Handle interaction mode switch — spawn agent if needed.
+            let is_agent_chat_msg = matches!(msg, area::change::Message::AgentChat(_));
             let is_mode_switch = matches!(
                 msg,
                 area::change::Message::SwitchInteractionMode(area::change::InteractionMode::AgentChat)
@@ -293,12 +300,25 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
             if is_toggle && state.change.interaction_visible && state.terminal.is_none() {
                 let _ = update(state, Message::TerminalSpawn);
             }
-            // Auto-spawn ACP session when switching to agent chat mode.
-            if is_mode_switch && state.change.chat_session.is_none() {
+            // Auto-spawn agent session when switching to agent chat mode or
+            // opening the panel (default mode is now AgentChat).
+            let wants_agent = is_mode_switch
+                || (is_toggle
+                    && state.change.interaction_visible
+                    && state.change.interaction_mode
+                        == area::change::InteractionMode::AgentChat);
+            if wants_agent && state.change.chat_session.is_none() {
                 let _ = update(state, Message::AgentSpawn);
             }
             state.terminal_focused = state.change.interaction_visible
                 && state.change.interaction_mode == area::change::InteractionMode::Terminal;
+            // Keep chat input focused during agent chat interactions.
+            if state.change.interaction_visible
+                && state.change.interaction_mode == area::change::InteractionMode::AgentChat
+                && (is_toggle || is_mode_switch || is_agent_chat_msg)
+            {
+                return iced::widget::operation::focus(widget::agent_chat::INPUT_ID);
+            }
         }
         Message::Caps(msg) => {
             if matches!(msg, area::caps::Message::TerminalScroll) {
@@ -374,7 +394,7 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                 ts.apply_scroll();
             }
         }
-        // ACP agent chat
+        // Agent chat
         Message::AgentSpawn => {
             if state.change.chat_session.is_none() {
                 let change_name = state
@@ -387,6 +407,7 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                 let session = chat_store::load_session(&change_name)
                     .unwrap_or_else(|| chat_store::ChatSession::new(change_name));
                 state.change.chat_session = Some(session);
+                area::change::rebuild_chat_editor(&mut state.change);
                 tracing::info!("agent chat session created");
             }
         }
@@ -396,6 +417,10 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                 AgentEvent::Ready(handle) => {
                     state.agent_handle = Some(handle);
                     tracing::info!("agent handle ready");
+                }
+                AgentEvent::CommandsAvailable(commands) => {
+                    tracing::info!(count = commands.len(), "slash commands discovered");
+                    state.change.chat_commands = commands;
                 }
                 AgentEvent::ContentDelta { text } => {
                     if let Some(session) = &mut state.change.chat_session {
@@ -443,6 +468,20 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                         });
                     }
                 }
+                AgentEvent::UsageUpdate { model, input_tokens, output_tokens, context_window } => {
+                    if let Some(m) = model {
+                        state.change.agent_model = m;
+                    }
+                    if input_tokens > 0 {
+                        state.change.agent_input_tokens = input_tokens;
+                    }
+                    if output_tokens > 0 {
+                        state.change.agent_output_tokens = output_tokens;
+                    }
+                    if let Some(cw) = context_window {
+                        state.change.agent_context_window = cw;
+                    }
+                }
                 AgentEvent::ProcessExited => {
                     tracing::info!("agent process exited");
                     state.agent_handle = None;
@@ -450,6 +489,12 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                         session.is_streaming = false;
                     }
                 }
+            }
+            // Sync editor states for any new messages.
+            area::change::rebuild_chat_editor(&mut state.change);
+            // Reset esc counter when streaming stops.
+            if !state.change.chat_session.as_ref().map_or(false, |s| s.is_streaming) {
+                state.change.esc_count = 0;
             }
         }
         Message::KeyPress(key, mods, text) => {
@@ -481,6 +526,91 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                         let _ = update(state, Message::FileFinder(widget::file_finder::Msg::SelectPrev));
                     }
                     _ => {}
+                }
+                return Task::none();
+            }
+
+            // Agent chat completion keyboard shortcuts.
+            let agent_chat_active = state.change.interaction_visible
+                && state.change.interaction_mode == area::change::InteractionMode::AgentChat
+                && state.change.chat_session.is_some();
+
+            if agent_chat_active && state.change.chat_completion.visible {
+                use keyboard::key::Named;
+                let completion_msg = match &key {
+                    keyboard::Key::Named(Named::Tab) => {
+                        Some(widget::agent_chat::Msg::CompletionAccept)
+                    }
+                    keyboard::Key::Named(Named::Escape) => {
+                        Some(widget::agent_chat::Msg::CompletionDismiss)
+                    }
+                    _ if mods.control()
+                        && key == keyboard::Key::Character("n".into()) =>
+                    {
+                        Some(widget::agent_chat::Msg::CompletionNext)
+                    }
+                    _ if mods.control()
+                        && key == keyboard::Key::Character("p".into()) =>
+                    {
+                        Some(widget::agent_chat::Msg::CompletionPrev)
+                    }
+                    _ => None,
+                };
+                if let Some(msg) = completion_msg {
+                    return update(
+                        state,
+                        Message::Change(area::change::Message::AgentChat(msg)),
+                    );
+                }
+            }
+
+            // Agent chat: Esc-Esc to cancel streaming.
+            if agent_chat_active
+                && key == keyboard::Key::Named(keyboard::key::Named::Escape)
+            {
+                let is_streaming = state.change.chat_session
+                    .as_ref()
+                    .map_or(false, |s| s.is_streaming);
+                if is_streaming {
+                    state.change.esc_count += 1;
+                    if state.change.esc_count >= 2 {
+                        // Don't reset esc_count — keep it at 2 so the status
+                        // bar shows "cancelling…" until streaming actually stops.
+                        return update(
+                            state,
+                            Message::Change(area::change::Message::AgentChat(
+                                widget::agent_chat::Msg::CancelPressed,
+                            )),
+                        );
+                    }
+                    return Task::none();
+                }
+            }
+
+            // Reset esc counter on any non-Esc key.
+            if agent_chat_active
+                && key != keyboard::Key::Named(keyboard::key::Named::Escape)
+            {
+                state.change.esc_count = 0;
+            }
+
+            // Agent chat: Enter sends, Shift+Enter inserts newline.
+            if agent_chat_active
+                && key == keyboard::Key::Named(keyboard::key::Named::Enter)
+            {
+                if mods.shift() {
+                    state.change.chat_input.perform(
+                        iced::widget::text_editor::Action::Edit(
+                            iced::widget::text_editor::Edit::Enter,
+                        ),
+                    );
+                } else {
+                    return update(
+                        state,
+                        Message::Change(area::change::Message::AgentChat(
+                            widget::agent_chat::Msg::SendPressed,
+                        )),
+                    );
                 }
                 return Task::none();
             }
@@ -586,9 +716,9 @@ pub fn handle_editor_action(
             }
             editor.cursor = pos;
         }
-        EditorAction::Scroll(dy) => {
-            let max_scroll = (editor.line_count() as f32 * 20.0).max(0.0);
-            editor.scroll_y = (editor.scroll_y + dy).clamp(0.0, max_scroll);
+        EditorAction::Scroll { dy, viewport_height, content_height } => {
+            let max = (content_height - viewport_height).max(0.0);
+            editor.scroll_y = (editor.scroll_y + dy).clamp(0.0, max);
         }
         EditorAction::SaveRequested => {
             // TODO: write editor content back to disk.
@@ -644,7 +774,7 @@ pub fn open_artifact_tab(
     }
 }
 
-// ── ACP helpers ─────────────────────────────────────────────────────────────
+// ── Agent helpers ───────────────────────────────────────────────────────────
 
 fn flush_pending_text(session: &mut chat_store::ChatSession) {
     if !session.pending_text.is_empty() {
@@ -742,7 +872,7 @@ fn subscription(state: &State) -> Subscription<Message> {
         );
     }
 
-    // ACP subscription: active when a chat session exists.
+    // Agent subscription: active when a chat session exists.
     if state.change.chat_session.is_some() {
         if let Some(root) = state.project.project_root.as_ref() {
             subs.push(

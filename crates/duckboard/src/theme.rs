@@ -51,6 +51,7 @@ pub const LAVENDER: Color = hex(0xb7, 0xbd, 0xf8);
 
 // ── Font sizes ──────────────────────────────────────────────────────────────
 
+pub const FONT_XS: f32 = 11.0;
 pub const FONT_SM: f32 = 11.0;
 pub const FONT_MD: f32 = 13.0;
 pub const FONT_LG: f32 = 16.0;

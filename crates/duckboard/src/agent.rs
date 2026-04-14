@@ -4,7 +4,9 @@
 //! stdin/stdout). Each prompt turn spawns a subprocess; multi-turn is achieved
 //! with `--resume <session_id>`.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 use iced::Subscription;
 use tokio::sync::mpsc;
@@ -16,6 +18,8 @@ use tokio::sync::mpsc;
 pub enum AgentEvent {
     /// Worker ready — carries a handle for sending commands.
     Ready(AgentHandle),
+    /// Available slash commands discovered from the project and plugins.
+    CommandsAvailable(Vec<SlashCommand>),
     /// Streaming text chunk from the agent.
     ContentDelta { text: String },
     /// Agent started a tool call.
@@ -29,6 +33,13 @@ pub enum AgentEvent {
         id: String,
         name: String,
         output: String,
+    },
+    /// Usage / model info update.
+    UsageUpdate {
+        model: Option<String>,
+        input_tokens: usize,
+        output_tokens: usize,
+        context_window: Option<usize>,
     },
     /// Agent finished its turn.
     TurnComplete,
@@ -45,7 +56,6 @@ pub enum AgentCommand {
         text: String,
         context: Option<AgentContext>,
     },
-    Cancel,
     Shutdown,
 }
 
@@ -60,9 +70,145 @@ pub struct AgentContext {
     pub git_diff: Option<String>,
 }
 
+/// A slash command available in the agent chat.
+#[derive(Debug, Clone)]
+pub struct SlashCommand {
+    pub name: String,
+    pub description: String,
+}
+
+/// Discover slash commands from the project and enabled plugins.
+pub fn discover_commands(project_root: &Path) -> Vec<SlashCommand> {
+    let mut commands = Vec::new();
+
+    // Project-level commands: <project>/.claude/commands/*.md
+    let project_cmds = project_root.join(".claude/commands");
+    if project_cmds.is_dir() {
+        scan_command_dir(&project_cmds, &mut commands);
+    }
+
+    // Enabled plugin commands from ~/.claude.
+    if let Ok(home) = std::env::var("HOME") {
+        let claude_dir = PathBuf::from(home).join(".claude");
+        let settings_path = claude_dir.join("settings.json");
+        if let Ok(settings_str) = std::fs::read_to_string(&settings_path) {
+            if let Ok(settings) = serde_json::from_str::<serde_json::Value>(&settings_str) {
+                if let Some(plugins) = settings["enabledPlugins"].as_object() {
+                    for (key, enabled) in plugins {
+                        if enabled.as_bool() != Some(true) {
+                            continue;
+                        }
+                        if let Some((plugin_name, marketplace)) = key.rsplit_once('@') {
+                            let plugin_dir = claude_dir
+                                .join("plugins/marketplaces")
+                                .join(marketplace)
+                                .join("plugins")
+                                .join(plugin_name);
+                            let cmd_dir = plugin_dir.join("commands");
+                            if cmd_dir.is_dir() {
+                                scan_command_dir(&cmd_dir, &mut commands);
+                            }
+                            let skills_dir = plugin_dir.join("skills");
+                            if skills_dir.is_dir() {
+                                scan_skills_dir(&skills_dir, &mut commands);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Built-in Claude Code commands (not discoverable from filesystem).
+    let builtins = [
+        ("clear", "Clear conversation history"),
+        ("compact", "Summarize and compact conversation"),
+        ("cost", "Show token usage and cost"),
+        ("help", "Show available commands"),
+        ("model", "Switch the model"),
+    ];
+    for (name, desc) in builtins {
+        commands.push(SlashCommand {
+            name: name.into(),
+            description: desc.into(),
+        });
+    }
+
+    commands.sort_by(|a, b| a.name.cmp(&b.name));
+    commands.dedup_by(|a, b| a.name == b.name);
+    commands
+}
+
+fn scan_command_dir(dir: &Path, commands: &mut Vec<SlashCommand>) {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().map_or(true, |e| e != "md") {
+            continue;
+        }
+        let name = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("")
+            .to_string();
+        if name.is_empty() {
+            continue;
+        }
+        let description = parse_frontmatter_description(&path).unwrap_or_default();
+        commands.push(SlashCommand { name, description });
+    }
+}
+
+fn scan_skills_dir(dir: &Path, commands: &mut Vec<SlashCommand>) {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let skill_file = path.join("SKILL.md");
+        if !skill_file.exists() {
+            continue;
+        }
+        let name = path
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("")
+            .to_string();
+        if name.is_empty() {
+            continue;
+        }
+        let description = parse_frontmatter_description(&skill_file).unwrap_or_default();
+        commands.push(SlashCommand { name, description });
+    }
+}
+
+fn parse_frontmatter_description(path: &Path) -> Option<String> {
+    let content = std::fs::read_to_string(path).ok()?;
+    let body = content.strip_prefix("---\n").or_else(|| content.strip_prefix("---\r\n"))?;
+    let end = body.find("\n---")?;
+    let frontmatter = &body[..end];
+    for line in frontmatter.lines() {
+        if let Some(desc) = line.strip_prefix("description:") {
+            let desc = desc.trim().trim_matches('"');
+            if !desc.is_empty() {
+                return Some(desc.to_string());
+            }
+        }
+    }
+    None
+}
+
 /// Clonable handle for sending commands to the worker.
 #[derive(Clone)]
 pub struct AgentHandle {
+    cancel_flag: Arc<AtomicBool>,
     tx: mpsc::UnboundedSender<AgentCommand>,
 }
 
@@ -72,7 +218,7 @@ impl AgentHandle {
     }
 
     pub fn cancel(&self) {
-        let _ = self.tx.send(AgentCommand::Cancel);
+        self.cancel_flag.store(true, Ordering::SeqCst);
     }
 
     #[allow(dead_code)]
@@ -102,10 +248,19 @@ fn agent_worker(project_root: PathBuf) -> impl iced::futures::Stream<Item = Agen
 
             let (cmd_tx, mut cmd_rx) = mpsc::unbounded_channel::<AgentCommand>();
 
+            // Shared cancel flag — set by cancel(), checked by read loop.
+            let cancel_flag = Arc::new(AtomicBool::new(false));
+
             // Send handle to Iced immediately.
-            let handle = AgentHandle { tx: cmd_tx };
+            let handle = AgentHandle { cancel_flag: cancel_flag.clone(), tx: cmd_tx };
             if sender.send(AgentEvent::Ready(handle)).await.is_err() {
                 return;
+            }
+
+            // Discover available slash commands and send them.
+            let commands = discover_commands(&project_root);
+            if !commands.is_empty() {
+                let _ = sender.send(AgentEvent::CommandsAvailable(commands)).await;
             }
 
             // Session ID persists across turns for multi-turn conversations.
@@ -115,12 +270,14 @@ fn agent_worker(project_root: PathBuf) -> impl iced::futures::Stream<Item = Agen
             while let Some(cmd) = cmd_rx.recv().await {
                 match cmd {
                     AgentCommand::SendPrompt { text, context } => {
+                        cancel_flag.store(false, Ordering::SeqCst);
                         let prompt = format_prompt(&text, context.as_ref());
                         match run_prompt_turn(
                             &project_root,
                             &prompt,
                             session_id.as_deref(),
                             &mut sender,
+                            &cancel_flag,
                         )
                         .await
                         {
@@ -131,16 +288,18 @@ fn agent_worker(project_root: PathBuf) -> impl iced::futures::Stream<Item = Agen
                                 }
                             }
                             Err(e) => {
-                                let _ = sender.send(AgentEvent::Error(format!("{e}"))).await;
+                                let msg = format!("{e}");
+                                if msg != "cancelled" {
+                                    let _ = sender.send(AgentEvent::Error(msg)).await;
+                                } else {
+                                    let _ = sender.send(AgentEvent::TurnComplete).await;
+                                }
                             }
                         }
                     }
-                    AgentCommand::Cancel => {
-                        // Can't cancel a -p subprocess cleanly; user can send next message.
-                        tracing::info!("cancel requested (ignored for -p mode)");
-                    }
                     AgentCommand::Shutdown => {
                         tracing::info!("agent chat shutdown");
+                        cancel_flag.store(true, Ordering::SeqCst);
                         break;
                     }
                 }
@@ -161,6 +320,7 @@ async fn run_prompt_turn(
     prompt: &str,
     resume_session: Option<&str>,
     sender: &mut iced::futures::channel::mpsc::Sender<AgentEvent>,
+    cancel_flag: &Arc<AtomicBool>,
 ) -> anyhow::Result<String> {
     use iced::futures::SinkExt;
     use std::io::Write;
@@ -217,6 +377,15 @@ async fn run_prompt_turn(
     let mut result_session_id = String::new();
 
     while let Some(data) = line_rx.recv().await {
+        // Check cancel flag between lines.
+        if cancel_flag.load(Ordering::SeqCst) {
+            tracing::info!("cancelling agent turn, killing child");
+            let _ = child.kill();
+            // Drain remaining lines.
+            while line_rx.recv().await.is_some() {}
+            return Err(anyhow::anyhow!("cancelled"));
+        }
+
         let Some(line) = data else { break }; // EOF
         if line.is_empty() {
             continue;
@@ -228,7 +397,6 @@ async fn run_prompt_turn(
         let msg_type = msg["type"].as_str().unwrap_or("");
 
         match msg_type {
-            // Streaming text deltas from --include-partial-messages.
             "stream_event" => {
                 if let Some(event) = msg.get("event") {
                     let event_type = event["type"].as_str().unwrap_or("");
@@ -243,22 +411,28 @@ async fn run_prompt_turn(
                     }
                 }
             }
-            // Complete assistant message (contains tool_use blocks too).
             "assistant" => {
+                // Extract usage from assistant message.
+                let input_t = msg["message"]["usage"]["input_tokens"].as_u64().unwrap_or(0) as usize;
+                let output_t = msg["message"]["usage"]["output_tokens"].as_u64().unwrap_or(0) as usize;
+                if input_t > 0 || output_t > 0 {
+                    let _ = sender
+                        .send(AgentEvent::UsageUpdate {
+                            model: None,
+                            input_tokens: input_t,
+                            output_tokens: output_t,
+                            context_window: None,
+                        })
+                        .await;
+                }
                 if let Some(content) = msg["message"]["content"].as_array() {
                     for block in content {
                         match block["type"].as_str().unwrap_or("") {
                             "tool_use" => {
                                 let _ = sender
                                     .send(AgentEvent::ToolUse {
-                                        id: block["id"]
-                                            .as_str()
-                                            .unwrap_or("")
-                                            .to_string(),
-                                        name: block["name"]
-                                            .as_str()
-                                            .unwrap_or("")
-                                            .to_string(),
+                                        id: block["id"].as_str().unwrap_or("").to_string(),
+                                        name: block["name"].as_str().unwrap_or("").to_string(),
                                         input: block["input"].to_string(),
                                     })
                                     .await;
@@ -268,17 +442,13 @@ async fn run_prompt_turn(
                     }
                 }
             }
-            // Tool result from Claude executing a tool.
             "tool_result" | "user" => {
                 if let Some(content) = msg["message"]["content"].as_array() {
                     for block in content {
                         if block["type"].as_str() == Some("tool_result") {
                             let _ = sender
                                 .send(AgentEvent::ToolResult {
-                                    id: block["tool_use_id"]
-                                        .as_str()
-                                        .unwrap_or("")
-                                        .to_string(),
+                                    id: block["tool_use_id"].as_str().unwrap_or("").to_string(),
                                     name: String::new(),
                                     output: block["content"]
                                         .as_str()
@@ -290,10 +460,48 @@ async fn run_prompt_turn(
                     }
                 }
             }
-            // Final result — contains session_id for resume.
+            "system" => {
+                // Extract model name from system init message.
+                if let Some(model) = msg["model"].as_str() {
+                    let _ = sender
+                        .send(AgentEvent::UsageUpdate {
+                            model: Some(model.to_string()),
+                            input_tokens: 0,
+                            output_tokens: 0,
+                            context_window: None,
+                        })
+                        .await;
+                }
+            }
             "result" => {
+                tracing::debug!(result_msg = %msg, "agent result message");
                 if let Some(sid) = msg["session_id"].as_str() {
                     result_session_id = sid.to_string();
+                }
+                // Extract usage — sum all token types for total context.
+                let usage = &msg["usage"];
+                let input_tokens = usage["input_tokens"].as_u64().unwrap_or(0)
+                    + usage["cache_read_input_tokens"].as_u64().unwrap_or(0)
+                    + usage["cache_creation_input_tokens"].as_u64().unwrap_or(0);
+                let input_tokens = input_tokens as usize;
+                let output_tokens = usage["output_tokens"].as_u64()
+                    .unwrap_or(0) as usize;
+                // Extract contextWindow from modelUsage.
+                let context_window = msg["modelUsage"]
+                    .as_object()
+                    .and_then(|mu| mu.values().next())
+                    .and_then(|v| v["contextWindow"].as_u64())
+                    .map(|v| v as usize);
+
+                if input_tokens > 0 || output_tokens > 0 || context_window.is_some() {
+                    let _ = sender
+                        .send(AgentEvent::UsageUpdate {
+                            model: None,
+                            input_tokens,
+                            output_tokens,
+                            context_window,
+                        })
+                        .await;
                 }
                 if msg["is_error"].as_bool() == Some(true) {
                     let error_msg = msg["result"]
