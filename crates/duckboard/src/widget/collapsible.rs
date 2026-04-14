@@ -17,9 +17,9 @@ pub fn view<'a, M: Clone + 'a>(
         row![
             text(title.to_uppercase())
                 .size(theme::FONT_SM)
-                .color(theme::TEXT_SECONDARY),
+                .color(theme::text_secondary()),
             Space::new().width(Length::Fill),
-            text(arrow).size(theme::FONT_SM).color(theme::TEXT_MUTED),
+            text(arrow).size(theme::FONT_SM).color(theme::text_muted()),
         ]
         .width(Length::Fill),
     )

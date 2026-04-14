@@ -157,7 +157,7 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for InteractionHandle<'a, M>
         let bounds = layout.bounds();
         let hovered = cursor.is_over(bounds);
 
-        let bg = if hovered { theme::BG_HOVER } else { theme::BG_ELEVATED };
+        let bg = if hovered { theme::bg_hover() } else { theme::bg_elevated() };
         renderer::Renderer::fill_quad(
             renderer,
             renderer::Quad {
@@ -190,7 +190,7 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for InteractionHandle<'a, M>
                 wrapping: iced::advanced::text::Wrapping::None,
             },
             iced::Point::new(arrow_x, arrow_y),
-            theme::TEXT_MUTED,
+            theme::text_muted(),
             bounds,
         );
     }

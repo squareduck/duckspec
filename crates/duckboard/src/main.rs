@@ -126,6 +126,8 @@ enum Message {
     PtyEvent(String, widget::terminal::PtyEvent),
     // Per-instance agent events (key identifies the interaction)
     AgentEvent(String, agent::AgentEvent),
+    // System theme changed
+    ThemeChanged(theme::ColorMode),
 }
 
 // ── Update ───────────────────────────────────────────────────────────────────
@@ -383,6 +385,10 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                 ix.esc_count = 0;
             }
         }
+        Message::ThemeChanged(mode) => {
+            theme::set_mode(mode);
+            rehighlight_all(state);
+        }
         Message::KeyPress(key, mods, text) => {
             // Cmd+P: open file finder.
             if mods.command() && key == keyboard::Key::Character("p".into()) {
@@ -511,6 +517,24 @@ fn dispatch_interaction_msg(state: &mut State, key: &str, msg: interaction::Msg)
         KEY_CAPS => update(state, Message::Caps(area::caps::Message::Interaction(msg))),
         KEY_CODEX => update(state, Message::Codex(area::codex::Message::Interaction(msg))),
         _ => update(state, Message::Change(area::change::Message::Interaction(msg))),
+    }
+}
+
+/// Re-highlight all open tabs (e.g. after a theme switch).
+fn rehighlight_all(state: &mut State) {
+    for tabs in [&mut state.change.tabs, &mut state.caps.tabs, &mut state.codex.tabs] {
+        let all_tabs = tabs
+            .preview
+            .iter_mut()
+            .chain(tabs.file_tabs.iter_mut());
+        for tab in all_tabs {
+            match &mut tab.view {
+                tab_bar::TabView::Editor { editor, .. }
+                | tab_bar::TabView::Diff { editor, .. } => {
+                    rehighlight(editor, &tab.id, &state.highlighter);
+                }
+            }
+        }
     }
 }
 
@@ -756,7 +780,30 @@ fn subscription(state: &State) -> Subscription<Message> {
     // Global keyboard events.
     subs.push(event::listen_raw(handle_key_event));
 
+    // Poll system dark/light mode.
+    subs.push(theme_subscription());
+
     Subscription::batch(subs)
+}
+
+fn theme_subscription() -> Subscription<Message> {
+    Subscription::run(theme_detect_stream).map(Message::ThemeChanged)
+}
+
+fn theme_detect_stream() -> impl iced::futures::Stream<Item = theme::ColorMode> {
+    use iced::futures::stream::{self, StreamExt};
+    use std::sync::atomic::{AtomicU8, Ordering};
+    static LAST: AtomicU8 = AtomicU8::new(u8::MAX);
+    stream::unfold((), |()| async {
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+        let current = theme::detect_mode();
+        Some((current, ()))
+    })
+    .filter(move |current| {
+        let cur_val = *current as u8;
+        let prev_val = LAST.swap(cur_val, Ordering::Relaxed);
+        async move { prev_val != cur_val }
+    })
 }
 
 // Non-capturing mapper functions for Subscription::map.
@@ -777,7 +824,10 @@ fn tagged_agent((key, e): (String, agent::AgentEvent)) -> Message {
 
 fn main() -> iced::Result {
     tracing_subscriber::fmt::init();
-    tracing::info!("duckboard starting");
+
+    // Detect system dark/light mode before creating the window.
+    theme::set_mode(theme::detect_mode());
+    tracing::info!(mode = ?theme::mode(), "duckboard starting");
 
     iced::application(State::new, update, view)
         .subscription(subscription)

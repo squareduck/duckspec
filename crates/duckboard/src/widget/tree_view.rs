@@ -69,7 +69,7 @@ pub fn view<'a, M: Clone + 'a>(
                 .width(ICON_SIZE)
                 .height(ICON_SIZE);
             row![
-                text(arrow).size(theme::FONT_SM).color(theme::TEXT_MUTED),
+                text(arrow).size(theme::FONT_SM).color(theme::text_muted()),
                 icon,
                 text(node_label).size(theme::FONT_MD).wrapping(Wrapping::None),
             ]

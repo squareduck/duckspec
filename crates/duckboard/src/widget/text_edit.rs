@@ -58,32 +58,22 @@ pub struct BlockLineInfo {
 /// Background color for a block kind.
 pub fn block_kind_bg(kind: BlockKind) -> Color {
     match kind {
-        BlockKind::User => theme::BG_ELEVATED,
-        BlockKind::Assistant => theme::BG_SURFACE,
-        BlockKind::ToolUse => Color {
-            r: theme::ACCENT_DIM.r * 0.15 + theme::BG_SURFACE.r * 0.85,
-            g: theme::ACCENT_DIM.g * 0.15 + theme::BG_SURFACE.g * 0.85,
-            b: theme::ACCENT_DIM.b * 0.15 + theme::BG_SURFACE.b * 0.85,
-            a: 1.0,
-        },
-        BlockKind::ToolResult => Color {
-            r: theme::SUCCESS.r * 0.1 + theme::BG_SURFACE.r * 0.9,
-            g: theme::SUCCESS.g * 0.1 + theme::BG_SURFACE.g * 0.9,
-            b: theme::SUCCESS.b * 0.1 + theme::BG_SURFACE.b * 0.9,
-            a: 1.0,
-        },
-        BlockKind::System => theme::BG_BASE,
+        BlockKind::User => theme::chat_bg_user(),
+        BlockKind::Assistant => theme::chat_bg_assistant(),
+        BlockKind::ToolUse => theme::chat_bg_tool_use(),
+        BlockKind::ToolResult => theme::chat_bg_tool_result(),
+        BlockKind::System => theme::chat_bg_system(),
     }
 }
 
 /// Header label color for a block kind.
 fn block_header_color(kind: BlockKind) -> Color {
     match kind {
-        BlockKind::User => theme::ACCENT,
-        BlockKind::Assistant => theme::TEXT_SECONDARY,
-        BlockKind::ToolUse => theme::ACCENT_DIM,
-        BlockKind::ToolResult => theme::SUCCESS,
-        BlockKind::System => theme::TEXT_MUTED,
+        BlockKind::User => theme::accent(),
+        BlockKind::Assistant => theme::text_secondary(),
+        BlockKind::ToolUse => theme::accent_dim(),
+        BlockKind::ToolResult => theme::success(),
+        BlockKind::System => theme::text_muted(),
     }
 }
 
@@ -1197,7 +1187,7 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for TextEdit<'a, M> {
                     border: Border::default(),
                     ..renderer::Quad::default()
                 },
-                theme::BG_BASE,
+                theme::bg_base(),
             );
 
             let first_vrow = (scroll_y / LINE_HEIGHT).floor() as usize;
@@ -1300,7 +1290,7 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for TextEdit<'a, M> {
                                     border: Border::default(),
                                     ..renderer::Quad::default()
                                 },
-                                Color { a: 0.3, ..theme::ACCENT },
+                                Color { a: 0.3, ..theme::accent() },
                             );
                         }
                     }
@@ -1395,7 +1385,7 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for TextEdit<'a, M> {
                                     wrapping: text::Wrapping::None,
                                 },
                                 Point::new(content_x + CONTENT_PAD - scroll_x, y),
-                                theme::TEXT_PRIMARY,
+                                theme::text_primary(),
                                 content_clip,
                             );
                         }
@@ -1434,7 +1424,7 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for TextEdit<'a, M> {
                         border: Border::default(),
                         ..renderer::Quad::default()
                     },
-                    theme::ACCENT,
+                    theme::accent(),
                 );
             }
 
@@ -1452,7 +1442,7 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for TextEdit<'a, M> {
                         border: Border::default(),
                         ..renderer::Quad::default()
                     },
-                    theme::BG_SURFACE,
+                    theme::bg_surface(),
                 );
 
                 for vrow in first_vrow..last_vrow {
@@ -1467,9 +1457,9 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for TextEdit<'a, M> {
                         let digits = digit_count(self.state.line_count());
                         let line_num = format!("{:>width$} ", line_idx + 1, width = digits);
                         let num_color = if line_idx == self.state.cursor.line && internal.focused {
-                            theme::TEXT_SECONDARY
+                            theme::text_secondary()
                         } else {
-                            theme::TEXT_MUTED
+                            theme::text_muted()
                         };
                         renderer.fill_text(
                             iced::advanced::Text {

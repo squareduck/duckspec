@@ -43,8 +43,8 @@ impl Default for RenderCell {
     fn default() -> Self {
         Self {
             grapheme: ' ',
-            fg: theme::TEXT_PRIMARY,
-            bg: theme::BG_BASE,
+            fg: theme::text_primary(),
+            bg: theme::bg_base(),
             bold: false,
             italic: false,
         }
@@ -75,8 +75,8 @@ impl CellBuffer {
             rows,
             cells: vec![RenderCell::default(); (cols as usize) * (rows as usize)],
             cursor: None,
-            default_fg: theme::TEXT_PRIMARY,
-            default_bg: theme::BG_BASE,
+            default_fg: theme::text_primary(),
+            default_bg: theme::bg_base(),
         }
     }
 
@@ -522,7 +522,7 @@ impl<'a> canvas::Program<()> for TerminalCanvas<'a> {
                         Size::new(CELL_WIDTH, CELL_HEIGHT),
                         Color {
                             a: 0.5,
-                            ..theme::TEXT_PRIMARY
+                            ..theme::text_primary()
                         },
                     );
                 }

@@ -207,11 +207,11 @@ pub fn view<'a>(
 fn view_status_bar<'a>(status: StatusInfo) -> Element<'a, Msg> {
     // Left side: status + cancel hint.
     let (status_text, status_color) = if status.is_streaming && status.esc_count >= 2 {
-        ("cancelling…", theme::ERROR)
+        ("cancelling…", theme::error())
     } else if status.is_streaming {
-        ("streaming", theme::ACCENT_DIM)
+        ("streaming", theme::accent_dim())
     } else {
-        ("ready", theme::TEXT_MUTED)
+        ("ready", theme::text_muted())
     };
 
     let mut left = row![
@@ -226,7 +226,7 @@ fn view_status_bar<'a>(status: StatusInfo) -> Element<'a, Msg> {
             _ => "esc to cancel",
         };
         left = left.push(
-            text(hint).size(theme::FONT_XS).color(theme::TEXT_MUTED),
+            text(hint).size(theme::FONT_XS).color(theme::text_muted()),
         );
     }
 
@@ -237,8 +237,8 @@ fn view_status_bar<'a>(status: StatusInfo) -> Element<'a, Msg> {
         0
     };
     let right = row![
-        text(status.model).size(theme::FONT_XS).color(theme::TEXT_MUTED),
-        text(format!("{}%", ctx_pct)).size(theme::FONT_XS).color(theme::TEXT_MUTED),
+        text(status.model).size(theme::FONT_XS).color(theme::text_muted()),
+        text(format!("{}%", ctx_pct)).size(theme::FONT_XS).color(theme::text_muted()),
     ]
     .spacing(theme::SPACING_SM)
     .align_y(iced::Alignment::Center);
@@ -264,18 +264,18 @@ fn view_completion<'a>(
         let cmd = &commands[cmd_idx];
         let is_selected = i == selected;
         let bg = if is_selected {
-            theme::BG_HOVER
+            theme::bg_hover()
         } else {
-            theme::BG_ELEVATED
+            theme::bg_elevated()
         };
         let label = row![
             text(format!("/{}", cmd.name))
                 .size(theme::FONT_MD)
-                .color(if is_selected { theme::TEXT_PRIMARY } else { theme::ACCENT }),
+                .color(if is_selected { theme::text_primary() } else { theme::accent() }),
             Space::new().width(theme::SPACING_SM),
             text(&cmd.description)
                 .size(theme::FONT_MD)
-                .color(if is_selected { theme::TEXT_SECONDARY } else { theme::TEXT_MUTED }),
+                .color(if is_selected { theme::text_secondary() } else { theme::text_muted() }),
         ]
         .align_y(iced::Alignment::Center);
         items = items.push(
@@ -347,9 +347,9 @@ fn fuzzy_score(query: &str, target: &str) -> Option<i32> {
 
 fn header_style(_theme: &iced::Theme) -> container::Style {
     container::Style {
-        background: Some(iced::Background::Color(theme::BG_SURFACE)),
+        background: Some(iced::Background::Color(theme::bg_surface())),
         border: iced::Border {
-            color: theme::BORDER_COLOR,
+            color: theme::border_color(),
             width: 0.0,
             radius: 0.0.into(),
         },
@@ -359,9 +359,9 @@ fn header_style(_theme: &iced::Theme) -> container::Style {
 
 fn completion_style(_theme: &iced::Theme) -> container::Style {
     container::Style {
-        background: Some(iced::Background::Color(theme::BG_ELEVATED)),
+        background: Some(iced::Background::Color(theme::bg_elevated())),
         border: iced::Border {
-            color: theme::BORDER_COLOR,
+            color: theme::border_color(),
             width: 1.0,
             radius: 0.0.into(),
         },
@@ -371,9 +371,9 @@ fn completion_style(_theme: &iced::Theme) -> container::Style {
 
 fn status_bar_style(_theme: &iced::Theme) -> container::Style {
     container::Style {
-        background: Some(iced::Background::Color(theme::BG_SURFACE)),
+        background: Some(iced::Background::Color(theme::bg_surface())),
         border: iced::Border {
-            color: theme::BORDER_COLOR,
+            color: theme::border_color(),
             width: 0.0,
             radius: 0.0.into(),
         },

@@ -29,17 +29,17 @@ pub fn build_editor(diff: &DiffData, highlight: Option<&DiffHighlight>) -> Edito
     for hunk in &diff.hunks {
         // Hunk header line.
         lines.push(hunk.header.trim_end().to_string());
-        backgrounds.push(Some(theme::DIFF_HUNK_BG));
+        backgrounds.push(Some(theme::diff_hunk_bg()));
         spans_per_line.push(vec![HighlightSpan {
             text: hunk.header.trim_end().to_string(),
-            color: theme::TEXT_MUTED,
+            color: theme::text_muted(),
         }]);
 
         for dl in &hunk.lines {
             let (prefix, prefix_color, bg) = match dl.kind {
-                LineKind::Added => ("+ ", theme::SUCCESS, Some(theme::DIFF_ADDED_BG)),
-                LineKind::Removed => ("- ", theme::ERROR, Some(theme::DIFF_REMOVED_BG)),
-                LineKind::Context => ("  ", theme::TEXT_MUTED, None),
+                LineKind::Added => ("+ ", theme::success(), Some(theme::diff_added_bg())),
+                LineKind::Removed => ("- ", theme::error(), Some(theme::diff_removed_bg())),
+                LineKind::Context => ("  ", theme::text_muted(), None),
             };
 
             let line_text = dl.text.trim_end_matches('\n');
@@ -52,7 +52,7 @@ pub fn build_editor(diff: &DiffData, highlight: Option<&DiffHighlight>) -> Edito
             let mut line_spans = vec![
                 HighlightSpan {
                     text: lineno_str.clone(),
-                    color: theme::TEXT_MUTED,
+                    color: theme::text_muted(),
                 },
                 HighlightSpan {
                     text: prefix.to_string(),
@@ -70,8 +70,8 @@ pub fn build_editor(diff: &DiffData, highlight: Option<&DiffHighlight>) -> Edito
                 }
             } else {
                 let fallback_color = match dl.kind {
-                    LineKind::Added | LineKind::Removed => theme::TEXT_PRIMARY,
-                    LineKind::Context => theme::TEXT_SECONDARY,
+                    LineKind::Added | LineKind::Removed => theme::text_primary(),
+                    LineKind::Context => theme::text_secondary(),
                 };
                 line_spans.push(HighlightSpan {
                     text: line_text.to_string(),

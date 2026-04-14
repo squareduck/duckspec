@@ -129,7 +129,7 @@ fn view_list<'a>(state: &'a State, project: &'a ProjectData) -> Element<'a, Mess
     let mut items = column![].spacing(theme::SPACING_XS);
 
     if project.codex_entries.is_empty() {
-        items = items.push(text("No codex entries").size(theme::FONT_MD).color(theme::TEXT_MUTED));
+        items = items.push(text("No codex entries").size(theme::FONT_MD).color(theme::text_muted()));
     } else {
         for entry in &project.codex_entries {
             let is_active = state

@@ -404,11 +404,11 @@ fn view_placeholder<'a, M: 'a>(_wrap: impl Fn(Msg) -> M + 'a) -> Element<'a, M> 
         column![
             text("Interaction")
                 .size(theme::FONT_MD)
-                .color(theme::TEXT_SECONDARY),
+                .color(theme::text_secondary()),
             Space::new().height(theme::SPACING_MD),
             text("Terminal and chat will appear here.")
                 .size(theme::FONT_MD)
-                .color(theme::TEXT_MUTED),
+                .color(theme::text_muted()),
         ]
         .spacing(theme::SPACING_SM)
         .padding(theme::SPACING_LG),

@@ -70,12 +70,12 @@ fn view_left<'a>(project: &'a ProjectData) -> Element<'a, Message> {
 
     let wordmark = column![
         row![
-            text("duck").size(28.0).color(theme::TEXT_PRIMARY),
-            text("spec").size(28.0).color(theme::ACCENT),
+            text("duck").size(28.0).color(theme::text_primary()),
+            text("spec").size(28.0).color(theme::accent()),
         ],
         text("specify \u{00b7} build \u{00b7} ship")
             .size(theme::FONT_SM)
-            .color(theme::TEXT_MUTED),
+            .color(theme::text_muted()),
     ]
     .spacing(2.0);
 
@@ -89,21 +89,21 @@ fn view_left<'a>(project: &'a ProjectData) -> Element<'a, Message> {
         "\u{1f50d}",
         "Find File",
         "Ctrl+P",
-        theme::ACCENT,
+        theme::accent(),
         Message::FindFile,
     ));
     actions = actions.push(action_row(
         "\u{25c8}",
         "Capabilities",
         "S",
-        theme::TEAL,
+        theme::teal(),
         Message::GoToCaps,
     ));
     actions = actions.push(action_row(
         "\u{2261}",
         "Codex",
         "X",
-        theme::MAUVE,
+        theme::mauve(),
         Message::GoToCodex,
     ));
 
@@ -113,7 +113,7 @@ fn view_left<'a>(project: &'a ProjectData) -> Element<'a, Message> {
         actions = actions.push(
             text("Active Changes")
                 .size(theme::FONT_SM)
-                .color(theme::TEXT_MUTED),
+                .color(theme::text_muted()),
         );
         actions = actions.push(Space::new().height(theme::SPACING_XS));
         for change in &project.active_changes {
@@ -126,7 +126,7 @@ fn view_left<'a>(project: &'a ProjectData) -> Element<'a, Message> {
             actions = actions.push(change_row(
                 &change.name,
                 &detail,
-                theme::SUCCESS,
+                theme::success(),
                 Message::ChangeClicked(change.name.clone()),
             ));
         }
@@ -138,14 +138,14 @@ fn view_left<'a>(project: &'a ProjectData) -> Element<'a, Message> {
         actions = actions.push(
             text("Archived")
                 .size(theme::FONT_SM)
-                .color(theme::TEXT_MUTED),
+                .color(theme::text_muted()),
         );
         actions = actions.push(Space::new().height(theme::SPACING_XS));
         for change in &project.archived_changes {
             actions = actions.push(change_row(
                 &change.name,
                 "",
-                theme::TEXT_MUTED,
+                theme::text_muted(),
                 Message::ArchivedChangeClicked(change.name.clone()),
             ));
         }
@@ -170,19 +170,19 @@ fn view_right<'a>(
             "\u{25c6}",
             &project.cap_count.to_string(),
             "caps",
-            theme::TEAL
+            theme::teal()
         ),
         stat_pill(
             "\u{2261}",
             &project.codex_count.to_string(),
             "codex",
-            theme::MAUVE
+            theme::mauve()
         ),
         stat_pill(
             "\u{25b6}",
             &project.active_changes.len().to_string(),
             "changes",
-            theme::PEACH
+            theme::peach()
         ),
     ]
     .spacing(theme::SPACING_MD);
@@ -191,7 +191,7 @@ fn view_right<'a>(
 
     // Git status.
     col = col.push(Space::new().height(theme::SPACING_SM));
-    col = col.push(section_header("\u{2387}", "Git Status", theme::PINK));
+    col = col.push(section_header("\u{2387}", "Git Status", theme::pink()));
 
     if changed_files.is_empty() {
         col = col.push(
@@ -199,7 +199,7 @@ fn view_right<'a>(
                 text("Working tree clean")
                     .size(theme::FONT_MD)
                     .font(iced::Font::MONOSPACE)
-                    .color(theme::TEXT_MUTED),
+                    .color(theme::text_muted()),
             )
             .padding([0.0, theme::SPACING_LG]),
         );
@@ -207,9 +207,9 @@ fn view_right<'a>(
         let mut git_col = column![].spacing(1.0);
         for cf in changed_files {
             let (marker, color) = match cf.status {
-                FileStatus::Modified => ("M ", theme::WARNING),
-                FileStatus::Added => ("A ", theme::SUCCESS),
-                FileStatus::Deleted => ("D ", theme::ERROR),
+                FileStatus::Modified => ("M ", theme::warning()),
+                FileStatus::Added => ("A ", theme::success()),
+                FileStatus::Deleted => ("D ", theme::error()),
             };
             git_col = git_col.push(
                 container(
@@ -221,7 +221,7 @@ fn view_right<'a>(
                         text(cf.path.display().to_string())
                             .size(theme::FONT_MD)
                             .font(iced::Font::MONOSPACE)
-                            .color(theme::TEXT_SECONDARY),
+                            .color(theme::text_secondary()),
                     ]
                     .spacing(theme::SPACING_XS),
                 )
@@ -234,13 +234,13 @@ fn view_right<'a>(
     // Project info.
     if let Some(root) = &project.project_root {
         col = col.push(Space::new().height(theme::SPACING_SM));
-        col = col.push(section_header("\u{2302}", "Project", theme::LAVENDER));
+        col = col.push(section_header("\u{2302}", "Project", theme::lavender()));
         col = col.push(
             container(
                 text(root.display().to_string())
                     .size(theme::FONT_MD)
                     .font(iced::Font::MONOSPACE)
-                    .color(theme::TEXT_SECONDARY),
+                    .color(theme::text_secondary()),
             )
             .padding([0.0, theme::SPACING_LG]),
         );
@@ -261,12 +261,12 @@ fn action_row<'a>(
     button(
         row![
             text(icon).size(theme::FONT_MD).color(color),
-            text(label).size(theme::FONT_MD).color(theme::TEXT_PRIMARY),
+            text(label).size(theme::FONT_MD).color(theme::text_primary()),
             Space::new().width(Length::Fill),
             text(shortcut)
                 .size(theme::FONT_SM)
                 .font(iced::Font::MONOSPACE)
-                .color(theme::TEXT_MUTED),
+                .color(theme::text_muted()),
         ]
         .spacing(theme::SPACING_SM)
         .align_y(Center)
@@ -289,11 +289,11 @@ fn change_row<'a>(
     button(
         row![
             text("\u{25b8}").size(theme::FONT_SM).color(color),
-            text(name).size(theme::FONT_MD).color(theme::TEXT_PRIMARY),
+            text(name).size(theme::FONT_MD).color(theme::text_primary()),
             Space::new().width(Length::Fill),
             text(detail_owned)
                 .size(theme::FONT_SM)
-                .color(theme::TEXT_MUTED),
+                .color(theme::text_muted()),
         ]
         .spacing(theme::SPACING_SM)
         .align_y(Center)
@@ -320,7 +320,7 @@ fn stat_pill<'a>(
             text(value_owned).size(theme::FONT_MD).color(color),
             text(label_owned)
                 .size(theme::FONT_SM)
-                .color(theme::TEXT_MUTED),
+                .color(theme::text_muted()),
         ]
         .spacing(theme::SPACING_XS)
         .align_y(Center),

@@ -279,7 +279,7 @@ fn view_list<'a>(state: &'a State, project: &'a ProjectData) -> Element<'a, Mess
             container(
                 text("Select a change")
                     .size(theme::FONT_MD)
-                    .color(theme::TEXT_MUTED),
+                    .color(theme::text_muted()),
             )
             .padding(theme::SPACING_LG),
         );
@@ -305,7 +305,7 @@ fn view_overview_section<'a>(state: &'a State, change: &'a ChangeData) -> Elemen
         items = items.push(file_item("design.md", &id, state));
     }
     if !change.has_proposal && !change.has_design {
-        items = items.push(text("No overview files").size(theme::FONT_MD).color(theme::TEXT_MUTED));
+        items = items.push(text("No overview files").size(theme::FONT_MD).color(theme::text_muted()));
     }
 
     collapsible::view(
@@ -318,7 +318,7 @@ fn view_overview_section<'a>(state: &'a State, change: &'a ChangeData) -> Elemen
 
 fn view_caps_section<'a>(state: &'a State, change: &'a ChangeData) -> Element<'a, Message> {
     let content = if change.cap_tree.is_empty() {
-        column![text("No capability changes").size(theme::FONT_MD).color(theme::TEXT_MUTED)].into()
+        column![text("No capability changes").size(theme::FONT_MD).color(theme::text_muted())].into()
     } else {
         tree_view::view(
             &change.cap_tree,
@@ -341,7 +341,7 @@ fn view_steps_section<'a>(state: &'a State, change: &'a ChangeData) -> Element<'
     let mut items = column![].spacing(theme::SPACING_XS);
 
     if change.steps.is_empty() {
-        items = items.push(text("No steps").size(theme::FONT_MD).color(theme::TEXT_MUTED));
+        items = items.push(text("No steps").size(theme::FONT_MD).color(theme::text_muted()));
     } else {
         for step in &change.steps {
             let is_active = state.tabs.active_tab().is_some_and(|t| t.id == step.id);
@@ -386,7 +386,7 @@ fn view_changed_files_section<'a>(state: &'a State) -> Element<'a, Message> {
     let mut items = column![].spacing(theme::SPACING_XS);
 
     if state.changed_files.is_empty() {
-        items = items.push(text("No changes").size(theme::FONT_MD).color(theme::TEXT_MUTED));
+        items = items.push(text("No changes").size(theme::FONT_MD).color(theme::text_muted()));
     } else {
         for cf in &state.changed_files {
             let status_char = match cf.status {

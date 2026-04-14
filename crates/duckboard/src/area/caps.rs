@@ -137,7 +137,7 @@ fn view_list<'a>(state: &'a State, project: &'a ProjectData) -> Element<'a, Mess
         column![
             text("No capabilities found")
                 .size(theme::FONT_MD)
-                .color(theme::TEXT_MUTED)
+                .color(theme::text_muted())
         ]
         .into()
     } else {

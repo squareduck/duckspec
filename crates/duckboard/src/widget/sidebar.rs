@@ -1,7 +1,7 @@
 //! Narrow icon sidebar for area navigation.
 
 use iced::widget::{button, column, container, svg, Space};
-use iced::{Center, Element, Length};
+use iced::{Center, Color, Element, Length};
 
 use crate::area::Area;
 use crate::theme;
@@ -36,7 +36,8 @@ pub fn view<'a, M: Clone + 'a>(
         } else {
             theme::nav_button
         };
-        let icon = svg(area_icon(area)).width(20).height(20);
+        let tint = if is_active { theme::accent() } else { theme::text_secondary() };
+        let icon = svg(area_icon(area)).width(20).height(20).style(svg_tint(tint));
         let btn = button(
             container(icon)
                 .width(Length::Fill)
@@ -53,7 +54,8 @@ pub fn view<'a, M: Clone + 'a>(
 
     let refresh_icon = svg(svg::Handle::from_memory(ICON_REFRESH))
         .width(18)
-        .height(18);
+        .height(18)
+        .style(svg_tint(theme::text_secondary()));
     let refresh = button(
         container(refresh_icon)
             .width(Length::Fill)
@@ -77,4 +79,10 @@ pub fn view<'a, M: Clone + 'a>(
     .padding(theme::SPACING_XS)
     .style(theme::sidebar)
     .into()
+}
+
+fn svg_tint(color: Color) -> impl Fn(&iced::Theme, svg::Status) -> svg::Style {
+    move |_theme, _status| svg::Style {
+        color: Some(color),
+    }
 }

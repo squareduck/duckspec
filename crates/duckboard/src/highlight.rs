@@ -2,19 +2,26 @@
 //!
 //! Provides a shared highlighter resource and per-line colored spans that the
 //! text editor widget renders via multiple `fill_text` calls.
+//!
+//! Supports both dark (Catppuccin Macchiato) and light (Catppuccin Latte)
+//! themes, selected dynamically via [`crate::theme::mode()`].
 
 use iced::Color;
 use syntect::highlighting::{Style, Theme, ThemeSet};
 use syntect::parsing::{SyntaxReference, SyntaxSet};
 
-/// Catppuccin Macchiato tmTheme, embedded at compile time.
+use crate::theme;
+
 const CATPPUCCIN_MACCHIATO: &[u8] =
     include_bytes!("../assets/catppuccin-macchiato.tmTheme");
+const CATPPUCCIN_LATTE: &[u8] =
+    include_bytes!("../assets/catppuccin-latte.tmTheme");
 
-/// App-level highlighter holding the (expensive) syntax set and theme.
+/// App-level highlighter holding the (expensive) syntax set and both themes.
 pub struct SyntaxHighlighter {
     syntax_set: SyntaxSet,
-    theme: Theme,
+    dark_theme: Theme,
+    light_theme: Theme,
 }
 
 /// A single colored text span within a line.
@@ -30,12 +37,26 @@ impl Default for SyntaxHighlighter {
     }
 }
 
+fn load_theme(bytes: &[u8]) -> Theme {
+    ThemeSet::load_from_reader(&mut std::io::Cursor::new(bytes))
+        .expect("embedded tmTheme should be valid")
+}
+
 impl SyntaxHighlighter {
     pub fn new() -> Self {
         let syntax_set = SyntaxSet::load_defaults_newlines();
-        let theme = ThemeSet::load_from_reader(&mut std::io::Cursor::new(CATPPUCCIN_MACCHIATO))
-            .expect("embedded Catppuccin Macchiato tmTheme should be valid");
-        Self { syntax_set, theme }
+        Self {
+            syntax_set,
+            dark_theme: load_theme(CATPPUCCIN_MACCHIATO),
+            light_theme: load_theme(CATPPUCCIN_LATTE),
+        }
+    }
+
+    fn active_theme(&self) -> &Theme {
+        match theme::mode() {
+            theme::ColorMode::Dark => &self.dark_theme,
+            theme::ColorMode::Light => &self.light_theme,
+        }
     }
 
     pub fn find_syntax(&self, file_extension: &str) -> &SyntaxReference {
@@ -52,7 +73,8 @@ impl SyntaxHighlighter {
     ) -> Vec<Vec<HighlightSpan>> {
         use syntect::easy::HighlightLines;
 
-        let mut h = HighlightLines::new(syntax, &self.theme);
+        let theme = self.active_theme();
+        let mut h = HighlightLines::new(syntax, theme);
         lines
             .iter()
             .map(|line| {

@@ -173,9 +173,9 @@ pub fn view<'a>(state: &'a FileFinderState) -> Element<'a, Msg> {
             item_style
         };
         let text_color = if is_selected {
-            theme::TEXT_PRIMARY
+            theme::text_primary()
         } else {
-            theme::TEXT_SECONDARY
+            theme::text_secondary()
         };
         list = list.push(
             container(
@@ -198,7 +198,7 @@ pub fn view<'a>(state: &'a FileFinderState) -> Element<'a, Msg> {
         .unwrap_or(0);
     let status = text(format!("{count} / {total}"))
         .size(theme::FONT_SM)
-        .color(theme::TEXT_MUTED);
+        .color(theme::text_muted());
 
     let panel = container(
         column![
@@ -231,16 +231,16 @@ pub fn view<'a>(state: &'a FileFinderState) -> Element<'a, Msg> {
 
 fn overlay_backdrop_style(_theme: &iced::Theme) -> container::Style {
     container::Style {
-        background: Some(iced::Color { a: 0.5, ..theme::BG_BASE }.into()),
+        background: Some(iced::Color { a: 0.5, ..theme::bg_base() }.into()),
         ..Default::default()
     }
 }
 
 fn finder_panel_style(_theme: &iced::Theme) -> container::Style {
     container::Style {
-        background: Some(theme::BG_SURFACE.into()),
+        background: Some(theme::bg_surface().into()),
         border: iced::Border {
-            color: theme::BORDER_COLOR,
+            color: theme::border_color(),
             width: 1.0,
             radius: 8.0.into(),
         },
@@ -250,7 +250,7 @@ fn finder_panel_style(_theme: &iced::Theme) -> container::Style {
 
 fn selected_item_style(_theme: &iced::Theme) -> container::Style {
     container::Style {
-        background: Some(theme::ACCENT_DIM.scale_alpha(0.2).into()),
+        background: Some(theme::accent_dim().scale_alpha(0.2).into()),
         ..Default::default()
     }
 }

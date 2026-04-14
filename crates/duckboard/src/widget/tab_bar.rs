@@ -279,7 +279,7 @@ pub fn view_bar<'a, M: Clone + 'a>(
         // File tabs get a close button; the preview tab doesn't.
         if !is_preview {
             let close_btn =
-                button(text("\u{00d7}").size(theme::FONT_MD).color(theme::TEXT_MUTED))
+                button(text("\u{00d7}").size(theme::FONT_MD).color(theme::text_muted()))
                     .on_press(on_close(*logical_idx))
                     .padding(0.0)
                     .style(theme::icon_button);
@@ -343,7 +343,7 @@ pub fn view_content(state: &TabState) -> Element<'_, TabContentMsg> {
                                 .color(color),
                             text(path.display().to_string())
                                 .size(theme::FONT_MD)
-                                .color(theme::TEXT_SECONDARY),
+                                .color(theme::text_secondary()),
                         ]
                         .spacing(theme::SPACING_SM)
                         .align_y(Center),
@@ -362,7 +362,7 @@ pub fn view_content(state: &TabState) -> Element<'_, TabContentMsg> {
                             icon,
                             text(&tab.id)
                                 .size(theme::FONT_MD)
-                                .color(theme::TEXT_SECONDARY),
+                                .color(theme::text_secondary()),
                         ]
                         .spacing(theme::SPACING_XS)
                         .align_y(Center),
@@ -391,7 +391,7 @@ pub fn view_content(state: &TabState) -> Element<'_, TabContentMsg> {
         None => container(
             text("Select an item to view its contents")
                 .size(theme::FONT_MD)
-                .color(theme::TEXT_MUTED),
+                .color(theme::text_muted()),
         )
         .width(Length::Fill)
         .height(Length::Fill)
