@@ -326,6 +326,23 @@ pub fn section_header(_theme: &Theme, status: button::Status) -> button::Style {
     }
 }
 
+pub fn dashboard_action(_theme: &Theme, status: button::Status) -> button::Style {
+    let bg = match status {
+        button::Status::Hovered => Some(bg_hover().into()),
+        _ => None,
+    };
+    button::Style {
+        background: bg,
+        text_color: accent(),
+        border: Border {
+            color: border_color(),
+            width: 1.0,
+            radius: BORDER_RADIUS.into(),
+        },
+        ..Default::default()
+    }
+}
+
 pub fn icon_button(_theme: &Theme, status: button::Status) -> button::Style {
     let color = match status {
         button::Status::Hovered => text_primary(),

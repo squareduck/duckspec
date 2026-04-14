@@ -245,6 +245,7 @@ pub fn update(
             if state.selected_change.as_deref() == Some(&name) {
                 state.selected_change = None;
             }
+            crate::chat_store::delete_session(&name);
             crate::chat_store::save_explorations(&state.explorations, state.exploration_counter);
         }
     }

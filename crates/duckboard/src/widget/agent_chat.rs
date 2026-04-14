@@ -82,16 +82,33 @@ pub fn build_chat_blocks(session: &ChatSession) -> Vec<Block> {
                         lines: Vec::new(),
                     });
                 }
-                ContentBlock::ToolResult { name, .. } => {
+                ContentBlock::ToolResult { name, output, .. } => {
                     let label = if name.is_empty() {
                         "✓ done".to_string()
                     } else {
                         format!("✓ {name}")
                     };
+                    const MAX_LINES: usize = 10;
+                    let all_lines: Vec<String> =
+                        output.lines().map(String::from).collect();
+                    let mut lines = if all_lines.len() > MAX_LINES {
+                        let mut truncated = all_lines[..MAX_LINES].to_vec();
+                        truncated.push(format!(
+                            "… ({} more lines)",
+                            all_lines.len() - MAX_LINES
+                        ));
+                        truncated
+                    } else {
+                        all_lines
+                    };
+                    // Skip entirely empty output.
+                    if lines.len() == 1 && lines[0].is_empty() {
+                        lines.clear();
+                    }
                     blocks.push(Block {
                         kind: BlockKind::ToolResult,
                         label,
-                        lines: Vec::new(),
+                        lines,
                     });
                 }
             }

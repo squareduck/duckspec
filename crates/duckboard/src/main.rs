@@ -285,21 +285,25 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
         Message::Dashboard(msg) => {
             match &msg {
                 area::dashboard::Message::ChangeClicked(name)
-                | area::dashboard::Message::ArchivedChangeClicked(name) => {
-                    state.change.selected_change = Some(name.clone());
+                | area::dashboard::Message::ArchivedChangeClicked(name)
+                | area::dashboard::Message::ExplorationClicked(name) => {
                     state.active_area = Area::Change;
-                }
-                area::dashboard::Message::FindFile => {
-                    return update(
-                        state,
-                        Message::FileFinder(widget::file_finder::Msg::Open),
+                    area::change::update(
+                        &mut state.change,
+                        area::change::Message::SelectChange(name.clone()),
+                        &state.project,
+                        &state.highlighter,
                     );
                 }
-                area::dashboard::Message::GoToCaps => {
-                    state.active_area = Area::Caps;
-                }
-                area::dashboard::Message::GoToCodex => {
-                    state.active_area = Area::Codex;
+                area::dashboard::Message::AddExploration => {
+                    // Delegate to the change area's exploration logic, then switch.
+                    area::change::update(
+                        &mut state.change,
+                        area::change::Message::AddExploration,
+                        &state.project,
+                        &state.highlighter,
+                    );
+                    state.active_area = Area::Change;
                 }
             }
             area::dashboard::update(&mut state.dashboard, msg);
@@ -739,7 +743,7 @@ fn view(state: &State) -> Element<'_, Message> {
 
     let area_content: Element<'_, Message> = match state.active_area {
         Area::Dashboard => {
-            area::dashboard::view(&state.dashboard, &state.project, &state.change.changed_files)
+            area::dashboard::view(&state.dashboard, &state.project, &state.change.explorations)
                 .map(Message::Dashboard)
         }
         Area::Change => {

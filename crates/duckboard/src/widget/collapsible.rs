@@ -31,7 +31,9 @@ pub fn view<'a, M: Clone + 'a>(
     let mut col = column![header].spacing(0.0);
 
     if expanded {
+        col = col.push(Space::new().height(theme::SPACING_XS));
         col = col.push(content);
+        col = col.push(Space::new().height(theme::SPACING_SM));
     }
 
     col.into()

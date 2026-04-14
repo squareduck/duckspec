@@ -90,6 +90,13 @@ pub fn save_session(session: &ChatSession) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Delete a persisted chat session from disk.
+pub fn delete_session(change_name: &str) {
+    if let Some(path) = session_path(change_name) {
+        let _ = std::fs::remove_file(path);
+    }
+}
+
 /// Rename a persisted session file from one change name to another.
 /// Also updates the in-memory session's `change_name`.
 pub fn rename_session(session: &mut ChatSession, new_name: &str) {
