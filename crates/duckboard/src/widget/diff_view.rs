@@ -1,130 +1,120 @@
-//! Inline diff view widget.
+//! Inline diff view with syntax highlighting and text selection.
 //!
-//! Renders a unified diff with line numbers, colored backgrounds for
-//! added/removed lines, and hunk headers. Structured to support future
-//! syntax highlighting (each line's text is isolated for span replacement).
+//! Builds an EditorState from diff data so it can be rendered via the TextEdit
+//! widget, inheriting selection, copy, and horizontal scroll for free.
 
-use iced::widget::{column, container, row, scrollable, text};
-use iced::{Element, Length};
+use iced::Color;
 
+use crate::highlight::HighlightSpan;
 use crate::theme;
-use crate::vcs::{DiffData, DiffLine, FileStatus, LineKind};
+use crate::vcs::{DiffData, DiffLine, LineKind};
 
-const LINENO_WIDTH: f32 = 48.0;
-const SIGN_WIDTH: f32 = 16.0;
-const LINE_HEIGHT: f32 = 20.0;
+use super::text_edit::EditorState;
 
-/// Render a full inline diff view.
-pub fn view<'a, M: 'a>(diff: &'a DiffData) -> Element<'a, M> {
-    let mut col = column![].spacing(0.0);
+/// Pre-computed syntax highlight data for a diff.
+#[derive(Debug, Clone)]
+pub struct DiffHighlight {
+    /// Highlighted spans per line of the old file (index 0 = line 1).
+    pub old_spans: Vec<Vec<HighlightSpan>>,
+    /// Highlighted spans per line of the new file (index 0 = line 1).
+    pub new_spans: Vec<Vec<HighlightSpan>>,
+}
 
-    if diff.hunks.is_empty() {
-        let msg = match diff.status {
-            FileStatus::Added => "New file (empty)",
-            FileStatus::Deleted => "File deleted (empty)",
-            FileStatus::Modified => "No visible changes",
-        };
-        col = col.push(
-            container(text(msg).size(theme::FONT_MD).color(theme::TEXT_MUTED))
-                .padding(theme::SPACING_LG),
-        );
-    }
+/// Build a read-only EditorState from diff data with syntax highlighting.
+pub fn build_editor(diff: &DiffData, highlight: Option<&DiffHighlight>) -> EditorState {
+    let mut lines = Vec::new();
+    let mut backgrounds: Vec<Option<Color>> = Vec::new();
+    let mut spans_per_line: Vec<Vec<HighlightSpan>> = Vec::new();
 
     for hunk in &diff.hunks {
-        col = col.push(hunk_header(&hunk.header));
-        for line in &hunk.lines {
-            col = col.push(diff_line(line));
+        // Hunk header line.
+        lines.push(hunk.header.trim_end().to_string());
+        backgrounds.push(Some(theme::DIFF_HUNK_BG));
+        spans_per_line.push(vec![HighlightSpan {
+            text: hunk.header.trim_end().to_string(),
+            color: theme::TEXT_MUTED,
+        }]);
+
+        for dl in &hunk.lines {
+            let (prefix, prefix_color, bg) = match dl.kind {
+                LineKind::Added => ("+ ", theme::SUCCESS, Some(theme::DIFF_ADDED_BG)),
+                LineKind::Removed => ("- ", theme::ERROR, Some(theme::DIFF_REMOVED_BG)),
+                LineKind::Context => ("  ", theme::TEXT_MUTED, None),
+            };
+
+            let line_text = dl.text.trim_end_matches('\n');
+            let lineno_str = format_lineno(dl);
+            let full_line = format!("{lineno_str}{prefix}{line_text}");
+            lines.push(full_line);
+            backgrounds.push(bg);
+
+            // Build highlight spans: lineno + sign prefix + content spans.
+            let mut line_spans = vec![
+                HighlightSpan {
+                    text: lineno_str.clone(),
+                    color: theme::TEXT_MUTED,
+                },
+                HighlightSpan {
+                    text: prefix.to_string(),
+                    color: prefix_color,
+                },
+            ];
+
+            let content_spans = highlight.and_then(|h| lookup_spans(dl, h));
+            if let Some(src_spans) = content_spans {
+                for s in src_spans {
+                    line_spans.push(HighlightSpan {
+                        text: s.text.trim_end_matches('\n').to_string(),
+                        color: s.color,
+                    });
+                }
+            } else {
+                let fallback_color = match dl.kind {
+                    LineKind::Added | LineKind::Removed => theme::TEXT_PRIMARY,
+                    LineKind::Context => theme::TEXT_SECONDARY,
+                };
+                line_spans.push(HighlightSpan {
+                    text: line_text.to_string(),
+                    color: fallback_color,
+                });
+            }
+
+            spans_per_line.push(line_spans);
         }
     }
 
-    scrollable(col)
-        .height(Length::Fill)
-        .width(Length::Fill)
-        .into()
-}
-
-fn hunk_header<'a, M: 'a>(header: &'a str) -> Element<'a, M> {
-    container(
-        text(header.trim_end())
-            .size(theme::FONT_MD)
-            .font(iced::Font::MONOSPACE)
-            .color(theme::TEXT_MUTED),
-    )
-    .padding([2.0, theme::SPACING_LG])
-    .width(Length::Fill)
-    .style(theme::diff_hunk_header)
-    .into()
-}
-
-fn diff_line<'a, M: 'a>(line: &'a DiffLine) -> Element<'a, M> {
-    let old_no = lineno_text(line.old_lineno);
-    let new_no = lineno_text(line.new_lineno);
-
-    let sign = match line.kind {
-        LineKind::Added => "+",
-        LineKind::Removed => "-",
-        LineKind::Context => " ",
-    };
-
-    let sign_color = match line.kind {
-        LineKind::Added => theme::SUCCESS,
-        LineKind::Removed => theme::ERROR,
-        LineKind::Context => theme::TEXT_MUTED,
-    };
-
-    let text_color = match line.kind {
-        LineKind::Added => theme::TEXT_PRIMARY,
-        LineKind::Removed => theme::TEXT_PRIMARY,
-        LineKind::Context => theme::TEXT_SECONDARY,
-    };
-
-    let line_text = line.text.trim_end_matches('\n');
-
-    let row_content = row![
-        text(old_no)
-            .size(theme::FONT_SM)
-            .font(iced::Font::MONOSPACE)
-            .color(theme::TEXT_MUTED)
-            .width(LINENO_WIDTH / 2.0),
-        text(new_no)
-            .size(theme::FONT_SM)
-            .font(iced::Font::MONOSPACE)
-            .color(theme::TEXT_MUTED)
-            .width(LINENO_WIDTH / 2.0),
-        text(sign)
-            .size(theme::FONT_MD)
-            .font(iced::Font::MONOSPACE)
-            .color(sign_color)
-            .width(SIGN_WIDTH),
-        text(line_text)
-            .size(theme::FONT_MD)
-            .font(iced::Font::MONOSPACE)
-            .color(text_color),
-    ]
-    .spacing(0.0)
-    .height(LINE_HEIGHT)
-    .align_y(iced::Center);
-
-    let style: fn(&iced::Theme) -> container::Style = match line.kind {
-        LineKind::Added => theme::diff_added,
-        LineKind::Removed => theme::diff_removed,
-        LineKind::Context => transparent_style,
-    };
-
-    container(row_content)
-        .padding([0.0, theme::SPACING_SM])
-        .width(Length::Fill)
-        .style(style)
-        .into()
-}
-
-fn lineno_text(n: Option<u32>) -> String {
-    match n {
-        Some(n) => format!("{n:>3}"),
-        None => "   ".to_string(),
+    if lines.is_empty() {
+        lines.push(String::new());
     }
+
+    let mut editor = EditorState::new("");
+    editor.lines = lines;
+    editor.highlight_spans = Some(spans_per_line);
+    editor.line_backgrounds = backgrounds;
+    editor
 }
 
-fn transparent_style(_theme: &iced::Theme) -> container::Style {
-    container::Style::default()
+fn format_lineno(dl: &DiffLine) -> String {
+    let old = match dl.old_lineno {
+        Some(n) => format!("{n:>4}"),
+        None => "    ".to_string(),
+    };
+    let new = match dl.new_lineno {
+        Some(n) => format!("{n:>4}"),
+        None => "    ".to_string(),
+    };
+    format!("{old} {new} ")
+}
+
+fn lookup_spans<'a>(dl: &DiffLine, h: &'a DiffHighlight) -> Option<&'a Vec<HighlightSpan>> {
+    match dl.kind {
+        LineKind::Removed | LineKind::Context => {
+            let idx = dl.old_lineno? as usize;
+            h.old_spans.get(idx.checked_sub(1)?)
+        }
+        LineKind::Added => {
+            let idx = dl.new_lineno? as usize;
+            h.new_spans.get(idx.checked_sub(1)?)
+        }
+    }
 }

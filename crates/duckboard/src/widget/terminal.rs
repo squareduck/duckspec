@@ -614,8 +614,14 @@ impl Write for ArcWriter {
 }
 
 /// Create a subscription that spawns a PTY child and streams its output.
-pub fn pty_subscription() -> Subscription<PtyEvent> {
-    Subscription::run(pty_worker)
+/// The `key` parameter makes each subscription unique so multiple terminals can coexist.
+/// Returns `(key, event)` tuples so the caller can route events without capturing in `.map()`.
+pub fn pty_subscription(key: String) -> Subscription<(String, PtyEvent)> {
+    Subscription::run_with(key, |key| {
+        use iced::futures::StreamExt;
+        let key = key.clone();
+        pty_worker().map(move |e| (key.clone(), e))
+    })
 }
 
 fn pty_worker() -> impl iced::futures::Stream<Item = PtyEvent> {

@@ -9,15 +9,15 @@ use crate::data::ProjectData;
 use crate::theme;
 use crate::widget::{collapsible, interaction_toggle, tab_bar, tree_view};
 
+use super::interaction::{self, InteractionMode, InteractionState};
+
 // ── State ────────────────────────────────────────────────────────────────────
 
-#[derive(Debug, Clone)]
 pub struct State {
     pub expanded_nodes: HashSet<String>,
     pub section_expanded: bool,
     pub tabs: tab_bar::TabState,
-    pub interaction_visible: bool,
-    pub interaction_width: f32,
+    pub interaction: InteractionState,
 }
 
 impl Default for State {
@@ -26,8 +26,7 @@ impl Default for State {
             expanded_nodes: HashSet::new(),
             section_expanded: true,
             tabs: tab_bar::TabState::default(),
-            interaction_visible: false,
-            interaction_width: theme::INTERACTION_COLUMN_WIDTH,
+            interaction: InteractionState::default(),
         }
     }
 }
@@ -41,8 +40,7 @@ pub enum Message {
     SelectItem(String),
     SelectTab(usize),
     CloseTab(usize),
-    InteractionHandle(interaction_toggle::HandleMsg),
-    TerminalScroll,
+    Interaction(interaction::Msg),
     TabContent(tab_bar::TabContentMsg),
 }
 
@@ -68,15 +66,26 @@ pub fn update(
         }
         Message::SelectTab(idx) => state.tabs.select(idx),
         Message::CloseTab(idx) => state.tabs.close(idx),
-        Message::InteractionHandle(msg) => match msg {
-            interaction_toggle::HandleMsg::Toggle => {
-                state.interaction_visible = !state.interaction_visible;
+        Message::Interaction(msg) => {
+            let is_mode_switch = matches!(msg, interaction::Msg::SwitchMode(_));
+            let just_opened = interaction::update(&mut state.interaction, msg);
+
+            if just_opened && state.interaction.mode == InteractionMode::Terminal {
+                interaction::spawn_terminal(&mut state.interaction);
             }
-            interaction_toggle::HandleMsg::SetWidth(w) => {
-                state.interaction_width = w;
+            if is_mode_switch && state.interaction.mode == InteractionMode::Terminal {
+                interaction::spawn_terminal(&mut state.interaction);
             }
-        },
-        Message::TerminalScroll => {}
+
+            let wants_agent = (just_opened && state.interaction.mode == InteractionMode::AgentChat)
+                || (is_mode_switch && state.interaction.mode == InteractionMode::AgentChat);
+            if wants_agent && state.interaction.chat_session.is_none() {
+                interaction::spawn_agent_session(&mut state.interaction, "caps");
+            }
+
+            state.interaction.terminal_focused = state.interaction.visible
+                && state.interaction.mode == InteractionMode::Terminal;
+        }
         Message::TabContent(tab_bar::TabContentMsg::EditorAction(action)) => {
             crate::handle_editor_action(&mut state.tabs, action, highlighter);
         }
@@ -88,7 +97,6 @@ pub fn update(
 pub fn view<'a>(
     state: &'a State,
     project: &'a ProjectData,
-    terminal: Option<&'a crate::widget::terminal::TerminalState>,
 ) -> Element<'a, Message> {
     let list = view_list(state, project);
     let content = view_content(state);
@@ -97,9 +105,9 @@ pub fn view<'a>(
         .style(theme::divider);
 
     let toggle = interaction_toggle::view(
-        state.interaction_visible,
-        state.interaction_width,
-        Message::InteractionHandle,
+        state.interaction.visible,
+        state.interaction.width,
+        |m| Message::Interaction(interaction::Msg::Handle(m)),
     );
 
     let mut main_row = row![
@@ -112,15 +120,11 @@ pub fn view<'a>(
         toggle,
     ];
 
-    if state.interaction_visible {
-        let interaction: Element<'a, Message> = if let Some(ts) = terminal {
-            crate::widget::terminal::view_terminal(ts).map(|_: ()| Message::TerminalScroll)
-        } else {
-            view_interaction()
-        };
+    if state.interaction.visible {
+        let interaction_col = interaction::view_column(&state.interaction, Message::Interaction);
         main_row = main_row.push(
-            container(interaction)
-                .width(state.interaction_width)
+            container(interaction_col)
+                .width(state.interaction.width)
                 .height(Length::Fill)
                 .style(theme::surface),
         );
@@ -168,23 +172,6 @@ fn view_content<'a>(state: &'a State) -> Element<'a, Message> {
     let body = tab_bar::view_content(&state.tabs).map(Message::TabContent);
 
     column![bar, body].height(Length::Fill).into()
-}
-
-fn view_interaction<'a>() -> Element<'a, Message> {
-    container(
-        column![
-            text("Interaction").size(theme::FONT_MD).color(theme::TEXT_SECONDARY),
-            Space::new().height(theme::SPACING_MD),
-            text("Terminal and chat will appear here.")
-                .size(theme::FONT_MD)
-                .color(theme::TEXT_MUTED),
-        ]
-        .spacing(theme::SPACING_SM)
-        .padding(theme::SPACING_LG),
-    )
-    .width(Length::Fill)
-    .height(Length::Fill)
-    .into()
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────

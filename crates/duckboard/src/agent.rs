@@ -236,8 +236,14 @@ impl std::fmt::Debug for AgentHandle {
 // ── Subscription ────────────────────────────────────────────────────────────
 
 /// Create a subscription that manages a Claude Code agent chat session.
-pub fn agent_subscription(project_root: PathBuf) -> Subscription<AgentEvent> {
-    Subscription::run_with(project_root, |root| agent_worker(root.clone()))
+/// The `key` parameter makes each subscription unique so multiple agents can coexist.
+/// Returns `(key, event)` tuples so the caller can route events without capturing in `.map()`.
+pub fn agent_subscription(key: String, project_root: PathBuf) -> Subscription<(String, AgentEvent)> {
+    Subscription::run_with((key, project_root.clone()), |(key, root)| {
+        use iced::futures::StreamExt;
+        let key = key.clone();
+        agent_worker(root.clone()).map(move |e| (key.clone(), e))
+    })
 }
 
 fn agent_worker(project_root: PathBuf) -> impl iced::futures::Stream<Item = AgentEvent> {

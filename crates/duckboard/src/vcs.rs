@@ -25,6 +25,10 @@ pub struct DiffData {
     pub path: PathBuf,
     pub status: FileStatus,
     pub hunks: Vec<Hunk>,
+    /// Old (HEAD) file content, kept for syntax highlighting.
+    pub old_content: String,
+    /// New (working tree) file content, kept for syntax highlighting.
+    pub new_content: String,
 }
 
 #[derive(Debug, Clone)]
@@ -145,6 +149,8 @@ pub fn file_diff(repo_root: &Path, rel_path: &Path) -> Option<DiffData> {
         path: rel_path.to_path_buf(),
         status,
         hunks,
+        old_content,
+        new_content,
     })
 }
 

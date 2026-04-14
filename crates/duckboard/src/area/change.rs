@@ -1,18 +1,18 @@
 //! Change area — single change workspace with three-column layout.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
-use iced::widget::{button, column, container, row, scrollable, svg, text, text_editor, Space};
+use iced::widget::{button, column, container, row, scrollable, svg, text, Space};
 use iced::widget::text::Wrapping;
 use iced::{Element, Length};
 
-use crate::agent::SlashCommand;
-use crate::chat_store::ChatSession;
 use crate::data::{ChangeData, ProjectData, StepCompletion};
 use crate::theme;
 use crate::vcs::{self, ChangedFile, FileStatus};
-use crate::widget::{agent_chat, collapsible, interaction_toggle, tab_bar, tree_view};
+use crate::widget::{collapsible, interaction_toggle, tab_bar, tree_view};
+
+use super::interaction::{self, InteractionMode, InteractionState};
 
 const ICON_BRANCH: &[u8] = include_bytes!("../../assets/icon_branch.svg");
 const ICON_FILE: &[u8] = include_bytes!("../../assets/icon_file.svg");
@@ -28,36 +28,15 @@ const ICON_SIZE: f32 = 14.0;
 
 // ── State ────────────────────────────────────────────────────────────────────
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum InteractionMode {
-    Terminal,
-    AgentChat,
-}
-
 pub struct State {
     pub selected_change: Option<String>,
     pub expanded_sections: HashSet<String>,
     pub expanded_nodes: HashSet<String>,
     pub tabs: tab_bar::TabState,
-    pub interaction_visible: bool,
-    pub interaction_width: f32,
-    pub interaction_mode: InteractionMode,
     pub changed_files: Vec<ChangedFile>,
-    pub chat_session: Option<ChatSession>,
-    pub chat_input: text_editor::Content,
-    pub chat_commands: Vec<SlashCommand>,
-    pub chat_completion: agent_chat::CompletionState,
-    pub chat_editor: Option<crate::widget::text_edit::EditorState>,
-    /// Esc key counter for double-esc-to-cancel. Reset when streaming stops.
-    pub esc_count: u8,
-    /// Agent model name (from last session).
-    pub agent_model: String,
-    /// Cumulative input tokens for the session.
-    pub agent_input_tokens: usize,
-    /// Cumulative output tokens for the session.
-    pub agent_output_tokens: usize,
-    /// Context window size from model.
-    pub agent_context_window: usize,
+    /// Per-change interaction states keyed by change name.
+    /// Switching changes keeps previous sessions alive.
+    pub interactions: HashMap<String, InteractionState>,
 }
 
 impl Default for State {
@@ -72,21 +51,23 @@ impl Default for State {
             expanded_sections: sections,
             expanded_nodes: HashSet::new(),
             tabs: tab_bar::TabState::default(),
-            interaction_visible: false,
-            interaction_width: theme::INTERACTION_COLUMN_WIDTH,
-            interaction_mode: InteractionMode::AgentChat,
             changed_files: vec![],
-            chat_session: None,
-            chat_input: text_editor::Content::new(),
-            chat_commands: Vec::new(),
-            chat_completion: agent_chat::CompletionState::default(),
-            chat_editor: None,
-            esc_count: 0,
-            agent_model: String::new(),
-            agent_input_tokens: 0,
-            agent_output_tokens: 0,
-            agent_context_window: 200_000,
+            interactions: HashMap::new(),
         }
+    }
+}
+
+impl State {
+    /// Get the active change's interaction state (if a change is selected).
+    pub fn active_interaction(&self) -> Option<&InteractionState> {
+        let name = self.selected_change.as_ref()?;
+        self.interactions.get(name)
+    }
+
+    /// Get the active change's interaction state mutably, creating it if needed.
+    pub fn active_interaction_mut(&mut self) -> Option<&mut InteractionState> {
+        let name = self.selected_change.as_ref()?;
+        Some(self.interactions.entry(name.clone()).or_default())
     }
 }
 
@@ -100,10 +81,7 @@ pub enum Message {
     SelectItem(String),
     SelectTab(usize),
     CloseTab(usize),
-    InteractionHandle(interaction_toggle::HandleMsg),
-    SwitchInteractionMode(InteractionMode),
-    AgentChat(agent_chat::Msg),
-    TerminalScroll,
+    Interaction(interaction::Msg),
     SelectChangedFile(PathBuf),
     TabContent(tab_bar::TabContentMsg),
 }
@@ -148,65 +126,30 @@ pub fn update(
         }
         Message::SelectTab(idx) => state.tabs.select(idx),
         Message::CloseTab(idx) => state.tabs.close(idx),
-        Message::InteractionHandle(msg) => match msg {
-            interaction_toggle::HandleMsg::Toggle => {
-                state.interaction_visible = !state.interaction_visible;
+        Message::Interaction(msg) => {
+            let session_name = state
+                .selected_change
+                .clone()
+                .unwrap_or_else(|| "default".to_string());
+            let Some(ix) = state.active_interaction_mut() else { return };
+            let is_mode_switch = matches!(msg, interaction::Msg::SwitchMode(_));
+            let just_opened = interaction::update(ix, msg);
+
+            if just_opened && ix.mode == InteractionMode::Terminal {
+                interaction::spawn_terminal(ix);
             }
-            interaction_toggle::HandleMsg::SetWidth(w) => {
-                state.interaction_width = w;
+            if is_mode_switch && ix.mode == InteractionMode::Terminal {
+                interaction::spawn_terminal(ix);
             }
-        },
-        Message::SwitchInteractionMode(mode) => {
-            state.interaction_mode = mode;
+
+            let wants_agent = (just_opened && ix.mode == InteractionMode::AgentChat)
+                || (is_mode_switch && ix.mode == InteractionMode::AgentChat);
+            if wants_agent && ix.chat_session.is_none() {
+                interaction::spawn_agent_session(ix, &session_name);
+            }
+
+            ix.terminal_focused = ix.visible && ix.mode == InteractionMode::Terminal;
         }
-        Message::AgentChat(msg) => match msg {
-            agent_chat::Msg::EditorAction(action) => {
-                // When completion is visible, intercept arrow navigation.
-                if state.chat_completion.visible {
-                    match &action {
-                        text_editor::Action::Move(text_editor::Motion::Up) => {
-                            completion_prev(state);
-                            return;
-                        }
-                        text_editor::Action::Move(text_editor::Motion::Down) => {
-                            completion_next(state);
-                            return;
-                        }
-                        _ => {}
-                    }
-                }
-
-                // Skip Enter — it's handled via KeyPress for send/newline logic.
-                if matches!(action, text_editor::Action::Edit(text_editor::Edit::Enter)) {
-                    return;
-                }
-
-                state.chat_input.perform(action);
-
-                // Update completion visibility based on current text.
-                let input_text = state.chat_input.text();
-                let trimmed = input_text.trim_end();
-                if trimmed.starts_with('/') && !trimmed.contains(' ') {
-                    state.chat_completion.visible = true;
-                    state.chat_completion.selected = 0;
-                } else {
-                    state.chat_completion.visible = false;
-                }
-            }
-            agent_chat::Msg::CompletionNext => completion_next(state),
-            agent_chat::Msg::CompletionPrev => completion_prev(state),
-            agent_chat::Msg::CompletionAccept => completion_accept(state),
-            agent_chat::Msg::CompletionDismiss => {
-                state.chat_completion.visible = false;
-            }
-            agent_chat::Msg::ChatAction(action) => {
-                handle_chat_action(&mut state.chat_editor, action);
-            }
-            agent_chat::Msg::SendPressed | agent_chat::Msg::CancelPressed => {
-                // Handled in main.rs where we have access to AgentHandle.
-            }
-        },
-        Message::TerminalScroll => {}
         Message::SelectChangedFile(path) => {
             if let Some(root) = &project.project_root {
                 if let Some(diff) = vcs::file_diff(root, &path) {
@@ -215,7 +158,23 @@ pub fn update(
                         .file_name()
                         .map(|n| n.to_string_lossy().to_string())
                         .unwrap_or_else(|| path.display().to_string());
-                    state.tabs.open_diff(id, title, diff);
+
+                    let ext = path
+                        .extension()
+                        .and_then(|e| e.to_str())
+                        .unwrap_or("txt");
+                    let syntax = highlighter.find_syntax(ext);
+                    let old_lines: Vec<String> = diff.old_content.lines().map(String::from).collect();
+                    let new_lines: Vec<String> = diff.new_content.lines().map(String::from).collect();
+                    let highlight = crate::widget::diff_view::DiffHighlight {
+                        old_spans: highlighter.highlight_lines(&old_lines, syntax),
+                        new_spans: highlighter.highlight_lines(&new_lines, syntax),
+                    };
+
+                    let diff_status = diff.status;
+                    let diff_path = diff.path.clone();
+                    let editor = crate::widget::diff_view::build_editor(&diff, Some(&highlight));
+                    state.tabs.open_diff(id, title, editor, diff_path, diff_status);
                 }
             }
         }
@@ -230,7 +189,6 @@ pub fn update(
 pub fn view<'a>(
     state: &'a State,
     project: &'a ProjectData,
-    terminal: Option<&'a crate::widget::terminal::TerminalState>,
 ) -> Element<'a, Message> {
     let list = view_list(state, project);
     let content = view_content(state);
@@ -238,8 +196,12 @@ pub fn view<'a>(
         .width(1.0)
         .style(theme::divider);
 
+    let ix = state.active_interaction();
+    let visible = ix.map_or(false, |i| i.visible);
+    let width = ix.map_or(theme::INTERACTION_COLUMN_WIDTH, |i| i.width);
+
     let toggle =
-        interaction_toggle::view(state.interaction_visible, state.interaction_width, Message::InteractionHandle);
+        interaction_toggle::view(visible, width, |m| Message::Interaction(interaction::Msg::Handle(m)));
 
     let mut main_row = row![
         container(list)
@@ -253,57 +215,17 @@ pub fn view<'a>(
         toggle,
     ];
 
-    if state.interaction_visible {
-        // Mode tabs at top of interaction column.
-        let mode_tabs = view_mode_tabs(state.interaction_mode);
+    if let Some(ix) = ix {
+        if ix.visible {
+            let interaction_col = interaction::view_column(ix, Message::Interaction);
 
-        // Content based on selected mode.
-        let interaction_content: Element<'a, Message> = match state.interaction_mode {
-            InteractionMode::Terminal => {
-                if let Some(ts) = terminal {
-                    crate::widget::terminal::view_terminal(ts).map(|_: ()| Message::TerminalScroll)
-                } else {
-                    view_interaction()
-                }
-            }
-            InteractionMode::AgentChat => {
-                if let (Some(session), Some(chat_editor)) =
-                    (&state.chat_session, &state.chat_editor)
-                {
-                    let status = agent_chat::StatusInfo {
-                        is_streaming: session.is_streaming,
-                        esc_count: state.esc_count,
-                        model: if state.agent_model.is_empty() {
-                            "—".to_string()
-                        } else {
-                            state.agent_model.clone()
-                        },
-                        context_tokens: state.agent_input_tokens + state.agent_output_tokens,
-                        context_max: state.agent_context_window,
-                    };
-                    agent_chat::view(
-                        session,
-                        chat_editor,
-                        &state.chat_input,
-                        &state.chat_commands,
-                        &state.chat_completion,
-                        status,
-                    )
-                    .map(Message::AgentChat)
-                } else {
-                    view_interaction()
-                }
-            }
-        };
-
-        let interaction_col = column![mode_tabs, interaction_content].height(Length::Fill);
-
-        main_row = main_row.push(
-            container(interaction_col)
-                .width(state.interaction_width)
-                .height(Length::Fill)
-                .style(theme::surface),
-        );
+            main_row = main_row.push(
+                container(interaction_col)
+                    .width(ix.width)
+                    .height(Length::Fill)
+                    .style(theme::surface),
+            );
+        }
     }
 
     main_row.height(Length::Fill).into()
@@ -554,53 +476,6 @@ fn view_content<'a>(state: &'a State) -> Element<'a, Message> {
     column![bar, body].height(Length::Fill).into()
 }
 
-fn view_mode_tabs<'a>(active: InteractionMode) -> Element<'a, Message> {
-    let terminal_style = if active == InteractionMode::Terminal {
-        theme::list_item_active as fn(&iced::Theme, button::Status) -> button::Style
-    } else {
-        theme::list_item
-    };
-    let agent_style = if active == InteractionMode::AgentChat {
-        theme::list_item_active as fn(&iced::Theme, button::Status) -> button::Style
-    } else {
-        theme::list_item
-    };
-
-    container(
-        row![
-            button(text("Agent").size(theme::FONT_SM))
-                .on_press(Message::SwitchInteractionMode(InteractionMode::AgentChat))
-                .padding([2.0, theme::SPACING_SM])
-                .style(agent_style),
-            button(text("Terminal").size(theme::FONT_SM))
-                .on_press(Message::SwitchInteractionMode(InteractionMode::Terminal))
-                .padding([2.0, theme::SPACING_SM])
-                .style(terminal_style),
-        ]
-        .spacing(theme::SPACING_XS),
-    )
-    .padding([theme::SPACING_XS, theme::SPACING_SM])
-    .style(theme::surface)
-    .into()
-}
-
-fn view_interaction<'a>() -> Element<'a, Message> {
-    container(
-        column![
-            text("Interaction").size(theme::FONT_MD).color(theme::TEXT_SECONDARY),
-            Space::new().height(theme::SPACING_MD),
-            text("Terminal and chat will appear here.")
-                .size(theme::FONT_MD)
-                .color(theme::TEXT_MUTED),
-        ]
-        .spacing(theme::SPACING_SM)
-        .padding(theme::SPACING_LG),
-    )
-    .width(Length::Fill)
-    .height(Length::Fill)
-    .into()
-}
-
 fn find_change<'a>(state: &State, project: &'a ProjectData) -> Option<&'a ChangeData> {
     let name = state.selected_change.as_ref()?;
     project
@@ -620,121 +495,4 @@ fn open_artifact(
         let title = id.rsplit('/').next().unwrap_or(id).to_string();
         crate::open_artifact_tab(&mut state.tabs, id.to_string(), title, content, id, highlighter);
     }
-}
-
-// ── Chat editor helpers ────────────────────────────────────────────────────
-
-/// Rebuild the single chat editor from the current session, preserving fold states.
-///
-/// Auto-scroll behavior:
-/// - First creation: scroll to bottom.
-/// - If user was already at the bottom: follow new content to bottom.
-/// - If user scrolled up to explore: keep their scroll position.
-pub fn rebuild_chat_editor(state: &mut State) {
-    let session = match &state.chat_session {
-        Some(s) => s,
-        None => {
-            state.chat_editor = None;
-            return;
-        }
-    };
-
-    let new_blocks = agent_chat::build_chat_blocks(session);
-
-    if let Some(existing) = &state.chat_editor {
-        let was_at_bottom = existing.is_at_bottom();
-        let old_scroll = existing.scroll_y;
-
-        let mut editor = crate::widget::text_edit::EditorState::from_blocks(new_blocks);
-        if was_at_bottom {
-            editor.scroll_to_bottom();
-        } else {
-            editor.scroll_y = old_scroll;
-        }
-        state.chat_editor = Some(editor);
-    } else {
-        // First creation — scroll to bottom.
-        let mut editor = crate::widget::text_edit::EditorState::from_blocks(new_blocks);
-        editor.scroll_to_bottom();
-        state.chat_editor = Some(editor);
-    }
-}
-
-fn handle_chat_action(
-    editor: &mut Option<crate::widget::text_edit::EditorState>,
-    action: crate::widget::text_edit::EditorAction,
-) {
-    let editor = match editor.as_mut() {
-        Some(e) => e,
-        None => return,
-    };
-
-    use crate::widget::text_edit::EditorAction;
-    match action {
-        EditorAction::Click(pos) => {
-            editor.cursor = pos;
-            editor.anchor = None;
-        }
-        EditorAction::Drag(pos) => {
-            if editor.anchor.is_none() {
-                editor.anchor = Some(editor.cursor);
-            }
-            editor.cursor = pos;
-        }
-        EditorAction::Scroll { dy, viewport_height, content_height } => {
-            let max = (content_height - viewport_height).max(0.0);
-            editor.scroll_y = (editor.scroll_y + dy).clamp(0.0, max);
-        }
-        EditorAction::SelectAll => editor.select_all(),
-        EditorAction::MoveLeft(sel) => editor.move_left(sel),
-        EditorAction::MoveRight(sel) => editor.move_right(sel),
-        EditorAction::MoveUp(sel) => editor.move_up(sel),
-        EditorAction::MoveDown(sel) => editor.move_down(sel),
-        EditorAction::MoveHome(sel) => editor.move_home(sel),
-        EditorAction::MoveEnd(sel) => editor.move_end(sel),
-        EditorAction::MoveWordLeft(sel) => editor.move_word_left(sel),
-        EditorAction::MoveWordRight(sel) => editor.move_word_right(sel),
-        EditorAction::Copy => {} // Handled by widget directly
-        _ => {}                  // Ignore all edit actions in read-only chat
-    }
-}
-
-// ── Completion helpers ──────────────────────────────────────────────────────
-
-fn completion_next(state: &mut State) {
-    let input_text = state.chat_input.text();
-    let query = input_text.trim_end().trim_start_matches('/');
-    let count = agent_chat::filter_commands(&state.chat_commands, query).len();
-    if count > 0 {
-        state.chat_completion.selected = (state.chat_completion.selected + 1) % count;
-    }
-}
-
-fn completion_prev(state: &mut State) {
-    let input_text = state.chat_input.text();
-    let query = input_text.trim_end().trim_start_matches('/');
-    let count = agent_chat::filter_commands(&state.chat_commands, query).len();
-    if count > 0 {
-        state.chat_completion.selected = if state.chat_completion.selected == 0 {
-            count - 1
-        } else {
-            state.chat_completion.selected - 1
-        };
-    }
-}
-
-fn completion_accept(state: &mut State) {
-    let input_text = state.chat_input.text();
-    let query = input_text.trim_end().trim_start_matches('/');
-    let filtered = agent_chat::filter_commands(&state.chat_commands, query);
-    let selected = state.chat_completion.selected.min(filtered.len().saturating_sub(1));
-    if let Some(&(cmd_idx, _)) = filtered.get(selected) {
-        let cmd_name = &state.chat_commands[cmd_idx].name;
-        let new_text = format!("/{} ", cmd_name);
-        state.chat_input = text_editor::Content::with_text(&new_text);
-        state
-            .chat_input
-            .perform(text_editor::Action::Move(text_editor::Motion::DocumentEnd));
-    }
-    state.chat_completion.visible = false;
 }

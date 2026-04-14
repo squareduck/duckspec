@@ -123,12 +123,15 @@ pub struct EditorState {
     pub lines: Vec<String>,
     pub cursor: Pos,
     pub anchor: Option<Pos>,
+    pub scroll_x: f32,
     pub scroll_y: f32,
     pub dirty: bool,
     undo_stack: Vec<UndoOp>,
     redo_stack: Vec<UndoOp>,
     /// Cached syntax-highlighted spans per line. `None` means stale/unset.
     pub highlight_spans: Option<Vec<Vec<HighlightSpan>>>,
+    /// Per-line background colors (e.g. diff added/removed). Empty = no backgrounds.
+    pub line_backgrounds: Vec<Option<Color>>,
     /// Block definitions for block-aware rendering (e.g. chat view).
     pub blocks: Vec<Block>,
     /// Maps each visible line index to its block and position within the block.
@@ -155,11 +158,13 @@ impl EditorState {
             lines,
             cursor: Pos::new(0, 0),
             anchor: None,
+            scroll_x: 0.0,
             scroll_y: 0.0,
             dirty: false,
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
             highlight_spans: None,
+            line_backgrounds: Vec::new(),
             blocks: Vec::new(),
             block_line_map: Vec::new(),
             pinned_to_bottom: false,
@@ -172,11 +177,13 @@ impl EditorState {
             lines: vec![String::new()],
             cursor: Pos::new(0, 0),
             anchor: None,
+            scroll_x: 0.0,
             scroll_y: 0.0,
             dirty: false,
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
             highlight_spans: None,
+            line_backgrounds: Vec::new(),
             blocks,
             block_line_map: Vec::new(),
             pinned_to_bottom: false,
@@ -701,8 +708,15 @@ pub enum EditorAction {
     Redo,
     Click(Pos),
     Drag(Pos),
-    /// Scroll by `dy` pixels, with viewport and content heights for clamping.
-    Scroll { dy: f32, viewport_height: f32, content_height: f32 },
+    /// Scroll by `dy`/`dx` pixels, with viewport and content dimensions for clamping.
+    Scroll {
+        dy: f32,
+        dx: f32,
+        viewport_height: f32,
+        content_height: f32,
+        viewport_width: f32,
+        content_width: f32,
+    },
     SaveRequested,
 }
 
@@ -940,8 +954,8 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for TextEdit<'a, M> {
         }
 
         // Compute wrap layout if enabled.
+        let cell_w = if internal.cell_width > 0.0 { internal.cell_width } else { 7.8 };
         let wrap = if self.word_wrap {
-            let cell_w = if internal.cell_width > 0.0 { internal.cell_width } else { 7.8 };
             let content_w = bounds.width - internal.gutter_width - CONTENT_PAD;
             let cpr = (content_w / cell_w).floor().max(1.0) as usize;
             Some(WrapLayout::compute(&self.state.lines, cpr))
@@ -981,14 +995,30 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for TextEdit<'a, M> {
             }
             Event::Mouse(mouse::Event::WheelScrolled { delta }) => {
                 if cursor.is_over(bounds) {
-                    let dy = match delta {
-                        mouse::ScrollDelta::Lines { y, .. } => -*y * LINE_HEIGHT * 3.0,
-                        mouse::ScrollDelta::Pixels { y, .. } => -*y,
+                    let (dy, dx) = match delta {
+                        mouse::ScrollDelta::Lines { x, y } => (
+                            -*y * LINE_HEIGHT * 3.0,
+                            -*x * cell_w * 3.0,
+                        ),
+                        mouse::ScrollDelta::Pixels { x, y } => (-*y, -*x),
                     };
+                    let content_w_px = if self.word_wrap {
+                        0.0
+                    } else {
+                        let max_chars = self.state.lines.iter()
+                            .map(|l| l.chars().count())
+                            .max()
+                            .unwrap_or(0);
+                        max_chars as f32 * cell_w + CONTENT_PAD * 2.0
+                    };
+                    let viewport_w = bounds.width - internal.gutter_width;
                     shell.publish((self.on_action)(EditorAction::Scroll {
                         dy,
+                        dx,
                         viewport_height: bounds.height,
                         content_height,
+                        viewport_width: viewport_w,
+                        content_width: content_w_px,
                     }));
                 }
             }
@@ -1145,6 +1175,19 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for TextEdit<'a, M> {
         let max_scroll = (content_height - bounds.height).max(0.0);
         let scroll_y = self.state.scroll_y.clamp(0.0, max_scroll);
 
+        // Horizontal scroll (only when not word-wrapping).
+        let scroll_x = if self.word_wrap {
+            0.0
+        } else {
+            let max_chars = self.state.lines.iter()
+                .map(|l| l.chars().count())
+                .max()
+                .unwrap_or(0);
+            let total_content_w = max_chars as f32 * cell_w + CONTENT_PAD * 2.0;
+            let max_scroll_x = (total_content_w - content_w).max(0.0);
+            self.state.scroll_x.clamp(0.0, max_scroll_x)
+        };
+
         // Clip to bounds.
         renderer.with_layer(bounds, |renderer: &mut iced::Renderer| {
             // Background.
@@ -1158,30 +1201,20 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for TextEdit<'a, M> {
                 theme::BG_BASE,
             );
 
-            // Gutter background.
-            if self.show_gutter {
-                renderer::Renderer::fill_quad(
-                    renderer,
-                    renderer::Quad {
-                        bounds: Rectangle {
-                            x: bounds.x,
-                            y: bounds.y,
-                            width: gutter_w,
-                            height: bounds.height,
-                        },
-                        border: Border::default(),
-                        ..renderer::Quad::default()
-                    },
-                    theme::BG_SURFACE,
-                );
-            }
-
             let first_vrow = (scroll_y / LINE_HEIGHT).floor() as usize;
             let visible_vrows = (bounds.height / LINE_HEIGHT).ceil() as usize + 1;
             let last_vrow = (first_vrow + visible_vrows).min(total_visual_rows);
 
             let selection = self.state.selection_range();
             let has_blocks = !self.state.blocks.is_empty();
+
+            // Content area clipping rectangle (excludes gutter).
+            let content_clip = Rectangle {
+                x: content_x,
+                y: bounds.y,
+                width: content_w,
+                height: bounds.height,
+            };
 
             for vrow in first_vrow..last_vrow {
                 let y = bounds.y + (vrow as f32) * LINE_HEIGHT - scroll_y;
@@ -1225,6 +1258,24 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for TextEdit<'a, M> {
                     }
                 }
 
+                // Per-line background (e.g. diff added/removed).
+                if let Some(Some(bg)) = self.state.line_backgrounds.get(line_idx) {
+                    renderer::Renderer::fill_quad(
+                        renderer,
+                        renderer::Quad {
+                            bounds: Rectangle {
+                                x: bounds.x,
+                                y,
+                                width: bounds.width,
+                                height: LINE_HEIGHT,
+                            },
+                            border: Border::default(),
+                            ..renderer::Quad::default()
+                        },
+                        *bg,
+                    );
+                }
+
                 // Selection highlight.
                 if let Some((sel_start, sel_end)) = selection {
                     if line_idx >= sel_start.line && line_idx <= sel_end.line {
@@ -1243,7 +1294,7 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for TextEdit<'a, M> {
                         if sel_col_start < sel_col_end && sel_col_start < abs_col_end && sel_col_end > abs_col_start {
                             let vis_start = sel_col_start.saturating_sub(abs_col_start);
                             let vis_end = sel_col_end.saturating_sub(abs_col_start);
-                            let sel_x = content_x + CONTENT_PAD + vis_start as f32 * cell_w;
+                            let sel_x = content_x + CONTENT_PAD + vis_start as f32 * cell_w - scroll_x;
                             let sel_w = (vis_end - vis_start) as f32 * cell_w;
                             renderer::Renderer::fill_quad(
                                 renderer,
@@ -1256,33 +1307,6 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for TextEdit<'a, M> {
                             );
                         }
                     }
-                }
-
-                // Line number — only on first sub-row.
-                if self.show_gutter && sub_row == 0 {
-                    let digits = digit_count(self.state.line_count());
-                    let line_num = format!("{:>width$} ", line_idx + 1, width = digits);
-                    let num_color = if line_idx == self.state.cursor.line && internal.focused {
-                        theme::TEXT_SECONDARY
-                    } else {
-                        theme::TEXT_MUTED
-                    };
-                    renderer.fill_text(
-                        iced::advanced::Text {
-                            content: line_num,
-                            bounds: Size::new(gutter_w, LINE_HEIGHT),
-                            size: Pixels(FONT_SIZE),
-                            line_height: text::LineHeight::Absolute(Pixels(LINE_HEIGHT)),
-                            font: Font::MONOSPACE,
-                            align_x: alignment::Horizontal::Left.into(),
-                            align_y: alignment::Vertical::Top,
-                            shaping: text::Shaping::Basic,
-                            wrapping: text::Wrapping::None,
-                        },
-                        Point::new(bounds.x + GUTTER_PAD, y),
-                        num_color,
-                        bounds,
-                    );
                 }
 
                 // Extract the sub-string for this visual row.
@@ -1316,9 +1340,9 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for TextEdit<'a, M> {
                                 shaping: text::Shaping::Basic,
                                 wrapping: text::Wrapping::None,
                             },
-                            Point::new(content_x + CONTENT_PAD, y),
+                            Point::new(content_x + CONTENT_PAD - scroll_x, y),
                             color,
-                            bounds,
+                            content_clip,
                         );
                     } else {
                         // Syntax highlighting spans — need to slice for this visual row.
@@ -1327,7 +1351,6 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for TextEdit<'a, M> {
                         if let Some(spans) = spans {
                             // Draw only the portion of spans that falls within char_start..char_end.
                             let mut col = 0usize; // character column in the logical line
-                            let mut x_off = 0.0f32;
                             for span in spans {
                                 let span_chars = span.text.chars().count();
                                 let span_end = col + span_chars;
@@ -1341,7 +1364,7 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for TextEdit<'a, M> {
                                         .collect();
                                     if !slice.is_empty() {
                                         let sw = slice.chars().count() as f32 * cell_w;
-                                        let sx = content_x + CONTENT_PAD + vis_start as f32 * cell_w;
+                                        let sx = content_x + CONTENT_PAD + vis_start as f32 * cell_w - scroll_x;
                                         renderer.fill_text(
                                             iced::advanced::Text {
                                                 content: slice,
@@ -1356,13 +1379,11 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for TextEdit<'a, M> {
                                             },
                                             Point::new(sx, y),
                                             span.color,
-                                            bounds,
+                                            content_clip,
                                         );
                                     }
                                 }
                                 col = span_end;
-                                let _ = x_off; // suppress unused
-                                x_off = (col.saturating_sub(char_start)) as f32 * cell_w;
                             }
                         } else {
                             renderer.fill_text(
@@ -1377,9 +1398,9 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for TextEdit<'a, M> {
                                     shaping: text::Shaping::Basic,
                                     wrapping: text::Wrapping::None,
                                 },
-                                Point::new(content_x + CONTENT_PAD, y),
+                                Point::new(content_x + CONTENT_PAD - scroll_x, y),
                                 theme::TEXT_PRIMARY,
-                                bounds,
+                                content_clip,
                             );
                         }
                     }
@@ -1402,7 +1423,7 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for TextEdit<'a, M> {
                 } else {
                     (
                         bounds.y + cursor_line as f32 * LINE_HEIGHT - scroll_y,
-                        content_x + CONTENT_PAD + cursor_col as f32 * cell_w,
+                        content_x + CONTENT_PAD + cursor_col as f32 * cell_w - scroll_x,
                     )
                 };
                 renderer::Renderer::fill_quad(
@@ -1419,6 +1440,59 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for TextEdit<'a, M> {
                     },
                     theme::ACCENT,
                 );
+            }
+
+            // Gutter overlay — drawn last so it covers horizontally-scrolled content.
+            if self.show_gutter {
+                renderer::Renderer::fill_quad(
+                    renderer,
+                    renderer::Quad {
+                        bounds: Rectangle {
+                            x: bounds.x,
+                            y: bounds.y,
+                            width: gutter_w,
+                            height: bounds.height,
+                        },
+                        border: Border::default(),
+                        ..renderer::Quad::default()
+                    },
+                    theme::BG_SURFACE,
+                );
+
+                for vrow in first_vrow..last_vrow {
+                    let y = bounds.y + (vrow as f32) * LINE_HEIGHT - scroll_y;
+                    let (line_idx, sub_row) = if let Some(ref w) = wrap {
+                        w.visual_to_logical(vrow)
+                    } else {
+                        (vrow, 0)
+                    };
+
+                    if sub_row == 0 {
+                        let digits = digit_count(self.state.line_count());
+                        let line_num = format!("{:>width$} ", line_idx + 1, width = digits);
+                        let num_color = if line_idx == self.state.cursor.line && internal.focused {
+                            theme::TEXT_SECONDARY
+                        } else {
+                            theme::TEXT_MUTED
+                        };
+                        renderer.fill_text(
+                            iced::advanced::Text {
+                                content: line_num,
+                                bounds: Size::new(gutter_w, LINE_HEIGHT),
+                                size: Pixels(FONT_SIZE),
+                                line_height: text::LineHeight::Absolute(Pixels(LINE_HEIGHT)),
+                                font: Font::MONOSPACE,
+                                align_x: alignment::Horizontal::Left.into(),
+                                align_y: alignment::Vertical::Top,
+                                shaping: text::Shaping::Basic,
+                                wrapping: text::Wrapping::None,
+                            },
+                            Point::new(bounds.x + GUTTER_PAD, y),
+                            num_color,
+                            bounds,
+                        );
+                    }
+                }
             }
         });
     }
@@ -1478,13 +1552,14 @@ fn pixel_to_pos_wrapped(
     let content_x = bounds.x + gutter_w + CONTENT_PAD;
     let max_scroll = (content_height - bounds.height).max(0.0);
     let scroll_y = state.scroll_y.clamp(0.0, max_scroll);
+    let scroll_x = if wrap.is_some() { 0.0 } else { state.scroll_x.max(0.0) };
 
     let vrow = ((point.y - bounds.y + scroll_y) / LINE_HEIGHT)
         .floor()
         .max(0.0) as usize;
 
-    let col_in_row = if point.x > content_x {
-        ((point.x - content_x) / cell_w).round() as usize
+    let col_in_row = if point.x + scroll_x > content_x {
+        ((point.x + scroll_x - content_x) / cell_w).round() as usize
     } else {
         0
     };

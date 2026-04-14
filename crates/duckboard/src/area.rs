@@ -2,6 +2,7 @@ pub mod caps;
 pub mod change;
 pub mod codex;
 pub mod dashboard;
+pub mod interaction;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Area {

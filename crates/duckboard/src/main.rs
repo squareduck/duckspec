@@ -17,8 +17,14 @@ mod watcher;
 mod widget;
 
 use area::Area;
+use area::interaction::{self, InteractionMode};
 use data::ProjectData;
 use widget::tab_bar;
+
+// ── Constants for routing keys ──────────────────────────────────────────────
+
+const KEY_CAPS: &str = "caps";
+const KEY_CODEX: &str = "codex";
 
 // ── State ────────────────────────────────────────────────────────────────────
 
@@ -29,11 +35,8 @@ struct State {
     change: area::change::State,
     caps: area::caps::State,
     codex: area::codex::State,
-    terminal: Option<widget::terminal::TerminalState>,
-    terminal_focused: bool,
     file_finder: widget::file_finder::FileFinderState,
     highlighter: highlight::SyntaxHighlighter,
-    agent_handle: Option<agent::AgentHandle>,
 }
 
 impl State {
@@ -64,11 +67,42 @@ impl State {
             change,
             caps: caps_state,
             codex: area::codex::State::default(),
-            terminal: None,
-            terminal_focused: false,
             file_finder: widget::file_finder::FileFinderState::default(),
             highlighter: highlight::SyntaxHighlighter::new(),
-            agent_handle: None,
+        }
+    }
+
+    /// Resolve a routing key to the corresponding interaction state.
+    /// Keys: "caps", "codex", or any other string is a change name.
+    fn interaction_mut(&mut self, key: &str) -> Option<&mut interaction::InteractionState> {
+        match key {
+            KEY_CAPS => Some(&mut self.caps.interaction),
+            KEY_CODEX => Some(&mut self.codex.interaction),
+            _ => self.change.interactions.get_mut(key),
+        }
+    }
+
+    /// Get the active area's interaction state and its routing key.
+    fn active_interaction(&self) -> Option<(&interaction::InteractionState, &str)> {
+        match self.active_area {
+            Area::Change => {
+                let name = self.change.selected_change.as_deref()?;
+                let ix = self.change.interactions.get(name)?;
+                Some((ix, name))
+            }
+            Area::Caps => Some((&self.caps.interaction, KEY_CAPS)),
+            Area::Codex => Some((&self.codex.interaction, KEY_CODEX)),
+            Area::Dashboard => None,
+        }
+    }
+
+    /// Get the active area's interaction state mutably and its routing key.
+    fn active_interaction_key(&self) -> Option<String> {
+        match self.active_area {
+            Area::Change => self.change.selected_change.clone(),
+            Area::Caps => Some(KEY_CAPS.to_string()),
+            Area::Codex => Some(KEY_CODEX.to_string()),
+            Area::Dashboard => None,
         }
     }
 }
@@ -89,13 +123,10 @@ enum Message {
     FileChanged(Vec<watcher::FileEvent>),
     // Keyboard
     KeyPress(keyboard::Key, keyboard::Modifiers, Option<String>),
-    // Terminal
-    TerminalSpawn,
-    TerminalScroll,
-    PtyEvent(widget::terminal::PtyEvent),
-    // Agent chat
-    AgentEvent(agent::AgentEvent),
-    AgentSpawn,
+    // Per-instance PTY events (key identifies the interaction)
+    PtyEvent(String, widget::terminal::PtyEvent),
+    // Per-instance agent events (key identifies the interaction)
+    AgentEvent(String, agent::AgentEvent),
 }
 
 // ── Update ───────────────────────────────────────────────────────────────────
@@ -117,7 +148,12 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                 Msg::Open => {
                     if let Some(root) = &state.project.project_root {
                         state.file_finder.open(root);
-                        state.terminal_focused = false;
+                        // Unfocus terminal in all areas.
+                        for ix in state.change.interactions.values_mut() {
+                            ix.terminal_focused = false;
+                        }
+                        state.caps.interaction.terminal_focused = false;
+                        state.codex.interaction.terminal_focused = false;
                         return iced::widget::operation::focus("file-finder-input");
                     }
                 }
@@ -143,10 +179,6 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                                     .file_name()
                                     .map(|n| n.to_string_lossy().to_string())
                                     .unwrap_or_else(|| rel_path.display().to_string());
-                                // Open in the active area's tabs.
-                                // Non-artifact files opened via file finder go
-                                // straight to editor; we don't try to classify
-                                // arbitrary project files as duckspec artifacts.
                                 let tabs = match state.active_area {
                                     Area::Change => &mut state.change.tabs,
                                     Area::Caps => &mut state.caps.tabs,
@@ -157,7 +189,6 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                                     }
                                 };
                                 tabs.open_file(id.clone(), title, content);
-                                // Highlight the newly opened file.
                                 if let Some(tab) = tabs.file_tabs.iter_mut().find(|t| t.id == id) {
                                     if let tab_bar::TabView::Editor { editor, .. } = &mut tab.view {
                                         rehighlight(editor, &id, &state.highlighter);
@@ -178,7 +209,6 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
             for event in &events {
                 match event {
                     watcher::FileEvent::Modified(path) => {
-                        // Refresh open tabs whose file was modified.
                         if let Some(root) = duckspec_root {
                             if let Ok(rel) = path.strip_prefix(root) {
                                 let id = rel.to_string_lossy().to_string();
@@ -194,7 +224,6 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                         }
                     }
                     watcher::FileEvent::Removed(path) => {
-                        // Close tabs for removed files.
                         if let Some(root) = duckspec_root {
                             if let Ok(rel) = path.strip_prefix(root) {
                                 let id = rel.to_string_lossy().to_string();
@@ -215,7 +244,6 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                 tracing::debug!("project reloaded (file watcher)");
             }
 
-            // Always refresh VCS status on any file change.
             refresh_changed_files(state);
         }
         Message::Dashboard(msg) => {
@@ -241,195 +269,58 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
             area::dashboard::update(&mut state.dashboard, msg);
         }
         Message::Change(msg) => {
-            if matches!(msg, area::change::Message::TerminalScroll) {
-                let _ = update(state, Message::TerminalScroll);
-                return Task::none();
-            }
-            // Handle agent chat actions that need AgentHandle.
-            if let area::change::Message::AgentChat(ref chat_msg) = msg {
-                match chat_msg {
-                    widget::agent_chat::Msg::SendPressed => {
-                        if let Some(handle) = &state.agent_handle {
-                            let text = state.change.chat_input.text();
-                            let text = text.trim().to_string();
-                            if !text.is_empty() {
-                                // Add user message to session.
-                                if let Some(session) = &mut state.change.chat_session {
-                                    session.messages.push(chat_store::ChatMessage {
-                                        role: chat_store::Role::User,
-                                        content: vec![chat_store::ContentBlock::Text(text.clone())],
-                                        timestamp: String::new(),
-                                    });
-                                    session.is_streaming = true;
-                                    session.pending_text.clear();
-                                }
-                                let context = gather_agent_context(state);
-                                handle.send_prompt(text, context);
-                                state.change.chat_input =
-                                    iced::widget::text_editor::Content::new();
-                                state.change.chat_completion.visible = false;
-                                area::change::rebuild_chat_editor(
-                                    &mut state.change,
-                                );
-                            }
-                        }
-                        return Task::none();
-                    }
-                    widget::agent_chat::Msg::CancelPressed => {
-                        if let Some(handle) = &state.agent_handle {
-                            handle.cancel();
-                        }
-                        return Task::none();
-                    }
-                    _ => {}
-                }
-            }
-            // Handle interaction mode switch — spawn agent if needed.
-            let is_agent_chat_msg = matches!(msg, area::change::Message::AgentChat(_));
-            let is_mode_switch = matches!(
-                msg,
-                area::change::Message::SwitchInteractionMode(area::change::InteractionMode::AgentChat)
-            );
-            let is_toggle = matches!(
-                msg,
-                area::change::Message::InteractionHandle(
-                    widget::interaction_toggle::HandleMsg::Toggle
-                )
-            );
             area::change::update(&mut state.change, msg, &state.project, &state.highlighter);
-            if is_toggle && state.change.interaction_visible && state.terminal.is_none() {
-                let _ = update(state, Message::TerminalSpawn);
-            }
-            // Auto-spawn agent session when switching to agent chat mode or
-            // opening the panel (default mode is now AgentChat).
-            let wants_agent = is_mode_switch
-                || (is_toggle
-                    && state.change.interaction_visible
-                    && state.change.interaction_mode
-                        == area::change::InteractionMode::AgentChat);
-            if wants_agent && state.change.chat_session.is_none() {
-                let _ = update(state, Message::AgentSpawn);
-            }
-            state.terminal_focused = state.change.interaction_visible
-                && state.change.interaction_mode == area::change::InteractionMode::Terminal;
-            // Keep chat input focused during agent chat interactions.
-            if state.change.interaction_visible
-                && state.change.interaction_mode == area::change::InteractionMode::AgentChat
-                && (is_toggle || is_mode_switch || is_agent_chat_msg)
-            {
-                return iced::widget::operation::focus(widget::agent_chat::INPUT_ID);
-            }
         }
         Message::Caps(msg) => {
-            if matches!(msg, area::caps::Message::TerminalScroll) {
-                let _ = update(state, Message::TerminalScroll);
-                return Task::none();
-            }
-            let is_toggle = matches!(
-                msg,
-                area::caps::Message::InteractionHandle(
-                    widget::interaction_toggle::HandleMsg::Toggle
-                )
-            );
             area::caps::update(&mut state.caps, msg, &state.project, &state.highlighter);
-            if is_toggle && state.caps.interaction_visible && state.terminal.is_none() {
-                let _ = update(state, Message::TerminalSpawn);
-            }
-            state.terminal_focused = state.caps.interaction_visible;
         }
         Message::Codex(msg) => {
-            if matches!(msg, area::codex::Message::TerminalScroll) {
-                let _ = update(state, Message::TerminalScroll);
-                return Task::none();
-            }
-            let is_toggle = matches!(
-                msg,
-                area::codex::Message::InteractionHandle(
-                    widget::interaction_toggle::HandleMsg::Toggle
-                )
-            );
             area::codex::update(&mut state.codex, msg, &state.project, &state.highlighter);
-            if is_toggle && state.codex.interaction_visible && state.terminal.is_none() {
-                let _ = update(state, Message::TerminalSpawn);
-            }
-            state.terminal_focused = state.codex.interaction_visible;
         }
-        // Terminal
-        Message::TerminalSpawn => {
-            if state.terminal.is_none() {
-                match widget::terminal::TerminalState::new() {
-                    Ok(ts) => {
-                        state.terminal = Some(ts);
-                        state.terminal_focused = true;
-                        tracing::info!("terminal spawned");
-                    }
-                    Err(e) => tracing::error!("failed to create terminal: {e}"),
-                }
-            }
-        }
-        Message::PtyEvent(evt) => {
+        // Per-instance PTY events
+        Message::PtyEvent(key, evt) => {
             use widget::terminal::PtyEvent;
+            let Some(ix) = state.interaction_mut(&key) else { return Task::none() };
             match evt {
                 PtyEvent::Ready(writer, master) => {
-                    if let Some(ref mut ts) = state.terminal {
+                    if let Some(ref mut ts) = ix.terminal {
                         ts.set_writer(writer.into_writer());
                         ts.set_master(master.into_master());
-                        tracing::info!("PTY writer ready");
+                        tracing::info!(key, "PTY writer ready");
                     }
                 }
                 PtyEvent::Output(bytes) => {
-                    if let Some(ref mut ts) = state.terminal {
+                    if let Some(ref mut ts) = ix.terminal {
                         ts.feed(&bytes);
                     }
                 }
                 PtyEvent::Exited => {
-                    tracing::info!("PTY child exited");
-                    state.terminal = None;
-                    state.terminal_focused = false;
+                    tracing::info!(key, "PTY child exited");
+                    ix.terminal = None;
+                    ix.terminal_focused = false;
                 }
             }
         }
-        Message::TerminalScroll => {
-            if let Some(ref mut ts) = state.terminal {
-                ts.apply_scroll();
-            }
-        }
-        // Agent chat
-        Message::AgentSpawn => {
-            if state.change.chat_session.is_none() {
-                let change_name = state
-                    .change
-                    .selected_change
-                    .clone()
-                    .unwrap_or_else(|| "default".to_string());
-
-                // Try to load persisted session, or create new.
-                let session = chat_store::load_session(&change_name)
-                    .unwrap_or_else(|| chat_store::ChatSession::new(change_name));
-                state.change.chat_session = Some(session);
-                area::change::rebuild_chat_editor(&mut state.change);
-                tracing::info!("agent chat session created");
-            }
-        }
-        Message::AgentEvent(evt) => {
+        // Per-instance agent events
+        Message::AgentEvent(key, evt) => {
             use agent::AgentEvent;
+            let Some(ix) = state.interaction_mut(&key) else { return Task::none() };
             match evt {
                 AgentEvent::Ready(handle) => {
-                    state.agent_handle = Some(handle);
-                    tracing::info!("agent handle ready");
+                    ix.agent_handle = Some(handle);
+                    tracing::info!(key, "agent handle ready");
                 }
                 AgentEvent::CommandsAvailable(commands) => {
-                    tracing::info!(count = commands.len(), "slash commands discovered");
-                    state.change.chat_commands = commands;
+                    tracing::info!(key, count = commands.len(), "slash commands discovered");
+                    ix.chat_commands = commands;
                 }
                 AgentEvent::ContentDelta { text } => {
-                    if let Some(session) = &mut state.change.chat_session {
+                    if let Some(session) = &mut ix.chat_session {
                         session.pending_text.push_str(&text);
                     }
                 }
                 AgentEvent::ToolUse { id, name, input } => {
-                    if let Some(session) = &mut state.change.chat_session {
-                        // Flush any pending text first.
+                    if let Some(session) = &mut ix.chat_session {
                         flush_pending_text(session);
                         session.messages.push(chat_store::ChatMessage {
                             role: chat_store::Role::Assistant,
@@ -439,7 +330,7 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                     }
                 }
                 AgentEvent::ToolResult { id, name, output } => {
-                    if let Some(session) = &mut state.change.chat_session {
+                    if let Some(session) = &mut ix.chat_session {
                         session.messages.push(chat_store::ChatMessage {
                             role: chat_store::Role::Assistant,
                             content: vec![chat_store::ContentBlock::ToolResult { id, name, output }],
@@ -448,18 +339,17 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                     }
                 }
                 AgentEvent::TurnComplete => {
-                    if let Some(session) = &mut state.change.chat_session {
+                    if let Some(session) = &mut ix.chat_session {
                         flush_pending_text(session);
                         session.is_streaming = false;
-                        // Persist to disk.
                         if let Err(e) = chat_store::save_session(session) {
                             tracing::error!("failed to save chat session: {e}");
                         }
                     }
                 }
                 AgentEvent::Error(msg) => {
-                    tracing::error!("agent error: {msg}");
-                    if let Some(session) = &mut state.change.chat_session {
+                    tracing::error!(key, "agent error: {msg}");
+                    if let Some(session) = &mut ix.chat_session {
                         session.is_streaming = false;
                         session.messages.push(chat_store::ChatMessage {
                             role: chat_store::Role::System,
@@ -470,31 +360,29 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                 }
                 AgentEvent::UsageUpdate { model, input_tokens, output_tokens, context_window } => {
                     if let Some(m) = model {
-                        state.change.agent_model = m;
+                        ix.agent_model = m;
                     }
                     if input_tokens > 0 {
-                        state.change.agent_input_tokens = input_tokens;
+                        ix.agent_input_tokens = input_tokens;
                     }
                     if output_tokens > 0 {
-                        state.change.agent_output_tokens = output_tokens;
+                        ix.agent_output_tokens = output_tokens;
                     }
                     if let Some(cw) = context_window {
-                        state.change.agent_context_window = cw;
+                        ix.agent_context_window = cw;
                     }
                 }
                 AgentEvent::ProcessExited => {
-                    tracing::info!("agent process exited");
-                    state.agent_handle = None;
-                    if let Some(session) = &mut state.change.chat_session {
+                    tracing::info!(key, "agent process exited");
+                    ix.agent_handle = None;
+                    if let Some(session) = &mut ix.chat_session {
                         session.is_streaming = false;
                     }
                 }
             }
-            // Sync editor states for any new messages.
-            area::change::rebuild_chat_editor(&mut state.change);
-            // Reset esc counter when streaming stops.
-            if !state.change.chat_session.as_ref().map_or(false, |s| s.is_streaming) {
-                state.change.esc_count = 0;
+            interaction::rebuild_chat_editor(ix);
+            if !ix.chat_session.as_ref().map_or(false, |s| s.is_streaming) {
+                ix.esc_count = 0;
             }
         }
         Message::KeyPress(key, mods, text) => {
@@ -530,100 +418,108 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                 return Task::none();
             }
 
-            // Agent chat completion keyboard shortcuts.
-            let agent_chat_active = state.change.interaction_visible
-                && state.change.interaction_mode == area::change::InteractionMode::AgentChat
-                && state.change.chat_session.is_some();
+            // Get the active area's interaction state for keyboard routing.
+            let active_info = state.active_interaction().map(|(i, _key)| {
+                let agent_chat_active = i.visible
+                    && i.mode == InteractionMode::AgentChat
+                    && i.chat_session.is_some();
+                let terminal_focused = i.terminal_focused;
+                let is_streaming = i.chat_session.as_ref().map_or(false, |s| s.is_streaming);
+                let completion_visible = i.chat_completion.visible;
+                (agent_chat_active, terminal_focused, is_streaming, completion_visible)
+            });
+            // We need the key separately (can't hold borrow across mutable calls).
+            let active_key = state.active_interaction_key();
 
-            if agent_chat_active && state.change.chat_completion.visible {
-                use keyboard::key::Named;
-                let completion_msg = match &key {
-                    keyboard::Key::Named(Named::Tab) => {
-                        Some(widget::agent_chat::Msg::CompletionAccept)
+            if let (Some((agent_chat_active, terminal_focused, is_streaming, completion_visible)), Some(routing_key)) = (active_info, &active_key) {
+                // Agent chat completion keyboard shortcuts.
+                if agent_chat_active && completion_visible {
+                    use keyboard::key::Named;
+                    let completion_msg = match &key {
+                        keyboard::Key::Named(Named::Tab) => {
+                            Some(widget::agent_chat::Msg::CompletionAccept)
+                        }
+                        keyboard::Key::Named(Named::Escape) => {
+                            Some(widget::agent_chat::Msg::CompletionDismiss)
+                        }
+                        _ if mods.control() && key == keyboard::Key::Character("n".into()) => {
+                            Some(widget::agent_chat::Msg::CompletionNext)
+                        }
+                        _ if mods.control() && key == keyboard::Key::Character("p".into()) => {
+                            Some(widget::agent_chat::Msg::CompletionPrev)
+                        }
+                        _ => None,
+                    };
+                    if let Some(msg) = completion_msg {
+                        return dispatch_interaction_msg(state, routing_key, interaction::Msg::AgentChat(msg));
                     }
-                    keyboard::Key::Named(Named::Escape) => {
-                        Some(widget::agent_chat::Msg::CompletionDismiss)
-                    }
-                    _ if mods.control()
-                        && key == keyboard::Key::Character("n".into()) =>
-                    {
-                        Some(widget::agent_chat::Msg::CompletionNext)
-                    }
-                    _ if mods.control()
-                        && key == keyboard::Key::Character("p".into()) =>
-                    {
-                        Some(widget::agent_chat::Msg::CompletionPrev)
-                    }
-                    _ => None,
-                };
-                if let Some(msg) = completion_msg {
-                    return update(
-                        state,
-                        Message::Change(area::change::Message::AgentChat(msg)),
-                    );
                 }
-            }
 
-            // Agent chat: Esc-Esc to cancel streaming.
-            if agent_chat_active
-                && key == keyboard::Key::Named(keyboard::key::Named::Escape)
-            {
-                let is_streaming = state.change.chat_session
-                    .as_ref()
-                    .map_or(false, |s| s.is_streaming);
-                if is_streaming {
-                    state.change.esc_count += 1;
-                    if state.change.esc_count >= 2 {
-                        // Don't reset esc_count — keep it at 2 so the status
-                        // bar shows "cancelling…" until streaming actually stops.
-                        return update(
-                            state,
-                            Message::Change(area::change::Message::AgentChat(
-                                widget::agent_chat::Msg::CancelPressed,
-                            )),
-                        );
+                // Agent chat: Esc-Esc to cancel streaming.
+                if agent_chat_active
+                    && key == keyboard::Key::Named(keyboard::key::Named::Escape)
+                {
+                    if is_streaming {
+                        if let Some(ix) = state.interaction_mut(routing_key) {
+                            ix.esc_count += 1;
+                            if ix.esc_count >= 2 {
+                                return dispatch_interaction_msg(state, routing_key,
+                                    interaction::Msg::AgentChat(widget::agent_chat::Msg::CancelPressed));
+                            }
+                        }
+                        return Task::none();
+                    }
+                }
+
+                // Reset esc counter on any non-Esc key.
+                if agent_chat_active
+                    && key != keyboard::Key::Named(keyboard::key::Named::Escape)
+                {
+                    if let Some(ix) = state.interaction_mut(routing_key) {
+                        ix.esc_count = 0;
+                    }
+                }
+
+                // Agent chat: Enter sends, Shift+Enter inserts newline.
+                if agent_chat_active
+                    && key == keyboard::Key::Named(keyboard::key::Named::Enter)
+                {
+                    if mods.shift() {
+                        if let Some(ix) = state.interaction_mut(routing_key) {
+                            ix.chat_input.perform(
+                                iced::widget::text_editor::Action::Edit(
+                                    iced::widget::text_editor::Edit::Enter,
+                                ),
+                            );
+                        }
+                    } else {
+                        return dispatch_interaction_msg(state, routing_key,
+                            interaction::Msg::AgentChat(widget::agent_chat::Msg::SendPressed));
                     }
                     return Task::none();
                 }
-            }
 
-            // Reset esc counter on any non-Esc key.
-            if agent_chat_active
-                && key != keyboard::Key::Named(keyboard::key::Named::Escape)
-            {
-                state.change.esc_count = 0;
-            }
-
-            // Agent chat: Enter sends, Shift+Enter inserts newline.
-            if agent_chat_active
-                && key == keyboard::Key::Named(keyboard::key::Named::Enter)
-            {
-                if mods.shift() {
-                    state.change.chat_input.perform(
-                        iced::widget::text_editor::Action::Edit(
-                            iced::widget::text_editor::Edit::Enter,
-                        ),
-                    );
-                } else {
-                    return update(
-                        state,
-                        Message::Change(area::change::Message::AgentChat(
-                            widget::agent_chat::Msg::SendPressed,
-                        )),
-                    );
-                }
-                return Task::none();
-            }
-
-            // Terminal keyboard capture.
-            if state.terminal_focused {
-                if let Some(ref mut ts) = state.terminal {
-                    ts.write_key(key, mods, text.as_deref());
+                // Terminal keyboard capture.
+                if terminal_focused {
+                    if let Some(ix) = state.interaction_mut(routing_key) {
+                        if let Some(ref mut ts) = ix.terminal {
+                            ts.write_key(key, mods, text.as_deref());
+                        }
+                    }
                 }
             }
         }
     }
     Task::none()
+}
+
+/// Dispatch an interaction message to the appropriate area by routing key.
+fn dispatch_interaction_msg(state: &mut State, key: &str, msg: interaction::Msg) -> Task<Message> {
+    match key {
+        KEY_CAPS => update(state, Message::Caps(area::caps::Message::Interaction(msg))),
+        KEY_CODEX => update(state, Message::Codex(area::codex::Message::Interaction(msg))),
+        _ => update(state, Message::Change(area::change::Message::Interaction(msg))),
+    }
 }
 
 /// Re-read content for all open text tabs from disk.
@@ -668,7 +564,7 @@ pub fn handle_editor_action(
     };
     let (editor, tab_id) = match &mut tab.view {
         tab_bar::TabView::Editor { editor, .. } => (editor, tab.id.as_str()),
-        _ => return,
+        tab_bar::TabView::Diff { editor, .. } => (editor, tab.id.as_str()),
     };
 
     let mutates_text = matches!(
@@ -698,9 +594,7 @@ pub fn handle_editor_action(
         EditorAction::MoveWordLeft(sel) => editor.move_word_left(sel),
         EditorAction::MoveWordRight(sel) => editor.move_word_right(sel),
         EditorAction::SelectAll => editor.select_all(),
-        EditorAction::Copy => {
-            // Copy is handled in the widget's on_event (clipboard access).
-        }
+        EditorAction::Copy => {}
         EditorAction::Cut => {
             editor.delete_selection();
         }
@@ -716,12 +610,13 @@ pub fn handle_editor_action(
             }
             editor.cursor = pos;
         }
-        EditorAction::Scroll { dy, viewport_height, content_height } => {
-            let max = (content_height - viewport_height).max(0.0);
-            editor.scroll_y = (editor.scroll_y + dy).clamp(0.0, max);
+        EditorAction::Scroll { dy, dx, viewport_height, content_height, viewport_width, content_width } => {
+            let max_y = (content_height - viewport_height).max(0.0);
+            editor.scroll_y = (editor.scroll_y + dy).clamp(0.0, max_y);
+            let max_x = (content_width - viewport_width).max(0.0);
+            editor.scroll_x = (editor.scroll_x + dx).clamp(0.0, max_x);
         }
         EditorAction::SaveRequested => {
-            // TODO: write editor content back to disk.
             tracing::info!("save requested (not yet implemented)");
         }
     }
@@ -787,54 +682,25 @@ fn flush_pending_text(session: &mut chat_store::ChatSession) {
     }
 }
 
-fn gather_agent_context(state: &State) -> Option<agent::AgentContext> {
-    let project_root = state.project.project_root.as_ref()?.clone();
-    let duckspec_root = state.project.duckspec_root.as_ref()?;
-    let change_name = state.change.selected_change.as_ref()?;
-    let change_dir = duckspec_root.join("changes").join(change_name);
-
-    let changed_files = state
-        .change
-        .changed_files
-        .iter()
-        .map(|f| f.path.clone())
-        .collect();
-
-    // Read spec content if available.
-    let spec_content = std::fs::read_to_string(change_dir.join("proposal.md")).ok();
-    let step_content = None; // Could read the latest step file.
-    let git_diff = None; // Could compute from vcs module.
-
-    Some(agent::AgentContext {
-        project_root,
-        change_dir,
-        changed_files,
-        spec_content,
-        step_content,
-        git_diff,
-    })
-}
-
 // ── View ─────────────────────────────────────────────────────────────────────
 
 fn view(state: &State) -> Element<'_, Message> {
     let sidebar =
         widget::sidebar::view(&state.active_area, Message::AreaSelected, Message::Refresh);
 
-    let term = state.terminal.as_ref();
     let area_content: Element<'_, Message> = match state.active_area {
         Area::Dashboard => {
             area::dashboard::view(&state.dashboard, &state.project, &state.change.changed_files)
                 .map(Message::Dashboard)
         }
         Area::Change => {
-            area::change::view(&state.change, &state.project, term).map(Message::Change)
+            area::change::view(&state.change, &state.project).map(Message::Change)
         }
         Area::Caps => {
-            area::caps::view(&state.caps, &state.project, term).map(Message::Caps)
+            area::caps::view(&state.caps, &state.project).map(Message::Caps)
         }
         Area::Codex => {
-            area::codex::view(&state.codex, &state.project, term).map(Message::Codex)
+            area::codex::view(&state.codex, &state.project).map(Message::Codex)
         }
     };
 
@@ -851,8 +717,6 @@ fn view(state: &State) -> Element<'_, Message> {
     }
 }
 
-// ── Main ─────────────────────────────────────────────────────────────────────
-
 // ── Subscription ────────────────────────────────────────────────────────────
 
 fn subscription(state: &State) -> Subscription<Message> {
@@ -865,26 +729,61 @@ fn subscription(state: &State) -> Subscription<Message> {
         );
     }
 
-    // PTY I/O subscription: active when a terminal exists.
-    if state.terminal.is_some() {
-        subs.push(
-            widget::terminal::pty_subscription().map(Message::PtyEvent),
-        );
+    // Per-change PTY subscriptions.
+    for (name, ix) in &state.change.interactions {
+        if ix.terminal.is_some() {
+            let key = format!("pty:change:{name}");
+            subs.push(widget::terminal::pty_subscription(key).map(tagged_pty));
+        }
+    }
+    // Caps / Codex PTY subscriptions.
+    if state.caps.interaction.terminal.is_some() {
+        subs.push(widget::terminal::pty_subscription(format!("pty:{KEY_CAPS}")).map(tagged_pty));
+    }
+    if state.codex.interaction.terminal.is_some() {
+        subs.push(widget::terminal::pty_subscription(format!("pty:{KEY_CODEX}")).map(tagged_pty));
     }
 
-    // Agent subscription: active when a chat session exists.
-    if state.change.chat_session.is_some() {
-        if let Some(root) = state.project.project_root.as_ref() {
+    // Per-change agent subscriptions.
+    if let Some(root) = state.project.project_root.as_ref() {
+        for (name, ix) in &state.change.interactions {
+            if ix.chat_session.is_some() {
+                let key = format!("agent:change:{name}");
+                subs.push(agent::agent_subscription(key, root.clone()).map(tagged_agent));
+            }
+        }
+        if state.caps.interaction.chat_session.is_some() {
             subs.push(
-                agent::agent_subscription(root.clone()).map(Message::AgentEvent),
+                agent::agent_subscription(format!("agent:{KEY_CAPS}"), root.clone()).map(tagged_agent),
+            );
+        }
+        if state.codex.interaction.chat_session.is_some() {
+            subs.push(
+                agent::agent_subscription(format!("agent:{KEY_CODEX}"), root.clone()).map(tagged_agent),
             );
         }
     }
 
-    // Global keyboard events — routing happens in update based on state.
+    // Global keyboard events.
     subs.push(event::listen_raw(handle_key_event));
 
     Subscription::batch(subs)
+}
+
+// Non-capturing mapper functions for Subscription::map.
+// The key embedded in the tuple carries the routing info.
+fn tagged_pty((key, e): (String, widget::terminal::PtyEvent)) -> Message {
+    // Strip the "pty:" or "pty:change:" prefix to get the routing key.
+    let routing_key = key.strip_prefix("pty:change:").unwrap_or(
+        key.strip_prefix("pty:").unwrap_or(&key)
+    ).to_string();
+    Message::PtyEvent(routing_key, e)
+}
+fn tagged_agent((key, e): (String, agent::AgentEvent)) -> Message {
+    let routing_key = key.strip_prefix("agent:change:").unwrap_or(
+        key.strip_prefix("agent:").unwrap_or(&key)
+    ).to_string();
+    Message::AgentEvent(routing_key, e)
 }
 
 fn main() -> iced::Result {

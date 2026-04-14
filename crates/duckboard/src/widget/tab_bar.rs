@@ -9,7 +9,7 @@ use iced::widget::{button, column, container, row, svg, text, Space};
 use iced::{Center, Element, Length};
 
 use crate::theme;
-use crate::vcs::DiffData;
+use crate::vcs::FileStatus;
 use crate::widget::text_edit::{self, EditorAction, EditorState};
 
 const ICON_FILE: &[u8] = include_bytes!("../../assets/icon_file.svg");
@@ -38,8 +38,12 @@ const MAX_FILE_TABS: usize = 5;
 pub enum TabView {
     /// Editable text file.
     Editor { editor: EditorState },
-    /// VCS diff view.
-    Diff(DiffData),
+    /// VCS diff view (read-only editor with per-line backgrounds).
+    Diff {
+        editor: EditorState,
+        path: std::path::PathBuf,
+        status: FileStatus,
+    },
 }
 
 // ── Messages emitted by tab content ─────────────────────────────────────────
@@ -125,11 +129,11 @@ impl TabState {
     }
 
     /// Open a diff in the preview tab.
-    pub fn open_diff(&mut self, id: String, title: String, diff: DiffData) {
+    pub fn open_diff(&mut self, id: String, title: String, editor: EditorState, path: std::path::PathBuf, status: FileStatus) {
         self.preview = Some(Tab {
             id,
             title,
-            view: TabView::Diff(diff),
+            view: TabView::Diff { editor, path, status },
         });
         self.active = ActiveTab::Preview;
     }
@@ -328,20 +332,20 @@ pub fn view_content(state: &TabState) -> Element<'_, TabContentMsg> {
     match state.active_tab() {
         Some(tab) => {
             let header: Element<'_, TabContentMsg> = match &tab.view {
-                TabView::Diff(diff) => {
-                    let status_char = match diff.status {
-                        crate::vcs::FileStatus::Modified => "M",
-                        crate::vcs::FileStatus::Added => "A",
-                        crate::vcs::FileStatus::Deleted => "D",
+                TabView::Diff { path, status, .. } => {
+                    let status_char = match status {
+                        FileStatus::Modified => "M",
+                        FileStatus::Added => "A",
+                        FileStatus::Deleted => "D",
                     };
-                    let color = theme::vcs_status_color(&diff.status);
+                    let color = theme::vcs_status_color(status);
                     container(
                         row![
                             text(status_char)
                                 .size(theme::FONT_MD)
                                 .font(iced::Font::MONOSPACE)
                                 .color(color),
-                            text(diff.path.display().to_string())
+                            text(path.display().to_string())
                                 .size(theme::FONT_MD)
                                 .color(theme::TEXT_SECONDARY),
                         ]
@@ -378,7 +382,12 @@ pub fn view_content(state: &TabState) -> Element<'_, TabContentMsg> {
                 TabView::Editor { editor, .. } => {
                     text_edit::view(editor, TabContentMsg::EditorAction)
                 }
-                TabView::Diff(diff) => super::diff_view::view(diff),
+                TabView::Diff { editor, .. } => {
+                    text_edit::TextEdit::new(editor, TabContentMsg::EditorAction)
+                        .read_only(true)
+                        .show_gutter(false)
+                        .into()
+                }
             };
 
             column![header, body].height(Length::Fill).into()

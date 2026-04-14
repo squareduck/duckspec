@@ -251,28 +251,7 @@ pub fn icon_button(_theme: &Theme, status: button::Status) -> button::Style {
     }
 }
 
-// ── Diff styles ─────────────────────────────────────────────────────────────
-
-pub fn diff_added(_theme: &Theme) -> container::Style {
-    container::Style {
-        background: Some(DIFF_ADDED_BG.into()),
-        ..Default::default()
-    }
-}
-
-pub fn diff_removed(_theme: &Theme) -> container::Style {
-    container::Style {
-        background: Some(DIFF_REMOVED_BG.into()),
-        ..Default::default()
-    }
-}
-
-pub fn diff_hunk_header(_theme: &Theme) -> container::Style {
-    container::Style {
-        background: Some(DIFF_HUNK_BG.into()),
-        ..Default::default()
-    }
-}
+// ── VCS helpers ─────────────────────────────────────────────────────────────
 
 pub fn vcs_status_color(status: &crate::vcs::FileStatus) -> Color {
     match status {
