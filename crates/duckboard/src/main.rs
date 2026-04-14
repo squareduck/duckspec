@@ -240,8 +240,44 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
             }
 
             if tree_changed {
+                // Snapshot known change names before reload for promotion detection.
+                let old_change_names: std::collections::HashSet<String> = state
+                    .project
+                    .active_changes
+                    .iter()
+                    .map(|c| c.name.clone())
+                    .collect();
+
                 state.project.reload();
                 tracing::debug!("project reloaded (file watcher)");
+
+                // Detect new change directories and promote exploration if active.
+                if state.change.is_exploration_selected() {
+                    let new_changes: Vec<String> = state
+                        .project
+                        .active_changes
+                        .iter()
+                        .filter(|c| !old_change_names.contains(&c.name))
+                        .map(|c| c.name.clone())
+                        .collect();
+
+                    if let Some(new_name) = new_changes.first()
+                        && let Some(exploration_name) = state.change.selected_change.clone()
+                    {
+                        tracing::info!(
+                            from = exploration_name,
+                            to = new_name.as_str(),
+                            "promoting exploration to real change"
+                        );
+                        // Rename the persisted chat session.
+                        if let Some(ix) = state.change.interactions.get_mut(&exploration_name)
+                            && let Some(session) = &mut ix.chat_session
+                        {
+                            chat_store::rename_session(session, new_name);
+                        }
+                        state.change.promote_exploration(&exploration_name, new_name);
+                    }
+                }
             }
 
             refresh_changed_files(state);

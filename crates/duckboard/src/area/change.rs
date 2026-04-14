@@ -23,6 +23,7 @@ const ICON_DOC_DELTA: &[u8] = include_bytes!("../../assets/icon_doc_delta.svg");
 const ICON_STEP: &[u8] = include_bytes!("../../assets/icon_step.svg");
 const ICON_STEP_DONE: &[u8] = include_bytes!("../../assets/icon_step_done.svg");
 const ICON_STEP_PARTIAL: &[u8] = include_bytes!("../../assets/icon_step_partial.svg");
+const ICON_EXPLORE: &[u8] = include_bytes!("../../assets/icon_explore.svg");
 
 const ICON_SIZE: f32 = 14.0;
 
@@ -37,6 +38,10 @@ pub struct State {
     /// Per-change interaction states keyed by change name.
     /// Switching changes keeps previous sessions alive.
     pub interactions: HashMap<String, InteractionState>,
+    /// Virtual exploration changes (not persisted to duckspec).
+    pub explorations: Vec<String>,
+    /// Counter for generating unique exploration names.
+    pub exploration_counter: usize,
 }
 
 impl Default for State {
@@ -46,6 +51,7 @@ impl Default for State {
         sections.insert("capabilities".to_string());
         sections.insert("steps".to_string());
         sections.insert("changed_files".to_string());
+        let (explorations, exploration_counter) = crate::chat_store::load_explorations();
         Self {
             selected_change: None,
             expanded_sections: sections,
@@ -53,6 +59,8 @@ impl Default for State {
             tabs: tab_bar::TabState::default(),
             changed_files: vec![],
             interactions: HashMap::new(),
+            explorations,
+            exploration_counter,
         }
     }
 }
@@ -69,6 +77,26 @@ impl State {
         let name = self.selected_change.as_ref()?;
         Some(self.interactions.entry(name.clone()).or_default())
     }
+
+    /// Whether the currently selected change is an exploration (virtual).
+    pub fn is_exploration_selected(&self) -> bool {
+        self.selected_change
+            .as_ref()
+            .is_some_and(|name| self.explorations.contains(name))
+    }
+
+    /// Promote an exploration to a real change: remove from explorations list,
+    /// migrate interaction state and chat session to the new name.
+    pub fn promote_exploration(&mut self, exploration_name: &str, real_name: &str) {
+        self.explorations.retain(|n| n != exploration_name);
+        if let Some(ix) = self.interactions.remove(exploration_name) {
+            self.interactions.insert(real_name.to_string(), ix);
+        }
+        if self.selected_change.as_deref() == Some(exploration_name) {
+            self.selected_change = Some(real_name.to_string());
+        }
+        crate::chat_store::save_explorations(&self.explorations, self.exploration_counter);
+    }
 }
 
 // ── Messages ─────────────────────────────────────────────────────────────────
@@ -84,6 +112,8 @@ pub enum Message {
     Interaction(interaction::Msg),
     SelectChangedFile(PathBuf),
     TabContent(tab_bar::TabContentMsg),
+    AddExploration,
+    RemoveExploration(String),
 }
 
 // ── Update ───────────────────────────────────────────────────────────────────
@@ -97,18 +127,32 @@ pub fn update(
     match message {
         Message::SelectChange(name) => {
             state.selected_change = Some(name.clone());
-            // Expand all tree nodes for the newly selected change.
             state.expanded_nodes.clear();
-            if let Some(change) = project
-                .active_changes
-                .iter()
-                .chain(project.archived_changes.iter())
-                .find(|c| c.name == name)
+
+            // Expand tree nodes for real changes.
+            if !state.explorations.contains(&name)
+                && let Some(change) = project
+                    .active_changes
+                    .iter()
+                    .chain(project.archived_changes.iter())
+                    .find(|c| c.name == name)
             {
                 crate::data::TreeNode::collect_parent_ids(
                     &change.cap_tree,
                     &mut state.expanded_nodes,
                 );
+            }
+
+            // Auto-open interaction for any change.
+            let ix = state.interactions.entry(name.clone()).or_default();
+            if !ix.visible {
+                ix.visible = true;
+                if ix.mode == InteractionMode::Terminal {
+                    interaction::spawn_terminal(ix);
+                }
+                if ix.mode == InteractionMode::AgentChat && ix.chat_session.is_none() {
+                    interaction::spawn_agent_session(ix, &name);
+                }
             }
         }
         Message::ToggleSection(id) => {
@@ -179,6 +223,30 @@ pub fn update(
         Message::TabContent(tab_bar::TabContentMsg::EditorAction(action)) => {
             crate::handle_editor_action(&mut state.tabs, action, highlighter);
         }
+        Message::AddExploration => {
+            state.exploration_counter += 1;
+            let name = format!("Exploration {}", state.exploration_counter);
+            state.explorations.push(name.clone());
+            state.selected_change = Some(name.clone());
+            crate::chat_store::save_explorations(&state.explorations, state.exploration_counter);
+            // Auto-open interaction panel.
+            let ix = state.interactions.entry(name.clone()).or_default();
+            ix.visible = true;
+            if ix.mode == InteractionMode::AgentChat && ix.chat_session.is_none() {
+                interaction::spawn_agent_session(ix, &name);
+            }
+            if ix.mode == InteractionMode::Terminal {
+                interaction::spawn_terminal(ix);
+            }
+        }
+        Message::RemoveExploration(name) => {
+            state.explorations.retain(|n| n != &name);
+            state.interactions.remove(&name);
+            if state.selected_change.as_deref() == Some(&name) {
+                state.selected_change = None;
+            }
+            crate::chat_store::save_explorations(&state.explorations, state.exploration_counter);
+        }
     }
 }
 
@@ -189,12 +257,38 @@ pub fn view<'a>(
     project: &'a ProjectData,
 ) -> Element<'a, Message> {
     let list = view_list(state, project);
-    let content = view_content(state);
     let divider = container(Space::new().height(Length::Fill))
         .width(1.0)
         .style(theme::divider);
 
+    let is_exploration = state.is_exploration_selected();
     let ix = state.active_interaction();
+
+    // Exploration mode: no content column or toggle, interaction fills remaining width.
+    if is_exploration {
+        let mut main_row = row![
+            container(list)
+                .width(theme::LIST_COLUMN_WIDTH)
+                .height(Length::Fill)
+                .style(theme::surface),
+            divider,
+        ];
+
+        if let Some(ix) = ix {
+            let interaction_col = interaction::view_column(ix, Message::Interaction);
+            main_row = main_row.push(
+                container(interaction_col)
+                    .width(Length::Fill)
+                    .height(Length::Fill)
+                    .style(theme::surface),
+            );
+        }
+
+        return main_row.height(Length::Fill).into();
+    }
+
+    // Normal mode: content column + optional interaction panel.
+    let content = view_content(state);
     let visible = ix.is_some_and(|i| i.visible);
     let width = ix.map_or(theme::INTERACTION_COLUMN_WIDTH, |i| i.width);
 
@@ -230,6 +324,40 @@ pub fn view<'a>(
 
 fn view_list<'a>(state: &'a State, project: &'a ProjectData) -> Element<'a, Message> {
     let mut selector = column![].spacing(theme::SPACING_XS);
+
+    // Exploration changes (virtual) — listed first.
+    for name in &state.explorations {
+        let is_selected = state.selected_change.as_deref() == Some(name);
+        let style = if is_selected {
+            theme::list_item_active as fn(&iced::Theme, button::Status) -> button::Style
+        } else {
+            theme::list_item
+        };
+        let icon = svg(svg::Handle::from_memory(ICON_EXPLORE))
+            .width(ICON_SIZE)
+            .height(ICON_SIZE);
+        let close_btn = button(text("\u{00d7}").size(theme::FONT_MD))
+            .on_press(Message::RemoveExploration(name.clone()))
+            .padding(0.0)
+            .style(theme::icon_button);
+        let label = row![
+            icon,
+            text(name).size(theme::FONT_MD).wrapping(Wrapping::None),
+            Space::new().width(Length::Fill),
+            close_btn,
+        ]
+        .spacing(theme::SPACING_XS)
+        .align_y(iced::Center);
+        selector = selector.push(
+            button(label)
+                .on_press(Message::SelectChange(name.clone()))
+                .width(Length::Fill)
+                .padding([theme::SPACING_XS, theme::SPACING_SM])
+                .style(style),
+        );
+    }
+
+    // Real changes from duckspec.
     let all_changes: Vec<_> = project
         .active_changes
         .iter()
@@ -260,17 +388,54 @@ fn view_list<'a>(state: &'a State, project: &'a ProjectData) -> Element<'a, Mess
         );
     }
 
-    let change_picker = collapsible::view(
-        "Change",
-        state.expanded_sections.contains("picker"),
-        Message::ToggleSection("picker".to_string()),
-        selector.into(),
-    );
+    let change_section = {
+        let arrow = if state.expanded_sections.contains("picker") { "\u{25bf}" } else { "\u{25b9}" };
+        let header = button(
+            row![
+                text("CHANGE")
+                    .size(theme::FONT_SM)
+                    .color(theme::text_secondary()),
+                Space::new().width(Length::Fill),
+                text(arrow).size(theme::FONT_SM).color(theme::text_muted()),
+            ]
+            .width(Length::Fill),
+        )
+        .on_press(Message::ToggleSection("picker".to_string()))
+        .width(Length::Fill)
+        .style(theme::section_header)
+        .padding([theme::SPACING_SM, theme::SPACING_SM]);
+
+        let mut col = column![
+            row![
+                container(header).width(Length::Fill),
+                button(text("+").size(theme::FONT_SM).color(theme::text_secondary()))
+                    .on_press(Message::AddExploration)
+                    .padding([theme::SPACING_SM, theme::SPACING_SM])
+                    .style(theme::section_header),
+            ]
+        ].spacing(0.0);
+
+        if state.expanded_sections.contains("picker") {
+            col = col.push(selector);
+        }
+        col
+    };
 
     let change = find_change(state, project);
-    let mut list_col = column![change_picker].spacing(0.0);
+    let is_exploration = state.is_exploration_selected();
+    let mut list_col = column![change_section].spacing(0.0);
 
-    if let Some(change) = change {
+    if is_exploration {
+        // Explorations only show the interaction column, no overview/caps/steps.
+        list_col = list_col.push(
+            container(
+                text("Exploration mode — use the agent or terminal to work freely.")
+                    .size(theme::FONT_MD)
+                    .color(theme::text_muted()),
+            )
+            .padding(theme::SPACING_LG),
+        );
+    } else if let Some(change) = change {
         list_col = list_col.push(view_overview_section(state, change));
         list_col = list_col.push(view_caps_section(state, change));
         list_col = list_col.push(view_steps_section(state, change));
