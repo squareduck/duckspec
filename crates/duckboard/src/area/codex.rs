@@ -144,7 +144,8 @@ fn view_list<'a>(state: &'a State, project: &'a ProjectData) -> Element<'a, Mess
             };
             let icon = svg(svg::Handle::from_memory(ICON_FILE))
                 .width(ICON_SIZE)
-                .height(ICON_SIZE);
+                .height(ICON_SIZE)
+                .style(theme::svg_tint(theme::text_muted()));
             let label = row![icon, text(&entry.label).size(theme::FONT_MD).wrapping(Wrapping::None)]
                 .spacing(theme::SPACING_XS)
                 .align_y(iced::Center);
@@ -166,6 +167,8 @@ fn view_list<'a>(state: &'a State, project: &'a ProjectData) -> Element<'a, Mess
     );
 
     scrollable(column![section].spacing(0.0))
+        .direction(theme::thin_scrollbar_direction())
+        .style(theme::thin_scrollbar)
         .height(Length::Fill)
         .into()
 }

@@ -67,7 +67,8 @@ pub fn view<'a, M: Clone + 'a>(
             };
             let icon = svg(svg::Handle::from_memory(ICON_FOLDER))
                 .width(ICON_SIZE)
-                .height(ICON_SIZE);
+                .height(ICON_SIZE)
+                .style(theme::svg_tint(theme::text_muted()));
             row![
                 text(arrow).size(theme::FONT_SM).color(theme::text_muted()),
                 icon,
@@ -78,7 +79,8 @@ pub fn view<'a, M: Clone + 'a>(
         } else {
             let icon = svg(svg::Handle::from_memory(icon_for_leaf(&node_label)))
                 .width(ICON_SIZE)
-                .height(ICON_SIZE);
+                .height(ICON_SIZE)
+                .style(theme::svg_tint(theme::text_muted()));
             row![
                 Space::new().width(theme::FONT_SM),
                 icon,

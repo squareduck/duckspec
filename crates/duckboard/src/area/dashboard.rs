@@ -45,7 +45,8 @@ pub fn view<'a>(
 ) -> Element<'a, Message> {
     let duck_icon = svg(svg::Handle::from_memory(LOGO_SVG))
         .width(40.0)
-        .height(40.0);
+        .height(40.0)
+        .style(theme::svg_tint(theme::text_primary()));
 
     let wordmark = column![
         row![
@@ -170,6 +171,8 @@ pub fn view<'a>(
             .max_width(520)
             .center_x(Length::Fill),
     )
+    .direction(theme::thin_scrollbar_direction())
+    .style(theme::thin_scrollbar)
     .height(Length::Fill)
     .width(Length::Fill)
     .into()
@@ -185,7 +188,8 @@ fn change_row<'a>(
     let detail_owned = detail.to_string();
     let icon = svg(svg::Handle::from_memory(ICON_BRANCH))
         .width(ICON_SIZE)
-        .height(ICON_SIZE);
+        .height(ICON_SIZE)
+        .style(theme::svg_tint(theme::text_muted()));
 
     let mut label = row![
         icon,
@@ -218,7 +222,8 @@ fn change_row<'a>(
 fn exploration_row(name: &str) -> Element<'_, Message> {
     let icon = svg(svg::Handle::from_memory(ICON_EXPLORE))
         .width(ICON_SIZE)
-        .height(ICON_SIZE);
+        .height(ICON_SIZE)
+        .style(theme::svg_tint(theme::text_muted()));
 
     let label = row![
         icon,

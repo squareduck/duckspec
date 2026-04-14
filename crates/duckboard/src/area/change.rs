@@ -336,7 +336,8 @@ fn view_list<'a>(state: &'a State, project: &'a ProjectData) -> Element<'a, Mess
         };
         let icon = svg(svg::Handle::from_memory(ICON_EXPLORE))
             .width(ICON_SIZE)
-            .height(ICON_SIZE);
+            .height(ICON_SIZE)
+            .style(theme::svg_tint(theme::text_muted()));
         let close_btn = button(text("\u{00d7}").size(theme::FONT_MD))
             .on_press(Message::RemoveExploration(name.clone()))
             .padding(0.0)
@@ -376,7 +377,8 @@ fn view_list<'a>(state: &'a State, project: &'a ProjectData) -> Element<'a, Mess
         };
         let icon = svg(svg::Handle::from_memory(ICON_BRANCH))
             .width(ICON_SIZE)
-            .height(ICON_SIZE);
+            .height(ICON_SIZE)
+            .style(theme::svg_tint(theme::text_muted()));
         let label = row![icon, text(&ch.name).size(theme::FONT_MD).wrapping(Wrapping::None)]
             .spacing(theme::SPACING_XS)
             .align_y(iced::Center);
@@ -455,6 +457,8 @@ fn view_list<'a>(state: &'a State, project: &'a ProjectData) -> Element<'a, Mess
     list_col = list_col.push(view_changed_files_section(state));
 
     scrollable(list_col)
+        .direction(theme::thin_scrollbar_direction())
+        .style(theme::thin_scrollbar)
         .height(Length::Fill)
         .into()
 }
@@ -523,7 +527,8 @@ fn view_steps_section<'a>(state: &'a State, change: &'a ChangeData) -> Element<'
             };
             let icon = svg(svg::Handle::from_memory(icon_bytes))
                 .width(ICON_SIZE)
-                .height(ICON_SIZE);
+                .height(ICON_SIZE)
+                .style(theme::svg_tint(theme::text_muted()));
             let label = row![
                 icon,
                 text(format!("{:02}-{}", step.number, step.label)).size(theme::FONT_MD).wrapping(Wrapping::None),
@@ -615,7 +620,8 @@ fn file_item<'a>(label: &str, id: &str, state: &State) -> Element<'a, Message> {
     };
     let icon = svg(svg::Handle::from_memory(icon_for_artifact(label)))
         .width(ICON_SIZE)
-        .height(ICON_SIZE);
+        .height(ICON_SIZE)
+        .style(theme::svg_tint(theme::text_muted()));
     let content = row![icon, text(label.to_string()).size(theme::FONT_MD).wrapping(Wrapping::None)]
         .spacing(theme::SPACING_XS)
         .align_y(iced::Center);

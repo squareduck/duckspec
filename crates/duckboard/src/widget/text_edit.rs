@@ -25,6 +25,7 @@ const FONT_SIZE: f32 = theme::FONT_MD;
 const LINE_HEIGHT: f32 = 20.0;
 const GUTTER_PAD: f32 = 8.0;
 const CONTENT_PAD: f32 = 8.0;
+const CONTENT_PAD_Y: f32 = 4.0;
 
 // ── Blocks ────────────────────────────────────────────────────────────────
 
@@ -228,7 +229,7 @@ impl EditorState {
         // scroll_to_bottom sets scroll_y to a huge sentinel.
         // Any real user scroll clamps it to max_scroll (content - viewport).
         // If scroll_y is still larger than total content, we're pinned.
-        let total = self.lines.len() as f32 * LINE_HEIGHT;
+        let total = self.lines.len() as f32 * LINE_HEIGHT + CONTENT_PAD_Y * 2.0;
         self.scroll_y >= total
     }
 
@@ -241,7 +242,7 @@ impl EditorState {
 
     /// Maximum scroll offset given the viewport height.
     pub fn max_scroll(&self, viewport_height: f32) -> f32 {
-        let total = self.lines.len() as f32 * LINE_HEIGHT;
+        let total = self.lines.len() as f32 * LINE_HEIGHT + CONTENT_PAD_Y * 2.0;
         (total - viewport_height).max(0.0)
     }
 
@@ -665,7 +666,7 @@ impl EditorState {
 
     /// Ensure the cursor is visible given the viewport height.
     pub fn scroll_to_cursor(&mut self, viewport_height: f32) {
-        let cursor_y = self.cursor.line as f32 * LINE_HEIGHT;
+        let cursor_y = self.cursor.line as f32 * LINE_HEIGHT + CONTENT_PAD_Y;
         if cursor_y < self.scroll_y {
             self.scroll_y = cursor_y;
         } else if cursor_y + LINE_HEIGHT > self.scroll_y + viewport_height {
@@ -894,7 +895,7 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for TextEdit<'a, M> {
             } else {
                 self.state.line_count()
             };
-            let height = row_count.max(1) as f32 * LINE_HEIGHT;
+            let height = row_count.max(1) as f32 * LINE_HEIGHT + CONTENT_PAD_Y * 2.0;
             let limits = limits.width(Length::Fill);
             layout::Node::new(limits.resolve(
                 Length::Fill,
@@ -954,9 +955,9 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for TextEdit<'a, M> {
         };
 
         let content_height = if let Some(ref w) = wrap {
-            w.total_visual_rows as f32 * LINE_HEIGHT
+            w.total_visual_rows as f32 * LINE_HEIGHT + CONTENT_PAD_Y * 2.0
         } else {
-            self.state.lines.len() as f32 * LINE_HEIGHT
+            self.state.lines.len() as f32 * LINE_HEIGHT + CONTENT_PAD_Y * 2.0
         };
 
         match event {
@@ -971,13 +972,16 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for TextEdit<'a, M> {
                     shell.publish((self.on_action)(EditorAction::Click(click_pos)));
                 } else {
                     internal.focused = false;
+                    internal.dragging = false;
                 }
             }
-            Event::Mouse(mouse::Event::CursorMoved { position }) => {
-                if internal.dragging {
-                    let drag_pos =
-                        pixel_to_pos_wrapped(*position, bounds, internal, self.state, wrap.as_ref(), content_height);
-                    shell.publish((self.on_action)(EditorAction::Drag(drag_pos)));
+            Event::Mouse(mouse::Event::CursorMoved { .. }) => {
+                if internal.dragging && internal.focused {
+                    if let Some(pos) = cursor.position() {
+                        let drag_pos =
+                            pixel_to_pos_wrapped(pos, bounds, internal, self.state, wrap.as_ref(), content_height);
+                        shell.publish((self.on_action)(EditorAction::Drag(drag_pos)));
+                    }
                 }
             }
             Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) => {
@@ -1132,7 +1136,7 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for TextEdit<'a, M> {
         _style: &renderer::Style,
         layout: Layout<'_>,
         _cursor: adv_mouse::Cursor,
-        _viewport: &Rectangle,
+        viewport: &Rectangle,
     ) {
         let bounds = layout.bounds();
         let internal = tree.state.downcast_ref::<InternalState>();
@@ -1158,7 +1162,7 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for TextEdit<'a, M> {
             None
         };
         let total_visual_rows = wrap.as_ref().map_or(self.state.line_count(), |w| w.total_visual_rows);
-        let content_height = total_visual_rows as f32 * LINE_HEIGHT;
+        let content_height = total_visual_rows as f32 * LINE_HEIGHT + CONTENT_PAD_Y * 2.0;
 
         // Clamp scroll so we don't render past the content.
         let max_scroll = (content_height - bounds.height).max(0.0);
@@ -1177,8 +1181,9 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for TextEdit<'a, M> {
             self.state.scroll_x.clamp(0.0, max_scroll_x)
         };
 
-        // Clip to bounds.
-        renderer.with_layer(bounds, |renderer: &mut iced::Renderer| {
+        // Clip to the intersection of layout bounds and the visible viewport.
+        let clip = bounds.intersection(viewport).unwrap_or(bounds);
+        renderer.with_layer(clip, |renderer: &mut iced::Renderer| {
             // Background.
             renderer::Renderer::fill_quad(
                 renderer,
@@ -1206,7 +1211,7 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for TextEdit<'a, M> {
             };
 
             for vrow in first_vrow..last_vrow {
-                let y = bounds.y + (vrow as f32) * LINE_HEIGHT - scroll_y;
+                let y = bounds.y + CONTENT_PAD_Y + (vrow as f32) * LINE_HEIGHT - scroll_y;
 
                 // Map visual row to logical line + sub-row.
                 let (line_idx, sub_row, char_start, char_end) = if let Some(ref w) = wrap {
@@ -1403,12 +1408,12 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for TextEdit<'a, M> {
                     let sub = starts.iter().rposition(|&s| cursor_col >= s).unwrap_or(0);
                     let col_in_row = cursor_col - starts[sub];
                     (
-                        bounds.y + vrow as f32 * LINE_HEIGHT - scroll_y,
+                        bounds.y + CONTENT_PAD_Y + vrow as f32 * LINE_HEIGHT - scroll_y,
                         content_x + CONTENT_PAD + col_in_row as f32 * cell_w,
                     )
                 } else {
                     (
-                        bounds.y + cursor_line as f32 * LINE_HEIGHT - scroll_y,
+                        bounds.y + CONTENT_PAD_Y + cursor_line as f32 * LINE_HEIGHT - scroll_y,
                         content_x + CONTENT_PAD + cursor_col as f32 * cell_w - scroll_x,
                     )
                 };
@@ -1446,7 +1451,7 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for TextEdit<'a, M> {
                 );
 
                 for vrow in first_vrow..last_vrow {
-                    let y = bounds.y + (vrow as f32) * LINE_HEIGHT - scroll_y;
+                    let y = bounds.y + CONTENT_PAD_Y + (vrow as f32) * LINE_HEIGHT - scroll_y;
                     let (line_idx, sub_row) = if let Some(ref w) = wrap {
                         w.visual_to_logical(vrow)
                     } else {
@@ -1540,7 +1545,7 @@ fn pixel_to_pos_wrapped(
     let scroll_y = state.scroll_y.clamp(0.0, max_scroll);
     let scroll_x = if wrap.is_some() { 0.0 } else { state.scroll_x.max(0.0) };
 
-    let vrow = ((point.y - bounds.y + scroll_y) / LINE_HEIGHT)
+    let vrow = ((point.y - bounds.y - CONTENT_PAD_Y + scroll_y) / LINE_HEIGHT)
         .floor()
         .max(0.0) as usize;
 

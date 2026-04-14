@@ -7,8 +7,8 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use iced::widget::{button, container};
-use iced::{Border, Color, Theme};
+use iced::widget::{button, container, scrollable, svg};
+use iced::{Background, Border, Color, Theme};
 
 // ── Dark / light mode state ────────────────────────────────────────────────
 
@@ -195,6 +195,49 @@ pub fn app_theme() -> Theme {
         danger: error(),
         warning: warning(),
     })
+}
+
+// ── SVG styles ────────────────────────────────────────────────────────────
+
+pub fn svg_tint(color: Color) -> impl Fn(&iced::Theme, svg::Status) -> svg::Style {
+    move |_theme, _status| svg::Style {
+        color: Some(color),
+    }
+}
+
+// ── Scrollable styles ─────────────────────────────────────────────────────
+
+/// Thin, subtle scrollbar with reserved space so content doesn't overlap.
+pub fn thin_scrollbar(_theme: &iced::Theme, _status: scrollable::Status) -> scrollable::Style {
+    let scroller_color = text_muted();
+    let rail = scrollable::Rail {
+        background: None,
+        border: Border::default(),
+        scroller: scrollable::Scroller {
+            background: Background::Color(scroller_color),
+            border: Border {
+                radius: 2.0.into(),
+                ..Border::default()
+            },
+        },
+    };
+    scrollable::Style {
+        container: container::Style::default(),
+        vertical_rail: rail,
+        horizontal_rail: rail,
+        gap: None,
+        ..scrollable::default(_theme, _status)
+    }
+}
+
+/// Scrollbar direction: thin vertical-only with reserved gutter space.
+pub fn thin_scrollbar_direction() -> scrollable::Direction {
+    scrollable::Direction::Vertical(
+        scrollable::Scrollbar::new()
+            .width(4)
+            .scroller_width(4)
+            .spacing(0),
+    )
 }
 
 // ── Container styles ───────────────────────────────────────────────────────

@@ -6,7 +6,7 @@ use iced::Element;
 use crate::agent::{AgentHandle, SlashCommand};
 use crate::chat_store::ChatSession;
 use crate::theme;
-use crate::widget::{agent_chat, interaction_toggle, text_edit::EditorState};
+use crate::widget::{agent_chat, interaction_toggle, text_edit::{Block, EditorState}};
 
 // ── Interaction mode ────────────────────────────────────────────────────────
 
@@ -31,7 +31,9 @@ pub struct InteractionState {
     pub chat_input: text_editor::Content,
     pub chat_commands: Vec<SlashCommand>,
     pub chat_completion: agent_chat::CompletionState,
-    pub chat_editor: Option<EditorState>,
+    pub chat_blocks: Vec<Block>,
+    pub chat_editors: Vec<EditorState>,
+    pub chat_collapsed: Vec<bool>,
     pub esc_count: u8,
     pub agent_model: String,
     pub agent_input_tokens: usize,
@@ -52,7 +54,9 @@ impl Default for InteractionState {
             chat_input: text_editor::Content::new(),
             chat_commands: Vec::new(),
             chat_completion: agent_chat::CompletionState::default(),
-            chat_editor: None,
+            chat_blocks: Vec::new(),
+            chat_editors: Vec::new(),
+            chat_collapsed: Vec::new(),
             esc_count: 0,
             agent_model: String::new(),
             agent_input_tokens: 0,
@@ -138,8 +142,21 @@ fn handle_agent_chat(state: &mut InteractionState, msg: agent_chat::Msg) {
         agent_chat::Msg::CompletionDismiss => {
             state.chat_completion.visible = false;
         }
-        agent_chat::Msg::ChatAction(action) => {
-            handle_chat_action(&mut state.chat_editor, action);
+        agent_chat::Msg::ChatAction(idx, action) => {
+            // Clear selection on all other editors so only one is active.
+            for (i, editor) in state.chat_editors.iter_mut().enumerate() {
+                if i != idx {
+                    editor.anchor = None;
+                }
+            }
+            if let Some(editor) = state.chat_editors.get_mut(idx) {
+                handle_chat_action_on(editor, action);
+            }
+        }
+        agent_chat::Msg::ToggleCollapse(idx) => {
+            if let Some(collapsed) = state.chat_collapsed.get_mut(idx) {
+                *collapsed = !*collapsed;
+            }
         }
         agent_chat::Msg::SendPressed => {
             // Send via agent handle.
@@ -173,43 +190,61 @@ fn handle_agent_chat(state: &mut InteractionState, msg: agent_chat::Msg) {
 
 // ── Chat editor ─────────────────────────────────────────────────────────────
 
-/// Rebuild the chat editor from the current session, preserving scroll state.
+/// Rebuild the per-block chat editors from the current session.
+///
+/// Preserves existing editor state (cursor, anchor, selection) for blocks
+/// whose content hasn't changed, so that in-progress selections aren't
+/// wiped during streaming rebuilds.
 pub fn rebuild_chat_editor(state: &mut InteractionState) {
     let session = match &state.chat_session {
         Some(s) => s,
         None => {
-            state.chat_editor = None;
+            state.chat_blocks.clear();
+            state.chat_editors.clear();
+            state.chat_collapsed.clear();
             return;
         }
     };
 
     let new_blocks = agent_chat::build_chat_blocks(session);
 
-    if let Some(existing) = &state.chat_editor {
-        let was_at_bottom = existing.is_at_bottom();
-        let old_scroll = existing.scroll_y;
-        let mut editor = EditorState::from_blocks(new_blocks);
-        if was_at_bottom {
-            editor.scroll_to_bottom();
-        } else {
-            editor.scroll_y = old_scroll;
-        }
-        state.chat_editor = Some(editor);
-    } else {
-        let mut editor = EditorState::from_blocks(new_blocks);
-        editor.scroll_to_bottom();
-        state.chat_editor = Some(editor);
+    // Preserve collapsed state for existing blocks, default new ones.
+    let old_len = state.chat_collapsed.len();
+    state.chat_collapsed.resize(new_blocks.len(), false);
+    for i in old_len..new_blocks.len() {
+        state.chat_collapsed[i] = matches!(
+            new_blocks[i].kind,
+            crate::widget::text_edit::BlockKind::ToolUse | crate::widget::text_edit::BlockKind::ToolResult
+        ) && !new_blocks[i].lines.is_empty();
     }
+
+    // Update editors: reuse existing ones when content is unchanged,
+    // only create new EditorState for new or changed blocks.
+    let mut new_editors = Vec::with_capacity(new_blocks.len());
+    for (i, block) in new_blocks.iter().enumerate() {
+        if i < state.chat_editors.len() && i < state.chat_blocks.len()
+            && state.chat_blocks[i].lines == block.lines
+        {
+            // Content unchanged — move the existing editor to preserve state.
+            let existing = std::mem::replace(
+                &mut state.chat_editors[i],
+                EditorState::new(""),
+            );
+            new_editors.push(existing);
+        } else {
+            let content = block.lines.join("\n");
+            new_editors.push(EditorState::new(&content));
+        }
+    }
+
+    state.chat_editors = new_editors;
+    state.chat_blocks = new_blocks;
 }
 
-fn handle_chat_action(
-    editor: &mut Option<EditorState>,
+fn handle_chat_action_on(
+    editor: &mut EditorState,
     action: crate::widget::text_edit::EditorAction,
 ) {
-    let editor = match editor.as_mut() {
-        Some(e) => e,
-        None => return,
-    };
     use crate::widget::text_edit::EditorAction;
     match action {
         EditorAction::Click(pos) => {
@@ -329,7 +364,7 @@ pub fn view_column<'a, M: 'a + Clone>(
             }
         }
         InteractionMode::AgentChat => {
-            if let (Some(session), Some(chat_editor)) = (&state.chat_session, &state.chat_editor) {
+            if let Some(session) = &state.chat_session {
                 let status = agent_chat::StatusInfo {
                     is_streaming: session.is_streaming,
                     esc_count: state.esc_count,
@@ -344,7 +379,10 @@ pub fn view_column<'a, M: 'a + Clone>(
                 let w = wrap.clone();
                 agent_chat::view(
                     session,
-                    chat_editor,
+                    &state.chat_blocks,
+                    &state.chat_editors,
+                    &state.chat_collapsed,
+                    session.is_streaming,
                     &state.chat_input,
                     &state.chat_commands,
                     &state.chat_completion,

@@ -1,9 +1,10 @@
-//! Agent chat widget — single block-aware text editor with input area.
+//! Agent chat widget — per-message text editors in a scrollable column.
 
-use iced::widget::{column, container, row, text, text_editor, Space};
+use iced::widget::{button, column, container, row, rule, scrollable, text, text_editor, Space};
 
 pub const INPUT_ID: &str = "agent-chat-input";
-use iced::{Element, Length};
+pub const CHAT_SCROLLABLE_ID: &str = "agent-chat-scroll";
+use iced::{Border, Element, Length};
 
 use crate::agent::SlashCommand;
 use crate::chat_store::{ChatSession, ContentBlock, Role};
@@ -21,8 +22,10 @@ pub enum Msg {
     CompletionNext,
     CompletionPrev,
     CompletionDismiss,
-    /// Action from the chat text editor.
-    ChatAction(text_edit::EditorAction),
+    /// Action from a per-block chat text editor (index, action).
+    ChatAction(usize, text_edit::EditorAction),
+    /// Toggle collapse state of a block.
+    ToggleCollapse(usize),
 }
 
 // ── Status bar info ────────────────────────────────────────────────────────
@@ -48,71 +51,76 @@ pub struct CompletionState {
 // ── Build blocks from session ──────────────────────────────────────────────
 
 /// Build blocks from a chat session for the block-aware editor.
+///
+/// ToolUse and ToolResult pairs are merged into a single ToolUse block
+/// whose label is the tool summary and whose lines are the (truncated)
+/// result output.
 pub fn build_chat_blocks(session: &ChatSession) -> Vec<Block> {
-    let mut blocks = Vec::new();
-
+    // Flatten all content blocks with their role, so we can look ahead.
+    let mut items: Vec<(&Role, &ContentBlock)> = Vec::new();
     for msg in &session.messages {
-        let role_label = match msg.role {
-            Role::User => "User",
-            Role::Assistant => "Assistant",
-            Role::System => "System",
-        };
+        for cb in &msg.content {
+            items.push((&msg.role, cb));
+        }
+    }
 
-        for block in &msg.content {
-            match block {
-                ContentBlock::Text(t) => {
-                    let kind = match msg.role {
-                        Role::User => BlockKind::User,
-                        Role::Assistant => BlockKind::Assistant,
-                        Role::System => BlockKind::System,
-                    };
-                    let lines: Vec<String> = t.lines().map(String::from).collect();
-                    blocks.push(Block {
-                        kind,
-                        label: role_label.to_string(),
-                        lines,
-                    });
-                }
-                ContentBlock::ToolUse { name, input, .. } => {
-                    // Single-line summary of the tool call.
-                    let summary = format_tool_summary(name, input);
-                    blocks.push(Block {
-                        kind: BlockKind::ToolUse,
-                        label: summary,
-                        lines: Vec::new(),
-                    });
-                }
-                ContentBlock::ToolResult { name, output, .. } => {
-                    let label = if name.is_empty() {
-                        "✓ done".to_string()
+    let mut blocks = Vec::new();
+    let mut i = 0;
+    while i < items.len() {
+        let (role, cb) = items[i];
+        match cb {
+            ContentBlock::Text(t) => {
+                let kind = match role {
+                    Role::User => BlockKind::User,
+                    Role::Assistant => BlockKind::Assistant,
+                    Role::System => BlockKind::System,
+                };
+                let role_label = match role {
+                    Role::User => "User",
+                    Role::Assistant => "Assistant",
+                    Role::System => "System",
+                };
+                let lines: Vec<String> = t.lines().map(String::from).collect();
+                blocks.push(Block {
+                    kind,
+                    label: role_label.to_string(),
+                    lines,
+                });
+            }
+            ContentBlock::ToolUse { id, name, input } => {
+                let summary = format_tool_summary(name, input);
+
+                // Look ahead for a matching ToolResult and merge.
+                let result_lines = if let Some((_, ContentBlock::ToolResult { id: rid, output, .. })) =
+                    items.get(i + 1)
+                {
+                    if rid == id {
+                        i += 1; // consume the result
+                        truncate_output(output)
                     } else {
-                        format!("✓ {name}")
-                    };
-                    const MAX_LINES: usize = 10;
-                    let all_lines: Vec<String> =
-                        output.lines().map(String::from).collect();
-                    let mut lines = if all_lines.len() > MAX_LINES {
-                        let mut truncated = all_lines[..MAX_LINES].to_vec();
-                        truncated.push(format!(
-                            "… ({} more lines)",
-                            all_lines.len() - MAX_LINES
-                        ));
-                        truncated
-                    } else {
-                        all_lines
-                    };
-                    // Skip entirely empty output.
-                    if lines.len() == 1 && lines[0].is_empty() {
-                        lines.clear();
+                        Vec::new()
                     }
-                    blocks.push(Block {
-                        kind: BlockKind::ToolResult,
-                        label,
-                        lines,
-                    });
-                }
+                } else {
+                    Vec::new()
+                };
+
+                blocks.push(Block {
+                    kind: BlockKind::ToolUse,
+                    label: summary,
+                    lines: result_lines,
+                });
+            }
+            ContentBlock::ToolResult { output, .. } => {
+                // Orphan result (no preceding ToolUse) — show standalone.
+                let lines = truncate_output(output);
+                blocks.push(Block {
+                    kind: BlockKind::ToolResult,
+                    label: "✓ done".to_string(),
+                    lines,
+                });
             }
         }
+        i += 1;
     }
 
     // Streaming pending text.
@@ -126,6 +134,44 @@ pub fn build_chat_blocks(session: &ChatSession) -> Vec<Block> {
     }
 
     blocks
+}
+
+/// Truncate tool output to a reasonable number of lines, filtering
+/// non-printable characters that cause rendering artifacts.
+fn truncate_output(output: &str) -> Vec<String> {
+    const MAX_LINES: usize = 10;
+    let all_lines: Vec<String> = output
+        .lines()
+        .map(|l| sanitize_line(l))
+        .collect();
+    let mut lines = if all_lines.len() > MAX_LINES {
+        let mut truncated = all_lines[..MAX_LINES].to_vec();
+        truncated.push(format!("… ({} more lines)", all_lines.len() - MAX_LINES));
+        truncated
+    } else {
+        all_lines
+    };
+    // Skip entirely empty output.
+    if lines.len() == 1 && lines[0].is_empty() {
+        lines.clear();
+    }
+    lines
+}
+
+/// Replace non-printable / non-standard-whitespace characters with a space
+/// to avoid rendering rectangles in the monospace font.
+fn sanitize_line(line: &str) -> String {
+    line.chars()
+        .map(|c| {
+            if c == '\t' {
+                ' '
+            } else if c.is_control() {
+                ' '
+            } else {
+                c
+            }
+        })
+        .collect()
 }
 
 /// Produce a short human-readable summary of a tool call.
@@ -171,21 +217,34 @@ fn format_tool_summary(name: &str, input: &str) -> String {
 
 pub fn view<'a>(
     _session: &'a ChatSession,
-    chat_editor: &'a EditorState,
+    blocks: &'a [Block],
+    editors: &'a [EditorState],
+    collapsed: &'a [bool],
+    is_streaming: bool,
     input_value: &'a text_editor::Content,
     commands: &'a [SlashCommand],
     completion: &CompletionState,
     status: StatusInfo,
 ) -> Element<'a, Msg> {
-    // Chat content — single block-aware text editor.
-    let chat_view = text_edit::TextEdit::new(chat_editor, Msg::ChatAction)
-        .show_gutter(false)
-        .word_wrap(true)
-        .read_only(true);
+    // Chat content — scrollable column of full-width sections.
+    let mut chat_col = column![].spacing(0.0);
 
-    let chat_scroll = container(chat_view)
+    for (i, block) in blocks.iter().enumerate() {
+        let is_collapsed = collapsed.get(i).copied().unwrap_or(false);
+        let block_el = view_block(i, block, editors.get(i), is_collapsed);
+        chat_col = chat_col.push(block_el);
+    }
+
+    let mut chat_scroll = scrollable(chat_col)
+        .direction(theme::thin_scrollbar_direction())
+        .style(theme::thin_scrollbar)
         .width(Length::Fill)
-        .height(Length::Fill);
+        .height(Length::Fill)
+        .id(CHAT_SCROLLABLE_ID);
+
+    if is_streaming {
+        chat_scroll = chat_scroll.anchor_bottom();
+    }
 
     // Completion popup — always present in the tree to keep input_row at a
     // stable index (prevents iced from losing text_editor focus).
@@ -219,6 +278,134 @@ pub fn view<'a>(
     column![chat_scroll, completion_el, input_row, status_bar]
         .height(Length::Fill)
         .into()
+}
+
+/// Render a single chat block as a full-width section followed by a subtle divider.
+fn view_block<'a>(
+    idx: usize,
+    block: &'a Block,
+    editor: Option<&'a EditorState>,
+    collapsed: bool,
+) -> Element<'a, Msg> {
+    let bg = text_edit::block_kind_bg(block.kind);
+    let header_color = block_header_color(block.kind);
+    let has_content = !block.lines.is_empty();
+    let is_tool = matches!(block.kind, BlockKind::ToolUse | BlockKind::ToolResult);
+
+    let section_bg = move |_theme: &iced::Theme| container::Style {
+        background: Some(iced::Background::Color(bg)),
+        ..Default::default()
+    };
+
+    let divider = rule::horizontal(1).style(move |_theme: &iced::Theme| rule::Style {
+        color: theme::border_color(),
+        radius: 0.0.into(),
+        fill_mode: rule::FillMode::Full,
+        snap: true,
+    });
+
+    // ── Tool blocks ─────────────────────────────────────────────────────
+    if is_tool {
+        let label = text(&block.label).size(theme::FONT_SM).color(header_color);
+
+        if !has_content {
+            let header_container = container(label)
+                .padding([theme::SPACING_SM, theme::SPACING_SM]);
+            let section = container(header_container)
+                .width(Length::Fill)
+                .style(section_bg);
+            return column![section, divider].into();
+        }
+
+        let arrow = text(if collapsed { "▸" } else { "▾" })
+            .size(theme::FONT_SM)
+            .color(header_color);
+        let header_row = row![arrow, label]
+            .spacing(theme::SPACING_XS)
+            .align_y(iced::Alignment::Center);
+        let header_btn = button(header_row)
+            .on_press(Msg::ToggleCollapse(idx))
+            .padding(0.0)
+            .style(|_theme, _status| iced::widget::button::Style {
+                background: None,
+                ..Default::default()
+            });
+
+        let header_container = container(header_btn)
+            .padding([theme::SPACING_SM, theme::SPACING_SM]);
+
+        let mut block_col = column![header_container];
+
+        if !collapsed {
+            if let Some(ed) = editor {
+                block_col = block_col.push(
+                    text_edit::TextEdit::new(ed, move |action| Msg::ChatAction(idx, action))
+                        .show_gutter(false)
+                        .word_wrap(true)
+                        .read_only(true)
+                        .fit_content(true),
+                );
+            }
+        }
+
+        let section = container(block_col)
+            .width(Length::Fill)
+            .style(section_bg);
+        return column![section, divider].into();
+    }
+
+    // ── User / Assistant / System: message sections ─────────────────────
+
+    let arrow = text(if collapsed { "▸" } else { "▾" })
+        .size(theme::FONT_SM)
+        .color(header_color);
+    let label = text(&block.label).size(theme::FONT_SM).color(header_color);
+
+    let header_row = row![arrow, label]
+        .spacing(theme::SPACING_XS)
+        .align_y(iced::Alignment::Center);
+
+    let header_btn = button(header_row)
+        .on_press(Msg::ToggleCollapse(idx))
+        .padding(0.0)
+        .style(|_theme, _status| iced::widget::button::Style {
+            background: None,
+            ..Default::default()
+        });
+
+    let header_container = container(header_btn)
+        .padding([theme::SPACING_SM, theme::SPACING_SM]);
+
+    let mut block_col = column![header_container];
+
+    if has_content && !collapsed {
+        if let Some(ed) = editor {
+            block_col = block_col.push(
+                text_edit::TextEdit::new(ed, move |action| Msg::ChatAction(idx, action))
+                    .show_gutter(false)
+                    .word_wrap(true)
+                    .read_only(true)
+                    .fit_content(true),
+            );
+        }
+    }
+
+    let section = container(block_col)
+        .width(Length::Fill)
+        .style(section_bg);
+
+    column![section, divider].into()
+}
+
+/// Header label color for a block kind (re-exported from text_edit for convenience).
+fn block_header_color(kind: BlockKind) -> iced::Color {
+    match kind {
+        BlockKind::User => theme::accent(),
+        BlockKind::Assistant => theme::text_secondary(),
+        BlockKind::ToolUse => theme::accent_dim(),
+        BlockKind::ToolResult => theme::success(),
+        BlockKind::System => theme::text_muted(),
+    }
 }
 
 fn view_status_bar<'a>(status: StatusInfo) -> Element<'a, Msg> {

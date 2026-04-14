@@ -356,7 +356,8 @@ pub fn view_content(state: &TabState) -> Element<'_, TabContentMsg> {
                 _ => {
                     let icon = svg(svg::Handle::from_memory(icon_for_title(&tab.title)))
                         .width(ICON_SIZE)
-                        .height(ICON_SIZE);
+                        .height(ICON_SIZE)
+                        .style(theme::svg_tint(theme::text_muted()));
                     container(
                         row![
                             icon,

@@ -158,6 +158,8 @@ fn view_list<'a>(state: &'a State, project: &'a ProjectData) -> Element<'a, Mess
     );
 
     scrollable(column![section].spacing(0.0))
+        .direction(theme::thin_scrollbar_direction())
+        .style(theme::thin_scrollbar)
         .height(Length::Fill)
         .into()
 }

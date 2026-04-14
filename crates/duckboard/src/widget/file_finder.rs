@@ -203,7 +203,10 @@ pub fn view<'a>(state: &'a FileFinderState) -> Element<'a, Msg> {
     let panel = container(
         column![
             input,
-            scrollable(list).height(Length::Shrink),
+            scrollable(list)
+                .direction(theme::thin_scrollbar_direction())
+                .style(theme::thin_scrollbar)
+                .height(Length::Shrink),
             container(status).padding([theme::SPACING_XS, theme::SPACING_MD]),
         ]
         .spacing(0.0)
