@@ -211,11 +211,11 @@ pub fn rebuild_chat_editor(state: &mut InteractionState) {
     // Preserve collapsed state for existing blocks, default new ones.
     let old_len = state.chat_collapsed.len();
     state.chat_collapsed.resize(new_blocks.len(), false);
-    for i in old_len..new_blocks.len() {
+    for (i, block) in new_blocks.iter().enumerate().skip(old_len) {
         state.chat_collapsed[i] = matches!(
-            new_blocks[i].kind,
+            block.kind,
             crate::widget::text_edit::BlockKind::ToolUse | crate::widget::text_edit::BlockKind::ToolResult
-        ) && !new_blocks[i].lines.is_empty();
+        ) && !block.lines.is_empty();
     }
 
     // Update editors: reuse existing ones when content is unchanged,

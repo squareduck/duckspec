@@ -976,12 +976,10 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for TextEdit<'a, M> {
                 }
             }
             Event::Mouse(mouse::Event::CursorMoved { .. }) => {
-                if internal.dragging && internal.focused {
-                    if let Some(pos) = cursor.position() {
-                        let drag_pos =
-                            pixel_to_pos_wrapped(pos, bounds, internal, self.state, wrap.as_ref(), content_height);
-                        shell.publish((self.on_action)(EditorAction::Drag(drag_pos)));
-                    }
+                if internal.dragging && internal.focused && let Some(pos) = cursor.position() {
+                    let drag_pos =
+                        pixel_to_pos_wrapped(pos, bounds, internal, self.state, wrap.as_ref(), content_height);
+                    shell.publish((self.on_action)(EditorAction::Drag(drag_pos)));
                 }
             }
             Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) => {

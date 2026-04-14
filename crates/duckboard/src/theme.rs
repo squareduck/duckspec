@@ -56,6 +56,7 @@ fn pick(dark: Color, light: Color) -> Color {
 
 // ── Catppuccin Macchiato (dark) ────────────────────────────────────────────
 
+#[allow(dead_code)]
 mod macchiato {
     use super::{hex, Color};
     pub const BASE: Color = hex(0x24, 0x27, 0x3a);
@@ -83,6 +84,7 @@ mod macchiato {
 
 // ── Catppuccin Latte (light) ───────────────────────────────────────────────
 
+#[allow(dead_code)]
 mod latte {
     use super::{hex, Color};
     pub const BASE: Color = hex(0xef, 0xf1, 0xf5);
@@ -157,10 +159,15 @@ pub fn success() -> Color { pick(macchiato::GREEN, latte::GREEN) }
 pub fn warning() -> Color { pick(macchiato::YELLOW, latte::YELLOW) }
 pub fn error() -> Color { pick(macchiato::RED, latte::RED) }
 
+#[allow(dead_code)]
 pub fn mauve() -> Color { pick(macchiato::MAUVE, latte::MAUVE) }
+#[allow(dead_code)]
 pub fn peach() -> Color { pick(macchiato::PEACH, latte::PEACH) }
+#[allow(dead_code)]
 pub fn teal() -> Color { pick(macchiato::TEAL, latte::TEAL) }
+#[allow(dead_code)]
 pub fn pink() -> Color { pick(macchiato::PINK, latte::PINK) }
+#[allow(dead_code)]
 pub fn lavender() -> Color { pick(macchiato::LAVENDER, latte::LAVENDER) }
 
 // ── Font sizes ─────────────────────────────────────────────────────────────
@@ -256,6 +263,7 @@ pub fn surface(_theme: &Theme) -> container::Style {
     }
 }
 
+#[allow(dead_code)]
 pub fn elevated(_theme: &Theme) -> container::Style {
     container::Style {
         background: Some(bg_elevated().into()),

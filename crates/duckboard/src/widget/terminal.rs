@@ -1,20 +1,24 @@
-//! Terminal emulator widget powered by libghostty-vt.
+//! Terminal emulator widget powered by alacritty_terminal.
 //!
 //! Renders a PTY-backed terminal inside an Iced Canvas. The heavy lifting
-//! (VT parsing, grid state) is handled by libghostty-vt; we only do
+//! (VT parsing, grid state) is handled by alacritty_terminal; we only do
 //! cell-by-cell rendering and keyboard/mouse plumbing.
 
-use std::cell::{Cell, RefCell};
+use std::cell::Cell;
 use std::io::{Read as _, Write};
-use std::rc::Rc;
+use std::sync::{Arc, Mutex};
+
+use alacritty_terminal::event::{Event as TermEvent, EventListener};
+use alacritty_terminal::grid::{Dimensions, Scroll};
+use alacritty_terminal::term::cell::Flags;
+use alacritty_terminal::term::{Config, Term, TermMode};
+use alacritty_terminal::vte::ansi::{self, Color as AnsiColor, NamedColor, Rgb};
 
 use iced::keyboard;
 use iced::mouse;
 use iced::widget::canvas;
 use iced::widget::canvas::Cache;
-use iced::{Color, Element, Length, Point, Rectangle, Size, Subscription, Theme};
-
-use libghostty_vt as vt;
+use iced::{Color, Element, Length, Point as IcedPoint, Rectangle, Size, Subscription, Theme};
 
 use crate::theme;
 
@@ -23,13 +27,13 @@ use crate::theme;
 const FONT_SIZE: f32 = theme::FONT_MD;
 const CELL_WIDTH: f32 = 8.4;
 const CELL_HEIGHT: f32 = 18.0;
-const DEFAULT_COLS: u16 = 80;
-const DEFAULT_ROWS: u16 = 24;
+const DEFAULT_COLS: usize = 80;
+const DEFAULT_ROWS: usize = 24;
 const MAX_SCROLLBACK: usize = 10_000;
 
 // ── Render buffer ────────────────────────────────────────────────────────────
 
-/// A single rendered cell, pre-computed from the libghostty-vt grid.
+/// A single rendered cell, pre-computed from the alacritty_terminal grid.
 #[derive(Clone)]
 struct RenderCell {
     grapheme: char,
@@ -53,8 +57,8 @@ impl Default for RenderCell {
 
 /// Pre-computed grid of cells ready for Canvas rendering.
 struct CellBuffer {
-    cols: u16,
-    rows: u16,
+    cols: usize,
+    rows: usize,
     cells: Vec<RenderCell>,
     cursor: Option<CursorInfo>,
     default_fg: Color,
@@ -63,58 +67,151 @@ struct CellBuffer {
 
 #[derive(Clone)]
 struct CursorInfo {
-    x: u16,
-    y: u16,
+    x: usize,
+    y: usize,
     visible: bool,
 }
 
 impl CellBuffer {
-    fn new(cols: u16, rows: u16) -> Self {
+    fn new(cols: usize, rows: usize) -> Self {
         Self {
             cols,
             rows,
-            cells: vec![RenderCell::default(); (cols as usize) * (rows as usize)],
+            cells: vec![RenderCell::default(); cols * rows],
             cursor: None,
             default_fg: theme::text_primary(),
             default_bg: theme::bg_base(),
         }
     }
 
-    fn cell(&self, row: u16, col: u16) -> &RenderCell {
-        &self.cells[(row as usize) * (self.cols as usize) + (col as usize)]
+    fn cell(&self, row: usize, col: usize) -> &RenderCell {
+        &self.cells[row * self.cols + col]
     }
 
-    fn resize(&mut self, cols: u16, rows: u16) {
+    fn resize(&mut self, cols: usize, rows: usize) {
         self.cols = cols;
         self.rows = rows;
-        self.cells
-            .resize((cols as usize) * (rows as usize), RenderCell::default());
+        self.cells.resize(cols * rows, RenderCell::default());
     }
+}
+
+// ── Event listener ──────────────────────────────────────────────────────────
+
+/// Collects device responses (PtyWrite events) from alacritty_terminal.
+#[derive(Clone)]
+struct Listener {
+    writeback: Arc<Mutex<Vec<u8>>>,
+}
+
+impl EventListener for Listener {
+    fn send_event(&self, event: TermEvent) {
+        if let TermEvent::PtyWrite(text) = event
+            && let Ok(mut wb) = self.writeback.lock()
+        {
+            wb.extend_from_slice(text.as_bytes());
+        }
+    }
+}
+
+// ── Terminal dimensions ─────────────────────────────────────────────────────
+
+struct TermDimensions {
+    cols: usize,
+    lines: usize,
+}
+
+impl Dimensions for TermDimensions {
+    fn total_lines(&self) -> usize {
+        self.lines
+    }
+
+    fn screen_lines(&self) -> usize {
+        self.lines
+    }
+
+    fn columns(&self) -> usize {
+        self.cols
+    }
+}
+
+// ── Default ANSI color palette ──────────────────────────────────────────────
+
+fn default_ansi_colors() -> alacritty_terminal::term::color::Colors {
+    let mut colors = alacritty_terminal::term::color::Colors::default();
+
+    // Standard 16 ANSI colors.
+    let palette: [(NamedColor, Rgb); 16] = [
+        (NamedColor::Black, Rgb { r: 0x1e, g: 0x1e, b: 0x2e }),
+        (NamedColor::Red, Rgb { r: 0xf3, g: 0x8b, b: 0xa8 }),
+        (NamedColor::Green, Rgb { r: 0xa6, g: 0xe3, b: 0xa1 }),
+        (NamedColor::Yellow, Rgb { r: 0xf9, g: 0xe2, b: 0xaf }),
+        (NamedColor::Blue, Rgb { r: 0x89, g: 0xb4, b: 0xfa }),
+        (NamedColor::Magenta, Rgb { r: 0xf5, g: 0xc2, b: 0xe7 }),
+        (NamedColor::Cyan, Rgb { r: 0x94, g: 0xe2, b: 0xd5 }),
+        (NamedColor::White, Rgb { r: 0xba, g: 0xc2, b: 0xde }),
+        (NamedColor::BrightBlack, Rgb { r: 0x58, g: 0x5b, b: 0x70 }),
+        (NamedColor::BrightRed, Rgb { r: 0xf3, g: 0x8b, b: 0xa8 }),
+        (NamedColor::BrightGreen, Rgb { r: 0xa6, g: 0xe3, b: 0xa1 }),
+        (NamedColor::BrightYellow, Rgb { r: 0xf9, g: 0xe2, b: 0xaf }),
+        (NamedColor::BrightBlue, Rgb { r: 0x89, g: 0xb4, b: 0xfa }),
+        (NamedColor::BrightMagenta, Rgb { r: 0xf5, g: 0xc2, b: 0xe7 }),
+        (NamedColor::BrightCyan, Rgb { r: 0x94, g: 0xe2, b: 0xd5 }),
+        (NamedColor::BrightWhite, Rgb { r: 0xa6, g: 0xad, b: 0xc8 }),
+    ];
+    for (name, rgb) in &palette {
+        colors[*name] = Some(*rgb);
+    }
+
+    // Foreground / background / cursor.
+    colors[NamedColor::Foreground] = Some(Rgb { r: 0xcd, g: 0xd6, b: 0xf4 });
+    colors[NamedColor::Background] = Some(Rgb { r: 0x1e, g: 0x1e, b: 0x2e });
+    colors[NamedColor::Cursor] = Some(Rgb { r: 0xf5, g: 0xe0, b: 0xdc });
+
+    // Dim variants.
+    colors[NamedColor::DimBlack] = Some(Rgb { r: 0x14, g: 0x14, b: 0x21 });
+    colors[NamedColor::DimRed] = Some(Rgb { r: 0xa8, g: 0x61, b: 0x75 });
+    colors[NamedColor::DimGreen] = Some(Rgb { r: 0x74, g: 0x9e, b: 0x71 });
+    colors[NamedColor::DimYellow] = Some(Rgb { r: 0xae, g: 0x9e, b: 0x7a });
+    colors[NamedColor::DimBlue] = Some(Rgb { r: 0x60, g: 0x7e, b: 0xaf });
+    colors[NamedColor::DimMagenta] = Some(Rgb { r: 0xab, g: 0x88, b: 0xa2 });
+    colors[NamedColor::DimCyan] = Some(Rgb { r: 0x68, g: 0x9e, b: 0x95 });
+    colors[NamedColor::DimWhite] = Some(Rgb { r: 0x82, g: 0x88, b: 0x9b });
+    colors[NamedColor::DimForeground] = Some(Rgb { r: 0x90, g: 0x96, b: 0xab });
+    colors[NamedColor::BrightForeground] = Some(Rgb { r: 0xcd, g: 0xd6, b: 0xf4 });
+
+    // 216-color cube (indices 16..232).
+    for i in 0..216 {
+        let r = if i / 36 > 0 { (i / 36) * 40 + 55 } else { 0 };
+        let g = if (i / 6) % 6 > 0 { ((i / 6) % 6) * 40 + 55 } else { 0 };
+        let b = if i % 6 > 0 { (i % 6) * 40 + 55 } else { 0 };
+        colors[16 + i] = Some(Rgb { r: r as u8, g: g as u8, b: b as u8 });
+    }
+
+    // Grayscale ramp (indices 232..256).
+    for i in 0..24 {
+        let value = (i * 10 + 8) as u8;
+        colors[232 + i] = Some(Rgb { r: value, g: value, b: value });
+    }
+
+    colors
 }
 
 // ── Terminal state ───────────────────────────────────────────────────────────
 
-/// Owns the libghostty-vt terminal and all associated state.
-///
-/// Lives on the main thread (`!Send + !Sync` due to libghostty-vt types).
-/// The pre-computed `buffer` is rebuilt after every `feed()` call so that
-/// Canvas `draw()` can read it without mutation.
+/// Owns the alacritty_terminal and all associated state.
 pub struct TerminalState {
-    /// Boxed to keep a stable address — libghostty-vt stores a raw pointer
-    /// to the Terminal's internal VTable for callback dispatch. Moving the
-    /// Terminal would invalidate that pointer and cause a use-after-free.
-    vt: Box<vt::Terminal<'static, 'static>>,
-    render: vt::RenderState<'static>,
-    key_encoder: vt::key::Encoder<'static>,
+    term: Term<Listener>,
+    parser: ansi::Processor,
+    listener: Listener,
+    /// Default ANSI color palette used when the terminal hasn't set a color.
+    default_colors: alacritty_terminal::term::color::Colors,
     pty_writer: Option<Box<dyn Write + Send>>,
-    /// Bytes the terminal wants to write back to the PTY (device responses).
-    pty_writeback: Rc<RefCell<Vec<u8>>>,
     buffer: CellBuffer,
     pub generation: u64,
-    pub cols: u16,
-    pub rows: u16,
+    pub cols: usize,
+    pub rows: usize,
     /// Set by Canvas draw() when widget bounds change. Applied in next feed().
-    pending_resize: Cell<Option<(u16, u16)>>,
+    pending_resize: Cell<Option<(usize, usize)>>,
     /// Scroll delta queued by Canvas update(). Applied in next feed().
     pending_scroll: Cell<isize>,
     /// The portable-pty master handle, needed for resize signals.
@@ -123,31 +220,30 @@ pub struct TerminalState {
 
 impl TerminalState {
     pub fn new() -> anyhow::Result<Self> {
-        let writeback: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
+        let listener = Listener {
+            writeback: Arc::new(Mutex::new(Vec::new())),
+        };
 
-        // Box the terminal FIRST, then register callbacks. This ensures the
-        // VTable has a stable heap address before libghostty-vt stores a
-        // raw pointer to it.
-        let mut terminal = Box::new(vt::Terminal::new(vt::TerminalOptions {
+        let config = Config {
+            scrolling_history: MAX_SCROLLBACK,
+            ..Config::default()
+        };
+
+        let dims = TermDimensions {
             cols: DEFAULT_COLS,
-            rows: DEFAULT_ROWS,
-            max_scrollback: MAX_SCROLLBACK,
-        })?);
+            lines: DEFAULT_ROWS,
+        };
 
-        let wb = writeback.clone();
-        terminal.on_pty_write(move |_term, data| {
-            wb.borrow_mut().extend_from_slice(data);
-        })?;
-
-        let render = vt::RenderState::new()?;
-        let key_encoder = vt::key::Encoder::new()?;
+        let term = Term::new(config, &dims, listener.clone());
+        let parser = ansi::Processor::new();
+        let default_colors = default_ansi_colors();
 
         Ok(Self {
-            vt: terminal,
-            render,
-            key_encoder,
+            term,
+            parser,
+            listener,
+            default_colors,
             pty_writer: None,
-            pty_writeback: writeback,
             buffer: CellBuffer::new(DEFAULT_COLS, DEFAULT_ROWS),
             generation: 0,
             cols: DEFAULT_COLS,
@@ -167,22 +263,19 @@ impl TerminalState {
         // Apply any pending scroll.
         let scroll = self.pending_scroll.replace(0);
         if scroll != 0 {
-            self.vt
-                .scroll_viewport(vt::terminal::ScrollViewport::Delta(scroll));
+            self.term.scroll_display(Scroll::Delta(scroll as i32));
         }
-        self.vt.vt_write(bytes);
+        self.parser.advance(&mut self.term, bytes);
         self.flush_writeback();
         self.rebuild_buffer();
         self.generation += 1;
     }
 
     /// Apply pending scroll without waiting for PTY output.
-    /// Called from update() when scroll events arrive but no PTY data is flowing.
     pub fn apply_scroll(&mut self) {
         let scroll = self.pending_scroll.replace(0);
         if scroll != 0 {
-            self.vt
-                .scroll_viewport(vt::terminal::ScrollViewport::Delta(scroll));
+            self.term.scroll_display(Scroll::Delta(scroll as i32));
             self.rebuild_buffer();
             self.generation += 1;
         }
@@ -202,7 +295,7 @@ impl TerminalState {
     }
 
     /// Request a resize — called from Canvas draw() via interior mutability.
-    pub fn request_resize(&self, cols: u16, rows: u16) {
+    pub fn request_resize(&self, cols: usize, rows: usize) {
         if cols != self.cols || rows != self.rows {
             self.pending_resize.set(Some((cols, rows)));
         }
@@ -225,27 +318,28 @@ impl TerminalState {
             return;
         };
 
-        if let Some(encoded) = encode_key(&mut self.key_encoder, &self.vt, key, mods, text) {
-            let _ = writer.write_all(&encoded);
+        if let Some(encoded) = encode_key(&self.term, key, mods, text) {
+            let _ = writer.write_all(encoded.as_bytes());
             let _ = writer.flush();
         }
     }
 
     /// Resize the terminal grid and notify the PTY child.
-    fn resize(&mut self, cols: u16, rows: u16) {
-        if cols == self.cols && rows == self.rows || cols == 0 || rows == 0 {
+    fn resize(&mut self, cols: usize, rows: usize) {
+        if (cols == self.cols && rows == self.rows) || cols == 0 || rows == 0 {
             return;
         }
         self.cols = cols;
         self.rows = rows;
-        let _ = self.vt.resize(cols, rows, CELL_WIDTH as u32, CELL_HEIGHT as u32);
+        let dims = TermDimensions { cols, lines: rows };
+        self.term.resize(dims);
         self.buffer.resize(cols, rows);
 
         // Notify PTY child of new size (sends SIGWINCH).
         if let Some(ref master) = self.pty_master {
             let _ = master.resize(portable_pty::PtySize {
-                rows,
-                cols,
+                rows: rows as u16,
+                cols: cols as u16,
                 pixel_width: (cols as f32 * CELL_WIDTH) as u16,
                 pixel_height: (rows as f32 * CELL_HEIGHT) as u16,
             });
@@ -256,115 +350,96 @@ impl TerminalState {
     }
 
     fn flush_writeback(&mut self) {
-        let bytes: Vec<u8> = self.pty_writeback.borrow_mut().drain(..).collect();
-        if !bytes.is_empty()
-            && let Some(ref mut writer) = self.pty_writer {
-                let _ = writer.write_all(&bytes);
-                let _ = writer.flush();
-            }
+        let bytes: Vec<u8> = {
+            let Ok(mut wb) = self.listener.writeback.lock() else {
+                return;
+            };
+            wb.drain(..).collect()
+        };
+        if !bytes.is_empty() && let Some(ref mut writer) = self.pty_writer {
+            let _ = writer.write_all(&bytes);
+            let _ = writer.flush();
+        }
     }
 
     fn rebuild_buffer(&mut self) {
-        let Ok(snapshot) = self.render.update(&self.vt) else {
-            return;
-        };
+        let content = self.term.renderable_content();
+        let term_colors = content.colors;
+        let fallback = &self.default_colors;
 
-        // Read default colors from snapshot.
-        if let Ok(colors) = snapshot.colors() {
-            self.buffer.default_fg = rgb_to_color(colors.foreground);
-            self.buffer.default_bg = rgb_to_color(colors.background);
+        // Resolve default fg/bg.
+        let default_fg = resolve_color(AnsiColor::Named(NamedColor::Foreground), term_colors, fallback);
+        let default_bg = resolve_color(AnsiColor::Named(NamedColor::Background), term_colors, fallback);
+        self.buffer.default_fg = default_fg;
+        self.buffer.default_bg = default_bg;
+
+        // Sync buffer dimensions.
+        let grid = self.term.grid();
+        let snap_cols = grid.columns();
+        let snap_rows = grid.screen_lines();
+        if snap_cols != self.buffer.cols || snap_rows != self.buffer.rows {
+            self.buffer.resize(snap_cols, snap_rows);
         }
 
-        // Sync buffer dimensions with what the snapshot reports.
-        if let (Ok(snap_cols), Ok(snap_rows)) = (snapshot.cols(), snapshot.rows())
-            && (snap_cols != self.buffer.cols || snap_rows != self.buffer.rows) {
-                self.buffer.resize(snap_cols, snap_rows);
-            }
-
         // Update cursor info.
-        self.buffer.cursor = snapshot
-            .cursor_viewport()
-            .ok()
-            .flatten()
-            .map(|c| CursorInfo {
-                x: c.x,
-                y: c.y,
-                visible: snapshot.cursor_visible().unwrap_or(true),
-            });
-
-        // Create fresh iterators each time — storing them across calls can
-        // cause stale internal pointers after alternate screen switches.
-        let Ok(mut row_iter) = vt::render::RowIterator::new() else {
-            return;
-        };
-        let Ok(mut cell_iter) = vt::render::CellIterator::new() else {
-            return;
-        };
-        let Ok(mut rows) = row_iter.update(&snapshot) else {
-            return;
+        let cursor = &content.cursor;
+        let cursor_visible = cursor.shape != alacritty_terminal::vte::ansi::CursorShape::Hidden;
+        self.buffer.cursor = if cursor_visible {
+            let display_offset = content.display_offset as i32;
+            let cursor_line = cursor.point.line.0 + display_offset;
+            if cursor_line >= 0 && (cursor_line as usize) < snap_rows {
+                Some(CursorInfo {
+                    x: cursor.point.column.0,
+                    y: cursor_line as usize,
+                    visible: true,
+                })
+            } else {
+                None
+            }
+        } else {
+            None
         };
 
-        let default_fg = self.buffer.default_fg;
-        let default_bg = self.buffer.default_bg;
-        let buf_cols = self.buffer.cols as usize;
-        let buf_rows = self.buffer.rows as usize;
-        let buf_len = self.buffer.cells.len();
-        let mut row_idx: usize = 0;
+        // Clear buffer before populating.
+        for cell in &mut self.buffer.cells {
+            *cell = RenderCell::default();
+        }
 
-        while let Some(row) = rows.next() {
-            if row_idx >= buf_rows {
-                break;
+        // Iterate visible cells.
+        for indexed in content.display_iter {
+            let line = indexed.point.line.0 + content.display_offset as i32;
+            if line < 0 || line as usize >= snap_rows {
+                continue;
+            }
+            let row_idx = line as usize;
+            let col_idx = indexed.point.column.0;
+            if col_idx >= snap_cols {
+                continue;
             }
 
-            let Ok(mut cells) = cell_iter.update(row) else {
-                row_idx += 1;
+            let cell = &indexed.cell;
+
+            // Skip wide char spacers.
+            if cell.flags.contains(Flags::WIDE_CHAR_SPACER)
+                || cell.flags.contains(Flags::LEADING_WIDE_CHAR_SPACER)
+            {
                 continue;
-            };
+            }
 
-            let mut col_idx: usize = 0;
-            while let Some(cell) = cells.next() {
-                if col_idx >= buf_cols {
-                    break;
-                }
+            let grapheme = cell.c;
+            let bold = cell.flags.contains(Flags::BOLD);
+            let italic = cell.flags.contains(Flags::ITALIC);
+            let inverse = cell.flags.contains(Flags::INVERSE);
 
-                let idx = row_idx * buf_cols + col_idx;
-                if idx >= buf_len {
-                    break;
-                }
+            let mut fg = resolve_color(cell.fg, term_colors, fallback);
+            let mut bg = resolve_color(cell.bg, term_colors, fallback);
 
-                // Grapheme: take the first codepoint.
-                let grapheme = cell
-                    .graphemes()
-                    .ok()
-                    .and_then(|g| g.into_iter().next())
-                    .unwrap_or(' ');
+            if inverse {
+                std::mem::swap(&mut fg, &mut bg);
+            }
 
-                // Colors: use cell-level resolved colors, fall back to defaults.
-                let fg = cell
-                    .fg_color()
-                    .ok()
-                    .flatten()
-                    .map(rgb_to_color)
-                    .unwrap_or(default_fg);
-                let bg = cell
-                    .bg_color()
-                    .ok()
-                    .flatten()
-                    .map(rgb_to_color)
-                    .unwrap_or(default_bg);
-
-                // Style attributes.
-                let style = cell.style().ok();
-                let bold = style.as_ref().is_some_and(|s| s.bold);
-                let italic = style.as_ref().is_some_and(|s| s.italic);
-
-                // Handle inverse video.
-                let (fg, bg) = if style.as_ref().is_some_and(|s| s.inverse) {
-                    (bg, fg)
-                } else {
-                    (fg, bg)
-                };
-
+            let idx = row_idx * snap_cols + col_idx;
+            if idx < self.buffer.cells.len() {
                 self.buffer.cells[idx] = RenderCell {
                     grapheme,
                     fg,
@@ -372,17 +447,41 @@ impl TerminalState {
                     bold,
                     italic,
                 };
-
-                col_idx += 1;
             }
-
-            row_idx += 1;
         }
     }
 }
 
-fn rgb_to_color(rgb: vt::style::RgbColor) -> Color {
-    Color::from_rgb8(rgb.r, rgb.g, rgb.b)
+/// Resolve an alacritty Color enum to an iced Color.
+/// Checks the terminal's live colors first, then falls back to our default palette.
+fn resolve_color(
+    color: AnsiColor,
+    colors: &alacritty_terminal::term::color::Colors,
+    fallback: &alacritty_terminal::term::color::Colors,
+) -> Color {
+    match color {
+        AnsiColor::Named(name) => {
+            let rgb = colors[name].or(fallback[name]);
+            if let Some(rgb) = rgb {
+                Color::from_rgb8(rgb.r, rgb.g, rgb.b)
+            } else {
+                match name {
+                    NamedColor::Foreground | NamedColor::BrightForeground => theme::text_primary(),
+                    NamedColor::Background => theme::bg_base(),
+                    _ => theme::text_primary(),
+                }
+            }
+        }
+        AnsiColor::Spec(rgb) => Color::from_rgb8(rgb.r, rgb.g, rgb.b),
+        AnsiColor::Indexed(idx) => {
+            let rgb = colors[idx as usize].or(fallback[idx as usize]);
+            if let Some(rgb) = rgb {
+                Color::from_rgb8(rgb.r, rgb.g, rgb.b)
+            } else {
+                theme::text_primary()
+            }
+        }
+    }
 }
 
 // ── Canvas rendering ─────────────────────────────────────────────────────────
@@ -427,8 +526,7 @@ impl<'a> canvas::Program<()> for TerminalCanvas<'a> {
                 };
                 if lines != 0 {
                     self.state.request_scroll(lines);
-                    return Some(canvas::Action::publish(())
-                        .and_capture());
+                    return Some(canvas::Action::publish(()).and_capture());
                 }
                 None
             }
@@ -447,8 +545,8 @@ impl<'a> canvas::Program<()> for TerminalCanvas<'a> {
         let buffer = &self.state.buffer;
 
         // Request resize if widget bounds changed.
-        let desired_cols = (bounds.width / CELL_WIDTH).floor().max(1.0) as u16;
-        let desired_rows = (bounds.height / CELL_HEIGHT).floor().max(1.0) as u16;
+        let desired_cols = (bounds.width / CELL_WIDTH).floor().max(1.0) as usize;
+        let desired_rows = (bounds.height / CELL_HEIGHT).floor().max(1.0) as usize;
         self.state.request_resize(desired_cols, desired_rows);
 
         // Invalidate cache when terminal content changes.
@@ -459,21 +557,21 @@ impl<'a> canvas::Program<()> for TerminalCanvas<'a> {
 
         let geometry = state.cache.draw(renderer, bounds.size(), |frame| {
             // Fill background.
-            frame.fill_rectangle(Point::ORIGIN, bounds.size(), buffer.default_bg);
+            frame.fill_rectangle(IcedPoint::ORIGIN, bounds.size(), buffer.default_bg);
 
-            let cols = buffer.cols as usize;
-            let rows = buffer.rows as usize;
+            let cols = buffer.cols;
+            let rows = buffer.rows;
 
             for row in 0..rows {
                 for col in 0..cols {
-                    let cell = buffer.cell(row as u16, col as u16);
+                    let cell = buffer.cell(row, col);
                     let x = col as f32 * CELL_WIDTH;
                     let y = row as f32 * CELL_HEIGHT;
 
                     // Draw cell background if it differs from the terminal default.
                     if cell.bg != buffer.default_bg {
                         frame.fill_rectangle(
-                            Point::new(x, y),
+                            IcedPoint::new(x, y),
                             Size::new(CELL_WIDTH, CELL_HEIGHT),
                             cell.bg,
                         );
@@ -502,7 +600,7 @@ impl<'a> canvas::Program<()> for TerminalCanvas<'a> {
 
                         frame.fill_text(canvas::Text {
                             content: cell.grapheme.to_string(),
-                            position: Point::new(x, y),
+                            position: IcedPoint::new(x, y),
                             color: cell.fg,
                             size: iced::Pixels(FONT_SIZE),
                             font,
@@ -514,18 +612,19 @@ impl<'a> canvas::Program<()> for TerminalCanvas<'a> {
 
             // Draw cursor.
             if let Some(ref cursor) = buffer.cursor
-                && cursor.visible {
-                    let cx = cursor.x as f32 * CELL_WIDTH;
-                    let cy = cursor.y as f32 * CELL_HEIGHT;
-                    frame.fill_rectangle(
-                        Point::new(cx, cy),
-                        Size::new(CELL_WIDTH, CELL_HEIGHT),
-                        Color {
-                            a: 0.5,
-                            ..theme::text_primary()
-                        },
-                    );
-                }
+                && cursor.visible
+            {
+                let cx = cursor.x as f32 * CELL_WIDTH;
+                let cy = cursor.y as f32 * CELL_HEIGHT;
+                frame.fill_rectangle(
+                    IcedPoint::new(cx, cy),
+                    Size::new(CELL_WIDTH, CELL_HEIGHT),
+                    Color {
+                        a: 0.5,
+                        ..theme::text_primary()
+                    },
+                );
+            }
         });
 
         vec![geometry]
@@ -533,14 +632,11 @@ impl<'a> canvas::Program<()> for TerminalCanvas<'a> {
 }
 
 /// Build a terminal view element from the current terminal state.
-///
-/// The returned element produces no messages — keyboard input is handled
-/// via a top-level subscription.
 pub fn view_terminal(state: &TerminalState) -> Element<'_, ()> {
     canvas::Canvas::new(TerminalCanvas { state })
-    .width(Length::Fill)
-    .height(Length::Fill)
-    .into()
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .into()
 }
 
 // ── PTY subscription ─────────────────────────────────────────────────────────
@@ -559,16 +655,14 @@ pub enum PtyEvent {
 /// A clonable wrapper around the PTY master for resize signals.
 #[derive(Clone)]
 pub struct PtyMaster {
-    inner: std::sync::Arc<std::sync::Mutex<Box<dyn portable_pty::MasterPty + Send>>>,
+    inner: Arc<Mutex<Box<dyn portable_pty::MasterPty + Send>>>,
 }
 
 impl PtyMaster {
     pub fn into_master(self) -> Box<dyn portable_pty::MasterPty + Send> {
-        match std::sync::Arc::try_unwrap(self.inner) {
+        match Arc::try_unwrap(self.inner) {
             Ok(mutex) => mutex.into_inner().unwrap(),
             Err(_arc) => {
-                // Can't unwrap — this shouldn't happen in practice since
-                // we only ever send this once.
                 panic!("PtyMaster still has multiple references");
             }
         }
@@ -588,19 +682,19 @@ impl std::fmt::Debug for PtyEvent {
 /// A clonable wrapper around the PTY writer so it can live in Iced messages.
 #[derive(Clone)]
 pub struct PtyWriter {
-    inner: std::sync::Arc<std::sync::Mutex<Box<dyn Write + Send>>>,
+    inner: Arc<Mutex<Box<dyn Write + Send>>>,
 }
 
 impl PtyWriter {
     pub fn into_writer(self) -> Box<dyn Write + Send> {
-        match std::sync::Arc::try_unwrap(self.inner) {
+        match Arc::try_unwrap(self.inner) {
             Ok(mutex) => mutex.into_inner().unwrap(),
             Err(arc) => Box::new(ArcWriter(arc)),
         }
     }
 }
 
-struct ArcWriter(std::sync::Arc<std::sync::Mutex<Box<dyn Write + Send>>>);
+struct ArcWriter(Arc<Mutex<Box<dyn Write + Send>>>);
 impl Write for ArcWriter {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
         self.0.lock().unwrap().write(buf)
@@ -611,8 +705,6 @@ impl Write for ArcWriter {
 }
 
 /// Create a subscription that spawns a PTY child and streams its output.
-/// The `key` parameter makes each subscription unique so multiple terminals can coexist.
-/// Returns `(key, event)` tuples so the caller can route events without capturing in `.map()`.
 pub fn pty_subscription(key: String) -> Subscription<(String, PtyEvent)> {
     Subscription::run_with(key, |key| {
         use iced::futures::StreamExt;
@@ -630,8 +722,8 @@ fn pty_worker() -> impl iced::futures::Stream<Item = PtyEvent> {
             // Open PTY.
             let pty_system = portable_pty::native_pty_system();
             let pair = match pty_system.openpty(portable_pty::PtySize {
-                rows: DEFAULT_ROWS,
-                cols: DEFAULT_COLS,
+                rows: DEFAULT_ROWS as u16,
+                cols: DEFAULT_COLS as u16,
                 pixel_width: 0,
                 pixel_height: 0,
             }) {
@@ -662,7 +754,7 @@ fn pty_worker() -> impl iced::futures::Stream<Item = PtyEvent> {
                 }
             };
             let pty_writer = PtyWriter {
-                inner: std::sync::Arc::new(std::sync::Mutex::new(writer)),
+                inner: Arc::new(Mutex::new(writer)),
             };
 
             // Clone reader before sending master away.
@@ -676,7 +768,7 @@ fn pty_worker() -> impl iced::futures::Stream<Item = PtyEvent> {
 
             // Send writer and master back to main thread.
             let pty_master = PtyMaster {
-                inner: std::sync::Arc::new(std::sync::Mutex::new(pair.master)),
+                inner: Arc::new(Mutex::new(pair.master)),
             };
             let _ = sender.send(PtyEvent::Ready(pty_writer, pty_master)).await;
 
@@ -726,149 +818,156 @@ fn pty_worker() -> impl iced::futures::Stream<Item = PtyEvent> {
 
 /// Translate an Iced keyboard event into bytes for the PTY.
 fn encode_key(
-    encoder: &mut vt::key::Encoder<'_>,
-    terminal: &vt::Terminal,
+    term: &Term<Listener>,
     key: keyboard::Key,
     mods: keyboard::Modifiers,
     text: Option<&str>,
-) -> Option<Vec<u8>> {
-    // Sync encoder options with current terminal state.
-    encoder.set_options_from_terminal(terminal);
+) -> Option<String> {
+    let mode = *term.mode();
+    let app_cursor = mode.contains(TermMode::APP_CURSOR);
 
-    let mut event = vt::key::Event::new().ok()?;
-    event.set_action(vt::key::Action::Press);
+    // Named keys first.
+    if let keyboard::Key::Named(named) = &key {
+        let seq = match named {
+            keyboard::key::Named::Enter => {
+                if mods.alt() {
+                    "\x1b\r".into()
+                } else {
+                    "\r".into()
+                }
+            }
+            keyboard::key::Named::Tab => {
+                if mods.shift() {
+                    "\x1b[Z".into()
+                } else {
+                    "\t".into()
+                }
+            }
+            keyboard::key::Named::Backspace => {
+                if mods.alt() {
+                    "\x1b\x7f".into()
+                } else if mods.control() {
+                    "\x08".into()
+                } else {
+                    "\x7f".into()
+                }
+            }
+            keyboard::key::Named::Escape => "\x1b".into(),
+            keyboard::key::Named::Space => {
+                if mods.control() {
+                    "\x00".into()
+                } else {
+                    " ".into()
+                }
+            }
+            keyboard::key::Named::ArrowUp => arrow_key('A', app_cursor, mods),
+            keyboard::key::Named::ArrowDown => arrow_key('B', app_cursor, mods),
+            keyboard::key::Named::ArrowRight => arrow_key('C', app_cursor, mods),
+            keyboard::key::Named::ArrowLeft => arrow_key('D', app_cursor, mods),
+            keyboard::key::Named::Home => {
+                if app_cursor {
+                    "\x1bOH".into()
+                } else {
+                    "\x1b[H".into()
+                }
+            }
+            keyboard::key::Named::End => {
+                if app_cursor {
+                    "\x1bOF".into()
+                } else {
+                    "\x1b[F".into()
+                }
+            }
+            keyboard::key::Named::PageUp => "\x1b[5~".into(),
+            keyboard::key::Named::PageDown => "\x1b[6~".into(),
+            keyboard::key::Named::Insert => "\x1b[2~".into(),
+            keyboard::key::Named::Delete => "\x1b[3~".into(),
+            keyboard::key::Named::F1 => "\x1bOP".into(),
+            keyboard::key::Named::F2 => "\x1bOQ".into(),
+            keyboard::key::Named::F3 => "\x1bOR".into(),
+            keyboard::key::Named::F4 => "\x1bOS".into(),
+            keyboard::key::Named::F5 => "\x1b[15~".into(),
+            keyboard::key::Named::F6 => "\x1b[17~".into(),
+            keyboard::key::Named::F7 => "\x1b[18~".into(),
+            keyboard::key::Named::F8 => "\x1b[19~".into(),
+            keyboard::key::Named::F9 => "\x1b[20~".into(),
+            keyboard::key::Named::F10 => "\x1b[21~".into(),
+            keyboard::key::Named::F11 => "\x1b[23~".into(),
+            keyboard::key::Named::F12 => "\x1b[24~".into(),
+            _ => return None,
+        };
+        return Some(seq);
+    }
 
-    // Map Iced modifiers to libghostty-vt mods.
-    let mut ghostty_mods = vt::key::Mods::empty();
-    if mods.shift() {
-        ghostty_mods |= vt::key::Mods::SHIFT;
-    }
-    if mods.control() {
-        ghostty_mods |= vt::key::Mods::CTRL;
-    }
-    if mods.alt() {
-        ghostty_mods |= vt::key::Mods::ALT;
-    }
-    if mods.logo() {
-        ghostty_mods |= vt::key::Mods::SUPER;
-    }
-    event.set_mods(ghostty_mods);
-
-    // Map the key.
-    match &key {
-        keyboard::Key::Named(named) => {
-            let ghostty_key = map_named_key(*named)?;
-            event.set_key(ghostty_key);
-        }
-        keyboard::Key::Character(ch) => {
-            // Map character to physical key if possible, otherwise use Unidentified.
-            let ghostty_key = map_char_to_key(ch).unwrap_or(vt::key::Key::Unidentified);
-            event.set_key(ghostty_key);
+    // Character keys.
+    if let keyboard::Key::Character(ch) = &key {
+        if mods.control() {
+            // Ctrl+letter → control character.
             if let Some(c) = ch.chars().next() {
-                event.set_unshifted_codepoint(c);
+                let ctrl = match c.to_ascii_lowercase() {
+                    c @ 'a'..='z' => Some((c as u8 - b'a' + 1) as char),
+                    '[' | '3' => Some('\x1b'),
+                    '\\' | '4' => Some('\x1c'),
+                    ']' | '5' => Some('\x1d'),
+                    '6' => Some('\x1e'),
+                    '/' | '7' => Some('\x1f'),
+                    '8' => Some('\x7f'),
+                    ' ' | '2' | '@' => Some('\x00'),
+                    _ => None,
+                };
+                if let Some(ctrl_char) = ctrl {
+                    let mut s = String::new();
+                    if mods.alt() {
+                        s.push('\x1b');
+                    }
+                    s.push(ctrl_char);
+                    return Some(s);
+                }
             }
         }
-        _ => return None,
+
+        // Alt+key → ESC prefix.
+        if mods.alt() {
+            if let Some(t) = text {
+                return Some(format!("\x1b{t}"));
+            } else {
+                return Some(format!("\x1b{ch}"));
+            }
+        }
+
+        // Plain text.
+        if let Some(t) = text {
+            return Some(t.to_string());
+        }
+        return Some(ch.to_string());
     }
 
-    // Set utf8 text if available.
-    if let Some(t) = text {
-        event.set_utf8(Some(t));
-    } else if let keyboard::Key::Character(ch) = &key {
-        event.set_utf8(Some(ch.as_str()));
+    None
+}
+
+/// Encode an arrow key with optional modifier support.
+fn arrow_key(direction: char, app_cursor: bool, mods: keyboard::Modifiers) -> String {
+    let modifier = csi_modifier(mods);
+    if modifier > 1 {
+        format!("\x1b[1;{modifier}{direction}")
+    } else if app_cursor {
+        format!("\x1bO{direction}")
+    } else {
+        format!("\x1b[{direction}")
     }
-
-    let mut buf = Vec::new();
-    encoder.encode_to_vec(&event, &mut buf).ok()?;
-    if buf.is_empty() { None } else { Some(buf) }
 }
 
-/// Map Iced named keys to libghostty-vt key codes.
-fn map_named_key(named: keyboard::key::Named) -> Option<vt::key::Key> {
-    use keyboard::key::Named::*;
-    Some(match named {
-        Enter => vt::key::Key::Enter,
-        Tab => vt::key::Key::Tab,
-        Backspace => vt::key::Key::Backspace,
-        Escape => vt::key::Key::Escape,
-        Space => vt::key::Key::Space,
-        ArrowUp => vt::key::Key::ArrowUp,
-        ArrowDown => vt::key::Key::ArrowDown,
-        ArrowLeft => vt::key::Key::ArrowLeft,
-        ArrowRight => vt::key::Key::ArrowRight,
-        Home => vt::key::Key::Home,
-        End => vt::key::Key::End,
-        PageUp => vt::key::Key::PageUp,
-        PageDown => vt::key::Key::PageDown,
-        Insert => vt::key::Key::Insert,
-        Delete => vt::key::Key::Delete,
-        F1 => vt::key::Key::F1,
-        F2 => vt::key::Key::F2,
-        F3 => vt::key::Key::F3,
-        F4 => vt::key::Key::F4,
-        F5 => vt::key::Key::F5,
-        F6 => vt::key::Key::F6,
-        F7 => vt::key::Key::F7,
-        F8 => vt::key::Key::F8,
-        F9 => vt::key::Key::F9,
-        F10 => vt::key::Key::F10,
-        F11 => vt::key::Key::F11,
-        F12 => vt::key::Key::F12,
-        _ => return None,
-    })
-}
-
-/// Map a character string to the corresponding physical key.
-fn map_char_to_key(ch: &str) -> Option<vt::key::Key> {
-    let c = ch.chars().next()?;
-    Some(match c.to_ascii_lowercase() {
-        'a' => vt::key::Key::A,
-        'b' => vt::key::Key::B,
-        'c' => vt::key::Key::C,
-        'd' => vt::key::Key::D,
-        'e' => vt::key::Key::E,
-        'f' => vt::key::Key::F,
-        'g' => vt::key::Key::G,
-        'h' => vt::key::Key::H,
-        'i' => vt::key::Key::I,
-        'j' => vt::key::Key::J,
-        'k' => vt::key::Key::K,
-        'l' => vt::key::Key::L,
-        'm' => vt::key::Key::M,
-        'n' => vt::key::Key::N,
-        'o' => vt::key::Key::O,
-        'p' => vt::key::Key::P,
-        'q' => vt::key::Key::Q,
-        'r' => vt::key::Key::R,
-        's' => vt::key::Key::S,
-        't' => vt::key::Key::T,
-        'u' => vt::key::Key::U,
-        'v' => vt::key::Key::V,
-        'w' => vt::key::Key::W,
-        'x' => vt::key::Key::X,
-        'y' => vt::key::Key::Y,
-        'z' => vt::key::Key::Z,
-        '0' => vt::key::Key::Digit0,
-        '1' => vt::key::Key::Digit1,
-        '2' => vt::key::Key::Digit2,
-        '3' => vt::key::Key::Digit3,
-        '4' => vt::key::Key::Digit4,
-        '5' => vt::key::Key::Digit5,
-        '6' => vt::key::Key::Digit6,
-        '7' => vt::key::Key::Digit7,
-        '8' => vt::key::Key::Digit8,
-        '9' => vt::key::Key::Digit9,
-        '-' => vt::key::Key::Minus,
-        '=' => vt::key::Key::Equal,
-        '[' => vt::key::Key::BracketLeft,
-        ']' => vt::key::Key::BracketRight,
-        '\\' => vt::key::Key::Backslash,
-        ';' => vt::key::Key::Semicolon,
-        '\'' => vt::key::Key::Quote,
-        '`' => vt::key::Key::Backquote,
-        ',' => vt::key::Key::Comma,
-        '.' => vt::key::Key::Period,
-        '/' => vt::key::Key::Slash,
-        _ => return None,
-    })
+/// Compute the CSI modifier parameter from keyboard modifiers.
+fn csi_modifier(mods: keyboard::Modifiers) -> u8 {
+    let mut m: u8 = 1;
+    if mods.shift() {
+        m += 1;
+    }
+    if mods.alt() {
+        m += 2;
+    }
+    if mods.control() {
+        m += 4;
+    }
+    m
 }

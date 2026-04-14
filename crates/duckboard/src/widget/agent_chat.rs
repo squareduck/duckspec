@@ -4,7 +4,7 @@ use iced::widget::{button, column, container, row, rule, scrollable, text, text_
 
 pub const INPUT_ID: &str = "agent-chat-input";
 pub const CHAT_SCROLLABLE_ID: &str = "agent-chat-scroll";
-use iced::{Border, Element, Length};
+use iced::{Element, Length};
 
 use crate::agent::SlashCommand;
 use crate::chat_store::{ChatSession, ContentBlock, Role};
@@ -142,7 +142,7 @@ fn truncate_output(output: &str) -> Vec<String> {
     const MAX_LINES: usize = 10;
     let all_lines: Vec<String> = output
         .lines()
-        .map(|l| sanitize_line(l))
+        .map(sanitize_line)
         .collect();
     let mut lines = if all_lines.len() > MAX_LINES {
         let mut truncated = all_lines[..MAX_LINES].to_vec();
@@ -163,9 +163,7 @@ fn truncate_output(output: &str) -> Vec<String> {
 fn sanitize_line(line: &str) -> String {
     line.chars()
         .map(|c| {
-            if c == '\t' {
-                ' '
-            } else if c.is_control() {
+            if c == '\t' || c.is_control() {
                 ' '
             } else {
                 c
@@ -215,6 +213,7 @@ fn format_tool_summary(name: &str, input: &str) -> String {
 
 // ── View ────────────────────────────────────────────────────────────────────
 
+#[allow(clippy::too_many_arguments)]
 pub fn view<'a>(
     _session: &'a ChatSession,
     blocks: &'a [Block],
@@ -336,16 +335,14 @@ fn view_block<'a>(
 
         let mut block_col = column![header_container];
 
-        if !collapsed {
-            if let Some(ed) = editor {
-                block_col = block_col.push(
-                    text_edit::TextEdit::new(ed, move |action| Msg::ChatAction(idx, action))
-                        .show_gutter(false)
-                        .word_wrap(true)
-                        .read_only(true)
-                        .fit_content(true),
-                );
-            }
+        if !collapsed && let Some(ed) = editor {
+            block_col = block_col.push(
+                text_edit::TextEdit::new(ed, move |action| Msg::ChatAction(idx, action))
+                    .show_gutter(false)
+                    .word_wrap(true)
+                    .read_only(true)
+                    .fit_content(true),
+            );
         }
 
         let section = container(block_col)
@@ -378,16 +375,14 @@ fn view_block<'a>(
 
     let mut block_col = column![header_container];
 
-    if has_content && !collapsed {
-        if let Some(ed) = editor {
-            block_col = block_col.push(
-                text_edit::TextEdit::new(ed, move |action| Msg::ChatAction(idx, action))
-                    .show_gutter(false)
-                    .word_wrap(true)
-                    .read_only(true)
-                    .fit_content(true),
-            );
-        }
+    if has_content && !collapsed && let Some(ed) = editor {
+        block_col = block_col.push(
+            text_edit::TextEdit::new(ed, move |action| Msg::ChatAction(idx, action))
+                .show_gutter(false)
+                .word_wrap(true)
+                .read_only(true)
+                .fit_content(true),
+        );
     }
 
     let section = container(block_col)

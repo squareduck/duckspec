@@ -15,7 +15,8 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 
 iced = { version = "0.14", features = ["advanced", "canvas", "svg"] }
-libghostty-vt = "0.1"
+alacritty_terminal = "0.26"
+vte = "0.15"
 portable-pty = "0.9"
 tokio = { version = "1", features = ["sync", "time"] }
 serde = { version = "1", features = ["derive"] }
