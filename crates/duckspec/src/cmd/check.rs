@@ -88,14 +88,13 @@ fn run_file_check(
 
         let result = if format {
             let r = check::format_artifact(&source, &kind, &ctx);
-            if let Some(ref formatted) = r.formatted {
-                if *formatted != source {
+            if let Some(ref formatted) = r.formatted
+                && *formatted != source {
                     std::fs::write(file_path, formatted).map_err(|e| {
                         anyhow::anyhow!("failed to write {}: {e}", file_path.display())
                     })?;
                     eprintln!("formatted {}", relative.display());
                 }
-            }
             r
         } else {
             check::check_artifact(&source, &kind, &ctx)

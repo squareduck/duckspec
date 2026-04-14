@@ -86,14 +86,13 @@ pub fn create_change(
     // Archive entries have the form YYYY-MM-DD-NN-<name>.
     // Strip the date+counter prefix to compare.
     for entry in archive_entries {
-        if let Some(archived_name) = strip_archive_prefix(entry) {
-            if archived_name == name {
+        if let Some(archived_name) = strip_archive_prefix(entry)
+            && archived_name == name {
                 return Err(PlanError::ChangeArchived {
                     name: name.to_string(),
                     archive_entry: entry.clone(),
                 });
             }
-        }
     }
 
     Ok(Plan {

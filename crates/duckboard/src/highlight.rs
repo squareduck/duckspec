@@ -24,6 +24,12 @@ pub struct HighlightSpan {
     pub color: Color,
 }
 
+impl Default for SyntaxHighlighter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SyntaxHighlighter {
     pub fn new() -> Self {
         let syntax_set = SyntaxSet::load_defaults_newlines();

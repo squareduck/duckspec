@@ -342,17 +342,15 @@ fn pick_archive_dir(duckspec_root: &Path, name: &str) -> anyhow::Result<PathBuf>
     if archive_root.is_dir() {
         for entry in std::fs::read_dir(&archive_root)? {
             let entry = entry?;
-            if let Some(dir_name) = entry.file_name().to_str() {
-                if dir_name.starts_with(&prefix) {
+            if let Some(dir_name) = entry.file_name().to_str()
+                && dir_name.starts_with(&prefix) {
                     // Try to extract NN from YYYY-MM-DD-NN-<name>.
                     let rest = &dir_name[prefix.len()..];
-                    if let Some(dash_pos) = rest.find('-') {
-                        if let Ok(n) = rest[..dash_pos].parse::<u32>() {
+                    if let Some(dash_pos) = rest.find('-')
+                        && let Ok(n) = rest[..dash_pos].parse::<u32>() {
                             nn = nn.max(n + 1);
                         }
-                    }
                 }
-            }
         }
     }
 

@@ -413,11 +413,10 @@ fn scan_source_files(
             }
 
             // Skip files inside duckspec/.
-            if let Ok(canonical) = path.canonicalize() {
-                if canonical.starts_with(&duckspec_canonical) {
+            if let Ok(canonical) = path.canonicalize()
+                && canonical.starts_with(&duckspec_canonical) {
                     continue;
                 }
-            }
 
             // Skip binary files — try reading as UTF-8.
             let content = match std::fs::read_to_string(path) {

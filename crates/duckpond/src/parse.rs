@@ -120,7 +120,7 @@ pub fn parse_elements(source: &str) -> Vec<Element> {
             line_start + line.len()
         };
 
-        state = advance(source, &mut elements, state, *line, line_start, line_end);
+        state = advance(source, &mut elements, state, line, line_start, line_end);
         line_start = line_end;
     }
 
@@ -413,8 +413,8 @@ fn parse_heading(line: &str) -> Option<(u8, &str)> {
         return None;
     }
     let rest = &trimmed[hashes..];
-    if rest.starts_with(' ') {
-        Some((hashes as u8, rest[1..].trim_end()))
+    if let Some(stripped) = rest.strip_prefix(' ') {
+        Some((hashes as u8, stripped.trim_end()))
     } else {
         None
     }

@@ -137,7 +137,7 @@ fn apply_entries(
 }
 
 fn apply_rename_entry(
-    sections: &mut Vec<Section>,
+    sections: &mut [Section],
     entry: &DeltaEntry,
     errors: &mut Vec<MergeError>,
 ) {
@@ -169,7 +169,7 @@ fn apply_rename_entry(
 }
 
 fn apply_remove_entry(
-    sections: &mut Vec<Section>,
+    #[allow(clippy::ptr_arg)] sections: &mut Vec<Section>,
     entry: &DeltaEntry,
     errors: &mut Vec<MergeError>,
 ) {
@@ -188,7 +188,7 @@ fn apply_remove_entry(
 }
 
 fn apply_replace_entry(
-    sections: &mut Vec<Section>,
+    sections: &mut [Section],
     entry: &DeltaEntry,
     errors: &mut Vec<MergeError>,
 ) {
@@ -211,7 +211,7 @@ fn apply_replace_entry(
 }
 
 fn apply_anchor_entry(
-    sections: &mut Vec<Section>,
+    sections: &mut [Section],
     entry: &DeltaEntry,
     errors: &mut Vec<MergeError>,
 ) {

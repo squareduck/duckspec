@@ -74,16 +74,13 @@ pub struct TabState {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Default)]
 pub enum ActiveTab {
+    #[default]
     Preview,
     File(usize),
 }
 
-impl Default for ActiveTab {
-    fn default() -> Self {
-        ActiveTab::Preview
-    }
-}
 
 impl TabState {
     // ── Total tab helpers ────────────────────────────────────────────────
@@ -238,12 +235,11 @@ impl TabState {
             .iter_mut()
             .chain(self.file_tabs.iter_mut())
             .find(|t| t.id == id);
-        if let Some(tab) = tab {
-            if let TabView::Editor { editor, .. } = &mut tab.view {
+        if let Some(tab) = tab
+            && let TabView::Editor { editor, .. } = &mut tab.view {
                 *editor = EditorState::new(&new_source);
                 crate::rehighlight(editor, id, highlighter);
             }
-        }
     }
 }
 

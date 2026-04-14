@@ -234,11 +234,10 @@ fn scan_source_files(
                 continue;
             }
 
-            if let Ok(canonical) = path.canonicalize() {
-                if canonical.starts_with(&duckspec_canonical) {
+            if let Ok(canonical) = path.canonicalize()
+                && canonical.starts_with(&duckspec_canonical) {
                     continue;
                 }
-            }
 
             let content = match std::fs::read_to_string(path) {
                 Ok(c) => c,

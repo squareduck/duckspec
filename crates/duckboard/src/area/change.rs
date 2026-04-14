@@ -142,8 +142,7 @@ pub fn update(
                 interaction::spawn_terminal(ix);
             }
 
-            let wants_agent = (just_opened && ix.mode == InteractionMode::AgentChat)
-                || (is_mode_switch && ix.mode == InteractionMode::AgentChat);
+            let wants_agent = (just_opened || is_mode_switch) && ix.mode == InteractionMode::AgentChat;
             if wants_agent && ix.chat_session.is_none() {
                 interaction::spawn_agent_session(ix, &session_name);
             }
@@ -151,8 +150,8 @@ pub fn update(
             ix.terminal_focused = ix.visible && ix.mode == InteractionMode::Terminal;
         }
         Message::SelectChangedFile(path) => {
-            if let Some(root) = &project.project_root {
-                if let Some(diff) = vcs::file_diff(root, &path) {
+            if let Some(root) = &project.project_root
+                && let Some(diff) = vcs::file_diff(root, &path) {
                     let id = format!("vcs:{}", path.display());
                     let title = path
                         .file_name()
@@ -176,7 +175,6 @@ pub fn update(
                     let editor = crate::widget::diff_view::build_editor(&diff, Some(&highlight));
                     state.tabs.open_diff(id, title, editor, diff_path, diff_status);
                 }
-            }
         }
         Message::TabContent(tab_bar::TabContentMsg::EditorAction(action)) => {
             crate::handle_editor_action(&mut state.tabs, action, highlighter);
@@ -197,7 +195,7 @@ pub fn view<'a>(
         .style(theme::divider);
 
     let ix = state.active_interaction();
-    let visible = ix.map_or(false, |i| i.visible);
+    let visible = ix.is_some_and(|i| i.visible);
     let width = ix.map_or(theme::INTERACTION_COLUMN_WIDTH, |i| i.width);
 
     let toggle =
@@ -215,8 +213,8 @@ pub fn view<'a>(
         toggle,
     ];
 
-    if let Some(ix) = ix {
-        if ix.visible {
+    if let Some(ix) = ix
+        && ix.visible {
             let interaction_col = interaction::view_column(ix, Message::Interaction);
 
             main_row = main_row.push(
@@ -226,7 +224,6 @@ pub fn view<'a>(
                     .style(theme::surface),
             );
         }
-    }
 
     main_row.height(Length::Fill).into()
 }
@@ -242,8 +239,7 @@ fn view_list<'a>(state: &'a State, project: &'a ProjectData) -> Element<'a, Mess
     for ch in &all_changes {
         let is_selected = state
             .selected_change
-            .as_ref()
-            .map_or(false, |s| s == &ch.name);
+            .as_ref() == Some(&ch.name);
         let style = if is_selected {
             theme::list_item_active as fn(&iced::Theme, button::Status) -> button::Style
         } else {
@@ -328,8 +324,8 @@ fn view_caps_section<'a>(state: &'a State, change: &'a ChangeData) -> Element<'a
             &change.cap_tree,
             &state.expanded_nodes,
             state.tabs.active_tab().map(|t| t.id.as_str()),
-            |id| Message::ToggleNode(id),
-            |id| Message::SelectItem(id),
+            Message::ToggleNode,
+            Message::SelectItem,
         )
     };
 
@@ -348,7 +344,7 @@ fn view_steps_section<'a>(state: &'a State, change: &'a ChangeData) -> Element<'
         items = items.push(text("No steps").size(theme::FONT_MD).color(theme::TEXT_MUTED));
     } else {
         for step in &change.steps {
-            let is_active = state.tabs.active_tab().map_or(false, |t| t.id == step.id);
+            let is_active = state.tabs.active_tab().is_some_and(|t| t.id == step.id);
             let style = if is_active {
                 theme::list_item_active as fn(&iced::Theme, button::Status) -> button::Style
             } else {
@@ -400,7 +396,7 @@ fn view_changed_files_section<'a>(state: &'a State) -> Element<'a, Message> {
             };
             let color = theme::vcs_status_color(&cf.status);
             let tab_id = format!("vcs:{}", cf.path.display());
-            let is_active = state.tabs.active_tab().map_or(false, |t| t.id == tab_id);
+            let is_active = state.tabs.active_tab().is_some_and(|t| t.id == tab_id);
             let style = if is_active {
                 theme::list_item_active as fn(&iced::Theme, button::Status) -> button::Style
             } else {
@@ -445,7 +441,7 @@ fn icon_for_artifact(label: &str) -> &'static [u8] {
 }
 
 fn file_item<'a>(label: &str, id: &str, state: &State) -> Element<'a, Message> {
-    let is_active = state.tabs.active_tab().map_or(false, |t| t.id == id);
+    let is_active = state.tabs.active_tab().is_some_and(|t| t.id == id);
     let style = if is_active {
         theme::list_item_active as fn(&iced::Theme, button::Status) -> button::Style
     } else {
@@ -468,8 +464,8 @@ fn file_item<'a>(label: &str, id: &str, state: &State) -> Element<'a, Message> {
 fn view_content<'a>(state: &'a State) -> Element<'a, Message> {
     let bar = tab_bar::view_bar(
         &state.tabs,
-        |i| Message::SelectTab(i),
-        |i| Message::CloseTab(i),
+        Message::SelectTab,
+        Message::CloseTab,
     );
     let body = tab_bar::view_content(&state.tabs).map(Message::TabContent);
 

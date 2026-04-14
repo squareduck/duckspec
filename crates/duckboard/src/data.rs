@@ -259,8 +259,8 @@ fn build_steps(dir: &Path, change_prefix: &str) -> Vec<StepInfo> {
             continue;
         }
         let stem = name.trim_end_matches(".md");
-        if let Some((num_str, slug)) = stem.split_once('-') {
-            if let Ok(number) = num_str.parse::<u32>() {
+        if let Some((num_str, slug)) = stem.split_once('-')
+            && let Ok(number) = num_str.parse::<u32>() {
                 let completion = compute_step_completion(&entry.path());
                 steps.push(StepInfo {
                     id: format!("{}/steps/{}", change_prefix, name),
@@ -269,7 +269,6 @@ fn build_steps(dir: &Path, change_prefix: &str) -> Vec<StepInfo> {
                     completion,
                 });
             }
-        }
     }
     steps
 }

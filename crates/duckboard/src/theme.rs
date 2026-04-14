@@ -54,7 +54,6 @@ pub const LAVENDER: Color = hex(0xb7, 0xbd, 0xf8);
 pub const FONT_XS: f32 = 11.0;
 pub const FONT_SM: f32 = 11.0;
 pub const FONT_MD: f32 = 13.0;
-pub const FONT_LG: f32 = 16.0;
 
 // ── Spacing ──────────────────────────────────────────────────────────────────
 
@@ -103,18 +102,6 @@ pub fn surface(_theme: &Theme) -> container::Style {
 pub fn elevated(_theme: &Theme) -> container::Style {
     container::Style {
         background: Some(BG_ELEVATED.into()),
-        ..Default::default()
-    }
-}
-
-pub fn panel(_theme: &Theme) -> container::Style {
-    container::Style {
-        background: Some(BG_SURFACE.into()),
-        border: Border {
-            color: BORDER_COLOR,
-            width: 1.0,
-            radius: 0.0.into(),
-        },
         ..Default::default()
     }
 }
@@ -225,18 +212,6 @@ pub fn section_header(_theme: &Theme, status: button::Status) -> button::Style {
     }
 }
 
-pub fn interaction_toggle(_theme: &Theme, status: button::Status) -> button::Style {
-    let bg = match status {
-        button::Status::Hovered => Some(BG_HOVER.into()),
-        _ => Some(BG_ELEVATED.into()),
-    };
-    button::Style {
-        background: bg,
-        text_color: TEXT_MUTED,
-        border: Border::default(),
-        ..Default::default()
-    }
-}
 
 pub fn icon_button(_theme: &Theme, status: button::Status) -> button::Style {
     let color = match status {

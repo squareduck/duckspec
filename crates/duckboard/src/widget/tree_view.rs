@@ -50,7 +50,7 @@ pub fn view<'a, M: Clone + 'a>(
 
     for node in flat {
         let indent = (node.depth as f32) * theme::SPACING_LG;
-        let is_selected = selected.map_or(false, |s| s == node.id);
+        let is_selected = selected.is_some_and(|s| s == node.id);
 
         let style = if is_selected {
             theme::list_item_active as fn(&iced::Theme, button::Status) -> button::Style

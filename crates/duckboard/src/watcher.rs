@@ -88,11 +88,10 @@ fn watch_stream(
                             .filter_map(|ev| classify(&ev.path, ev.kind))
                             .collect();
 
-                        if !file_events.is_empty() {
-                            if async_tx.blocking_send(file_events).is_err() {
+                        if !file_events.is_empty()
+                            && async_tx.blocking_send(file_events).is_err() {
                                 break;
                             }
-                        }
                     }
                     Ok(Err(err)) => {
                         tracing::warn!("file watcher error: {err}");

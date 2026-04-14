@@ -1101,8 +1101,8 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for TextEdit<'a, M> {
                         shell.publish((self.on_action)(EditorAction::SaveRequested));
                     }
                     _ if !self.read_only => {
-                        if !cmd && !modifiers.control() {
-                            if let Some(txt) = key_text {
+                        if !cmd && !modifiers.control()
+                            && let Some(txt) = key_text {
                                 for ch in txt.chars() {
                                     if !ch.is_control() {
                                         shell.publish(
@@ -1111,7 +1111,6 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for TextEdit<'a, M> {
                                     }
                                 }
                             }
-                        }
                     }
                     _ => {}
                 }
@@ -1236,9 +1235,9 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for TextEdit<'a, M> {
                 };
 
                 // Block background.
-                if has_blocks {
-                    if let Some(info) = self.state.block_line_map.get(line_idx) {
-                        if let Some(block) = self.state.blocks.get(info.block_idx) {
+                if has_blocks
+                    && let Some(info) = self.state.block_line_map.get(line_idx)
+                        && let Some(block) = self.state.blocks.get(info.block_idx) {
                             let bg = block_kind_bg(block.kind);
                             renderer::Renderer::fill_quad(
                                 renderer,
@@ -1255,8 +1254,6 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for TextEdit<'a, M> {
                                 bg,
                             );
                         }
-                    }
-                }
 
                 // Per-line background (e.g. diff added/removed).
                 if let Some(Some(bg)) = self.state.line_backgrounds.get(line_idx) {
@@ -1277,8 +1274,8 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for TextEdit<'a, M> {
                 }
 
                 // Selection highlight.
-                if let Some((sel_start, sel_end)) = selection {
-                    if line_idx >= sel_start.line && line_idx <= sel_end.line {
+                if let Some((sel_start, sel_end)) = selection
+                    && line_idx >= sel_start.line && line_idx <= sel_end.line {
                         let abs_col_start = char_start;
                         let abs_col_end = char_end;
                         let sel_col_start = if line_idx == sel_start.line {
@@ -1307,7 +1304,6 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for TextEdit<'a, M> {
                             );
                         }
                     }
-                }
 
                 // Extract the sub-string for this visual row.
                 let line = &self.state.lines[line_idx];

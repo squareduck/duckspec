@@ -57,8 +57,7 @@ impl State {
         // Expand all tree nodes by default.
         let mut caps_expanded = std::collections::HashSet::new();
         data::TreeNode::collect_parent_ids(&project.cap_tree, &mut caps_expanded);
-        let mut caps_state = area::caps::State::default();
-        caps_state.expanded_nodes = caps_expanded;
+        let caps_state = area::caps::State { expanded_nodes: caps_expanded, ..Default::default() };
 
         Self {
             active_area: Area::Dashboard,
@@ -189,11 +188,10 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                                     }
                                 };
                                 tabs.open_file(id.clone(), title, content);
-                                if let Some(tab) = tabs.file_tabs.iter_mut().find(|t| t.id == id) {
-                                    if let tab_bar::TabView::Editor { editor, .. } = &mut tab.view {
+                                if let Some(tab) = tabs.file_tabs.iter_mut().find(|t| t.id == id)
+                                    && let tab_bar::TabView::Editor { editor, .. } = &mut tab.view {
                                         rehighlight(editor, &id, &state.highlighter);
                                     }
-                                }
                             }
                         }
                         state.file_finder.close();
@@ -381,7 +379,7 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                 }
             }
             interaction::rebuild_chat_editor(ix);
-            if !ix.chat_session.as_ref().map_or(false, |s| s.is_streaming) {
+            if !ix.chat_session.as_ref().is_some_and(|s| s.is_streaming) {
                 ix.esc_count = 0;
             }
         }
@@ -424,7 +422,7 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                     && i.mode == InteractionMode::AgentChat
                     && i.chat_session.is_some();
                 let terminal_focused = i.terminal_focused;
-                let is_streaming = i.chat_session.as_ref().map_or(false, |s| s.is_streaming);
+                let is_streaming = i.chat_session.as_ref().is_some_and(|s| s.is_streaming);
                 let completion_visible = i.chat_completion.visible;
                 (agent_chat_active, terminal_focused, is_streaming, completion_visible)
             });
@@ -458,8 +456,7 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                 // Agent chat: Esc-Esc to cancel streaming.
                 if agent_chat_active
                     && key == keyboard::Key::Named(keyboard::key::Named::Escape)
-                {
-                    if is_streaming {
+                    && is_streaming {
                         if let Some(ix) = state.interaction_mut(routing_key) {
                             ix.esc_count += 1;
                             if ix.esc_count >= 2 {
@@ -469,16 +466,13 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                         }
                         return Task::none();
                     }
-                }
 
                 // Reset esc counter on any non-Esc key.
                 if agent_chat_active
                     && key != keyboard::Key::Named(keyboard::key::Named::Escape)
-                {
-                    if let Some(ix) = state.interaction_mut(routing_key) {
+                    && let Some(ix) = state.interaction_mut(routing_key) {
                         ix.esc_count = 0;
                     }
-                }
 
                 // Agent chat: Enter sends, Shift+Enter inserts newline.
                 if agent_chat_active
@@ -500,13 +494,11 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                 }
 
                 // Terminal keyboard capture.
-                if terminal_focused {
-                    if let Some(ix) = state.interaction_mut(routing_key) {
-                        if let Some(ref mut ts) = ix.terminal {
+                if terminal_focused
+                    && let Some(ix) = state.interaction_mut(routing_key)
+                        && let Some(ref mut ts) = ix.terminal {
                             ts.write_key(key, mods, text.as_deref());
                         }
-                    }
-                }
             }
         }
     }
@@ -530,11 +522,10 @@ fn refresh_open_tabs(state: &mut State) {
             .iter_mut()
             .chain(tabs.file_tabs.iter_mut());
         for tab in all_tabs {
-            if let tab_bar::TabView::Editor { .. } = &tab.view {
-                if let Some(content) = state.project.read_artifact(&tab.id) {
+            if let tab_bar::TabView::Editor { .. } = &tab.view
+                && let Some(content) = state.project.read_artifact(&tab.id) {
                     tabs_refresh_single(tab, content, &state.highlighter);
                 }
-            }
         }
     }
 }
@@ -660,13 +651,11 @@ pub fn open_artifact_tab(
     highlighter: &highlight::SyntaxHighlighter,
 ) {
     tabs.open_preview(id.clone(), title, source);
-    if let Some(tab) = tabs.preview.as_mut() {
-        if tab.id == id {
-            if let tab_bar::TabView::Editor { editor, .. } = &mut tab.view {
+    if let Some(tab) = tabs.preview.as_mut()
+        && tab.id == id
+            && let tab_bar::TabView::Editor { editor, .. } = &mut tab.view {
                 rehighlight(editor, &id, highlighter);
             }
-        }
-    }
 }
 
 // ── Agent helpers ───────────────────────────────────────────────────────────

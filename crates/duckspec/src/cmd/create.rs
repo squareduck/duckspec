@@ -216,11 +216,10 @@ fn list_files(dir: &Path) -> anyhow::Result<Vec<String>> {
     let mut names = Vec::new();
     for entry in fs::read_dir(dir)? {
         let entry = entry?;
-        if entry.path().is_file() {
-            if let Some(name) = entry.file_name().to_str() {
+        if entry.path().is_file()
+            && let Some(name) = entry.file_name().to_str() {
                 names.push(name.to_string());
             }
-        }
     }
     names.sort();
     Ok(names)
@@ -242,13 +241,11 @@ fn scan_caps(dir: &Path, caps_root: &Path, out: &mut Vec<String>) -> anyhow::Res
         let path = entry.path();
         if path.is_dir() {
             scan_caps(&path, caps_root, out)?;
-        } else if path.file_name().and_then(|f| f.to_str()) == Some("spec.md") {
-            if let Some(parent) = path.parent() {
-                if let Ok(rel) = parent.strip_prefix(caps_root) {
+        } else if path.file_name().and_then(|f| f.to_str()) == Some("spec.md")
+            && let Some(parent) = path.parent()
+                && let Ok(rel) = parent.strip_prefix(caps_root) {
                     out.push(rel.to_string_lossy().into_owned());
                 }
-            }
-        }
     }
     Ok(())
 }

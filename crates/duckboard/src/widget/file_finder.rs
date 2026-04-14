@@ -26,6 +26,7 @@ pub enum Msg {
 
 // ── State ───────────────────────────────────────────────────────────────────
 
+#[derive(Default)]
 pub struct FileFinderState {
     pub visible: bool,
     pub query: String,
@@ -33,16 +34,6 @@ pub struct FileFinderState {
     matcher: Option<Nucleo<String>>,
 }
 
-impl Default for FileFinderState {
-    fn default() -> Self {
-        Self {
-            visible: false,
-            query: String::new(),
-            selected: 0,
-            matcher: None,
-        }
-    }
-}
 
 // Nucleo<String> is not Debug/Clone, so skip derive for the parent.
 impl std::fmt::Debug for FileFinderState {

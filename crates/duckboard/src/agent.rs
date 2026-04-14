@@ -91,9 +91,9 @@ pub fn discover_commands(project_root: &Path) -> Vec<SlashCommand> {
     if let Ok(home) = std::env::var("HOME") {
         let claude_dir = PathBuf::from(home).join(".claude");
         let settings_path = claude_dir.join("settings.json");
-        if let Ok(settings_str) = std::fs::read_to_string(&settings_path) {
-            if let Ok(settings) = serde_json::from_str::<serde_json::Value>(&settings_str) {
-                if let Some(plugins) = settings["enabledPlugins"].as_object() {
+        if let Ok(settings_str) = std::fs::read_to_string(&settings_path)
+            && let Ok(settings) = serde_json::from_str::<serde_json::Value>(&settings_str)
+                && let Some(plugins) = settings["enabledPlugins"].as_object() {
                     for (key, enabled) in plugins {
                         if enabled.as_bool() != Some(true) {
                             continue;
@@ -115,8 +115,6 @@ pub fn discover_commands(project_root: &Path) -> Vec<SlashCommand> {
                         }
                     }
                 }
-            }
-        }
     }
 
     // Built-in Claude Code commands (not discoverable from filesystem).
@@ -146,7 +144,7 @@ fn scan_command_dir(dir: &Path, commands: &mut Vec<SlashCommand>) {
     };
     for entry in entries.flatten() {
         let path = entry.path();
-        if path.extension().map_or(true, |e| e != "md") {
+        if path.extension().is_none_or(|e| e != "md") {
             continue;
         }
         let name = path
@@ -406,15 +404,14 @@ async fn run_prompt_turn(
             "stream_event" => {
                 if let Some(event) = msg.get("event") {
                     let event_type = event["type"].as_str().unwrap_or("");
-                    if event_type == "content_block_delta" {
-                        if let Some(text) = event["delta"]["text"].as_str() {
+                    if event_type == "content_block_delta"
+                        && let Some(text) = event["delta"]["text"].as_str() {
                             let _ = sender
                                 .send(AgentEvent::ContentDelta {
                                     text: text.to_string(),
                                 })
                                 .await;
                         }
-                    }
                 }
             }
             "assistant" => {
@@ -433,17 +430,14 @@ async fn run_prompt_turn(
                 }
                 if let Some(content) = msg["message"]["content"].as_array() {
                     for block in content {
-                        match block["type"].as_str().unwrap_or("") {
-                            "tool_use" => {
-                                let _ = sender
-                                    .send(AgentEvent::ToolUse {
-                                        id: block["id"].as_str().unwrap_or("").to_string(),
-                                        name: block["name"].as_str().unwrap_or("").to_string(),
-                                        input: block["input"].to_string(),
-                                    })
-                                    .await;
-                            }
-                            _ => {}
+                        if block["type"].as_str().unwrap_or("") == "tool_use" {
+                            let _ = sender
+                                .send(AgentEvent::ToolUse {
+                                    id: block["id"].as_str().unwrap_or("").to_string(),
+                                    name: block["name"].as_str().unwrap_or("").to_string(),
+                                    input: block["input"].to_string(),
+                                })
+                                .await;
                         }
                     }
                 }

@@ -537,11 +537,10 @@ fn extract_cap_path_from_relative(relative: &Path) -> String {
         .filter_map(|c| c.as_os_str().to_str())
         .collect();
     // Handle both "caps/auth/spec.md" and "changes/x/caps/auth/spec.md"
-    if let Some(caps_idx) = components.iter().position(|c| *c == "caps") {
-        if caps_idx + 2 <= components.len() {
+    if let Some(caps_idx) = components.iter().position(|c| *c == "caps")
+        && caps_idx + 2 <= components.len() {
             return components[caps_idx + 1..components.len() - 1].join("/");
         }
-    }
     String::new()
 }
 

@@ -153,14 +153,13 @@ fn print_cap_tree(dir: &Path, canonical_root: &Path, depth: usize) -> anyhow::Re
             .map(|p| p.to_path_buf())
             .unwrap_or_default();
         let kind = layout::classify(&relative);
-        if let Some(kind) = kind {
-            if let Some((t, s)) = extract_title_summary(&source, &kind) {
+        if let Some(kind) = kind
+            && let Some((t, s)) = extract_title_summary(&source, &kind) {
                 title = Some(t);
                 if !s.is_empty() {
                     summary = Some(s);
                 }
             }
-        }
         if let Some((reqs, scenarios)) = extract_spec_stats(&source) {
             stats_str = format!("{reqs} req, {scenarios} scn");
         }

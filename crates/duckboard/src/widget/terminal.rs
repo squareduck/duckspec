@@ -257,12 +257,11 @@ impl TerminalState {
 
     fn flush_writeback(&mut self) {
         let bytes: Vec<u8> = self.pty_writeback.borrow_mut().drain(..).collect();
-        if !bytes.is_empty() {
-            if let Some(ref mut writer) = self.pty_writer {
+        if !bytes.is_empty()
+            && let Some(ref mut writer) = self.pty_writer {
                 let _ = writer.write_all(&bytes);
                 let _ = writer.flush();
             }
-        }
     }
 
     fn rebuild_buffer(&mut self) {
@@ -277,11 +276,10 @@ impl TerminalState {
         }
 
         // Sync buffer dimensions with what the snapshot reports.
-        if let (Ok(snap_cols), Ok(snap_rows)) = (snapshot.cols(), snapshot.rows()) {
-            if snap_cols != self.buffer.cols || snap_rows != self.buffer.rows {
+        if let (Ok(snap_cols), Ok(snap_rows)) = (snapshot.cols(), snapshot.rows())
+            && (snap_cols != self.buffer.cols || snap_rows != self.buffer.rows) {
                 self.buffer.resize(snap_cols, snap_rows);
             }
-        }
 
         // Update cursor info.
         self.buffer.cursor = snapshot
@@ -357,11 +355,11 @@ impl TerminalState {
 
                 // Style attributes.
                 let style = cell.style().ok();
-                let bold = style.as_ref().map_or(false, |s| s.bold);
-                let italic = style.as_ref().map_or(false, |s| s.italic);
+                let bold = style.as_ref().is_some_and(|s| s.bold);
+                let italic = style.as_ref().is_some_and(|s| s.italic);
 
                 // Handle inverse video.
-                let (fg, bg) = if style.as_ref().map_or(false, |s| s.inverse) {
+                let (fg, bg) = if style.as_ref().is_some_and(|s| s.inverse) {
                     (bg, fg)
                 } else {
                     (fg, bg)
@@ -515,8 +513,8 @@ impl<'a> canvas::Program<()> for TerminalCanvas<'a> {
             }
 
             // Draw cursor.
-            if let Some(ref cursor) = buffer.cursor {
-                if cursor.visible {
+            if let Some(ref cursor) = buffer.cursor
+                && cursor.visible {
                     let cx = cursor.x as f32 * CELL_WIDTH;
                     let cy = cursor.y as f32 * CELL_HEIGHT;
                     frame.fill_rectangle(
@@ -528,7 +526,6 @@ impl<'a> canvas::Program<()> for TerminalCanvas<'a> {
                         },
                     );
                 }
-            }
         });
 
         vec![geometry]

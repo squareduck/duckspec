@@ -326,11 +326,10 @@ fn parse_content_children(
             } if *hl == level => {
                 // Check that the heading does NOT start with a marker.
                 let trimmed = content.trim();
-                if let Some(first) = trimmed.chars().next() {
-                    if DeltaMarker::from_char(first).is_some() {
+                if let Some(first) = trimmed.chars().next()
+                    && DeltaMarker::from_char(first).is_some() {
                         errors.push(ParseError::MarkerOnContentChild { span: *span });
                     }
-                }
 
                 let heading = content.clone();
                 let heading_span = *span;

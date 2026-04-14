@@ -116,11 +116,10 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for InteractionHandle<'a, M>
                 }
             }
             Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) => {
-                if let Some(state) = drag.take() {
-                    if !state.dragging {
+                if let Some(state) = drag.take()
+                    && !state.dragging {
                         shell.publish((self.on_event)(HandleMsg::Toggle));
                     }
-                }
             }
             _ => {}
         }

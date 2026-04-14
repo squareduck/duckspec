@@ -180,15 +180,14 @@ fn validate_step_slug(
     ctx: &CheckContext,
     errors: &mut Vec<ParseError>,
 ) {
-    if let Some(ref expected) = ctx.filename_slug {
-        if step.slug != *expected {
+    if let Some(ref expected) = ctx.filename_slug
+        && step.slug != *expected {
             errors.push(ParseError::SlugMismatch {
                 expected: expected.clone(),
                 actual: step.slug.clone(),
                 span: step.title_span,
             });
         }
-    }
 }
 
 /// Scan raw elements for H2 delta markers and check canonical ordering.
@@ -222,8 +221,7 @@ fn validate_delta_ordering(elements: &[Element]) -> Vec<ParseError> {
             content,
             ..
         } = &elements[i]
-        {
-            if content.trim().starts_with('@') {
+            && content.trim().starts_with('@') {
                 // Collect H3 children of this @ entry.
                 let mut h3_markers = Vec::new();
                 let mut j = i + 1;
@@ -245,7 +243,6 @@ fn validate_delta_ordering(elements: &[Element]) -> Vec<ParseError> {
                 }
                 check_order(&h3_markers, &mut errors);
             }
-        }
         i += 1;
     }
 

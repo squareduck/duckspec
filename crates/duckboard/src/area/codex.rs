@@ -71,8 +71,7 @@ pub fn update(
                 interaction::spawn_terminal(&mut state.interaction);
             }
 
-            let wants_agent = (just_opened && state.interaction.mode == InteractionMode::AgentChat)
-                || (is_mode_switch && state.interaction.mode == InteractionMode::AgentChat);
+            let wants_agent = (just_opened || is_mode_switch) && state.interaction.mode == InteractionMode::AgentChat;
             if wants_agent && state.interaction.chat_session.is_none() {
                 interaction::spawn_agent_session(&mut state.interaction, "codex");
             }
@@ -136,7 +135,7 @@ fn view_list<'a>(state: &'a State, project: &'a ProjectData) -> Element<'a, Mess
             let is_active = state
                 .tabs
                 .active_tab()
-                .map_or(false, |t| t.id == entry.id);
+                .is_some_and(|t| t.id == entry.id);
             let style = if is_active {
                 theme::list_item_active
                     as fn(&iced::Theme, button::Status) -> button::Style
@@ -174,8 +173,8 @@ fn view_list<'a>(state: &'a State, project: &'a ProjectData) -> Element<'a, Mess
 fn view_content<'a>(state: &'a State) -> Element<'a, Message> {
     let bar = tab_bar::view_bar(
         &state.tabs,
-        |i| Message::SelectTab(i),
-        |i| Message::CloseTab(i),
+        Message::SelectTab,
+        Message::CloseTab,
     );
     let body = tab_bar::view_content(&state.tabs).map(Message::TabContent);
 

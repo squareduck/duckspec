@@ -77,8 +77,7 @@ pub fn update(
                 interaction::spawn_terminal(&mut state.interaction);
             }
 
-            let wants_agent = (just_opened && state.interaction.mode == InteractionMode::AgentChat)
-                || (is_mode_switch && state.interaction.mode == InteractionMode::AgentChat);
+            let wants_agent = (just_opened || is_mode_switch) && state.interaction.mode == InteractionMode::AgentChat;
             if wants_agent && state.interaction.chat_session.is_none() {
                 interaction::spawn_agent_session(&mut state.interaction, "caps");
             }
@@ -146,8 +145,8 @@ fn view_list<'a>(state: &'a State, project: &'a ProjectData) -> Element<'a, Mess
             &project.cap_tree,
             &state.expanded_nodes,
             state.tabs.active_tab().map(|t| t.id.as_str()),
-            |id| Message::ToggleNode(id),
-            |id| Message::SelectItem(id),
+            Message::ToggleNode,
+            Message::SelectItem,
         )
     };
 
@@ -166,8 +165,8 @@ fn view_list<'a>(state: &'a State, project: &'a ProjectData) -> Element<'a, Mess
 fn view_content<'a>(state: &'a State) -> Element<'a, Message> {
     let bar = tab_bar::view_bar(
         &state.tabs,
-        |i| Message::SelectTab(i),
-        |i| Message::CloseTab(i),
+        Message::SelectTab,
+        Message::CloseTab,
     );
     let body = tab_bar::view_content(&state.tabs).map(Message::TabContent);
 
