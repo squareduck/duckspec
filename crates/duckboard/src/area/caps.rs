@@ -145,6 +145,7 @@ fn view_list<'a>(state: &'a State, project: &'a ProjectData) -> Element<'a, Mess
             &project.cap_tree,
             &state.expanded_nodes,
             state.tabs.active_tab().map(|t| t.id.as_str()),
+            &std::collections::HashSet::new(),
             Message::ToggleNode,
             Message::SelectItem,
         )

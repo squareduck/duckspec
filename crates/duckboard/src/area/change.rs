@@ -42,6 +42,8 @@ pub struct State {
     pub explorations: Vec<String>,
     /// Counter for generating unique exploration names.
     pub exploration_counter: usize,
+    /// When true, content column shows the audit view.
+    pub audit_active: bool,
 }
 
 impl State {
@@ -62,6 +64,7 @@ impl State {
             interactions: HashMap::new(),
             explorations,
             exploration_counter,
+            audit_active: false,
         }
     }
 }
@@ -124,6 +127,9 @@ pub enum Message {
     TabContent(tab_bar::TabContentMsg),
     AddExploration,
     RemoveExploration(String),
+    ShowAudit,
+    RefreshAudit,
+    SelectAuditError { change: String, artifact_id: String },
 }
 
 // ── Update ───────────────────────────────────────────────────────────────────
@@ -137,6 +143,7 @@ pub fn update(
     match message {
         Message::SelectChange(name) => {
             state.selected_change = Some(name.clone());
+            state.audit_active = false;
             state.expanded_nodes.clear();
 
             // Expand tree nodes for real changes.
@@ -258,6 +265,30 @@ pub fn update(
             crate::chat_store::delete_session(&name, project.project_root.as_deref());
             crate::chat_store::save_explorations(&state.explorations, state.exploration_counter, project.project_root.as_deref());
         }
+        Message::ShowAudit => {
+            state.audit_active = true;
+            state.selected_change = None;
+        }
+        Message::RefreshAudit => {
+            // Handled by main.rs — calls project.revalidate().
+        }
+        Message::SelectAuditError { change, artifact_id } => {
+            state.audit_active = false;
+            state.selected_change = Some(change.clone());
+            state.expanded_nodes.clear();
+            if let Some(ch) = project
+                .active_changes
+                .iter()
+                .chain(project.archived_changes.iter())
+                .find(|c| c.name == change)
+            {
+                crate::data::TreeNode::collect_parent_ids(
+                    &ch.cap_tree,
+                    &mut state.expanded_nodes,
+                );
+            }
+            open_artifact(state, &artifact_id, project, highlighter);
+        }
     }
 }
 
@@ -299,7 +330,11 @@ pub fn view<'a>(
     }
 
     // Normal mode: content column + optional interaction panel.
-    let content = view_content(state);
+    let content = if state.audit_active {
+        view_audit(project)
+    } else {
+        view_content(state, project)
+    };
     let visible = ix.is_some_and(|i| i.visible);
     let width = ix.map_or(theme::INTERACTION_COLUMN_WIDTH, |i| i.width);
 
@@ -389,9 +424,20 @@ fn view_list<'a>(state: &'a State, project: &'a ProjectData) -> Element<'a, Mess
             .width(ICON_SIZE)
             .height(ICON_SIZE)
             .style(theme::svg_tint(theme::text_muted()));
-        let label = row![icon, text(&ch.name).size(theme::FONT_MD).wrapping(Wrapping::None)]
+        let mut label = row![icon, text(&ch.name).size(theme::FONT_MD).wrapping(Wrapping::None)]
             .spacing(theme::SPACING_XS)
             .align_y(iced::Center);
+        if let Some(v) = project.validations.get(&ch.name) {
+            let count = v.total_count();
+            if count > 0 {
+                label = label.push(Space::new().width(Length::Fill));
+                label = label.push(
+                    text(count.to_string())
+                        .size(theme::FONT_SM)
+                        .color(theme::error()),
+                );
+            }
+        }
         selector = selector.push(
             button(label)
                 .on_press(Message::SelectChange(ch.name.clone()))
@@ -434,9 +480,43 @@ fn view_list<'a>(state: &'a State, project: &'a ProjectData) -> Element<'a, Mess
         col
     };
 
+    // Audit header — always visible.
+    let audit_section = {
+        let total_errors: usize = project.validations.values().map(|v| v.total_count()).sum();
+        let title_color = if state.audit_active {
+            theme::accent()
+        } else {
+            theme::text_secondary()
+        };
+        let style = if state.audit_active {
+            theme::list_item_active as fn(&iced::Theme, button::Status) -> button::Style
+        } else {
+            theme::section_header
+        };
+        let mut label = row![
+            text("AUDIT")
+                .size(theme::FONT_SM)
+                .color(title_color),
+        ]
+        .width(Length::Fill);
+        if total_errors > 0 {
+            label = label.push(Space::new().width(Length::Fill));
+            label = label.push(
+                text(total_errors.to_string())
+                    .size(theme::FONT_SM)
+                    .color(theme::error()),
+            );
+        }
+        button(label)
+            .on_press(Message::ShowAudit)
+            .width(Length::Fill)
+            .style(style)
+            .padding([theme::SPACING_SM, theme::SPACING_SM])
+    };
+
     let change = find_change(state, project);
     let is_exploration = state.is_exploration_selected();
-    let mut list_col = column![change_section].spacing(0.0);
+    let mut list_col = column![audit_section, change_section].spacing(0.0);
 
     if is_exploration {
         // Explorations only show the interaction column, no overview/caps/steps.
@@ -446,20 +526,29 @@ fn view_list<'a>(state: &'a State, project: &'a ProjectData) -> Element<'a, Mess
                     .size(theme::FONT_MD)
                     .color(theme::text_muted()),
             )
-            .padding(theme::SPACING_LG),
+            .padding([theme::SPACING_SM, theme::SPACING_SM]),
         );
-    } else if let Some(change) = change {
-        list_col = list_col.push(view_overview_section(state, change));
-        list_col = list_col.push(view_caps_section(state, change));
-        list_col = list_col.push(view_steps_section(state, change));
-    } else {
+    } else if !state.audit_active {
+        if let Some(change) = change {
+            let error_ids: HashSet<String> = project
+                .validations
+                .get(&change.name)
+                .map(|v| v.file_errors.iter().map(|(p, _)| p.clone()).collect())
+                .unwrap_or_default();
+            list_col = list_col.push(view_overview_section(state, change, &error_ids));
+            list_col = list_col.push(view_caps_section(state, change, &error_ids));
+            list_col = list_col.push(view_steps_section(state, change, &error_ids));
+        }
+    }
+
+    if !state.audit_active && change.is_none() && !is_exploration {
         list_col = list_col.push(
             container(
                 text("Select a change")
                     .size(theme::FONT_MD)
                     .color(theme::text_muted()),
             )
-            .padding(theme::SPACING_LG),
+            .padding([theme::SPACING_SM, theme::SPACING_SM]),
         );
     }
 
@@ -473,19 +562,28 @@ fn view_list<'a>(state: &'a State, project: &'a ProjectData) -> Element<'a, Mess
         .into()
 }
 
-fn view_overview_section<'a>(state: &'a State, change: &'a ChangeData) -> Element<'a, Message> {
+fn view_overview_section<'a>(
+    state: &'a State,
+    change: &'a ChangeData,
+    error_ids: &HashSet<String>,
+) -> Element<'a, Message> {
     let mut items = column![].spacing(theme::SPACING_XS);
 
     if change.has_proposal {
         let id = format!("{}/proposal.md", change.prefix);
-        items = items.push(file_item("proposal.md", &id, state));
+        let has_err = error_ids.contains(&id);
+        items = items.push(file_item("proposal.md", &id, has_err, state));
     }
     if change.has_design {
         let id = format!("{}/design.md", change.prefix);
-        items = items.push(file_item("design.md", &id, state));
+        let has_err = error_ids.contains(&id);
+        items = items.push(file_item("design.md", &id, has_err, state));
     }
     if !change.has_proposal && !change.has_design {
-        items = items.push(text("No overview files").size(theme::FONT_MD).color(theme::text_muted()));
+        items = items.push(
+            container(text("No overview files").size(theme::FONT_MD).color(theme::text_muted()))
+                .padding([2.0, theme::SPACING_SM]),
+        );
     }
 
     collapsible::view(
@@ -496,14 +594,21 @@ fn view_overview_section<'a>(state: &'a State, change: &'a ChangeData) -> Elemen
     )
 }
 
-fn view_caps_section<'a>(state: &'a State, change: &'a ChangeData) -> Element<'a, Message> {
+fn view_caps_section<'a>(
+    state: &'a State,
+    change: &'a ChangeData,
+    error_ids: &HashSet<String>,
+) -> Element<'a, Message> {
     let content = if change.cap_tree.is_empty() {
-        column![text("No capability changes").size(theme::FONT_MD).color(theme::text_muted())].into()
+        container(text("No capability changes").size(theme::FONT_MD).color(theme::text_muted()))
+            .padding([2.0, theme::SPACING_SM])
+            .into()
     } else {
         tree_view::view(
             &change.cap_tree,
             &state.expanded_nodes,
             state.tabs.active_tab().map(|t| t.id.as_str()),
+            error_ids,
             Message::ToggleNode,
             Message::SelectItem,
         )
@@ -517,14 +622,22 @@ fn view_caps_section<'a>(state: &'a State, change: &'a ChangeData) -> Element<'a
     )
 }
 
-fn view_steps_section<'a>(state: &'a State, change: &'a ChangeData) -> Element<'a, Message> {
+fn view_steps_section<'a>(
+    state: &'a State,
+    change: &'a ChangeData,
+    error_ids: &HashSet<String>,
+) -> Element<'a, Message> {
     let mut items = column![].spacing(theme::SPACING_XS);
 
     if change.steps.is_empty() {
-        items = items.push(text("No steps").size(theme::FONT_MD).color(theme::text_muted()));
+        items = items.push(
+            container(text("No steps").size(theme::FONT_MD).color(theme::text_muted()))
+                .padding([2.0, theme::SPACING_SM]),
+        );
     } else {
         for step in &change.steps {
             let is_active = state.tabs.active_tab().is_some_and(|t| t.id == step.id);
+            let has_error = error_ids.contains(&step.id);
             let style = if is_active {
                 theme::list_item_active as fn(&iced::Theme, button::Status) -> button::Style
             } else {
@@ -539,12 +652,18 @@ fn view_steps_section<'a>(state: &'a State, change: &'a ChangeData) -> Element<'
                 .width(ICON_SIZE)
                 .height(ICON_SIZE)
                 .style(theme::svg_tint(theme::text_muted()));
-            let label = row![
+            let mut label = row![
                 icon,
                 text(format!("{:02}-{}", step.number, step.label)).size(theme::FONT_MD).wrapping(Wrapping::None),
             ]
             .spacing(theme::SPACING_XS)
             .align_y(iced::Center);
+            if has_error {
+                label = label.push(Space::new().width(Length::Fill));
+                label = label.push(
+                    text("\u{2022}").size(theme::FONT_MD).color(theme::error()),
+                );
+            }
             items = items.push(
                 button(label)
                     .on_press(Message::SelectItem(step.id.clone()))
@@ -567,7 +686,10 @@ fn view_changed_files_section<'a>(state: &'a State) -> Element<'a, Message> {
     let mut items = column![].spacing(theme::SPACING_XS);
 
     if state.changed_files.is_empty() {
-        items = items.push(text("No changes").size(theme::FONT_MD).color(theme::text_muted()));
+        items = items.push(
+            container(text("No changes").size(theme::FONT_MD).color(theme::text_muted()))
+                .padding([2.0, theme::SPACING_SM]),
+        );
     } else {
         for cf in &state.changed_files {
             let status_char = match cf.status {
@@ -611,6 +733,156 @@ fn view_changed_files_section<'a>(state: &'a State) -> Element<'a, Message> {
     )
 }
 
+fn view_audit<'a>(project: &'a ProjectData) -> Element<'a, Message> {
+    let total_errors: usize = project.validations.values().map(|v| v.total_count()).sum();
+
+    // ── Header ─────────────────────────────────────────────────────────
+    let summary = if total_errors == 0 {
+        text("All checks passed")
+            .size(theme::FONT_MD)
+            .color(theme::success())
+    } else {
+        text(format!(
+            "{} error{}",
+            total_errors,
+            if total_errors == 1 { "" } else { "s" }
+        ))
+        .size(theme::FONT_MD)
+        .color(theme::error())
+    };
+
+    let header = container(
+        row![
+            column![
+                text("Audit").size(22.0).color(theme::text_primary()),
+                summary,
+            ]
+            .spacing(theme::SPACING_XS),
+            Space::new().width(Length::Fill),
+            button(
+                text("Refresh")
+                    .size(theme::FONT_MD)
+                    .color(theme::accent()),
+            )
+            .on_press(Message::RefreshAudit)
+            .padding([theme::SPACING_SM, theme::SPACING_LG])
+            .style(theme::dashboard_action),
+        ]
+        .align_y(iced::Center)
+        .width(Length::Fill),
+    )
+    .padding([theme::SPACING_LG, theme::SPACING_XL]);
+
+    let mut content = column![header].spacing(theme::SPACING_MD);
+
+    if total_errors > 0 {
+        let mut changes: Vec<_> = project.validations.iter().collect();
+        changes.sort_by_key(|(name, _)| name.as_str());
+
+        for (change_name, validation) in changes {
+            content = content.push(view_audit_change(change_name, validation));
+        }
+    }
+
+    scrollable(
+        container(content)
+            .padding([0.0, theme::SPACING_XL])
+            .width(Length::Fill),
+    )
+    .direction(theme::thin_scrollbar_direction())
+    .style(theme::thin_scrollbar)
+    .height(Length::Fill)
+    .width(Length::Fill)
+    .into()
+}
+
+/// Render a single change's errors as a card.
+fn view_audit_change<'a>(
+    change_name: &'a str,
+    validation: &'a crate::data::ChangeValidation,
+) -> Element<'a, Message> {
+    let icon = svg(svg::Handle::from_memory(ICON_BRANCH))
+        .width(16.0)
+        .height(16.0)
+        .style(theme::svg_tint(theme::text_muted()));
+    let change_header = row![
+        icon,
+        text(change_name).size(15.0).color(theme::text_primary()),
+        Space::new().width(Length::Fill),
+        text(format!(
+            "{} error{}",
+            validation.total_count(),
+            if validation.total_count() == 1 { "" } else { "s" }
+        ))
+        .size(theme::FONT_SM)
+        .color(theme::text_muted()),
+    ]
+    .spacing(theme::SPACING_SM)
+    .align_y(iced::Center);
+
+    let mut card = column![change_header].spacing(theme::SPACING_MD);
+
+    // Per-file error groups.
+    for (path, errors) in &validation.file_errors {
+        let artifact_id = path.clone();
+        let change = change_name.to_string();
+        let file_link = button(
+            text(path.as_str())
+                .size(theme::FONT_MD)
+                .color(theme::accent()),
+        )
+        .on_press(Message::SelectAuditError {
+            change,
+            artifact_id,
+        })
+        .padding(0.0)
+        .style(theme::link_button);
+
+        let mut error_list = column![].spacing(theme::SPACING_XS);
+        for err in errors {
+            error_list = error_list.push(
+                text(err.as_str())
+                    .size(theme::FONT_MD)
+                    .color(theme::error()),
+            );
+        }
+
+        let group = column![
+            file_link,
+            container(error_list).padding([0.0, theme::SPACING_LG]),
+        ]
+        .spacing(theme::SPACING_XS);
+
+        card = card.push(group);
+    }
+
+    // Cross-file change-level errors.
+    if !validation.change_errors.is_empty() {
+        let mut structural = column![
+            text("Structural").size(theme::FONT_MD).color(theme::text_secondary()),
+        ]
+        .spacing(theme::SPACING_XS);
+
+        for err in &validation.change_errors {
+            structural = structural.push(
+                container(
+                    text(err.as_str())
+                        .size(theme::FONT_MD)
+                        .color(theme::error()),
+                )
+                .padding([0.0, theme::SPACING_LG]),
+            );
+        }
+        card = card.push(structural);
+    }
+
+    container(card)
+        .padding(theme::SPACING_LG)
+        .width(Length::Fill)
+        .style(theme::audit_card)
+        .into()
+}
+
 fn icon_for_artifact(label: &str) -> &'static [u8] {
     match label {
         l if l.starts_with("spec.delta") => ICON_SPEC_DELTA,
@@ -621,7 +893,7 @@ fn icon_for_artifact(label: &str) -> &'static [u8] {
     }
 }
 
-fn file_item<'a>(label: &str, id: &str, state: &State) -> Element<'a, Message> {
+fn file_item<'a>(label: &str, id: &str, has_error: bool, state: &State) -> Element<'a, Message> {
     let is_active = state.tabs.active_tab().is_some_and(|t| t.id == id);
     let style = if is_active {
         theme::list_item_active as fn(&iced::Theme, button::Status) -> button::Style
@@ -632,9 +904,15 @@ fn file_item<'a>(label: &str, id: &str, state: &State) -> Element<'a, Message> {
         .width(ICON_SIZE)
         .height(ICON_SIZE)
         .style(theme::svg_tint(theme::text_muted()));
-    let content = row![icon, text(label.to_string()).size(theme::FONT_MD).wrapping(Wrapping::None)]
+    let mut content = row![icon, text(label.to_string()).size(theme::FONT_MD).wrapping(Wrapping::None)]
         .spacing(theme::SPACING_XS)
         .align_y(iced::Center);
+    if has_error {
+        content = content.push(Space::new().width(Length::Fill));
+        content = content.push(
+            text("\u{2022}").size(theme::FONT_MD).color(theme::error()),
+        );
+    }
     button(content)
         .on_press(Message::SelectItem(id.to_string()))
         .width(Length::Fill)
@@ -643,7 +921,7 @@ fn file_item<'a>(label: &str, id: &str, state: &State) -> Element<'a, Message> {
         .into()
 }
 
-fn view_content<'a>(state: &'a State) -> Element<'a, Message> {
+fn view_content<'a>(state: &'a State, project: &'a ProjectData) -> Element<'a, Message> {
     let bar = tab_bar::view_bar(
         &state.tabs,
         Message::SelectTab,
@@ -651,7 +929,55 @@ fn view_content<'a>(state: &'a State) -> Element<'a, Message> {
     );
     let body = tab_bar::view_content(&state.tabs).map(Message::TabContent);
 
-    column![bar, body].height(Length::Fill).into()
+    // Error panel for the active artifact.
+    let error_panel = state
+        .tabs
+        .active_tab()
+        .and_then(|tab| {
+            let change_name = state.selected_change.as_ref()?;
+            let validation = project.validations.get(change_name)?;
+            let errors = validation
+                .file_errors
+                .iter()
+                .find(|(path, _)| *path == tab.id)?;
+            Some(&errors.1)
+        })
+        .filter(|errs| !errs.is_empty());
+
+    let mut col = column![bar, body].height(Length::Fill);
+
+    if let Some(errors) = error_panel {
+        let divider = container(Space::new().width(Length::Fill))
+            .height(1.0)
+            .style(theme::divider);
+
+        let mut error_list = column![].spacing(theme::SPACING_XS);
+        for err in errors {
+            error_list = error_list.push(
+                text(err.as_str())
+                    .size(theme::FONT_MD)
+                    .color(theme::error()),
+            );
+        }
+
+        let panel = container(
+            column![
+                text("Errors")
+                    .size(theme::FONT_SM)
+                    .color(theme::text_secondary()),
+                error_list,
+            ]
+            .spacing(theme::SPACING_SM),
+        )
+        .padding(theme::SPACING_SM)
+        .width(Length::Fill)
+        .style(theme::surface);
+
+        col = col.push(divider);
+        col = col.push(panel);
+    }
+
+    col.into()
 }
 
 fn find_change<'a>(state: &State, project: &'a ProjectData) -> Option<&'a ChangeData> {

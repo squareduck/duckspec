@@ -271,6 +271,18 @@ pub fn elevated(_theme: &Theme) -> container::Style {
     }
 }
 
+pub fn audit_card(_theme: &Theme) -> container::Style {
+    container::Style {
+        background: Some(bg_surface().into()),
+        border: Border {
+            color: border_color(),
+            width: 1.0,
+            radius: BORDER_RADIUS.into(),
+        },
+        ..Default::default()
+    }
+}
+
 pub fn divider(_theme: &Theme) -> container::Style {
     container::Style {
         background: Some(border_color().into()),
@@ -390,6 +402,19 @@ pub fn dashboard_action(_theme: &Theme, status: button::Status) -> button::Style
             width: 1.0,
             radius: BORDER_RADIUS.into(),
         },
+        ..Default::default()
+    }
+}
+
+pub fn link_button(_theme: &Theme, status: button::Status) -> button::Style {
+    let color = match status {
+        button::Status::Hovered => text_primary(),
+        _ => accent(),
+    };
+    button::Style {
+        background: None,
+        text_color: color,
+        border: Border::default(),
         ..Default::default()
     }
 }

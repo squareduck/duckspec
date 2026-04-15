@@ -305,10 +305,22 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                     );
                     state.active_area = Area::Change;
                 }
+                area::dashboard::Message::ShowAudit => {
+                    state.active_area = Area::Change;
+                    area::change::update(
+                        &mut state.change,
+                        area::change::Message::ShowAudit,
+                        &state.project,
+                        &state.highlighter,
+                    );
+                }
             }
             area::dashboard::update(&mut state.dashboard, msg);
         }
         Message::Change(msg) => {
+            if matches!(msg, area::change::Message::RefreshAudit) {
+                state.project.revalidate();
+            }
             area::change::update(&mut state.change, msg, &state.project, &state.highlighter);
         }
         Message::Caps(msg) => {

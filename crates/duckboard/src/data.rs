@@ -1,5 +1,6 @@
 //! Project data model and filesystem loader.
 
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -15,6 +16,28 @@ pub struct ProjectData {
     pub codex_entries: Vec<TreeNode>,
     pub cap_count: usize,
     pub codex_count: usize,
+    /// Validation results per change name, populated on reload.
+    pub validations: HashMap<String, ChangeValidation>,
+}
+
+/// Validation results for a single change.
+#[derive(Debug, Clone, Default)]
+pub struct ChangeValidation {
+    /// Per-file parse errors: (relative path, list of error messages).
+    pub file_errors: Vec<(String, Vec<String>)>,
+    /// Cross-file change-level errors.
+    pub change_errors: Vec<String>,
+}
+
+impl ChangeValidation {
+    pub fn total_count(&self) -> usize {
+        self.file_errors.iter().map(|(_, errs)| errs.len()).sum::<usize>()
+            + self.change_errors.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.file_errors.is_empty() && self.change_errors.is_empty()
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -85,6 +108,7 @@ impl ProjectData {
         let codex_count = codex_entries.len();
         let active_changes = build_changes(&root.join("changes"), "changes");
         let archived_changes = build_changes(&root.join("archive"), "archive");
+        let validations = run_validations(root, &active_changes);
 
         Self {
             project_root: find_repo_root(),
@@ -95,14 +119,25 @@ impl ProjectData {
             codex_entries,
             cap_count,
             codex_count,
+            validations,
         }
     }
 
     pub fn reload(&mut self) {
+        let old_validations = std::mem::take(&mut self.validations);
         if let Some(root) = self.duckspec_root.clone() {
             *self = Self::load_from(&root);
         } else {
             *self = Self::load();
+        }
+        // Preserve existing validations — only refresh on explicit user action.
+        self.validations = old_validations;
+    }
+
+    /// Re-run validation for all active changes.
+    pub fn revalidate(&mut self) {
+        if let Some(root) = &self.duckspec_root {
+            self.validations = run_validations(root, &self.active_changes);
         }
     }
 
@@ -317,4 +352,115 @@ fn count_leaf_caps(nodes: &[TreeNode]) -> usize {
 
 fn is_dir(entry: &fs::DirEntry) -> bool {
     entry.file_type().map(|t| t.is_dir()).unwrap_or(false)
+}
+
+// ── Validation ──────────────────────────────────────────────────────────────
+
+/// Run `check_change` for all active changes and collect results.
+fn run_validations(
+    duckspec_root: &Path,
+    active_changes: &[ChangeData],
+) -> HashMap<String, ChangeValidation> {
+    let state = build_duckspec_state(duckspec_root);
+    let mut results = HashMap::new();
+
+    for change in active_changes {
+        let files = load_change_files(duckspec_root, &change.name);
+        let check = duckpond::check::check_change(&change.name, &files, &state);
+
+        let validation = ChangeValidation {
+            file_errors: check
+                .file_errors
+                .into_iter()
+                .map(|(path, errs)| {
+                    (
+                        path.display().to_string(),
+                        errs.iter().map(|e| e.to_string()).collect(),
+                    )
+                })
+                .collect(),
+            change_errors: check
+                .change_errors
+                .iter()
+                .map(|e| e.to_string())
+                .collect(),
+        };
+
+        if !validation.is_empty() {
+            results.insert(change.name.clone(), validation);
+        }
+    }
+
+    results
+}
+
+/// Build `DuckspecState` by scanning `caps/` for existing spec.md and doc.md files.
+fn build_duckspec_state(duckspec_root: &Path) -> duckpond::check::DuckspecState {
+    let caps_dir = duckspec_root.join("caps");
+    let mut cap_spec_paths = std::collections::HashSet::new();
+    let mut cap_doc_paths = std::collections::HashSet::new();
+
+    if caps_dir.is_dir() {
+        scan_caps_for_state(&caps_dir, &caps_dir, &mut cap_spec_paths, &mut cap_doc_paths);
+    }
+
+    duckpond::check::DuckspecState {
+        cap_spec_paths,
+        cap_doc_paths,
+    }
+}
+
+/// Recursively scan `caps/` for spec.md and doc.md, collecting capability paths.
+fn scan_caps_for_state(
+    dir: &Path,
+    caps_root: &Path,
+    spec_paths: &mut std::collections::HashSet<PathBuf>,
+    doc_paths: &mut std::collections::HashSet<PathBuf>,
+) {
+    let Ok(entries) = fs::read_dir(dir) else { return };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            scan_caps_for_state(&path, caps_root, spec_paths, doc_paths);
+        } else if let Some(filename) = path.file_name().and_then(|f| f.to_str()) {
+            if let Some(cap_path) = path.parent().and_then(|p| p.strip_prefix(caps_root).ok()) {
+                match filename {
+                    "spec.md" => { spec_paths.insert(cap_path.to_path_buf()); }
+                    "doc.md" => { doc_paths.insert(cap_path.to_path_buf()); }
+                    _ => {}
+                }
+            }
+        }
+    }
+}
+
+/// Load all classifiable markdown files in a change directory as `LoadedFile`s.
+fn load_change_files(duckspec_root: &Path, change_name: &str) -> Vec<duckpond::check::LoadedFile> {
+    let change_dir = duckspec_root.join("changes").join(change_name);
+    let mut files = Vec::new();
+    collect_md_files_recursive(&change_dir, duckspec_root, &mut files);
+    files
+}
+
+fn collect_md_files_recursive(
+    dir: &Path,
+    duckspec_root: &Path,
+    out: &mut Vec<duckpond::check::LoadedFile>,
+) {
+    let Ok(entries) = fs::read_dir(dir) else { return };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_md_files_recursive(&path, duckspec_root, out);
+        } else if path.extension().and_then(|e| e.to_str()) == Some("md") {
+            let Ok(relative) = path.strip_prefix(duckspec_root) else { continue };
+            let Some(kind) = duckpond::layout::classify(relative) else { continue };
+            let Ok(content) = fs::read_to_string(&path) else { continue };
+            out.push(duckpond::check::LoadedFile {
+                relative_path: relative.to_path_buf(),
+                kind,
+                content,
+            });
+        }
+    }
 }

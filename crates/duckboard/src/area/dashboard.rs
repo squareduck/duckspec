@@ -20,6 +20,7 @@ pub enum Message {
     ArchivedChangeClicked(String),
     ExplorationClicked(String),
     AddExploration,
+    ShowAudit,
 }
 
 // ── Update ───────────────────────────────────────────────────────────────────
@@ -64,6 +65,69 @@ pub fn view<'a>(
         .align_y(Center);
 
     let mut content = column![logo, Space::new().height(theme::SPACING_XL)].spacing(0.0);
+
+    // ── Audit summary ───────────────────────────────────────────────────────
+    let total_errors: usize = project.validations.values().map(|v| v.total_count()).sum();
+    if total_errors > 0 {
+        let change_count = project.validations.len();
+        let summary_text = format!(
+            "{} error{} across {} change{}",
+            total_errors,
+            if total_errors == 1 { "" } else { "s" },
+            change_count,
+            if change_count == 1 { "" } else { "s" },
+        );
+        let audit_card = container(
+            row![
+                column![
+                    text("Audit")
+                        .size(theme::FONT_MD)
+                        .color(theme::text_primary()),
+                    text(summary_text)
+                        .size(theme::FONT_SM)
+                        .color(theme::error()),
+                ]
+                .spacing(theme::SPACING_XS),
+                Space::new().width(Length::Fill),
+                button(
+                    text("View")
+                        .size(theme::FONT_MD)
+                        .color(theme::accent()),
+                )
+                .on_press(Message::ShowAudit)
+                .padding([theme::SPACING_XS, theme::SPACING_MD])
+                .style(theme::dashboard_action),
+            ]
+            .align_y(Center)
+            .width(Length::Fill),
+        )
+        .padding(theme::SPACING_MD)
+        .width(Length::Fill)
+        .style(theme::audit_card);
+
+        content = content.push(audit_card);
+        content = content.push(Space::new().height(theme::SPACING_XL));
+    } else if !project.active_changes.is_empty() {
+        let audit_card = container(
+            row![
+                text("Audit")
+                    .size(theme::FONT_MD)
+                    .color(theme::text_primary()),
+                Space::new().width(Length::Fill),
+                text("No errors")
+                    .size(theme::FONT_SM)
+                    .color(theme::success()),
+            ]
+            .align_y(Center)
+            .width(Length::Fill),
+        )
+        .padding(theme::SPACING_MD)
+        .width(Length::Fill)
+        .style(theme::audit_card);
+
+        content = content.push(audit_card);
+        content = content.push(Space::new().height(theme::SPACING_XL));
+    }
 
     // ── Explorations ────────────────────────────────────────────────────────
     let has_explorations = !explorations.is_empty();

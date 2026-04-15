@@ -41,6 +41,7 @@ pub fn view<'a, M: Clone + 'a>(
     nodes: &[TreeNode],
     expanded: &HashSet<String>,
     selected: Option<&str>,
+    error_ids: &HashSet<String>,
     on_toggle: impl Fn(String) -> M + 'a,
     on_select: impl Fn(String) -> M + 'a,
 ) -> Element<'a, M> {
@@ -51,6 +52,7 @@ pub fn view<'a, M: Clone + 'a>(
     for node in flat {
         let indent = (node.depth as f32) * theme::SPACING_LG;
         let is_selected = selected.is_some_and(|s| s == node.id);
+        let has_error = error_ids.contains(&node.id);
 
         let style = if is_selected {
             theme::list_item_active as fn(&iced::Theme, button::Status) -> button::Style
@@ -59,7 +61,7 @@ pub fn view<'a, M: Clone + 'a>(
         };
 
         let node_label = node.label.clone();
-        let label = if node.has_children {
+        let mut label = if node.has_children {
             let arrow = if node.is_expanded {
                 "\u{25be}"
             } else {
@@ -89,6 +91,13 @@ pub fn view<'a, M: Clone + 'a>(
             .spacing(theme::SPACING_XS)
             .align_y(iced::Center)
         };
+
+        if has_error {
+            label = label.push(Space::new().width(Length::Fill));
+            label = label.push(
+                text("\u{2022}").size(theme::FONT_MD).color(theme::error()),
+            );
+        }
 
         let btn_content = row![Space::new().width(indent), label].align_y(iced::Center);
 
