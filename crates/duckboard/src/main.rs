@@ -9,6 +9,7 @@ use iced::{Element, Event, Length, Subscription, Task};
 mod agent;
 mod area;
 mod chat_store;
+pub mod config;
 mod data;
 pub mod highlight;
 mod theme;
@@ -31,10 +32,12 @@ const KEY_CODEX: &str = "codex";
 struct State {
     active_area: Area,
     project: ProjectData,
+    config: config::Config,
     dashboard: area::dashboard::State,
     change: area::change::State,
     caps: area::caps::State,
     codex: area::codex::State,
+    settings: area::settings::State,
     file_finder: widget::file_finder::FileFinderState,
     highlighter: highlight::SyntaxHighlighter,
 }
@@ -59,13 +62,17 @@ impl State {
         data::TreeNode::collect_parent_ids(&project.cap_tree, &mut caps_expanded);
         let caps_state = area::caps::State { expanded_nodes: caps_expanded, ..Default::default() };
 
+        let config = config::load();
+        theme::set_fonts(&config);
         Self {
             active_area: Area::Dashboard,
             project,
+            config,
             dashboard: area::dashboard::State::default(),
             change,
             caps: caps_state,
             codex: area::codex::State::default(),
+            settings: area::settings::State::default(),
             file_finder: widget::file_finder::FileFinderState::default(),
             highlighter: highlight::SyntaxHighlighter::new(),
         }
@@ -91,7 +98,7 @@ impl State {
             }
             Area::Caps => Some((&self.caps.interaction, KEY_CAPS)),
             Area::Codex => Some((&self.codex.interaction, KEY_CODEX)),
-            Area::Dashboard => None,
+            Area::Dashboard | Area::Settings => None,
         }
     }
 
@@ -101,7 +108,7 @@ impl State {
             Area::Change => self.change.selected_change.clone(),
             Area::Caps => Some(KEY_CAPS.to_string()),
             Area::Codex => Some(KEY_CODEX.to_string()),
-            Area::Dashboard => None,
+            Area::Dashboard | Area::Settings => None,
         }
     }
 }
@@ -126,6 +133,8 @@ enum Message {
     PtyEvent(String, widget::terminal::PtyEvent),
     // Per-instance agent events (key identifies the interaction)
     AgentEvent(String, agent::AgentEvent),
+    // Settings
+    Settings(area::settings::Message),
     // System theme changed
     ThemeChanged(theme::ColorMode),
 }
@@ -136,6 +145,13 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
     match message {
         Message::AreaSelected(area) => {
             state.active_area = area;
+            if area == Area::Settings {
+                area::settings::update(
+                    &mut state.settings,
+                    &mut state.config,
+                    area::settings::Message::LoadFonts,
+                );
+            }
         }
         Message::Refresh => {
             state.project.reload();
@@ -184,7 +200,7 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                                     Area::Change => &mut state.change.tabs,
                                     Area::Caps => &mut state.caps.tabs,
                                     Area::Codex => &mut state.codex.tabs,
-                                    Area::Dashboard => {
+                                    Area::Dashboard | Area::Settings => {
                                         state.active_area = Area::Change;
                                         &mut state.change.tabs
                                     }
@@ -328,6 +344,10 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
         }
         Message::Codex(msg) => {
             area::codex::update(&mut state.codex, msg, &state.project, &state.highlighter);
+        }
+        Message::Settings(msg) => {
+            area::settings::update(&mut state.settings, &mut state.config, msg);
+            theme::set_fonts(&state.config);
         }
         // Per-instance PTY events
         Message::PtyEvent(key, evt) => {
@@ -776,6 +796,9 @@ fn view(state: &State) -> Element<'_, Message> {
         }
         Area::Codex => {
             area::codex::view(&state.codex, &state.project).map(Message::Codex)
+        }
+        Area::Settings => {
+            area::settings::view(&state.settings, &state.config).map(Message::Settings)
         }
     };
 

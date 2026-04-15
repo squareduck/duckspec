@@ -16,10 +16,10 @@ pub fn view<'a, M: Clone + 'a>(
     let header = button(
         row![
             text(title.to_uppercase())
-                .size(theme::FONT_SM)
+                .size(theme::font_sm())
                 .color(theme::text_secondary()),
             Space::new().width(Length::Fill),
-            text(arrow).size(theme::FONT_SM).color(theme::text_muted()),
+            text(arrow).size(theme::font_sm()).color(theme::text_muted()),
         ]
         .width(Length::Fill),
     )

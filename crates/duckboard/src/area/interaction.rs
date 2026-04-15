@@ -430,7 +430,7 @@ fn view_mode_tabs<'a, M: 'a + Clone>(
         };
 
         let w = wrap.clone();
-        let tab_btn = button(text(label).size(theme::FONT_MD))
+        let tab_btn = button(text(label).size(theme::font_md()))
             .on_press(w(Msg::SwitchMode(mode)))
             .padding([theme::SPACING_SM, theme::SPACING_MD])
             .style(tab_style);
@@ -467,11 +467,11 @@ fn view_placeholder<'a, M: 'a>(_wrap: impl Fn(Msg) -> M + 'a) -> Element<'a, M> 
     container(
         column![
             text("Interaction")
-                .size(theme::FONT_MD)
+                .size(theme::font_md())
                 .color(theme::text_secondary()),
             Space::new().height(theme::SPACING_MD),
             text("Terminal and chat will appear here.")
-                .size(theme::FONT_MD)
+                .size(theme::font_md())
                 .color(theme::text_muted()),
         ]
         .spacing(theme::SPACING_SM)

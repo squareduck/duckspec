@@ -211,6 +211,7 @@ pub fn update(
             ix.terminal_focused = ix.visible && ix.mode == InteractionMode::Terminal;
         }
         Message::SelectChangedFile(path) => {
+            state.audit_active = false;
             if let Some(root) = &project.project_root
                 && let Some(diff) = vcs::file_diff(root, &path) {
                     let id = format!("vcs:{}", path.display());
@@ -383,13 +384,13 @@ fn view_list<'a>(state: &'a State, project: &'a ProjectData) -> Element<'a, Mess
             .width(ICON_SIZE)
             .height(ICON_SIZE)
             .style(theme::svg_tint(theme::text_muted()));
-        let close_btn = button(text("\u{00d7}").size(theme::FONT_MD))
+        let close_btn = button(text("\u{00d7}").size(theme::font_md()))
             .on_press(Message::RemoveExploration(name.clone()))
             .padding(0.0)
             .style(theme::icon_button);
         let label = row![
             icon,
-            text(name).size(theme::FONT_MD).wrapping(Wrapping::None),
+            text(name).size(theme::font_md()).wrapping(Wrapping::None),
             Space::new().width(Length::Fill),
             close_btn,
         ]
@@ -424,7 +425,7 @@ fn view_list<'a>(state: &'a State, project: &'a ProjectData) -> Element<'a, Mess
             .width(ICON_SIZE)
             .height(ICON_SIZE)
             .style(theme::svg_tint(theme::text_muted()));
-        let mut label = row![icon, text(&ch.name).size(theme::FONT_MD).wrapping(Wrapping::None)]
+        let mut label = row![icon, text(&ch.name).size(theme::font_md()).wrapping(Wrapping::None)]
             .spacing(theme::SPACING_XS)
             .align_y(iced::Center);
         if let Some(v) = project.validations.get(&ch.name) {
@@ -433,7 +434,7 @@ fn view_list<'a>(state: &'a State, project: &'a ProjectData) -> Element<'a, Mess
                 label = label.push(Space::new().width(Length::Fill));
                 label = label.push(
                     text(count.to_string())
-                        .size(theme::FONT_SM)
+                        .size(theme::font_sm())
                         .color(theme::error()),
                 );
             }
@@ -452,10 +453,10 @@ fn view_list<'a>(state: &'a State, project: &'a ProjectData) -> Element<'a, Mess
         let header = button(
             row![
                 text("CHANGE")
-                    .size(theme::FONT_SM)
+                    .size(theme::font_sm())
                     .color(theme::text_secondary()),
                 Space::new().width(Length::Fill),
-                text(arrow).size(theme::FONT_SM).color(theme::text_muted()),
+                text(arrow).size(theme::font_sm()).color(theme::text_muted()),
             ]
             .width(Length::Fill),
         )
@@ -467,7 +468,7 @@ fn view_list<'a>(state: &'a State, project: &'a ProjectData) -> Element<'a, Mess
         let mut col = column![
             row![
                 container(header).width(Length::Fill),
-                button(text("+").size(theme::FONT_SM).color(theme::text_secondary()))
+                button(text("+").size(theme::font_sm()).color(theme::text_secondary()))
                     .on_press(Message::AddExploration)
                     .padding([theme::SPACING_SM, theme::SPACING_SM])
                     .style(theme::section_header),
@@ -495,7 +496,7 @@ fn view_list<'a>(state: &'a State, project: &'a ProjectData) -> Element<'a, Mess
         };
         let mut label = row![
             text("AUDIT")
-                .size(theme::FONT_SM)
+                .size(theme::font_sm())
                 .color(title_color),
         ]
         .width(Length::Fill);
@@ -503,7 +504,7 @@ fn view_list<'a>(state: &'a State, project: &'a ProjectData) -> Element<'a, Mess
             label = label.push(Space::new().width(Length::Fill));
             label = label.push(
                 text(total_errors.to_string())
-                    .size(theme::FONT_SM)
+                    .size(theme::font_sm())
                     .color(theme::error()),
             );
         }
@@ -523,7 +524,7 @@ fn view_list<'a>(state: &'a State, project: &'a ProjectData) -> Element<'a, Mess
         list_col = list_col.push(
             container(
                 text("Exploration mode — use the agent or terminal to work freely.")
-                    .size(theme::FONT_MD)
+                    .size(theme::font_md())
                     .color(theme::text_muted()),
             )
             .padding([theme::SPACING_SM, theme::SPACING_SM]),
@@ -545,7 +546,7 @@ fn view_list<'a>(state: &'a State, project: &'a ProjectData) -> Element<'a, Mess
         list_col = list_col.push(
             container(
                 text("Select a change")
-                    .size(theme::FONT_MD)
+                    .size(theme::font_md())
                     .color(theme::text_muted()),
             )
             .padding([theme::SPACING_SM, theme::SPACING_SM]),
@@ -581,7 +582,7 @@ fn view_overview_section<'a>(
     }
     if !change.has_proposal && !change.has_design {
         items = items.push(
-            container(text("No overview files").size(theme::FONT_MD).color(theme::text_muted()))
+            container(text("No overview files").size(theme::font_md()).color(theme::text_muted()))
                 .padding([2.0, theme::SPACING_SM]),
         );
     }
@@ -600,7 +601,7 @@ fn view_caps_section<'a>(
     error_ids: &HashSet<String>,
 ) -> Element<'a, Message> {
     let content = if change.cap_tree.is_empty() {
-        container(text("No capability changes").size(theme::FONT_MD).color(theme::text_muted()))
+        container(text("No capability changes").size(theme::font_md()).color(theme::text_muted()))
             .padding([2.0, theme::SPACING_SM])
             .into()
     } else {
@@ -631,7 +632,7 @@ fn view_steps_section<'a>(
 
     if change.steps.is_empty() {
         items = items.push(
-            container(text("No steps").size(theme::FONT_MD).color(theme::text_muted()))
+            container(text("No steps").size(theme::font_md()).color(theme::text_muted()))
                 .padding([2.0, theme::SPACING_SM]),
         );
     } else {
@@ -654,14 +655,14 @@ fn view_steps_section<'a>(
                 .style(theme::svg_tint(theme::text_muted()));
             let mut label = row![
                 icon,
-                text(format!("{:02}-{}", step.number, step.label)).size(theme::FONT_MD).wrapping(Wrapping::None),
+                text(format!("{:02}-{}", step.number, step.label)).size(theme::font_md()).wrapping(Wrapping::None),
             ]
             .spacing(theme::SPACING_XS)
             .align_y(iced::Center);
             if has_error {
                 label = label.push(Space::new().width(Length::Fill));
                 label = label.push(
-                    text("\u{2022}").size(theme::FONT_MD).color(theme::error()),
+                    text("\u{2022}").size(theme::font_md()).color(theme::error()),
                 );
             }
             items = items.push(
@@ -687,7 +688,7 @@ fn view_changed_files_section<'a>(state: &'a State) -> Element<'a, Message> {
 
     if state.changed_files.is_empty() {
         items = items.push(
-            container(text("No changes").size(theme::FONT_MD).color(theme::text_muted()))
+            container(text("No changes").size(theme::font_md()).color(theme::text_muted()))
                 .padding([2.0, theme::SPACING_SM]),
         );
     } else {
@@ -708,10 +709,10 @@ fn view_changed_files_section<'a>(state: &'a State) -> Element<'a, Message> {
 
             let label = row![
                 text(status_char)
-                    .size(theme::FONT_MD)
-                    .font(iced::Font::MONOSPACE)
+                    .size(theme::font_md())
+                    .font(theme::content_font())
                     .color(color),
-                text(cf.path.display().to_string()).size(theme::FONT_MD).wrapping(Wrapping::None),
+                text(cf.path.display().to_string()).size(theme::font_md()).wrapping(Wrapping::None),
             ]
             .spacing(theme::SPACING_SM);
 
@@ -739,7 +740,7 @@ fn view_audit<'a>(project: &'a ProjectData) -> Element<'a, Message> {
     // ── Header ─────────────────────────────────────────────────────────
     let summary = if total_errors == 0 {
         text("All checks passed")
-            .size(theme::FONT_MD)
+            .size(theme::font_md())
             .color(theme::success())
     } else {
         text(format!(
@@ -747,7 +748,7 @@ fn view_audit<'a>(project: &'a ProjectData) -> Element<'a, Message> {
             total_errors,
             if total_errors == 1 { "" } else { "s" }
         ))
-        .size(theme::FONT_MD)
+        .size(theme::font_md())
         .color(theme::error())
     };
 
@@ -761,7 +762,7 @@ fn view_audit<'a>(project: &'a ProjectData) -> Element<'a, Message> {
             Space::new().width(Length::Fill),
             button(
                 text("Refresh")
-                    .size(theme::FONT_MD)
+                    .size(theme::font_md())
                     .color(theme::accent()),
             )
             .on_press(Message::RefreshAudit)
@@ -814,7 +815,7 @@ fn view_audit_change<'a>(
             validation.total_count(),
             if validation.total_count() == 1 { "" } else { "s" }
         ))
-        .size(theme::FONT_SM)
+        .size(theme::font_sm())
         .color(theme::text_muted()),
     ]
     .spacing(theme::SPACING_SM)
@@ -828,7 +829,7 @@ fn view_audit_change<'a>(
         let change = change_name.to_string();
         let file_link = button(
             text(path.as_str())
-                .size(theme::FONT_MD)
+                .size(theme::font_md())
                 .color(theme::accent()),
         )
         .on_press(Message::SelectAuditError {
@@ -842,7 +843,7 @@ fn view_audit_change<'a>(
         for err in errors {
             error_list = error_list.push(
                 text(err.as_str())
-                    .size(theme::FONT_MD)
+                    .size(theme::font_md())
                     .color(theme::error()),
             );
         }
@@ -859,7 +860,7 @@ fn view_audit_change<'a>(
     // Cross-file change-level errors.
     if !validation.change_errors.is_empty() {
         let mut structural = column![
-            text("Structural").size(theme::FONT_MD).color(theme::text_secondary()),
+            text("Structural").size(theme::font_md()).color(theme::text_secondary()),
         ]
         .spacing(theme::SPACING_XS);
 
@@ -867,7 +868,7 @@ fn view_audit_change<'a>(
             structural = structural.push(
                 container(
                     text(err.as_str())
-                        .size(theme::FONT_MD)
+                        .size(theme::font_md())
                         .color(theme::error()),
                 )
                 .padding([0.0, theme::SPACING_LG]),
@@ -904,13 +905,13 @@ fn file_item<'a>(label: &str, id: &str, has_error: bool, state: &State) -> Eleme
         .width(ICON_SIZE)
         .height(ICON_SIZE)
         .style(theme::svg_tint(theme::text_muted()));
-    let mut content = row![icon, text(label.to_string()).size(theme::FONT_MD).wrapping(Wrapping::None)]
+    let mut content = row![icon, text(label.to_string()).size(theme::font_md()).wrapping(Wrapping::None)]
         .spacing(theme::SPACING_XS)
         .align_y(iced::Center);
     if has_error {
         content = content.push(Space::new().width(Length::Fill));
         content = content.push(
-            text("\u{2022}").size(theme::FONT_MD).color(theme::error()),
+            text("\u{2022}").size(theme::font_md()).color(theme::error()),
         );
     }
     button(content)
@@ -955,7 +956,7 @@ fn view_content<'a>(state: &'a State, project: &'a ProjectData) -> Element<'a, M
         for err in errors {
             error_list = error_list.push(
                 text(err.as_str())
-                    .size(theme::FONT_MD)
+                    .size(theme::font_md())
                     .color(theme::error()),
             );
         }
@@ -963,7 +964,7 @@ fn view_content<'a>(state: &'a State, project: &'a ProjectData) -> Element<'a, M
         let panel = container(
             column![
                 text("Errors")
-                    .size(theme::FONT_SM)
+                    .size(theme::font_sm())
                     .color(theme::text_secondary()),
                 error_list,
             ]

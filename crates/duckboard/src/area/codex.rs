@@ -129,7 +129,7 @@ fn view_list<'a>(state: &'a State, project: &'a ProjectData) -> Element<'a, Mess
     let mut items = column![].spacing(theme::SPACING_XS);
 
     if project.codex_entries.is_empty() {
-        items = items.push(text("No codex entries").size(theme::FONT_MD).color(theme::text_muted()));
+        items = items.push(text("No codex entries").size(theme::font_md()).color(theme::text_muted()));
     } else {
         for entry in &project.codex_entries {
             let is_active = state
@@ -146,7 +146,7 @@ fn view_list<'a>(state: &'a State, project: &'a ProjectData) -> Element<'a, Mess
                 .width(ICON_SIZE)
                 .height(ICON_SIZE)
                 .style(theme::svg_tint(theme::text_muted()));
-            let label = row![icon, text(&entry.label).size(theme::FONT_MD).wrapping(Wrapping::None)]
+            let label = row![icon, text(&entry.label).size(theme::font_md()).wrapping(Wrapping::None)]
                 .spacing(theme::SPACING_XS)
                 .align_y(iced::Center);
             items = items.push(

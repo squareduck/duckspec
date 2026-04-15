@@ -136,7 +136,7 @@ fn view_list<'a>(state: &'a State, project: &'a ProjectData) -> Element<'a, Mess
     let tree = if project.cap_tree.is_empty() {
         column![
             text("No capabilities found")
-                .size(theme::FONT_MD)
+                .size(theme::font_md())
                 .color(theme::text_muted())
         ]
         .into()

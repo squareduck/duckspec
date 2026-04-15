@@ -271,7 +271,7 @@ pub fn view_bar<'a, M: Clone + 'a>(
         };
 
         let mut tab_row = row![
-            text(&tab.title).size(theme::FONT_MD),
+            text(&tab.title).size(theme::font_md()),
         ]
         .spacing(theme::SPACING_XS)
         .align_y(Center);
@@ -279,7 +279,7 @@ pub fn view_bar<'a, M: Clone + 'a>(
         // File tabs get a close button; the preview tab doesn't.
         if !is_preview {
             let close_btn =
-                button(text("\u{00d7}").size(theme::FONT_MD).color(theme::text_muted()))
+                button(text("\u{00d7}").size(theme::font_md()).color(theme::text_muted()))
                     .on_press(on_close(*logical_idx))
                     .padding(0.0)
                     .style(theme::icon_button);
@@ -338,11 +338,11 @@ pub fn view_content(state: &TabState) -> Element<'_, TabContentMsg> {
                     container(
                         row![
                             text(status_char)
-                                .size(theme::FONT_MD)
-                                .font(iced::Font::MONOSPACE)
+                                .size(theme::font_md())
+                                .font(theme::content_font())
                                 .color(color),
                             text(path.display().to_string())
-                                .size(theme::FONT_MD)
+                                .size(theme::font_md())
                                 .color(theme::text_secondary()),
                         ]
                         .spacing(theme::SPACING_SM)
@@ -362,7 +362,7 @@ pub fn view_content(state: &TabState) -> Element<'_, TabContentMsg> {
                         row![
                             icon,
                             text(&tab.id)
-                                .size(theme::FONT_MD)
+                                .size(theme::font_md())
                                 .color(theme::text_secondary()),
                         ]
                         .spacing(theme::SPACING_XS)
@@ -391,7 +391,7 @@ pub fn view_content(state: &TabState) -> Element<'_, TabContentMsg> {
         }
         None => container(
             text("Select an item to view its contents")
-                .size(theme::FONT_MD)
+                .size(theme::font_md())
                 .color(theme::text_muted()),
         )
         .width(Length::Fill)

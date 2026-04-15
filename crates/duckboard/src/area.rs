@@ -3,6 +3,7 @@ pub mod change;
 pub mod codex;
 pub mod dashboard;
 pub mod interaction;
+pub mod settings;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Area {
@@ -10,10 +11,11 @@ pub enum Area {
     Change,
     Caps,
     Codex,
+    Settings,
 }
 
 impl Area {
-    pub const ALL: [Area; 4] = [
+    pub const NAV: [Area; 4] = [
         Area::Dashboard,
         Area::Change,
         Area::Caps,

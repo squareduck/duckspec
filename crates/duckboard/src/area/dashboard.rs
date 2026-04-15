@@ -43,8 +43,8 @@ pub fn view<'a>(
     project: &'a ProjectData,
     explorations: &'a [String],
 ) -> Element<'a, Message> {
-    let sep = || text(" \u{00b7} ").size(theme::FONT_SM).color(theme::text_muted());
-    let muted = |s| text(s).size(theme::FONT_SM).color(theme::text_muted());
+    let sep = || text(" \u{00b7} ").size(theme::font_sm()).color(theme::text_muted());
+    let muted = |s| text(s).size(theme::font_sm()).color(theme::text_muted());
 
     let logo = column![
         row![
@@ -55,9 +55,9 @@ pub fn view<'a>(
             muted("explore"), sep(),
             muted("propose"), sep(),
             muted("design"), sep(),
-            text("doc").size(theme::FONT_SM).color(theme::text_primary()),
-            text(" ").size(theme::FONT_SM),
-            text("spec").size(theme::FONT_SM).color(theme::accent()),
+            text("doc").size(theme::font_sm()).color(theme::text_primary()),
+            text(" ").size(theme::font_sm()),
+            text("spec").size(theme::font_sm()).color(theme::accent()),
             sep(),
             muted("step"), sep(),
             muted("apply"), sep(),
@@ -83,17 +83,17 @@ pub fn view<'a>(
             row![
                 column![
                     text("Audit")
-                        .size(theme::FONT_MD)
+                        .size(theme::font_md())
                         .color(theme::text_primary()),
                     text(summary_text)
-                        .size(theme::FONT_SM)
+                        .size(theme::font_sm())
                         .color(theme::error()),
                 ]
                 .spacing(theme::SPACING_XS),
                 Space::new().width(Length::Fill),
                 button(
                     text("View")
-                        .size(theme::FONT_MD)
+                        .size(theme::font_md())
                         .color(theme::accent()),
                 )
                 .on_press(Message::ShowAudit)
@@ -113,11 +113,11 @@ pub fn view<'a>(
         let audit_card = container(
             row![
                 text("Audit")
-                    .size(theme::FONT_MD)
+                    .size(theme::font_md())
                     .color(theme::text_primary()),
                 Space::new().width(Length::Fill),
                 text("No errors")
-                    .size(theme::FONT_SM)
+                    .size(theme::font_sm())
                     .color(theme::success()),
             ]
             .align_y(Center)
@@ -136,7 +136,7 @@ pub fn view<'a>(
     if has_explorations {
         content = content.push(
             text("Explorations")
-                .size(theme::FONT_SM)
+                .size(theme::font_sm())
                 .color(theme::text_muted()),
         );
         content = content.push(Space::new().height(theme::SPACING_SM));
@@ -153,9 +153,9 @@ pub fn view<'a>(
     content = content.push(
         button(
             row![
-                text("+").size(theme::FONT_MD).color(theme::accent()),
+                text("+").size(theme::font_md()).color(theme::accent()),
                 text("New Exploration")
-                    .size(theme::FONT_MD)
+                    .size(theme::font_md())
                     .color(theme::accent()),
             ]
             .spacing(theme::SPACING_XS)
@@ -172,7 +172,7 @@ pub fn view<'a>(
     if !project.active_changes.is_empty() {
         content = content.push(
             text("Active Changes")
-                .size(theme::FONT_SM)
+                .size(theme::font_sm())
                 .color(theme::text_muted()),
         );
         content = content.push(Space::new().height(theme::SPACING_SM));
@@ -199,7 +199,7 @@ pub fn view<'a>(
     if !project.archived_changes.is_empty() {
         content = content.push(
             text("Archived")
-                .size(theme::FONT_SM)
+                .size(theme::font_sm())
                 .color(theme::text_muted()),
         );
         content = content.push(Space::new().height(theme::SPACING_SM));
@@ -223,7 +223,7 @@ pub fn view<'a>(
         content = content.push(
             container(
                 text("No changes yet. Start an exploration or create a change in duckspec.")
-                    .size(theme::FONT_MD)
+                    .size(theme::font_md())
                     .color(theme::text_muted()),
             )
             .padding([theme::SPACING_LG, 0.0]),
@@ -260,7 +260,7 @@ fn change_row<'a>(
     let mut label = row![
         icon,
         text(name)
-            .size(theme::FONT_MD)
+            .size(theme::font_md())
             .color(theme::text_primary())
             .wrapping(Wrapping::None),
     ]
@@ -272,7 +272,7 @@ fn change_row<'a>(
         label = label.push(Space::new().width(Length::Fill));
         label = label.push(
             text(detail_owned)
-                .size(theme::FONT_SM)
+                .size(theme::font_sm())
                 .color(theme::text_muted()),
         );
     }
@@ -294,7 +294,7 @@ fn exploration_row(name: &str) -> Element<'_, Message> {
     let label = row![
         icon,
         text(name)
-            .size(theme::FONT_MD)
+            .size(theme::font_md())
             .color(theme::text_primary())
             .wrapping(Wrapping::None),
     ]

@@ -1,9 +1,8 @@
-//! Per-change chat session model and XDG-compliant persistence.
+//! Per-change chat session model and persistence.
 //!
-//! Sessions are stored per-project under the XDG data directory, using a hash
-//! of the project root path to isolate different projects.
+//! Sessions are stored per-project under `~/.config/duckboard/data/`, using a
+//! hash of the project root path to isolate different projects.
 
-use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -61,21 +60,8 @@ impl ChatSession {
 
 // ── Persistence ─────────────────────────────────────────────────────────────
 
-/// Derive a short hex hash from a project root path for per-project isolation.
-fn project_hash(project_root: &Path) -> String {
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    project_root.hash(&mut hasher);
-    format!("{:016x}", hasher.finish())
-}
-
-/// XDG data directory for duckboard, scoped to a project when available.
 fn data_dir(project_root: Option<&Path>) -> Option<PathBuf> {
-    let dirs = directories::ProjectDirs::from("com", "duckspec", "duckboard")?;
-    let base = dirs.data_dir().to_path_buf();
-    match project_root {
-        Some(root) => Some(base.join("projects").join(project_hash(root))),
-        None => Some(base),
-    }
+    Some(crate::config::data_dir(project_root))
 }
 
 fn chat_dir(project_root: Option<&Path>) -> Option<PathBuf> {

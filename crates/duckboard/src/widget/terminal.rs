@@ -24,7 +24,7 @@ use crate::theme;
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
-const FONT_SIZE: f32 = theme::FONT_MD;
+fn font_size() -> f32 { theme::content_size() }
 const CELL_WIDTH: f32 = 8.4;
 const CELL_HEIGHT: f32 = 18.0;
 const PAD_X: f32 = 6.0;
@@ -591,22 +591,22 @@ impl<'a> canvas::Program<()> for TerminalCanvas<'a> {
                                 } else {
                                     iced::font::Style::Normal
                                 },
-                                ..iced::Font::MONOSPACE
+                                ..theme::content_font()
                             }
                         } else if cell.italic {
                             iced::Font {
                                 style: iced::font::Style::Italic,
-                                ..iced::Font::MONOSPACE
+                                ..theme::content_font()
                             }
                         } else {
-                            iced::Font::MONOSPACE
+                            theme::content_font()
                         };
 
                         frame.fill_text(canvas::Text {
                             content: cell.grapheme.to_string(),
                             position: IcedPoint::new(x, y),
                             color: cell.fg,
-                            size: iced::Pixels(FONT_SIZE),
+                            size: iced::Pixels(font_size()),
                             font,
                             ..canvas::Text::default()
                         });

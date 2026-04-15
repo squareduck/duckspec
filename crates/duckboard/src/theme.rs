@@ -170,11 +170,83 @@ pub fn pink() -> Color { pick(macchiato::PINK, latte::PINK) }
 #[allow(dead_code)]
 pub fn lavender() -> Color { pick(macchiato::LAVENDER, latte::LAVENDER) }
 
-// ── Font sizes ─────────────────────────────────────────────────────────────
+// ── Font state ────────────────────────────────────────────────────────────
 
-pub const FONT_XS: f32 = 11.0;
-pub const FONT_SM: f32 = 11.0;
-pub const FONT_MD: f32 = 13.0;
+use std::sync::{OnceLock, RwLock};
+
+struct FontState {
+    ui_font: iced::Font,
+    ui_size: f32,
+    content_font: iced::Font,
+    content_size: f32,
+}
+
+impl Default for FontState {
+    fn default() -> Self {
+        Self {
+            ui_font: iced::Font::DEFAULT,
+            ui_size: 13.0,
+            content_font: iced::Font::MONOSPACE,
+            content_size: 13.0,
+        }
+    }
+}
+
+static FONTS: OnceLock<RwLock<FontState>> = OnceLock::new();
+
+fn fonts() -> &'static RwLock<FontState> {
+    FONTS.get_or_init(|| RwLock::new(FontState::default()))
+}
+
+pub fn set_fonts(config: &crate::config::Config) {
+    let state = FontState {
+        ui_font: crate::config::ui_font(config),
+        ui_size: config.ui.font_size,
+        content_font: crate::config::content_font(config),
+        content_size: config.content.font_size,
+    };
+    *fonts().write().unwrap() = state;
+}
+
+pub fn ui_font() -> iced::Font {
+    fonts().read().unwrap().ui_font
+}
+
+pub fn content_font() -> iced::Font {
+    fonts().read().unwrap().content_font
+}
+
+pub fn ui_size() -> f32 {
+    fonts().read().unwrap().ui_size
+}
+
+pub fn content_size() -> f32 {
+    fonts().read().unwrap().content_size
+}
+
+// ── Font size helpers ─────────────────────────────────────────────────────
+// Three tiers: small (config − 2), default (config), big (config + 2).
+
+pub fn font_sm() -> f32 {
+    (ui_size() - 2.0).max(6.0)
+}
+
+pub fn font_md() -> f32 {
+    ui_size()
+}
+
+pub fn font_lg() -> f32 {
+    ui_size() + 2.0
+}
+
+pub fn content_sm() -> f32 {
+    (content_size() - 2.0).max(6.0)
+}
+
+pub fn content_lg() -> f32 {
+    content_size() + 2.0
+}
+
 
 // ── Spacing ────────────────────────────────────────────────────────────────
 

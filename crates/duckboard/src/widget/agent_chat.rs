@@ -263,7 +263,7 @@ pub fn view<'a>(
     // Input area.
     let input = text_editor(input_value)
         .on_action(Msg::EditorAction)
-        .size(theme::FONT_MD)
+        .size(theme::font_md())
         .height(Length::Shrink)
         .id(INPUT_ID);
 
@@ -305,7 +305,7 @@ fn view_block<'a>(
 
     // ── Tool blocks ─────────────────────────────────────────────────────
     if is_tool {
-        let label = text(&block.label).size(theme::FONT_SM).color(header_color);
+        let label = text(&block.label).size(theme::font_sm()).color(header_color);
 
         if !has_content {
             let header_container = container(label)
@@ -317,7 +317,7 @@ fn view_block<'a>(
         }
 
         let arrow = text(if collapsed { "▸" } else { "▾" })
-            .size(theme::FONT_SM)
+            .size(theme::font_sm())
             .color(header_color);
         let header_row = row![arrow, label]
             .spacing(theme::SPACING_XS)
@@ -354,9 +354,9 @@ fn view_block<'a>(
     // ── User / Assistant / System: message sections ─────────────────────
 
     let arrow = text(if collapsed { "▸" } else { "▾" })
-        .size(theme::FONT_SM)
+        .size(theme::font_sm())
         .color(header_color);
-    let label = text(&block.label).size(theme::FONT_SM).color(header_color);
+    let label = text(&block.label).size(theme::font_sm()).color(header_color);
 
     let header_row = row![arrow, label]
         .spacing(theme::SPACING_XS)
@@ -426,7 +426,7 @@ fn view_status_bar<'a>(status: StatusInfo) -> Element<'a, Msg> {
     };
 
     let mut left = row![
-        text(status_text).size(theme::FONT_XS).color(status_color),
+        text(status_text).size(theme::font_sm()).color(status_color),
     ]
     .spacing(theme::SPACING_SM)
     .align_y(iced::Alignment::Center);
@@ -437,7 +437,7 @@ fn view_status_bar<'a>(status: StatusInfo) -> Element<'a, Msg> {
             _ => "esc to cancel",
         };
         left = left.push(
-            text(hint).size(theme::FONT_XS).color(theme::text_muted()),
+            text(hint).size(theme::font_sm()).color(theme::text_muted()),
         );
     }
 
@@ -455,14 +455,14 @@ fn view_status_bar<'a>(status: StatusInfo) -> Element<'a, Msg> {
         theme::text_muted()
     };
     let right = row![
-        text(status.model).size(theme::FONT_XS).color(theme::text_muted()),
+        text(status.model).size(theme::font_sm()).color(theme::text_muted()),
         text(format!(
             "{} / {} ({}%)",
             format_number(status.context_tokens),
             format_number(status.context_max),
             ctx_pct,
         ))
-        .size(theme::FONT_XS)
+        .size(theme::font_sm())
         .color(ctx_color),
     ]
     .spacing(theme::SPACING_SM)
@@ -505,11 +505,11 @@ fn view_completion<'a>(
         };
         let label = row![
             text(format!("/{}", cmd.name))
-                .size(theme::FONT_MD)
+                .size(theme::font_md())
                 .color(if is_selected { theme::text_primary() } else { theme::accent() }),
             Space::new().width(theme::SPACING_SM),
             text(&cmd.description)
-                .size(theme::FONT_MD)
+                .size(theme::font_md())
                 .color(if is_selected { theme::text_secondary() } else { theme::text_muted() }),
         ]
         .align_y(iced::Alignment::Center);

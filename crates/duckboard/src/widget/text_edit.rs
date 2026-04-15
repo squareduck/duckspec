@@ -12,7 +12,7 @@ use iced::advanced::{Clipboard, Layout, Shell};
 use iced::keyboard::key::Named;
 use iced::mouse;
 use iced::{
-    alignment, keyboard, Border, Color, Element, Event, Font, Length,
+    alignment, keyboard, Border, Color, Element, Event, Length,
     Pixels, Point, Rectangle, Size, Theme,
 };
 
@@ -21,7 +21,7 @@ use crate::theme;
 
 // ── Layout constants ───────────────────────────────────────────────────────
 
-const FONT_SIZE: f32 = theme::FONT_MD;
+fn font_size() -> f32 { theme::content_size() }
 const LINE_HEIGHT: f32 = 20.0;
 const GUTTER_PAD: f32 = 8.0;
 const CONTENT_PAD: f32 = 8.0;
@@ -1321,9 +1321,9 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for TextEdit<'a, M> {
                             iced::advanced::Text {
                                 content: row_text,
                                 bounds: Size::new(content_w, LINE_HEIGHT),
-                                size: Pixels(FONT_SIZE),
+                                size: Pixels(font_size()),
                                 line_height: text::LineHeight::Absolute(Pixels(LINE_HEIGHT)),
-                                font: Font::MONOSPACE,
+                                font: theme::content_font(),
                                 align_x: alignment::Horizontal::Left.into(),
                                 align_y: alignment::Vertical::Top,
                                 shaping: text::Shaping::Basic,
@@ -1358,9 +1358,9 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for TextEdit<'a, M> {
                                             iced::advanced::Text {
                                                 content: slice,
                                                 bounds: Size::new(sw + cell_w, LINE_HEIGHT),
-                                                size: Pixels(FONT_SIZE),
+                                                size: Pixels(font_size()),
                                                 line_height: text::LineHeight::Absolute(Pixels(LINE_HEIGHT)),
-                                                font: Font::MONOSPACE,
+                                                font: theme::content_font(),
                                                 align_x: alignment::Horizontal::Left.into(),
                                                 align_y: alignment::Vertical::Top,
                                                 shaping: text::Shaping::Basic,
@@ -1379,9 +1379,9 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for TextEdit<'a, M> {
                                 iced::advanced::Text {
                                     content: row_text,
                                     bounds: Size::new(content_w, LINE_HEIGHT),
-                                    size: Pixels(FONT_SIZE),
+                                    size: Pixels(font_size()),
                                     line_height: text::LineHeight::Absolute(Pixels(LINE_HEIGHT)),
-                                    font: Font::MONOSPACE,
+                                    font: theme::content_font(),
                                     align_x: alignment::Horizontal::Left.into(),
                                     align_y: alignment::Vertical::Top,
                                     shaping: text::Shaping::Basic,
@@ -1468,9 +1468,9 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for TextEdit<'a, M> {
                             iced::advanced::Text {
                                 content: line_num,
                                 bounds: Size::new(gutter_w, LINE_HEIGHT),
-                                size: Pixels(FONT_SIZE),
+                                size: Pixels(font_size()),
                                 line_height: text::LineHeight::Absolute(Pixels(LINE_HEIGHT)),
-                                font: Font::MONOSPACE,
+                                font: theme::content_font(),
                                 align_x: alignment::Horizontal::Left.into(),
                                 align_y: alignment::Vertical::Top,
                                 shaping: text::Shaping::Basic,
@@ -1501,9 +1501,9 @@ fn measure_cell_width(_renderer: &iced::Renderer) -> f32 {
     let para = Paragraph::with_text(iced::advanced::Text {
         content: "M",
         bounds: Size::new(f32::INFINITY, LINE_HEIGHT),
-        size: Pixels(FONT_SIZE),
+        size: Pixels(font_size()),
         line_height: text::LineHeight::Absolute(Pixels(LINE_HEIGHT)),
-        font: Font::MONOSPACE,
+        font: theme::content_font(),
         align_x: alignment::Horizontal::Left.into(),
         align_y: alignment::Vertical::Top,
         shaping: text::Shaping::Basic,

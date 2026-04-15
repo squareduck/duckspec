@@ -183,7 +183,7 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for InteractionHandle<'a, M>
                 bounds: Size::new(arrow_size, arrow_size),
                 size: iced::Pixels(arrow_size),
                 line_height: iced::advanced::text::LineHeight::Absolute(iced::Pixels(arrow_size)),
-                font: iced::Font::default(),
+                font: theme::ui_font(),
                 align_x: alignment::Horizontal::Left.into(),
                 align_y: alignment::Vertical::Top,
                 shaping: iced::advanced::text::Shaping::Basic,

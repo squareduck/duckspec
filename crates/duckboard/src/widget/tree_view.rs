@@ -72,9 +72,9 @@ pub fn view<'a, M: Clone + 'a>(
                 .height(ICON_SIZE)
                 .style(theme::svg_tint(theme::text_muted()));
             row![
-                text(arrow).size(theme::FONT_SM).color(theme::text_muted()),
+                text(arrow).size(theme::font_sm()).color(theme::text_muted()),
                 icon,
-                text(node_label).size(theme::FONT_MD).wrapping(Wrapping::None),
+                text(node_label).size(theme::font_md()).wrapping(Wrapping::None),
             ]
             .spacing(theme::SPACING_XS)
             .align_y(iced::Center)
@@ -84,9 +84,9 @@ pub fn view<'a, M: Clone + 'a>(
                 .height(ICON_SIZE)
                 .style(theme::svg_tint(theme::text_muted()));
             row![
-                Space::new().width(theme::FONT_SM),
+                Space::new().width(theme::font_sm()),
                 icon,
-                text(node_label).size(theme::FONT_MD).wrapping(Wrapping::None),
+                text(node_label).size(theme::font_md()).wrapping(Wrapping::None),
             ]
             .spacing(theme::SPACING_XS)
             .align_y(iced::Center)
@@ -95,7 +95,7 @@ pub fn view<'a, M: Clone + 'a>(
         if has_error {
             label = label.push(Space::new().width(Length::Fill));
             label = label.push(
-                text("\u{2022}").size(theme::FONT_MD).color(theme::error()),
+                text("\u{2022}").size(theme::font_md()).color(theme::error()),
             );
         }
 
