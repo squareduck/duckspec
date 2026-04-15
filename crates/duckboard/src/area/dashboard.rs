@@ -29,9 +29,8 @@ pub fn update(_state: &mut State, _message: Message) {
     // Navigation messages are handled by the parent (main.rs).
 }
 
-// ── Logo ────────────────────────────────────────────────────────────────────
+// ── Icons ───────────────────────────────────────────────────────────────────
 
-const LOGO_SVG: &[u8] = include_bytes!("../../assets/logo.svg");
 const ICON_BRANCH: &[u8] = include_bytes!("../../assets/icon_branch.svg");
 const ICON_EXPLORE: &[u8] = include_bytes!("../../assets/icon_explore.svg");
 
@@ -44,25 +43,28 @@ pub fn view<'a>(
     project: &'a ProjectData,
     explorations: &'a [String],
 ) -> Element<'a, Message> {
-    let duck_icon = svg(svg::Handle::from_memory(LOGO_SVG))
-        .width(40.0)
-        .height(40.0)
-        .style(theme::svg_tint(theme::text_primary()));
+    let sep = || text(" \u{00b7} ").size(theme::FONT_SM).color(theme::text_muted());
+    let muted = |s| text(s).size(theme::FONT_SM).color(theme::text_muted());
 
-    let wordmark = column![
+    let logo = column![
         row![
             text("duck").size(22.0).color(theme::text_primary()),
             text("spec").size(22.0).color(theme::accent()),
         ],
-        text("specify \u{00b7} build \u{00b7} ship")
-            .size(theme::FONT_SM)
-            .color(theme::text_muted()),
+        row![
+            muted("explore"), sep(),
+            muted("propose"), sep(),
+            muted("design"), sep(),
+            text("doc").size(theme::FONT_SM).color(theme::text_primary()),
+            text(" ").size(theme::FONT_SM),
+            text("spec").size(theme::FONT_SM).color(theme::accent()),
+            sep(),
+            muted("step"), sep(),
+            muted("apply"), sep(),
+            muted("archive"),
+        ],
     ]
     .spacing(1.0);
-
-    let logo = row![duck_icon, wordmark]
-        .spacing(theme::SPACING_SM)
-        .align_y(Center);
 
     let mut content = column![logo, Space::new().height(theme::SPACING_XL)].spacing(0.0);
 
