@@ -168,7 +168,7 @@ pub fn update(
                     interaction::spawn_terminal(ix);
                 }
                 if ix.mode == InteractionMode::AgentChat && ix.chat_session.is_none() {
-                    interaction::spawn_agent_session(ix, &name, project.project_root.as_deref());
+                    interaction::spawn_agent_session(ix, &name, project.project_root.as_deref(), highlighter);
                 }
             }
         }
@@ -194,7 +194,7 @@ pub fn update(
                 .unwrap_or_else(|| "default".to_string());
             let Some(ix) = state.active_interaction_mut() else { return };
             let is_mode_switch = matches!(msg, interaction::Msg::SwitchMode(_));
-            let just_opened = interaction::update(ix, msg);
+            let just_opened = interaction::update(ix, msg, highlighter);
 
             if just_opened && ix.mode == InteractionMode::Terminal {
                 interaction::spawn_terminal(ix);
@@ -205,7 +205,7 @@ pub fn update(
 
             let wants_agent = (just_opened || is_mode_switch) && ix.mode == InteractionMode::AgentChat;
             if wants_agent && ix.chat_session.is_none() {
-                interaction::spawn_agent_session(ix, &session_name, project.project_root.as_deref());
+                interaction::spawn_agent_session(ix, &session_name, project.project_root.as_deref(), highlighter);
             }
 
             ix.terminal_focused = ix.visible && ix.mode == InteractionMode::Terminal;
@@ -250,7 +250,7 @@ pub fn update(
             let ix = state.interactions.entry(name.clone()).or_default();
             ix.visible = true;
             if ix.mode == InteractionMode::AgentChat && ix.chat_session.is_none() {
-                interaction::spawn_agent_session(ix, &name, project.project_root.as_deref());
+                interaction::spawn_agent_session(ix, &name, project.project_root.as_deref(), highlighter);
             }
             if ix.mode == InteractionMode::Terminal {
                 interaction::spawn_terminal(ix);

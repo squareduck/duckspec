@@ -27,6 +27,8 @@ use crate::theme;
 const FONT_SIZE: f32 = theme::FONT_MD;
 const CELL_WIDTH: f32 = 8.4;
 const CELL_HEIGHT: f32 = 18.0;
+const PAD_X: f32 = 6.0;
+const PAD_Y: f32 = 4.0;
 const DEFAULT_COLS: usize = 80;
 const DEFAULT_ROWS: usize = 24;
 const MAX_SCROLLBACK: usize = 10_000;
@@ -544,9 +546,11 @@ impl<'a> canvas::Program<()> for TerminalCanvas<'a> {
     ) -> Vec<canvas::Geometry<iced::Renderer>> {
         let buffer = &self.state.buffer;
 
-        // Request resize if widget bounds changed.
-        let desired_cols = (bounds.width / CELL_WIDTH).floor().max(1.0) as usize;
-        let desired_rows = (bounds.height / CELL_HEIGHT).floor().max(1.0) as usize;
+        // Request resize if widget bounds changed (account for padding).
+        let inner_w = (bounds.width - PAD_X * 2.0).max(CELL_WIDTH);
+        let inner_h = (bounds.height - PAD_Y * 2.0).max(CELL_HEIGHT);
+        let desired_cols = (inner_w / CELL_WIDTH).floor().max(1.0) as usize;
+        let desired_rows = (inner_h / CELL_HEIGHT).floor().max(1.0) as usize;
         self.state.request_resize(desired_cols, desired_rows);
 
         // Invalidate cache when terminal content changes.
@@ -565,8 +569,8 @@ impl<'a> canvas::Program<()> for TerminalCanvas<'a> {
             for row in 0..rows {
                 for col in 0..cols {
                     let cell = buffer.cell(row, col);
-                    let x = col as f32 * CELL_WIDTH;
-                    let y = row as f32 * CELL_HEIGHT;
+                    let x = PAD_X + col as f32 * CELL_WIDTH;
+                    let y = PAD_Y + row as f32 * CELL_HEIGHT;
 
                     // Draw cell background if it differs from the terminal default.
                     if cell.bg != buffer.default_bg {
@@ -614,8 +618,8 @@ impl<'a> canvas::Program<()> for TerminalCanvas<'a> {
             if let Some(ref cursor) = buffer.cursor
                 && cursor.visible
             {
-                let cx = cursor.x as f32 * CELL_WIDTH;
-                let cy = cursor.y as f32 * CELL_HEIGHT;
+                let cx = PAD_X + cursor.x as f32 * CELL_WIDTH;
+                let cy = PAD_Y + cursor.y as f32 * CELL_HEIGHT;
                 frame.fill_rectangle(
                     IcedPoint::new(cx, cy),
                     Size::new(CELL_WIDTH, CELL_HEIGHT),
@@ -735,7 +739,8 @@ fn pty_worker() -> impl iced::futures::Stream<Item = PtyEvent> {
             };
 
             // Spawn default shell.
-            let cmd = portable_pty::CommandBuilder::new_default_prog();
+            let mut cmd = portable_pty::CommandBuilder::new_default_prog();
+            cmd.env("PROMPT_EOL_MARK", "");
             let _child = match pair.slave.spawn_command(cmd) {
                 Ok(child) => child,
                 Err(e) => {

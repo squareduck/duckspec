@@ -5,6 +5,7 @@ use iced::Element;
 
 use crate::agent::{AgentHandle, SlashCommand};
 use crate::chat_store::ChatSession;
+use crate::highlight::SyntaxHighlighter;
 use crate::theme;
 use crate::widget::{agent_chat, interaction_toggle, text_edit::{Block, EditorState}};
 
@@ -80,7 +81,7 @@ pub enum Msg {
 // ── Update helpers ──────────────────────────────────────────────────────────
 
 /// Handle an interaction message. Returns `true` if the panel was just toggled open.
-pub fn update(state: &mut InteractionState, msg: Msg) -> bool {
+pub fn update(state: &mut InteractionState, msg: Msg, highlighter: &SyntaxHighlighter) -> bool {
     let mut just_opened = false;
     match msg {
         Msg::Handle(hmsg) => match hmsg {
@@ -96,7 +97,7 @@ pub fn update(state: &mut InteractionState, msg: Msg) -> bool {
             state.mode = mode;
         }
         Msg::AgentChat(chat_msg) => {
-            handle_agent_chat(state, chat_msg);
+            handle_agent_chat(state, chat_msg, highlighter);
         }
         Msg::TerminalScroll => {
             if let Some(ref mut ts) = state.terminal {
@@ -107,7 +108,7 @@ pub fn update(state: &mut InteractionState, msg: Msg) -> bool {
     just_opened
 }
 
-fn handle_agent_chat(state: &mut InteractionState, msg: agent_chat::Msg) {
+fn handle_agent_chat(state: &mut InteractionState, msg: agent_chat::Msg, highlighter: &SyntaxHighlighter) {
     match msg {
         agent_chat::Msg::EditorAction(action) => {
             if state.chat_completion.visible {
@@ -176,7 +177,7 @@ fn handle_agent_chat(state: &mut InteractionState, msg: agent_chat::Msg) {
                     handle.send_prompt(text, None);
                     state.chat_input = text_editor::Content::new();
                     state.chat_completion.visible = false;
-                    rebuild_chat_editor(state);
+                    rebuild_chat_editor(state, highlighter);
                 }
             }
         }
@@ -195,7 +196,7 @@ fn handle_agent_chat(state: &mut InteractionState, msg: agent_chat::Msg) {
 /// Preserves existing editor state (cursor, anchor, selection) for blocks
 /// whose content hasn't changed, so that in-progress selections aren't
 /// wiped during streaming rebuilds.
-pub fn rebuild_chat_editor(state: &mut InteractionState) {
+pub fn rebuild_chat_editor(state: &mut InteractionState, highlighter: &SyntaxHighlighter) {
     let session = match &state.chat_session {
         Some(s) => s,
         None => {
@@ -233,7 +234,10 @@ pub fn rebuild_chat_editor(state: &mut InteractionState) {
             new_editors.push(existing);
         } else {
             let content = block.lines.join("\n");
-            new_editors.push(EditorState::new(&content));
+            let mut editor = EditorState::new(&content);
+            let syntax = highlighter.find_syntax("md");
+            editor.highlight_spans = Some(highlighter.highlight_lines(&editor.lines, syntax));
+            new_editors.push(editor);
         }
     }
 
@@ -336,12 +340,13 @@ pub fn spawn_agent_session(
     state: &mut InteractionState,
     session_name: &str,
     project_root: Option<&std::path::Path>,
+    highlighter: &SyntaxHighlighter,
 ) {
     if state.chat_session.is_none() {
         let session = crate::chat_store::load_session(session_name, project_root)
             .unwrap_or_else(|| crate::chat_store::ChatSession::new(session_name.to_string()));
         state.chat_session = Some(session);
-        rebuild_chat_editor(state);
+        rebuild_chat_editor(state, highlighter);
         tracing::info!("agent chat session created for {session_name}");
     }
 }
@@ -406,36 +411,53 @@ fn view_mode_tabs<'a, M: 'a + Clone>(
     active: InteractionMode,
     wrap: impl Fn(Msg) -> M + 'a + Clone,
 ) -> Element<'a, M> {
-    use iced::widget::{button, container, row, text};
+    use iced::widget::{button, column, container, row, text, Space};
+    use iced::Length;
 
-    let terminal_style = if active == InteractionMode::Terminal {
-        theme::list_item_active as fn(&iced::Theme, iced::widget::button::Status) -> iced::widget::button::Style
-    } else {
-        theme::list_item
-    };
-    let agent_style = if active == InteractionMode::AgentChat {
-        theme::list_item_active as fn(&iced::Theme, iced::widget::button::Status) -> iced::widget::button::Style
-    } else {
-        theme::list_item
-    };
+    let modes = [
+        ("Agent", InteractionMode::AgentChat),
+        ("Terminal", InteractionMode::Terminal),
+    ];
 
-    let w1 = wrap.clone();
-    let w2 = wrap.clone();
-    container(
-        row![
-            button(text("Agent").size(theme::FONT_SM))
-                .on_press(w1(Msg::SwitchMode(InteractionMode::AgentChat)))
-                .padding([2.0, theme::SPACING_SM])
-                .style(agent_style),
-            button(text("Terminal").size(theme::FONT_SM))
-                .on_press(w2(Msg::SwitchMode(InteractionMode::Terminal)))
-                .padding([2.0, theme::SPACING_SM])
-                .style(terminal_style),
-        ]
-        .spacing(theme::SPACING_XS),
-    )
-    .padding([theme::SPACING_XS, theme::SPACING_SM])
-    .style(theme::surface)
+    let mut tabs_row = row![].spacing(0.0).height(32.0);
+
+    for (label, mode) in modes {
+        let is_active = active == mode;
+        let tab_style = if is_active {
+            theme::tab_active as fn(&iced::Theme, iced::widget::button::Status) -> iced::widget::button::Style
+        } else {
+            theme::tab_inactive
+        };
+
+        let w = wrap.clone();
+        let tab_btn = button(text(label).size(theme::FONT_MD))
+            .on_press(w(Msg::SwitchMode(mode)))
+            .padding([theme::SPACING_SM, theme::SPACING_MD])
+            .style(tab_style);
+
+        let underline_style = if is_active { theme::accent_bar } else { theme::surface };
+        let underline = container(Space::new().width(Length::Fill).height(2.0))
+            .width(Length::Fill)
+            .style(underline_style);
+
+        let sep = container(Space::new().width(1.0).height(Length::Fill))
+            .style(theme::divider);
+        tabs_row = tabs_row.push(sep);
+        tabs_row = tabs_row.push(column![tab_btn, underline].width(Length::Shrink));
+    }
+
+    let sep = container(Space::new().width(1.0).height(Length::Fill))
+        .style(theme::divider);
+    tabs_row = tabs_row.push(sep);
+
+    let bar_border = container(Space::new().width(Length::Fill).height(1.0))
+        .width(Length::Fill)
+        .style(theme::divider);
+
+    column![
+        container(tabs_row).width(Length::Fill).style(theme::surface),
+        bar_border,
+    ]
     .into()
 }
 

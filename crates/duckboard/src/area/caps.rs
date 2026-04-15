@@ -68,7 +68,7 @@ pub fn update(
         Message::CloseTab(idx) => state.tabs.close(idx),
         Message::Interaction(msg) => {
             let is_mode_switch = matches!(msg, interaction::Msg::SwitchMode(_));
-            let just_opened = interaction::update(&mut state.interaction, msg);
+            let just_opened = interaction::update(&mut state.interaction, msg, highlighter);
 
             if just_opened && state.interaction.mode == InteractionMode::Terminal {
                 interaction::spawn_terminal(&mut state.interaction);
@@ -79,7 +79,7 @@ pub fn update(
 
             let wants_agent = (just_opened || is_mode_switch) && state.interaction.mode == InteractionMode::AgentChat;
             if wants_agent && state.interaction.chat_session.is_none() {
-                interaction::spawn_agent_session(&mut state.interaction, "caps", project.project_root.as_deref());
+                interaction::spawn_agent_session(&mut state.interaction, "caps", project.project_root.as_deref(), highlighter);
             }
 
             state.interaction.terminal_focused = state.interaction.visible

@@ -335,6 +335,8 @@ async fn run_prompt_turn(
         .arg("stream-json")
         .arg("--verbose")
         .arg("--include-partial-messages")
+        .arg("--permission-mode")
+        .arg("bypassPermissions")
         .current_dir(project_root)
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())

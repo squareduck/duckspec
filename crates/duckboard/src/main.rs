@@ -357,83 +357,92 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
         Message::AgentEvent(key, evt) => {
             use agent::AgentEvent;
             let proj_root = state.project.project_root.clone();
-            let Some(ix) = state.interaction_mut(&key) else { return Task::none() };
-            match evt {
-                AgentEvent::Ready(handle) => {
-                    ix.agent_handle = Some(handle);
-                    tracing::info!(key, "agent handle ready");
-                }
-                AgentEvent::CommandsAvailable(commands) => {
-                    tracing::info!(key, count = commands.len(), "slash commands discovered");
-                    ix.chat_commands = commands;
-                }
-                AgentEvent::ContentDelta { text } => {
-                    if let Some(session) = &mut ix.chat_session {
-                        session.pending_text.push_str(&text);
+            {
+                let Some(ix) = state.interaction_mut(&key) else { return Task::none() };
+                match evt {
+                    AgentEvent::Ready(handle) => {
+                        ix.agent_handle = Some(handle);
+                        tracing::info!(key, "agent handle ready");
                     }
-                }
-                AgentEvent::ToolUse { id, name, input } => {
-                    if let Some(session) = &mut ix.chat_session {
-                        flush_pending_text(session);
-                        session.messages.push(chat_store::ChatMessage {
-                            role: chat_store::Role::Assistant,
-                            content: vec![chat_store::ContentBlock::ToolUse { id, name, input }],
-                            timestamp: String::new(),
-                        });
+                    AgentEvent::CommandsAvailable(commands) => {
+                        tracing::info!(key, count = commands.len(), "slash commands discovered");
+                        ix.chat_commands = commands;
                     }
-                }
-                AgentEvent::ToolResult { id, name, output } => {
-                    if let Some(session) = &mut ix.chat_session {
-                        session.messages.push(chat_store::ChatMessage {
-                            role: chat_store::Role::Assistant,
-                            content: vec![chat_store::ContentBlock::ToolResult { id, name, output }],
-                            timestamp: String::new(),
-                        });
+                    AgentEvent::ContentDelta { text } => {
+                        if let Some(session) = &mut ix.chat_session {
+                            session.pending_text.push_str(&text);
+                        }
                     }
-                }
-                AgentEvent::TurnComplete => {
-                    if let Some(session) = &mut ix.chat_session {
-                        flush_pending_text(session);
-                        session.is_streaming = false;
-                        if let Err(e) = chat_store::save_session(session, proj_root.as_deref()) {
-                            tracing::error!("failed to save chat session: {e}");
+                    AgentEvent::ToolUse { id, name, input } => {
+                        if let Some(session) = &mut ix.chat_session {
+                            flush_pending_text(session);
+                            session.messages.push(chat_store::ChatMessage {
+                                role: chat_store::Role::Assistant,
+                                content: vec![chat_store::ContentBlock::ToolUse { id, name, input }],
+                                timestamp: String::new(),
+                            });
+                        }
+                    }
+                    AgentEvent::ToolResult { id, name, output } => {
+                        if let Some(session) = &mut ix.chat_session {
+                            session.messages.push(chat_store::ChatMessage {
+                                role: chat_store::Role::Assistant,
+                                content: vec![chat_store::ContentBlock::ToolResult { id, name, output }],
+                                timestamp: String::new(),
+                            });
+                        }
+                    }
+                    AgentEvent::TurnComplete => {
+                        if let Some(session) = &mut ix.chat_session {
+                            flush_pending_text(session);
+                            session.is_streaming = false;
+                            if let Err(e) = chat_store::save_session(session, proj_root.as_deref()) {
+                                tracing::error!("failed to save chat session: {e}");
+                            }
+                        }
+                    }
+                    AgentEvent::Error(msg) => {
+                        tracing::error!(key, "agent error: {msg}");
+                        if let Some(session) = &mut ix.chat_session {
+                            session.is_streaming = false;
+                            session.messages.push(chat_store::ChatMessage {
+                                role: chat_store::Role::System,
+                                content: vec![chat_store::ContentBlock::Text(format!("Error: {msg}"))],
+                                timestamp: String::new(),
+                            });
+                        }
+                    }
+                    AgentEvent::UsageUpdate { model, input_tokens, output_tokens, context_window } => {
+                        if let Some(m) = model {
+                            ix.agent_model = m;
+                        }
+                        if input_tokens > 0 {
+                            ix.agent_input_tokens = input_tokens;
+                        }
+                        if output_tokens > 0 {
+                            ix.agent_output_tokens = output_tokens;
+                        }
+                        if let Some(cw) = context_window {
+                            ix.agent_context_window = cw;
+                        }
+                    }
+                    AgentEvent::ProcessExited => {
+                        tracing::info!(key, "agent process exited");
+                        ix.agent_handle = None;
+                        if let Some(session) = &mut ix.chat_session {
+                            session.is_streaming = false;
                         }
                     }
                 }
-                AgentEvent::Error(msg) => {
-                    tracing::error!(key, "agent error: {msg}");
-                    if let Some(session) = &mut ix.chat_session {
-                        session.is_streaming = false;
-                        session.messages.push(chat_store::ChatMessage {
-                            role: chat_store::Role::System,
-                            content: vec![chat_store::ContentBlock::Text(format!("Error: {msg}"))],
-                            timestamp: String::new(),
-                        });
-                    }
-                }
-                AgentEvent::UsageUpdate { model, input_tokens, output_tokens, context_window } => {
-                    if let Some(m) = model {
-                        ix.agent_model = m;
-                    }
-                    if input_tokens > 0 {
-                        ix.agent_input_tokens = input_tokens;
-                    }
-                    if output_tokens > 0 {
-                        ix.agent_output_tokens = output_tokens;
-                    }
-                    if let Some(cw) = context_window {
-                        ix.agent_context_window = cw;
-                    }
-                }
-                AgentEvent::ProcessExited => {
-                    tracing::info!(key, "agent process exited");
-                    ix.agent_handle = None;
-                    if let Some(session) = &mut ix.chat_session {
-                        session.is_streaming = false;
-                    }
-                }
             }
-            interaction::rebuild_chat_editor(ix);
+            let highlighter = &state.highlighter;
+            let ix = match key.as_str() {
+                KEY_CAPS => Some(&mut state.caps.interaction),
+                KEY_CODEX => Some(&mut state.codex.interaction),
+                _ => state.change.interactions.get_mut(&key),
+            };
+            let Some(ix) = ix else { return Task::none() };
+            interaction::rebuild_chat_editor(ix, highlighter);
             if !ix.chat_session.as_ref().is_some_and(|s| s.is_streaming) {
                 ix.esc_count = 0;
             }

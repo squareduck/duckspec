@@ -403,6 +403,18 @@ fn block_header_color(kind: BlockKind) -> iced::Color {
     }
 }
 
+fn format_number(n: usize) -> String {
+    let s = n.to_string();
+    let mut result = String::with_capacity(s.len() + s.len() / 3);
+    for (i, ch) in s.chars().enumerate() {
+        if i > 0 && (s.len() - i) % 3 == 0 {
+            result.push(',');
+        }
+        result.push(ch);
+    }
+    result
+}
+
 fn view_status_bar<'a>(status: StatusInfo) -> Element<'a, Msg> {
     // Left side: status + cancel hint.
     let (status_text, status_color) = if status.is_streaming && status.esc_count >= 2 {
@@ -429,25 +441,49 @@ fn view_status_bar<'a>(status: StatusInfo) -> Element<'a, Msg> {
         );
     }
 
-    // Right side: model + context.
+    // Right side: model + context tokens + percentage.
     let ctx_pct = if status.context_max > 0 {
         (status.context_tokens as f32 / status.context_max as f32 * 100.0) as usize
     } else {
         0
     };
+    let ctx_color = if ctx_pct >= 90 {
+        theme::error()
+    } else if ctx_pct >= 75 {
+        theme::warning()
+    } else {
+        theme::text_muted()
+    };
     let right = row![
         text(status.model).size(theme::FONT_XS).color(theme::text_muted()),
-        text(format!("{}%", ctx_pct)).size(theme::FONT_XS).color(theme::text_muted()),
+        text(format!(
+            "{} / {} ({}%)",
+            format_number(status.context_tokens),
+            format_number(status.context_max),
+            ctx_pct,
+        ))
+        .size(theme::FONT_XS)
+        .color(ctx_color),
     ]
     .spacing(theme::SPACING_SM)
     .align_y(iced::Alignment::Center);
 
-    container(
+    let bar = container(
         row![left, Space::new().width(Length::Fill), right]
             .align_y(iced::Alignment::Center),
     )
     .padding([theme::SPACING_XS, theme::SPACING_SM])
-    .style(status_bar_style)
+    .style(status_bar_style);
+
+    column![
+        rule::horizontal(1).style(|_theme: &iced::Theme| rule::Style {
+            color: theme::border_color(),
+            radius: 0.0.into(),
+            fill_mode: rule::FillMode::Full,
+            snap: true,
+        }),
+        bar,
+    ]
     .into()
 }
 
@@ -571,11 +607,6 @@ fn completion_style(_theme: &iced::Theme) -> container::Style {
 fn status_bar_style(_theme: &iced::Theme) -> container::Style {
     container::Style {
         background: Some(iced::Background::Color(theme::bg_surface())),
-        border: iced::Border {
-            color: theme::border_color(),
-            width: 0.0,
-            radius: 0.0.into(),
-        },
         ..Default::default()
     }
 }
