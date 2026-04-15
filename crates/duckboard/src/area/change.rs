@@ -1,7 +1,7 @@
 //! Change area — single change workspace with three-column layout.
 
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use iced::widget::{button, column, container, row, scrollable, svg, text, Space};
 use iced::widget::text::Wrapping;
@@ -44,14 +44,15 @@ pub struct State {
     pub exploration_counter: usize,
 }
 
-impl Default for State {
-    fn default() -> Self {
+impl State {
+    pub fn new(project_root: Option<&Path>) -> Self {
         let mut sections = HashSet::new();
         sections.insert("overview".to_string());
         sections.insert("capabilities".to_string());
         sections.insert("steps".to_string());
         sections.insert("changed_files".to_string());
-        let (explorations, exploration_counter) = crate::chat_store::load_explorations();
+        let (explorations, exploration_counter) =
+            crate::chat_store::load_explorations(project_root);
         Self {
             selected_change: None,
             expanded_sections: sections,
@@ -87,7 +88,12 @@ impl State {
 
     /// Promote an exploration to a real change: remove from explorations list,
     /// migrate interaction state and chat session to the new name.
-    pub fn promote_exploration(&mut self, exploration_name: &str, real_name: &str) {
+    pub fn promote_exploration(
+        &mut self,
+        exploration_name: &str,
+        real_name: &str,
+        project_root: Option<&Path>,
+    ) {
         self.explorations.retain(|n| n != exploration_name);
         if let Some(ix) = self.interactions.remove(exploration_name) {
             self.interactions.insert(real_name.to_string(), ix);
@@ -95,7 +101,11 @@ impl State {
         if self.selected_change.as_deref() == Some(exploration_name) {
             self.selected_change = Some(real_name.to_string());
         }
-        crate::chat_store::save_explorations(&self.explorations, self.exploration_counter);
+        crate::chat_store::save_explorations(
+            &self.explorations,
+            self.exploration_counter,
+            project_root,
+        );
     }
 }
 
@@ -151,7 +161,7 @@ pub fn update(
                     interaction::spawn_terminal(ix);
                 }
                 if ix.mode == InteractionMode::AgentChat && ix.chat_session.is_none() {
-                    interaction::spawn_agent_session(ix, &name);
+                    interaction::spawn_agent_session(ix, &name, project.project_root.as_deref());
                 }
             }
         }
@@ -188,7 +198,7 @@ pub fn update(
 
             let wants_agent = (just_opened || is_mode_switch) && ix.mode == InteractionMode::AgentChat;
             if wants_agent && ix.chat_session.is_none() {
-                interaction::spawn_agent_session(ix, &session_name);
+                interaction::spawn_agent_session(ix, &session_name, project.project_root.as_deref());
             }
 
             ix.terminal_focused = ix.visible && ix.mode == InteractionMode::Terminal;
@@ -228,12 +238,12 @@ pub fn update(
             let name = format!("Exploration {}", state.exploration_counter);
             state.explorations.push(name.clone());
             state.selected_change = Some(name.clone());
-            crate::chat_store::save_explorations(&state.explorations, state.exploration_counter);
+            crate::chat_store::save_explorations(&state.explorations, state.exploration_counter, project.project_root.as_deref());
             // Auto-open interaction panel.
             let ix = state.interactions.entry(name.clone()).or_default();
             ix.visible = true;
             if ix.mode == InteractionMode::AgentChat && ix.chat_session.is_none() {
-                interaction::spawn_agent_session(ix, &name);
+                interaction::spawn_agent_session(ix, &name, project.project_root.as_deref());
             }
             if ix.mode == InteractionMode::Terminal {
                 interaction::spawn_terminal(ix);
@@ -245,8 +255,8 @@ pub fn update(
             if state.selected_change.as_deref() == Some(&name) {
                 state.selected_change = None;
             }
-            crate::chat_store::delete_session(&name);
-            crate::chat_store::save_explorations(&state.explorations, state.exploration_counter);
+            crate::chat_store::delete_session(&name, project.project_root.as_deref());
+            crate::chat_store::save_explorations(&state.explorations, state.exploration_counter, project.project_root.as_deref());
         }
     }
 }

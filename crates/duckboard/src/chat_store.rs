@@ -1,6 +1,10 @@
 //! Per-change chat session model and XDG-compliant persistence.
+//!
+//! Sessions are stored per-project under the XDG data directory, using a hash
+//! of the project root path to isolate different projects.
 
-use std::path::PathBuf;
+use std::hash::{Hash, Hasher};
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
@@ -57,19 +61,34 @@ impl ChatSession {
 
 // ── Persistence ─────────────────────────────────────────────────────────────
 
-/// XDG data directory for duckboard chat sessions.
-fn chat_dir() -> Option<PathBuf> {
-    let dirs = directories::ProjectDirs::from("com", "duckspec", "duckboard")?;
-    Some(dirs.data_dir().join("chats"))
+/// Derive a short hex hash from a project root path for per-project isolation.
+fn project_hash(project_root: &Path) -> String {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    project_root.hash(&mut hasher);
+    format!("{:016x}", hasher.finish())
 }
 
-fn session_path(change_name: &str) -> Option<PathBuf> {
-    Some(chat_dir()?.join(format!("{change_name}.json")))
+/// XDG data directory for duckboard, scoped to a project when available.
+fn data_dir(project_root: Option<&Path>) -> Option<PathBuf> {
+    let dirs = directories::ProjectDirs::from("com", "duckspec", "duckboard")?;
+    let base = dirs.data_dir().to_path_buf();
+    match project_root {
+        Some(root) => Some(base.join("projects").join(project_hash(root))),
+        None => Some(base),
+    }
+}
+
+fn chat_dir(project_root: Option<&Path>) -> Option<PathBuf> {
+    Some(data_dir(project_root)?.join("chats"))
+}
+
+fn session_path(change_name: &str, project_root: Option<&Path>) -> Option<PathBuf> {
+    Some(chat_dir(project_root)?.join(format!("{change_name}.json")))
 }
 
 /// Load a persisted chat session for the given change.
-pub fn load_session(change_name: &str) -> Option<ChatSession> {
-    let path = session_path(change_name)?;
+pub fn load_session(change_name: &str, project_root: Option<&Path>) -> Option<ChatSession> {
+    let path = session_path(change_name, project_root)?;
     let data = std::fs::read_to_string(&path).ok()?;
     let messages: Vec<ChatMessage> = serde_json::from_str(&data).ok()?;
     Some(ChatSession {
@@ -81,8 +100,8 @@ pub fn load_session(change_name: &str) -> Option<ChatSession> {
 }
 
 /// Save a chat session to disk.
-pub fn save_session(session: &ChatSession) -> anyhow::Result<()> {
-    let dir = chat_dir().ok_or_else(|| anyhow::anyhow!("no XDG data directory"))?;
+pub fn save_session(session: &ChatSession, project_root: Option<&Path>) -> anyhow::Result<()> {
+    let dir = chat_dir(project_root).ok_or_else(|| anyhow::anyhow!("no XDG data directory"))?;
     std::fs::create_dir_all(&dir)?;
     let path = dir.join(format!("{}.json", session.change_name));
     let data = serde_json::to_string_pretty(&session.messages)?;
@@ -91,31 +110,25 @@ pub fn save_session(session: &ChatSession) -> anyhow::Result<()> {
 }
 
 /// Delete a persisted chat session from disk.
-pub fn delete_session(change_name: &str) {
-    if let Some(path) = session_path(change_name) {
+pub fn delete_session(change_name: &str, project_root: Option<&Path>) {
+    if let Some(path) = session_path(change_name, project_root) {
         let _ = std::fs::remove_file(path);
     }
 }
 
 /// Rename a persisted session file from one change name to another.
 /// Also updates the in-memory session's `change_name`.
-pub fn rename_session(session: &mut ChatSession, new_name: &str) {
+pub fn rename_session(session: &mut ChatSession, new_name: &str, project_root: Option<&Path>) {
     let old_name = session.change_name.clone();
     session.change_name = new_name.to_string();
 
     // Move the persisted file if it exists.
-    if let (Some(old_path), Some(new_path)) = (session_path(&old_name), session_path(new_name))
+    if let (Some(old_path), Some(new_path)) =
+        (session_path(&old_name, project_root), session_path(new_name, project_root))
         && old_path.exists()
     {
         let _ = std::fs::rename(&old_path, &new_path);
     }
-}
-
-// ── Exploration persistence ────────────────────────────────────────────────
-
-fn data_dir() -> Option<PathBuf> {
-    let dirs = directories::ProjectDirs::from("com", "duckspec", "duckboard")?;
-    Some(dirs.data_dir().to_path_buf())
 }
 
 /// Persisted exploration state.
@@ -126,8 +139,8 @@ struct ExplorationData {
 }
 
 /// Load persisted exploration list and counter.
-pub fn load_explorations() -> (Vec<String>, usize) {
-    let Some(path) = data_dir().map(|d| d.join("explorations.json")) else {
+pub fn load_explorations(project_root: Option<&Path>) -> (Vec<String>, usize) {
+    let Some(path) = data_dir(project_root).map(|d| d.join("explorations.json")) else {
         return (vec![], 0);
     };
     let Ok(data) = std::fs::read_to_string(&path) else {
@@ -140,8 +153,8 @@ pub fn load_explorations() -> (Vec<String>, usize) {
 }
 
 /// Save exploration list and counter to disk.
-pub fn save_explorations(explorations: &[String], counter: usize) {
-    let Some(dir) = data_dir() else { return };
+pub fn save_explorations(explorations: &[String], counter: usize, project_root: Option<&Path>) {
+    let Some(dir) = data_dir(project_root) else { return };
     let _ = std::fs::create_dir_all(&dir);
     let state = ExplorationData {
         explorations: explorations.to_vec(),

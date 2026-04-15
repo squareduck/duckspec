@@ -332,9 +332,13 @@ pub fn spawn_terminal(state: &mut InteractionState) {
 }
 
 /// Create an agent chat session if one doesn't exist.
-pub fn spawn_agent_session(state: &mut InteractionState, session_name: &str) {
+pub fn spawn_agent_session(
+    state: &mut InteractionState,
+    session_name: &str,
+    project_root: Option<&std::path::Path>,
+) {
     if state.chat_session.is_none() {
-        let session = crate::chat_store::load_session(session_name)
+        let session = crate::chat_store::load_session(session_name, project_root)
             .unwrap_or_else(|| crate::chat_store::ChatSession::new(session_name.to_string()));
         state.chat_session = Some(session);
         rebuild_chat_editor(state);

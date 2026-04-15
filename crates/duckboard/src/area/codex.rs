@@ -73,7 +73,7 @@ pub fn update(
 
             let wants_agent = (just_opened || is_mode_switch) && state.interaction.mode == InteractionMode::AgentChat;
             if wants_agent && state.interaction.chat_session.is_none() {
-                interaction::spawn_agent_session(&mut state.interaction, "codex");
+                interaction::spawn_agent_session(&mut state.interaction, "codex", project.project_root.as_deref());
             }
 
             state.interaction.terminal_focused = state.interaction.visible

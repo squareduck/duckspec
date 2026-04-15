@@ -49,7 +49,7 @@ impl State {
             changes = project.active_changes.len(),
             "project loaded"
         );
-        let mut change = area::change::State::default();
+        let mut change = area::change::State::new(project.project_root.as_deref());
         if let Some(root) = &project.project_root {
             change.changed_files = vcs::changed_files(root);
         }
@@ -273,9 +273,9 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                         if let Some(ix) = state.change.interactions.get_mut(&exploration_name)
                             && let Some(session) = &mut ix.chat_session
                         {
-                            chat_store::rename_session(session, new_name);
+                            chat_store::rename_session(session, new_name, state.project.project_root.as_deref());
                         }
-                        state.change.promote_exploration(&exploration_name, new_name);
+                        state.change.promote_exploration(&exploration_name, new_name, state.project.project_root.as_deref());
                     }
                 }
             }
@@ -344,6 +344,7 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
         // Per-instance agent events
         Message::AgentEvent(key, evt) => {
             use agent::AgentEvent;
+            let proj_root = state.project.project_root.clone();
             let Some(ix) = state.interaction_mut(&key) else { return Task::none() };
             match evt {
                 AgentEvent::Ready(handle) => {
@@ -382,7 +383,7 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                     if let Some(session) = &mut ix.chat_session {
                         flush_pending_text(session);
                         session.is_streaming = false;
-                        if let Err(e) = chat_store::save_session(session) {
+                        if let Err(e) = chat_store::save_session(session, proj_root.as_deref()) {
                             tracing::error!("failed to save chat session: {e}");
                         }
                     }
