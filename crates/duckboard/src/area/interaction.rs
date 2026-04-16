@@ -17,18 +17,21 @@ pub enum InteractionMode {
     AgentChat,
 }
 
-// ── Interaction state ───────────────────────────────────────────────────────
+// ── Session controls (which buttons to show) ────────────────────────────────
 
-pub struct InteractionState {
-    pub visible: bool,
-    pub width: f32,
-    pub mode: InteractionMode,
-    // Terminal
-    pub terminal: Option<crate::widget::terminal::TerminalState>,
-    pub terminal_focused: bool,
-    // Agent
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SessionControls {
+    /// Show a session dropdown + "+" new-session button.
+    Multi,
+    /// Show a "Clear" button that resets the single session.
+    Single,
+}
+
+// ── Agent session (per-session bundle) ──────────────────────────────────────
+
+pub struct AgentSession {
+    pub session: ChatSession,
     pub agent_handle: Option<AgentHandle>,
-    pub chat_session: Option<ChatSession>,
     pub chat_input: text_editor::Content,
     pub chat_commands: Vec<SlashCommand>,
     pub chat_completion: agent_chat::CompletionState,
@@ -42,16 +45,17 @@ pub struct InteractionState {
     pub agent_context_window: usize,
 }
 
-impl Default for InteractionState {
-    fn default() -> Self {
+impl AgentSession {
+    /// Create a fresh session for a scope.
+    pub fn new(scope: String) -> Self {
+        Self::from_session(ChatSession::new(scope))
+    }
+
+    /// Wrap a loaded ChatSession with fresh UI state.
+    pub fn from_session(session: ChatSession) -> Self {
         Self {
-            visible: false,
-            width: theme::INTERACTION_COLUMN_WIDTH,
-            mode: InteractionMode::AgentChat,
-            terminal: None,
-            terminal_focused: false,
+            session,
             agent_handle: None,
-            chat_session: None,
             chat_input: text_editor::Content::new(),
             chat_commands: Vec::new(),
             chat_completion: agent_chat::CompletionState::default(),
@@ -67,20 +71,72 @@ impl Default for InteractionState {
     }
 }
 
+// ── Interaction state ───────────────────────────────────────────────────────
+
+pub struct InteractionState {
+    pub visible: bool,
+    pub width: f32,
+    pub mode: InteractionMode,
+    // Terminal
+    pub terminal: Option<crate::widget::terminal::TerminalState>,
+    pub terminal_focused: bool,
+    // Agent sessions (sorted newest-first).
+    pub sessions: Vec<AgentSession>,
+    pub active_session: usize,
+}
+
+impl Default for InteractionState {
+    fn default() -> Self {
+        Self {
+            visible: false,
+            width: theme::INTERACTION_COLUMN_WIDTH,
+            mode: InteractionMode::AgentChat,
+            terminal: None,
+            terminal_focused: false,
+            sessions: Vec::new(),
+            active_session: 0,
+        }
+    }
+}
+
+impl InteractionState {
+    pub fn active(&self) -> Option<&AgentSession> {
+        self.sessions.get(self.active_session)
+    }
+
+    pub fn active_mut(&mut self) -> Option<&mut AgentSession> {
+        self.sessions.get_mut(self.active_session)
+    }
+
+    pub fn find_session_mut(&mut self, id: &str) -> Option<&mut AgentSession> {
+        self.sessions.iter_mut().find(|s| s.session.id == id)
+    }
+
+    pub fn find_session_index(&self, id: &str) -> Option<usize> {
+        self.sessions.iter().position(|s| s.session.id == id)
+    }
+}
+
 // ── Shared messages ─────────────────────────────────────────────────────────
 
-/// Messages that the interaction column can produce, to be wrapped by each area.
 #[derive(Debug, Clone)]
 pub enum Msg {
     Handle(interaction_toggle::HandleMsg),
     SwitchMode(InteractionMode),
     AgentChat(agent_chat::Msg),
     TerminalScroll,
+    /// Create a new agent session for the current scope. Handled by area.
+    NewSession,
+    /// Switch the active agent session by id. Handled by area.
+    SelectSession(String),
+    /// Reset the active session (single-session UIs). Handled by area.
+    ClearSession,
 }
 
 // ── Update helpers ──────────────────────────────────────────────────────────
 
 /// Handle an interaction message. Returns `true` if the panel was just toggled open.
+/// NewSession / SelectSession / ClearSession are ignored here — areas handle them.
 pub fn update(state: &mut InteractionState, msg: Msg, highlighter: &SyntaxHighlighter) -> bool {
     let mut just_opened = false;
     match msg {
@@ -104,21 +160,25 @@ pub fn update(state: &mut InteractionState, msg: Msg, highlighter: &SyntaxHighli
                 ts.apply_scroll();
             }
         }
+        Msg::NewSession | Msg::SelectSession(_) | Msg::ClearSession => {
+            // Area-handled.
+        }
     }
     just_opened
 }
 
 fn handle_agent_chat(state: &mut InteractionState, msg: agent_chat::Msg, highlighter: &SyntaxHighlighter) {
+    let Some(ax) = state.active_mut() else { return };
     match msg {
         agent_chat::Msg::EditorAction(action) => {
-            if state.chat_completion.visible {
+            if ax.chat_completion.visible {
                 match &action {
                     text_editor::Action::Move(text_editor::Motion::Up) => {
-                        completion_prev(state);
+                        completion_prev(ax);
                         return;
                     }
                     text_editor::Action::Move(text_editor::Motion::Down) => {
-                        completion_next(state);
+                        completion_next(ax);
                         return;
                     }
                     _ => {}
@@ -127,62 +187,58 @@ fn handle_agent_chat(state: &mut InteractionState, msg: agent_chat::Msg, highlig
             if matches!(action, text_editor::Action::Edit(text_editor::Edit::Enter)) {
                 return;
             }
-            state.chat_input.perform(action);
-            let input_text = state.chat_input.text();
+            ax.chat_input.perform(action);
+            let input_text = ax.chat_input.text();
             let trimmed = input_text.trim_end();
             if trimmed.starts_with('/') && !trimmed.contains(' ') {
-                state.chat_completion.visible = true;
-                state.chat_completion.selected = 0;
+                ax.chat_completion.visible = true;
+                ax.chat_completion.selected = 0;
             } else {
-                state.chat_completion.visible = false;
+                ax.chat_completion.visible = false;
             }
         }
-        agent_chat::Msg::CompletionNext => completion_next(state),
-        agent_chat::Msg::CompletionPrev => completion_prev(state),
-        agent_chat::Msg::CompletionAccept => completion_accept(state),
+        agent_chat::Msg::CompletionNext => completion_next(ax),
+        agent_chat::Msg::CompletionPrev => completion_prev(ax),
+        agent_chat::Msg::CompletionAccept => completion_accept(ax),
         agent_chat::Msg::CompletionDismiss => {
-            state.chat_completion.visible = false;
+            ax.chat_completion.visible = false;
         }
         agent_chat::Msg::ChatAction(idx, action) => {
-            // Clear selection on all other editors so only one is active.
-            for (i, editor) in state.chat_editors.iter_mut().enumerate() {
+            for (i, editor) in ax.chat_editors.iter_mut().enumerate() {
                 if i != idx {
                     editor.anchor = None;
                 }
             }
-            if let Some(editor) = state.chat_editors.get_mut(idx) {
+            if let Some(editor) = ax.chat_editors.get_mut(idx) {
                 handle_chat_action_on(editor, action);
             }
         }
         agent_chat::Msg::ToggleCollapse(idx) => {
-            if let Some(collapsed) = state.chat_collapsed.get_mut(idx) {
+            if let Some(collapsed) = ax.chat_collapsed.get_mut(idx) {
                 *collapsed = !*collapsed;
             }
         }
         agent_chat::Msg::SendPressed => {
-            // Send via agent handle.
-            if let Some(handle) = &state.agent_handle {
-                let text = state.chat_input.text();
+            if let Some(handle) = &ax.agent_handle {
+                let text = ax.chat_input.text();
                 let text = text.trim().to_string();
                 if !text.is_empty() {
-                    if let Some(session) = &mut state.chat_session {
-                        session.messages.push(crate::chat_store::ChatMessage {
-                            role: crate::chat_store::Role::User,
-                            content: vec![crate::chat_store::ContentBlock::Text(text.clone())],
-                            timestamp: String::new(),
-                        });
-                        session.is_streaming = true;
-                        session.pending_text.clear();
-                    }
+                    ax.session.messages.push(crate::chat_store::ChatMessage {
+                        role: crate::chat_store::Role::User,
+                        content: vec![crate::chat_store::ContentBlock::Text(text.clone())],
+                        timestamp: String::new(),
+                    });
+                    ax.session.is_streaming = true;
+                    ax.session.pending_text.clear();
                     handle.send_prompt(text, None);
-                    state.chat_input = text_editor::Content::new();
-                    state.chat_completion.visible = false;
-                    rebuild_chat_editor(state, highlighter);
+                    ax.chat_input = text_editor::Content::new();
+                    ax.chat_completion.visible = false;
+                    rebuild_chat_editor(ax, highlighter);
                 }
             }
         }
         agent_chat::Msg::CancelPressed => {
-            if let Some(handle) = &state.agent_handle {
+            if let Some(handle) = &ax.agent_handle {
                 handle.cancel();
             }
         }
@@ -191,44 +247,26 @@ fn handle_agent_chat(state: &mut InteractionState, msg: agent_chat::Msg, highlig
 
 // ── Chat editor ─────────────────────────────────────────────────────────────
 
-/// Rebuild the per-block chat editors from the current session.
-///
-/// Preserves existing editor state (cursor, anchor, selection) for blocks
-/// whose content hasn't changed, so that in-progress selections aren't
-/// wiped during streaming rebuilds.
-pub fn rebuild_chat_editor(state: &mut InteractionState, highlighter: &SyntaxHighlighter) {
-    let session = match &state.chat_session {
-        Some(s) => s,
-        None => {
-            state.chat_blocks.clear();
-            state.chat_editors.clear();
-            state.chat_collapsed.clear();
-            return;
-        }
-    };
+/// Rebuild the per-block chat editors for the given session.
+pub fn rebuild_chat_editor(ax: &mut AgentSession, highlighter: &SyntaxHighlighter) {
+    let new_blocks = agent_chat::build_chat_blocks(&ax.session);
 
-    let new_blocks = agent_chat::build_chat_blocks(session);
-
-    // Preserve collapsed state for existing blocks, default new ones.
-    let old_len = state.chat_collapsed.len();
-    state.chat_collapsed.resize(new_blocks.len(), false);
+    let old_len = ax.chat_collapsed.len();
+    ax.chat_collapsed.resize(new_blocks.len(), false);
     for (i, block) in new_blocks.iter().enumerate().skip(old_len) {
-        state.chat_collapsed[i] = matches!(
+        ax.chat_collapsed[i] = matches!(
             block.kind,
             crate::widget::text_edit::BlockKind::ToolUse | crate::widget::text_edit::BlockKind::ToolResult
         ) && !block.lines.is_empty();
     }
 
-    // Update editors: reuse existing ones when content is unchanged,
-    // only create new EditorState for new or changed blocks.
     let mut new_editors = Vec::with_capacity(new_blocks.len());
     for (i, block) in new_blocks.iter().enumerate() {
-        if i < state.chat_editors.len() && i < state.chat_blocks.len()
-            && state.chat_blocks[i].lines == block.lines
+        if i < ax.chat_editors.len() && i < ax.chat_blocks.len()
+            && ax.chat_blocks[i].lines == block.lines
         {
-            // Content unchanged — move the existing editor to preserve state.
             let existing = std::mem::replace(
-                &mut state.chat_editors[i],
+                &mut ax.chat_editors[i],
                 EditorState::new(""),
             );
             new_editors.push(existing);
@@ -241,8 +279,8 @@ pub fn rebuild_chat_editor(state: &mut InteractionState, highlighter: &SyntaxHig
         }
     }
 
-    state.chat_editors = new_editors;
-    state.chat_blocks = new_blocks;
+    ax.chat_editors = new_editors;
+    ax.chat_blocks = new_blocks;
 }
 
 fn handle_chat_action_on(
@@ -283,45 +321,44 @@ fn handle_chat_action_on(
 
 // ── Completion helpers ──────────────────────────────────────────────────────
 
-fn completion_next(state: &mut InteractionState) {
-    let input_text = state.chat_input.text();
+fn completion_next(ax: &mut AgentSession) {
+    let input_text = ax.chat_input.text();
     let query = input_text.trim_end().trim_start_matches('/');
-    let count = agent_chat::filter_commands(&state.chat_commands, query).len();
+    let count = agent_chat::filter_commands(&ax.chat_commands, query).len();
     if count > 0 {
-        state.chat_completion.selected = (state.chat_completion.selected + 1) % count;
+        ax.chat_completion.selected = (ax.chat_completion.selected + 1) % count;
     }
 }
 
-fn completion_prev(state: &mut InteractionState) {
-    let input_text = state.chat_input.text();
+fn completion_prev(ax: &mut AgentSession) {
+    let input_text = ax.chat_input.text();
     let query = input_text.trim_end().trim_start_matches('/');
-    let count = agent_chat::filter_commands(&state.chat_commands, query).len();
+    let count = agent_chat::filter_commands(&ax.chat_commands, query).len();
     if count > 0 {
-        state.chat_completion.selected = if state.chat_completion.selected == 0 {
+        ax.chat_completion.selected = if ax.chat_completion.selected == 0 {
             count - 1
         } else {
-            state.chat_completion.selected - 1
+            ax.chat_completion.selected - 1
         };
     }
 }
 
-fn completion_accept(state: &mut InteractionState) {
-    let input_text = state.chat_input.text();
+fn completion_accept(ax: &mut AgentSession) {
+    let input_text = ax.chat_input.text();
     let query = input_text.trim_end().trim_start_matches('/');
-    let filtered = agent_chat::filter_commands(&state.chat_commands, query);
-    let selected = state.chat_completion.selected.min(filtered.len().saturating_sub(1));
+    let filtered = agent_chat::filter_commands(&ax.chat_commands, query);
+    let selected = ax.chat_completion.selected.min(filtered.len().saturating_sub(1));
     if let Some(&(cmd_idx, _)) = filtered.get(selected) {
-        let cmd_name = &state.chat_commands[cmd_idx].name;
+        let cmd_name = &ax.chat_commands[cmd_idx].name;
         let new_text = format!("/{} ", cmd_name);
-        state.chat_input = text_editor::Content::with_text(&new_text);
-        state.chat_input.perform(text_editor::Action::Move(text_editor::Motion::DocumentEnd));
+        ax.chat_input = text_editor::Content::with_text(&new_text);
+        ax.chat_input.perform(text_editor::Action::Move(text_editor::Motion::DocumentEnd));
     }
-    state.chat_completion.visible = false;
+    ax.chat_completion.visible = false;
 }
 
 // ── Spawn helpers ───────────────────────────────────────────────────────────
 
-/// Spawn a terminal if one doesn't exist yet.
 pub fn spawn_terminal(state: &mut InteractionState) {
     if state.terminal.is_none() {
         match crate::widget::terminal::TerminalState::new() {
@@ -335,28 +372,69 @@ pub fn spawn_terminal(state: &mut InteractionState) {
     }
 }
 
-/// Create an agent chat session if one doesn't exist.
-pub fn spawn_agent_session(
+/// Ensure the interaction has at least one session for the scope.
+/// On first call, loads any persisted sessions; if none, creates one empty.
+pub fn ensure_sessions(
     state: &mut InteractionState,
-    session_name: &str,
+    scope: &str,
     project_root: Option<&std::path::Path>,
     highlighter: &SyntaxHighlighter,
 ) {
-    if state.chat_session.is_none() {
-        let session = crate::chat_store::load_session(session_name, project_root)
-            .unwrap_or_else(|| crate::chat_store::ChatSession::new(session_name.to_string()));
-        state.chat_session = Some(session);
-        rebuild_chat_editor(state, highlighter);
-        tracing::info!("agent chat session created for {session_name}");
+    if !state.sessions.is_empty() {
+        return;
+    }
+    let loaded = crate::chat_store::load_sessions_for(scope, project_root);
+    if loaded.is_empty() {
+        let mut ax = AgentSession::new(scope.to_string());
+        reconcile_display_names(std::slice::from_mut(&mut ax));
+        state.sessions.push(ax);
+    } else {
+        for session in loaded {
+            let mut ax = AgentSession::from_session(session);
+            rebuild_chat_editor(&mut ax, highlighter);
+            state.sessions.push(ax);
+        }
+        // load_sessions_for already reconciled; no-op here.
+    }
+    state.active_session = 0;
+}
+
+/// Re-run display-name reconciliation on a slice of `AgentSession`.
+/// Call after inserting a new session or promoting scopes.
+pub fn reconcile_display_names(sessions: &mut [AgentSession]) {
+    // Temporarily move out the ChatSession fields to satisfy the chat_store
+    // signature that takes `&mut [ChatSession]`.
+    // Simpler: iterate and build a Vec of mutable refs is not straightforward,
+    // so we inline the logic here against AgentSession directly.
+    use std::collections::HashMap;
+    let mut groups: HashMap<String, Vec<usize>> = HashMap::new();
+    for (i, ax) in sessions.iter().enumerate() {
+        let prefix = crate::chat_store::minute_prefix_public(ax.session.created_at_nanos);
+        groups.entry(prefix).or_default().push(i);
+    }
+    for (_prefix, mut indices) in groups {
+        indices.sort_by_key(|&i| sessions[i].session.created_at_nanos);
+        if indices.len() == 1 {
+            let i = indices[0];
+            let minute = crate::chat_store::minute_prefix_public(sessions[i].session.created_at_nanos);
+            sessions[i].session.display_name = format!("{} {}", minute, sessions[i].session.scope);
+        } else {
+            for (n, i) in indices.iter().enumerate() {
+                let minute = crate::chat_store::minute_prefix_public(sessions[*i].session.created_at_nanos);
+                sessions[*i].session.display_name =
+                    format!("{} #{} {}", minute, n + 1, sessions[*i].session.scope);
+            }
+        }
     }
 }
 
 // ── View ────────────────────────────────────────────────────────────────────
 
-/// View the interaction column content (mode tabs + terminal/agent chat).
+/// View the interaction column content (mode tabs + session controls + terminal/agent chat).
 pub fn view_column<'a, M: 'a + Clone>(
     state: &'a InteractionState,
     wrap: impl Fn(Msg) -> M + 'a + Clone,
+    controls: SessionControls,
 ) -> Element<'a, M> {
     use iced::widget::column;
 
@@ -373,31 +451,34 @@ pub fn view_column<'a, M: 'a + Clone>(
             }
         }
         InteractionMode::AgentChat => {
-            if let Some(session) = &state.chat_session {
+            if let Some(ax) = state.active() {
                 let status = agent_chat::StatusInfo {
-                    is_streaming: session.is_streaming,
-                    esc_count: state.esc_count,
-                    model: if state.agent_model.is_empty() {
+                    is_streaming: ax.session.is_streaming,
+                    esc_count: ax.esc_count,
+                    model: if ax.agent_model.is_empty() {
                         "\u{2014}".to_string()
                     } else {
-                        state.agent_model.clone()
+                        ax.agent_model.clone()
                     },
-                    context_tokens: state.agent_input_tokens + state.agent_output_tokens,
-                    context_max: state.agent_context_window,
+                    context_tokens: ax.agent_input_tokens + ax.agent_output_tokens,
+                    context_max: ax.agent_context_window,
                 };
                 let w = wrap.clone();
-                agent_chat::view(
-                    session,
-                    &state.chat_blocks,
-                    &state.chat_editors,
-                    &state.chat_collapsed,
-                    session.is_streaming,
-                    &state.chat_input,
-                    &state.chat_commands,
-                    &state.chat_completion,
+                let chat_view = agent_chat::view(
+                    &ax.session,
+                    &ax.chat_blocks,
+                    &ax.chat_editors,
+                    &ax.chat_collapsed,
+                    ax.session.is_streaming,
+                    &ax.chat_input,
+                    &ax.chat_commands,
+                    &ax.chat_completion,
                     status,
                 )
-                .map(move |m| w(Msg::AgentChat(m)))
+                .map(move |m| w(Msg::AgentChat(m)));
+
+                let session_bar = view_session_bar(state, controls, wrap.clone());
+                column![session_bar, chat_view].height(iced::Length::Fill).into()
             } else {
                 view_placeholder(wrap.clone())
             }
@@ -406,6 +487,102 @@ pub fn view_column<'a, M: 'a + Clone>(
 
     column![mode_tabs, content].height(iced::Length::Fill).into()
 }
+
+fn view_session_bar<'a, M: 'a + Clone>(
+    state: &'a InteractionState,
+    controls: SessionControls,
+    wrap: impl Fn(Msg) -> M + 'a + Clone,
+) -> Element<'a, M> {
+    use iced::widget::{button, column, container, pick_list, row, text, Space};
+    use iced::Length;
+
+    let content_row: iced::widget::Row<'a, M> = match controls {
+        SessionControls::Single => {
+            let w = wrap.clone();
+            let clear_btn = button(
+                text("Clear").size(theme::font_sm()),
+            )
+            .on_press(w(Msg::ClearSession))
+            .padding([2.0, theme::SPACING_SM])
+            .style(theme::session_bar_button);
+
+            row![Space::new().width(Length::Fill), clear_btn]
+                .spacing(theme::SPACING_XS)
+                .align_y(iced::Center)
+        }
+        SessionControls::Multi => {
+            let options: Vec<SessionChoice> = state
+                .sessions
+                .iter()
+                .map(|s| SessionChoice {
+                    id: s.session.id.clone(),
+                    label: s.session.display_name.clone(),
+                })
+                .collect();
+            let selected = state.active().map(|ax| SessionChoice {
+                id: ax.session.id.clone(),
+                label: ax.session.display_name.clone(),
+            });
+
+            let w_sel = wrap.clone();
+            let picker = pick_list(options, selected, move |choice: SessionChoice| {
+                w_sel(Msg::SelectSession(choice.id))
+            })
+            .placeholder("Session")
+            .width(Length::Fill)
+            .text_size(theme::font_sm())
+            .padding([2.0, theme::SPACING_SM])
+            .style(theme::session_picker)
+            .menu_style(theme::session_picker_menu);
+
+            let w_new = wrap.clone();
+            let new_btn = button(
+                text("+").size(theme::font_sm()),
+            )
+            .on_press(w_new(Msg::NewSession))
+            .padding([2.0, theme::SPACING_SM])
+            .style(theme::session_bar_button);
+
+            row![picker, new_btn]
+                .spacing(theme::SPACING_XS)
+                .align_y(iced::Center)
+        }
+    };
+
+    let bar_border = container(Space::new().width(Length::Fill).height(1.0))
+        .width(Length::Fill)
+        .style(theme::divider);
+
+    column![
+        container(content_row)
+            .padding([theme::SPACING_XS, theme::SPACING_SM])
+            .width(Length::Fill)
+            .style(theme::surface),
+        bar_border,
+    ]
+    .into()
+}
+
+/// Choice type for the session pick_list (needs Display + Eq + Clone).
+#[derive(Debug, Clone)]
+struct SessionChoice {
+    id: String,
+    label: String,
+}
+
+impl std::fmt::Display for SessionChoice {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.label)
+    }
+}
+
+impl PartialEq for SessionChoice {
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id
+    }
+}
+
+impl Eq for SessionChoice {}
 
 fn view_mode_tabs<'a, M: 'a + Clone>(
     active: InteractionMode,

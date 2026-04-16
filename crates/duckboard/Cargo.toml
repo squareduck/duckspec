@@ -24,7 +24,7 @@ serde_json = "1"
 toml.workspace = true
 dirs = "6"
 font-kit = "0.14"
-time = { workspace = true, features = ["serde"] }
+time = { workspace = true, features = ["serde", "local-offset"] }
 notify-debouncer-mini = "0.5"
 ignore.workspace = true
 gix = { version = "0.72", default-features = false, features = ["status"] }

@@ -7,7 +7,7 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use iced::widget::{button, container, scrollable, svg};
+use iced::widget::{button, container, overlay::menu, pick_list, scrollable, svg};
 use iced::{Background, Border, Color, Theme};
 
 // ── Dark / light mode state ────────────────────────────────────────────────
@@ -319,6 +319,16 @@ pub fn thin_scrollbar_direction() -> scrollable::Direction {
     )
 }
 
+/// Scrollbar direction: thin horizontal-only with reserved gutter space.
+pub fn thin_scrollbar_direction_horizontal() -> scrollable::Direction {
+    scrollable::Direction::Horizontal(
+        scrollable::Scrollbar::new()
+            .width(4)
+            .scroller_width(4)
+            .spacing(0),
+    )
+}
+
 // ── Container styles ───────────────────────────────────────────────────────
 
 pub fn sidebar(_theme: &Theme) -> container::Style {
@@ -501,6 +511,59 @@ pub fn icon_button(_theme: &Theme, status: button::Status) -> button::Style {
         text_color: color,
         border: Border::default(),
         ..Default::default()
+    }
+}
+
+/// Compact button for the session bar (`+`, `Clear`).
+pub fn session_bar_button(_theme: &Theme, status: button::Status) -> button::Style {
+    let bg = match status {
+        button::Status::Hovered => Some(bg_hover().into()),
+        _ => Some(bg_surface().into()),
+    };
+    button::Style {
+        background: bg,
+        text_color: text_secondary(),
+        border: Border {
+            color: border_color(),
+            width: 1.0,
+            radius: BORDER_RADIUS.into(),
+        },
+        ..Default::default()
+    }
+}
+
+// ── Pick list / menu styles ────────────────────────────────────────────────
+
+pub fn session_picker(_theme: &Theme, status: pick_list::Status) -> pick_list::Style {
+    let bg = match status {
+        pick_list::Status::Hovered | pick_list::Status::Opened { .. } => bg_hover(),
+        _ => bg_surface(),
+    };
+    pick_list::Style {
+        text_color: text_primary(),
+        placeholder_color: text_muted(),
+        handle_color: text_muted(),
+        background: bg.into(),
+        border: Border {
+            color: border_color(),
+            width: 1.0,
+            radius: BORDER_RADIUS.into(),
+        },
+    }
+}
+
+pub fn session_picker_menu(_theme: &Theme) -> menu::Style {
+    menu::Style {
+        background: bg_surface().into(),
+        border: Border {
+            color: border_color(),
+            width: 1.0,
+            radius: BORDER_RADIUS.into(),
+        },
+        text_color: text_primary(),
+        selected_text_color: text_primary(),
+        selected_background: bg_hover().into(),
+        shadow: iced::Shadow::default(),
     }
 }
 

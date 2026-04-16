@@ -5,7 +5,7 @@
 //! (up to `MAX_FILE_TABS`) hold files opened via the file finder (Ctrl+P),
 //! with oldest-first eviction.
 
-use iced::widget::{button, column, container, row, svg, text, Space};
+use iced::widget::{button, column, container, row, scrollable, svg, text, Space};
 use iced::{Center, Element, Length};
 
 use crate::theme;
@@ -313,12 +313,17 @@ pub fn view_bar<'a, M: Clone + 'a>(
         .style(theme::divider);
     tabs_row = tabs_row.push(sep);
 
+    let tabs_scroll = scrollable(tabs_row)
+        .direction(theme::thin_scrollbar_direction_horizontal())
+        .style(theme::thin_scrollbar)
+        .width(Length::Fill);
+
     let bar_border = container(Space::new().width(Length::Fill).height(1.0))
         .width(Length::Fill)
         .style(theme::divider);
 
     column![
-        container(tabs_row).width(Length::Fill).style(theme::surface),
+        container(tabs_scroll).width(Length::Fill).style(theme::surface),
         bar_border,
     ]
     .into()

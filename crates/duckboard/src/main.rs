@@ -78,17 +78,23 @@ impl State {
         }
     }
 
-    /// Resolve a routing key to the corresponding interaction state.
-    /// Keys: "caps", "codex", or any other string is a change name.
-    fn interaction_mut(&mut self, key: &str) -> Option<&mut interaction::InteractionState> {
-        match key {
+    /// Resolve a scope (bare change name / "caps" / "codex") to its interaction state.
+    fn interaction_mut(&mut self, scope: &str) -> Option<&mut interaction::InteractionState> {
+        match scope {
             KEY_CAPS => Some(&mut self.caps.interaction),
             KEY_CODEX => Some(&mut self.codex.interaction),
-            _ => self.change.interactions.get_mut(key),
+            _ => self.change.interactions.get_mut(scope),
         }
     }
 
-    /// Get the active area's interaction state and its routing key.
+    /// Resolve a composite routing key `<scope>/<session_id>` to the session bundle.
+    fn agent_session_mut(&mut self, key: &str) -> Option<&mut interaction::AgentSession> {
+        let (scope, session_id) = key.split_once('/')?;
+        let ix = self.interaction_mut(scope)?;
+        ix.find_session_mut(session_id)
+    }
+
+    /// Get the active area's interaction state and its scope.
     fn active_interaction(&self) -> Option<(&interaction::InteractionState, &str)> {
         match self.active_area {
             Area::Change => {
@@ -102,7 +108,7 @@ impl State {
         }
     }
 
-    /// Get the active area's interaction state mutably and its routing key.
+    /// Get the active area's scope (for looking up the interaction state).
     fn active_interaction_key(&self) -> Option<String> {
         match self.active_area {
             Area::Change => self.change.selected_change.clone(),
@@ -285,12 +291,6 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                             to = new_name.as_str(),
                             "promoting exploration to real change"
                         );
-                        // Rename the persisted chat session.
-                        if let Some(ix) = state.change.interactions.get_mut(&exploration_name)
-                            && let Some(session) = &mut ix.chat_session
-                        {
-                            chat_store::rename_session(session, new_name, state.project.project_root.as_deref());
-                        }
                         state.change.promote_exploration(&exploration_name, new_name, state.project.project_root.as_deref());
                     }
                 }
@@ -373,98 +373,84 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                 }
             }
         }
-        // Per-instance agent events
+        // Per-instance agent events — key is `<scope>/<session_id>`.
         Message::AgentEvent(key, evt) => {
             use agent::AgentEvent;
             let proj_root = state.project.project_root.clone();
             {
-                let Some(ix) = state.interaction_mut(&key) else { return Task::none() };
+                let Some(ax) = state.agent_session_mut(&key) else { return Task::none() };
                 match evt {
                     AgentEvent::Ready(handle) => {
-                        ix.agent_handle = Some(handle);
+                        ax.agent_handle = Some(handle);
                         tracing::info!(key, "agent handle ready");
                     }
                     AgentEvent::CommandsAvailable(commands) => {
                         tracing::info!(key, count = commands.len(), "slash commands discovered");
-                        ix.chat_commands = commands;
+                        ax.chat_commands = commands;
                     }
                     AgentEvent::ContentDelta { text } => {
-                        if let Some(session) = &mut ix.chat_session {
-                            session.pending_text.push_str(&text);
-                        }
+                        ax.session.pending_text.push_str(&text);
                     }
                     AgentEvent::ToolUse { id, name, input } => {
-                        if let Some(session) = &mut ix.chat_session {
-                            flush_pending_text(session);
-                            session.messages.push(chat_store::ChatMessage {
-                                role: chat_store::Role::Assistant,
-                                content: vec![chat_store::ContentBlock::ToolUse { id, name, input }],
-                                timestamp: String::new(),
-                            });
-                        }
+                        flush_pending_text(&mut ax.session);
+                        ax.session.messages.push(chat_store::ChatMessage {
+                            role: chat_store::Role::Assistant,
+                            content: vec![chat_store::ContentBlock::ToolUse { id, name, input }],
+                            timestamp: String::new(),
+                        });
                     }
                     AgentEvent::ToolResult { id, name, output } => {
-                        if let Some(session) = &mut ix.chat_session {
-                            session.messages.push(chat_store::ChatMessage {
-                                role: chat_store::Role::Assistant,
-                                content: vec![chat_store::ContentBlock::ToolResult { id, name, output }],
-                                timestamp: String::new(),
-                            });
-                        }
+                        ax.session.messages.push(chat_store::ChatMessage {
+                            role: chat_store::Role::Assistant,
+                            content: vec![chat_store::ContentBlock::ToolResult { id, name, output }],
+                            timestamp: String::new(),
+                        });
                     }
                     AgentEvent::TurnComplete => {
-                        if let Some(session) = &mut ix.chat_session {
-                            flush_pending_text(session);
-                            session.is_streaming = false;
-                            if let Err(e) = chat_store::save_session(session, proj_root.as_deref()) {
-                                tracing::error!("failed to save chat session: {e}");
-                            }
+                        flush_pending_text(&mut ax.session);
+                        ax.session.is_streaming = false;
+                        if let Err(e) = chat_store::save_session(&ax.session, proj_root.as_deref()) {
+                            tracing::error!("failed to save chat session: {e}");
                         }
                     }
                     AgentEvent::Error(msg) => {
                         tracing::error!(key, "agent error: {msg}");
-                        if let Some(session) = &mut ix.chat_session {
-                            session.is_streaming = false;
-                            session.messages.push(chat_store::ChatMessage {
-                                role: chat_store::Role::System,
-                                content: vec![chat_store::ContentBlock::Text(format!("Error: {msg}"))],
-                                timestamp: String::new(),
-                            });
-                        }
+                        ax.session.is_streaming = false;
+                        ax.session.messages.push(chat_store::ChatMessage {
+                            role: chat_store::Role::System,
+                            content: vec![chat_store::ContentBlock::Text(format!("Error: {msg}"))],
+                            timestamp: String::new(),
+                        });
                     }
                     AgentEvent::UsageUpdate { model, input_tokens, output_tokens, context_window } => {
                         if let Some(m) = model {
-                            ix.agent_model = m;
+                            ax.agent_model = m;
                         }
                         if input_tokens > 0 {
-                            ix.agent_input_tokens = input_tokens;
+                            ax.agent_input_tokens = input_tokens;
                         }
                         if output_tokens > 0 {
-                            ix.agent_output_tokens = output_tokens;
+                            ax.agent_output_tokens = output_tokens;
                         }
                         if let Some(cw) = context_window {
-                            ix.agent_context_window = cw;
+                            ax.agent_context_window = cw;
                         }
                     }
                     AgentEvent::ProcessExited => {
                         tracing::info!(key, "agent process exited");
-                        ix.agent_handle = None;
-                        if let Some(session) = &mut ix.chat_session {
-                            session.is_streaming = false;
-                        }
+                        ax.agent_handle = None;
+                        ax.session.is_streaming = false;
                     }
                 }
             }
-            let highlighter = &state.highlighter;
-            let ix = match key.as_str() {
-                KEY_CAPS => Some(&mut state.caps.interaction),
-                KEY_CODEX => Some(&mut state.codex.interaction),
-                _ => state.change.interactions.get_mut(&key),
-            };
-            let Some(ix) = ix else { return Task::none() };
-            interaction::rebuild_chat_editor(ix, highlighter);
-            if !ix.chat_session.as_ref().is_some_and(|s| s.is_streaming) {
-                ix.esc_count = 0;
+            let State { change, caps, codex, highlighter, .. } = state;
+            let ax = resolve_session_mut(change, caps, codex, &key);
+            if let Some(ax) = ax {
+                let is_streaming = ax.session.is_streaming;
+                interaction::rebuild_chat_editor(ax, highlighter);
+                if !is_streaming {
+                    ax.esc_count = 0;
+                }
             }
         }
         Message::ThemeChanged(mode) => {
@@ -506,12 +492,13 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
 
             // Get the active area's interaction state for keyboard routing.
             let active_info = state.active_interaction().map(|(i, _key)| {
+                let active_session = i.active();
                 let agent_chat_active = i.visible
                     && i.mode == InteractionMode::AgentChat
-                    && i.chat_session.is_some();
+                    && active_session.is_some();
                 let terminal_focused = i.terminal_focused;
-                let is_streaming = i.chat_session.as_ref().is_some_and(|s| s.is_streaming);
-                let completion_visible = i.chat_completion.visible;
+                let is_streaming = active_session.is_some_and(|ax| ax.session.is_streaming);
+                let completion_visible = active_session.is_some_and(|ax| ax.chat_completion.visible);
                 (agent_chat_active, terminal_focused, is_streaming, completion_visible)
             });
             // We need the key separately (can't hold borrow across mutable calls).
@@ -545,9 +532,11 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                 if agent_chat_active
                     && key == keyboard::Key::Named(keyboard::key::Named::Escape)
                     && is_streaming {
-                        if let Some(ix) = state.interaction_mut(routing_key) {
-                            ix.esc_count += 1;
-                            if ix.esc_count >= 2 {
+                        if let Some(ix) = state.interaction_mut(routing_key)
+                            && let Some(ax) = ix.active_mut()
+                        {
+                            ax.esc_count += 1;
+                            if ax.esc_count >= 2 {
                                 return dispatch_interaction_msg(state, routing_key,
                                     interaction::Msg::AgentChat(widget::agent_chat::Msg::CancelPressed));
                             }
@@ -558,17 +547,21 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                 // Reset esc counter on any non-Esc key.
                 if agent_chat_active
                     && key != keyboard::Key::Named(keyboard::key::Named::Escape)
-                    && let Some(ix) = state.interaction_mut(routing_key) {
-                        ix.esc_count = 0;
-                    }
+                    && let Some(ix) = state.interaction_mut(routing_key)
+                    && let Some(ax) = ix.active_mut()
+                {
+                    ax.esc_count = 0;
+                }
 
                 // Agent chat: Enter sends, Shift+Enter inserts newline.
                 if agent_chat_active
                     && key == keyboard::Key::Named(keyboard::key::Named::Enter)
                 {
                     if mods.shift() {
-                        if let Some(ix) = state.interaction_mut(routing_key) {
-                            ix.chat_input.perform(
+                        if let Some(ix) = state.interaction_mut(routing_key)
+                            && let Some(ax) = ix.active_mut()
+                        {
+                            ax.chat_input.perform(
                                 iced::widget::text_editor::Action::Edit(
                                     iced::widget::text_editor::Edit::Enter,
                                 ),
@@ -591,6 +584,24 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
         }
     }
     Task::none()
+}
+
+/// Resolve a composite routing key `<scope>/<session_id>` to its AgentSession
+/// by borrowing only the three area substates. Useful when the caller needs
+/// to also hold a borrow on other fields (e.g. `highlighter`) of `State`.
+fn resolve_session_mut<'a>(
+    change: &'a mut area::change::State,
+    caps: &'a mut area::caps::State,
+    codex: &'a mut area::codex::State,
+    key: &str,
+) -> Option<&'a mut interaction::AgentSession> {
+    let (scope, session_id) = key.split_once('/')?;
+    let ix = match scope {
+        KEY_CAPS => &mut caps.interaction,
+        KEY_CODEX => &mut codex.interaction,
+        _ => change.interactions.get_mut(scope)?,
+    };
+    ix.find_session_mut(session_id)
 }
 
 /// Dispatch an interaction message to the appropriate area by routing key.
@@ -842,24 +853,19 @@ fn subscription(state: &State) -> Subscription<Message> {
         subs.push(widget::terminal::pty_subscription(format!("pty:{KEY_CODEX}")).map(tagged_pty));
     }
 
-    // Per-change agent subscriptions.
+    // Per-session agent subscriptions. Key format: `agent:<scope>/<session_id>`.
     if let Some(root) = state.project.project_root.as_ref() {
-        for (name, ix) in &state.change.interactions {
-            if ix.chat_session.is_some() {
-                let key = format!("agent:change:{name}");
+        let push_scope = |scope: &str, ix: &interaction::InteractionState, subs: &mut Vec<Subscription<Message>>| {
+            for session in &ix.sessions {
+                let key = format!("agent:{scope}/{}", session.session.id);
                 subs.push(agent::agent_subscription(key, root.clone()).map(tagged_agent));
             }
+        };
+        for (name, ix) in &state.change.interactions {
+            push_scope(name, ix, &mut subs);
         }
-        if state.caps.interaction.chat_session.is_some() {
-            subs.push(
-                agent::agent_subscription(format!("agent:{KEY_CAPS}"), root.clone()).map(tagged_agent),
-            );
-        }
-        if state.codex.interaction.chat_session.is_some() {
-            subs.push(
-                agent::agent_subscription(format!("agent:{KEY_CODEX}"), root.clone()).map(tagged_agent),
-            );
-        }
+        push_scope(KEY_CAPS, &state.caps.interaction, &mut subs);
+        push_scope(KEY_CODEX, &state.codex.interaction, &mut subs);
     }
 
     // Global keyboard events.
@@ -901,9 +907,7 @@ fn tagged_pty((key, e): (String, widget::terminal::PtyEvent)) -> Message {
     Message::PtyEvent(routing_key, e)
 }
 fn tagged_agent((key, e): (String, agent::AgentEvent)) -> Message {
-    let routing_key = key.strip_prefix("agent:change:").unwrap_or(
-        key.strip_prefix("agent:").unwrap_or(&key)
-    ).to_string();
+    let routing_key = key.strip_prefix("agent:").unwrap_or(&key).to_string();
     Message::AgentEvent(routing_key, e)
 }
 

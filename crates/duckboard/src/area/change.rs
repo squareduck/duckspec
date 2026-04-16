@@ -12,7 +12,7 @@ use crate::theme;
 use crate::vcs::{self, ChangedFile, FileStatus};
 use crate::widget::{collapsible, interaction_toggle, tab_bar, tree_view};
 
-use super::interaction::{self, InteractionMode, InteractionState};
+use super::interaction::{self, AgentSession, InteractionMode, InteractionState, SessionControls};
 
 const ICON_BRANCH: &[u8] = include_bytes!("../../assets/icon_branch.svg");
 const ICON_FILE: &[u8] = include_bytes!("../../assets/icon_file.svg");
@@ -90,7 +90,7 @@ impl State {
     }
 
     /// Promote an exploration to a real change: remove from explorations list,
-    /// migrate interaction state and chat session to the new name.
+    /// migrate interaction state and chat sessions to the new name.
     pub fn promote_exploration(
         &mut self,
         exploration_name: &str,
@@ -98,12 +98,17 @@ impl State {
         project_root: Option<&Path>,
     ) {
         self.explorations.retain(|n| n != exploration_name);
-        if let Some(ix) = self.interactions.remove(exploration_name) {
+        if let Some(mut ix) = self.interactions.remove(exploration_name) {
+            for ax in ix.sessions.iter_mut() {
+                ax.session.scope = real_name.to_string();
+            }
+            interaction::reconcile_display_names(&mut ix.sessions);
             self.interactions.insert(real_name.to_string(), ix);
         }
         if self.selected_change.as_deref() == Some(exploration_name) {
             self.selected_change = Some(real_name.to_string());
         }
+        crate::chat_store::rename_scope(exploration_name, real_name, project_root);
         crate::chat_store::save_explorations(
             &self.explorations,
             self.exploration_counter,
@@ -160,15 +165,13 @@ pub fn update(
                 );
             }
 
-            // Auto-open interaction for any change.
+            // Auto-open interaction and ensure at least one session exists.
             let ix = state.interactions.entry(name.clone()).or_default();
+            interaction::ensure_sessions(ix, &name, project.project_root.as_deref(), highlighter);
             if !ix.visible {
                 ix.visible = true;
                 if ix.mode == InteractionMode::Terminal {
                     interaction::spawn_terminal(ix);
-                }
-                if ix.mode == InteractionMode::AgentChat && ix.chat_session.is_none() {
-                    interaction::spawn_agent_session(ix, &name, project.project_root.as_deref(), highlighter);
                 }
             }
         }
@@ -188,27 +191,52 @@ pub fn update(
         Message::SelectTab(idx) => state.tabs.select(idx),
         Message::CloseTab(idx) => state.tabs.close(idx),
         Message::Interaction(msg) => {
-            let session_name = state
-                .selected_change
-                .clone()
-                .unwrap_or_else(|| "default".to_string());
-            let Some(ix) = state.active_interaction_mut() else { return };
-            let is_mode_switch = matches!(msg, interaction::Msg::SwitchMode(_));
-            let just_opened = interaction::update(ix, msg, highlighter);
+            let scope = match state.selected_change.clone() {
+                Some(n) => n,
+                None => return,
+            };
+            match msg {
+                interaction::Msg::NewSession => {
+                    let Some(ix) = state.active_interaction_mut() else { return };
+                    interaction::ensure_sessions(ix, &scope, project.project_root.as_deref(), highlighter);
+                    let new_session = AgentSession::new(scope.clone());
+                    let _ = crate::chat_store::save_session(&new_session.session, project.project_root.as_deref());
+                    ix.sessions.insert(0, new_session);
+                    ix.active_session = 0;
+                    interaction::reconcile_display_names(&mut ix.sessions);
+                }
+                interaction::Msg::SelectSession(id) => {
+                    let Some(ix) = state.active_interaction_mut() else { return };
+                    if let Some(idx) = ix.find_session_index(&id) {
+                        ix.active_session = idx;
+                    }
+                }
+                interaction::Msg::ClearSession => {
+                    // Multi-session areas don't surface a Clear button, but
+                    // handle it defensively by resetting the active session.
+                    let Some(ix) = state.active_interaction_mut() else { return };
+                    clear_active_session(ix, &scope, project.project_root.as_deref());
+                }
+                other => {
+                    let Some(ix) = state.active_interaction_mut() else { return };
+                    let is_mode_switch = matches!(other, interaction::Msg::SwitchMode(_));
+                    let just_opened = interaction::update(ix, other, highlighter);
 
-            if just_opened && ix.mode == InteractionMode::Terminal {
-                interaction::spawn_terminal(ix);
-            }
-            if is_mode_switch && ix.mode == InteractionMode::Terminal {
-                interaction::spawn_terminal(ix);
-            }
+                    if just_opened && ix.mode == InteractionMode::Terminal {
+                        interaction::spawn_terminal(ix);
+                    }
+                    if is_mode_switch && ix.mode == InteractionMode::Terminal {
+                        interaction::spawn_terminal(ix);
+                    }
 
-            let wants_agent = (just_opened || is_mode_switch) && ix.mode == InteractionMode::AgentChat;
-            if wants_agent && ix.chat_session.is_none() {
-                interaction::spawn_agent_session(ix, &session_name, project.project_root.as_deref(), highlighter);
-            }
+                    let wants_agent = (just_opened || is_mode_switch) && ix.mode == InteractionMode::AgentChat;
+                    if wants_agent {
+                        interaction::ensure_sessions(ix, &scope, project.project_root.as_deref(), highlighter);
+                    }
 
-            ix.terminal_focused = ix.visible && ix.mode == InteractionMode::Terminal;
+                    ix.terminal_focused = ix.visible && ix.mode == InteractionMode::Terminal;
+                }
+            }
         }
         Message::SelectChangedFile(path) => {
             state.audit_active = false;
@@ -247,12 +275,10 @@ pub fn update(
             state.explorations.push(name.clone());
             state.selected_change = Some(name.clone());
             crate::chat_store::save_explorations(&state.explorations, state.exploration_counter, project.project_root.as_deref());
-            // Auto-open interaction panel.
+            // Auto-open interaction panel with a fresh session.
             let ix = state.interactions.entry(name.clone()).or_default();
+            interaction::ensure_sessions(ix, &name, project.project_root.as_deref(), highlighter);
             ix.visible = true;
-            if ix.mode == InteractionMode::AgentChat && ix.chat_session.is_none() {
-                interaction::spawn_agent_session(ix, &name, project.project_root.as_deref(), highlighter);
-            }
             if ix.mode == InteractionMode::Terminal {
                 interaction::spawn_terminal(ix);
             }
@@ -263,7 +289,7 @@ pub fn update(
             if state.selected_change.as_deref() == Some(&name) {
                 state.selected_change = None;
             }
-            crate::chat_store::delete_session(&name, project.project_root.as_deref());
+            crate::chat_store::delete_scope(&name, project.project_root.as_deref());
             crate::chat_store::save_explorations(&state.explorations, state.exploration_counter, project.project_root.as_deref());
         }
         Message::ShowAudit => {
@@ -318,7 +344,7 @@ pub fn view<'a>(
         ];
 
         if let Some(ix) = ix {
-            let interaction_col = interaction::view_column(ix, Message::Interaction);
+            let interaction_col = interaction::view_column(ix, Message::Interaction, SessionControls::Single);
             main_row = main_row.push(
                 container(interaction_col)
                     .width(Length::Fill)
@@ -356,7 +382,7 @@ pub fn view<'a>(
 
     if let Some(ix) = ix
         && ix.visible {
-            let interaction_col = interaction::view_column(ix, Message::Interaction);
+            let interaction_col = interaction::view_column(ix, Message::Interaction, SessionControls::Multi);
 
             main_row = main_row.push(
                 container(interaction_col)
@@ -367,6 +393,34 @@ pub fn view<'a>(
         }
 
     main_row.height(Length::Fill).into()
+}
+
+/// Reset the active session for a scope: cancel agent, delete persisted file,
+/// and replace with a fresh empty session under a new id.
+fn clear_active_session(
+    ix: &mut InteractionState,
+    scope: &str,
+    project_root: Option<&Path>,
+) {
+    if ix.sessions.is_empty() {
+        ix.sessions.push(AgentSession::new(scope.to_string()));
+        ix.active_session = 0;
+        return;
+    }
+    let idx = ix.active_session.min(ix.sessions.len() - 1);
+    if let Some(ax) = ix.sessions.get(idx) {
+        if let Some(handle) = &ax.agent_handle {
+            handle.cancel();
+        }
+        crate::chat_store::delete_session(
+            &ax.session.scope,
+            &ax.session.id,
+            project_root,
+        );
+    }
+    ix.sessions[idx] = AgentSession::new(scope.to_string());
+    ix.active_session = idx;
+    interaction::reconcile_display_names(&mut ix.sessions);
 }
 
 fn view_list<'a>(state: &'a State, project: &'a ProjectData) -> Element<'a, Message> {

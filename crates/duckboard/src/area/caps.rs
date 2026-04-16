@@ -9,7 +9,7 @@ use crate::data::ProjectData;
 use crate::theme;
 use crate::widget::{collapsible, interaction_toggle, tab_bar, tree_view};
 
-use super::interaction::{self, InteractionMode, InteractionState};
+use super::interaction::{self, AgentSession, InteractionMode, InteractionState, SessionControls};
 
 // ── State ────────────────────────────────────────────────────────────────────
 
@@ -67,23 +67,39 @@ pub fn update(
         Message::SelectTab(idx) => state.tabs.select(idx),
         Message::CloseTab(idx) => state.tabs.close(idx),
         Message::Interaction(msg) => {
-            let is_mode_switch = matches!(msg, interaction::Msg::SwitchMode(_));
-            let just_opened = interaction::update(&mut state.interaction, msg, highlighter);
+            match msg {
+                interaction::Msg::ClearSession => {
+                    clear_single_session(&mut state.interaction, "caps", project.project_root.as_deref());
+                }
+                interaction::Msg::NewSession | interaction::Msg::SelectSession(_) => {
+                    // Caps is single-session; ignore.
+                }
+                other => {
+                    let is_mode_switch = matches!(other, interaction::Msg::SwitchMode(_));
+                    let just_opened = interaction::update(&mut state.interaction, other, highlighter);
 
-            if just_opened && state.interaction.mode == InteractionMode::Terminal {
-                interaction::spawn_terminal(&mut state.interaction);
-            }
-            if is_mode_switch && state.interaction.mode == InteractionMode::Terminal {
-                interaction::spawn_terminal(&mut state.interaction);
-            }
+                    if just_opened && state.interaction.mode == InteractionMode::Terminal {
+                        interaction::spawn_terminal(&mut state.interaction);
+                    }
+                    if is_mode_switch && state.interaction.mode == InteractionMode::Terminal {
+                        interaction::spawn_terminal(&mut state.interaction);
+                    }
 
-            let wants_agent = (just_opened || is_mode_switch) && state.interaction.mode == InteractionMode::AgentChat;
-            if wants_agent && state.interaction.chat_session.is_none() {
-                interaction::spawn_agent_session(&mut state.interaction, "caps", project.project_root.as_deref(), highlighter);
-            }
+                    let wants_agent = (just_opened || is_mode_switch)
+                        && state.interaction.mode == InteractionMode::AgentChat;
+                    if wants_agent {
+                        interaction::ensure_sessions(
+                            &mut state.interaction,
+                            "caps",
+                            project.project_root.as_deref(),
+                            highlighter,
+                        );
+                    }
 
-            state.interaction.terminal_focused = state.interaction.visible
-                && state.interaction.mode == InteractionMode::Terminal;
+                    state.interaction.terminal_focused = state.interaction.visible
+                        && state.interaction.mode == InteractionMode::Terminal;
+                }
+            }
         }
         Message::TabContent(tab_bar::TabContentMsg::EditorAction(action)) => {
             crate::handle_editor_action(&mut state.tabs, action, highlighter);
@@ -120,7 +136,7 @@ pub fn view<'a>(
     ];
 
     if state.interaction.visible {
-        let interaction_col = interaction::view_column(&state.interaction, Message::Interaction);
+        let interaction_col = interaction::view_column(&state.interaction, Message::Interaction, SessionControls::Single);
         main_row = main_row.push(
             container(interaction_col)
                 .width(state.interaction.width)
@@ -130,6 +146,28 @@ pub fn view<'a>(
     }
 
     main_row.height(Length::Fill).into()
+}
+
+fn clear_single_session(
+    ix: &mut InteractionState,
+    scope: &str,
+    project_root: Option<&std::path::Path>,
+) {
+    if ix.sessions.is_empty() {
+        ix.sessions.push(AgentSession::new(scope.to_string()));
+        ix.active_session = 0;
+        return;
+    }
+    let idx = ix.active_session.min(ix.sessions.len() - 1);
+    if let Some(ax) = ix.sessions.get(idx) {
+        if let Some(handle) = &ax.agent_handle {
+            handle.cancel();
+        }
+        crate::chat_store::delete_session(&ax.session.scope, &ax.session.id, project_root);
+    }
+    ix.sessions[idx] = AgentSession::new(scope.to_string());
+    ix.active_session = idx;
+    interaction::reconcile_display_names(&mut ix.sessions);
 }
 
 fn view_list<'a>(state: &'a State, project: &'a ProjectData) -> Element<'a, Message> {
