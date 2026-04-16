@@ -137,6 +137,8 @@ enum Message {
     KeyPress(keyboard::Key, keyboard::Modifiers, Option<String>),
     // Per-instance PTY events (key identifies the interaction)
     PtyEvent(String, widget::terminal::PtyEvent),
+    // Clipboard → PTY paste (key identifies the interaction)
+    TerminalPaste(String, Option<String>),
     // Per-instance agent events (key identifies the interaction)
     AgentEvent(String, agent::AgentEvent),
     // Settings
@@ -349,6 +351,15 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
             area::settings::update(&mut state.settings, &mut state.config, msg);
             theme::set_fonts(&state.config);
         }
+        // Clipboard → PTY paste.
+        Message::TerminalPaste(key, Some(text)) => {
+            if let Some(ix) = state.interaction_mut(&key)
+                && let Some(ref mut ts) = ix.terminal
+            {
+                ts.paste_text(&text);
+            }
+        }
+        Message::TerminalPaste(_, None) => {}
         // Per-instance PTY events
         Message::PtyEvent(key, evt) => {
             use widget::terminal::PtyEvent;
@@ -575,11 +586,43 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                 }
 
                 // Terminal keyboard capture.
-                if terminal_focused
-                    && let Some(ix) = state.interaction_mut(routing_key)
-                        && let Some(ref mut ts) = ix.terminal {
-                            ts.write_key(key, mods, text.as_deref());
+                if terminal_focused {
+                    // Clipboard shortcuts: Cmd+C/V on macOS, Ctrl+Shift+C/V elsewhere.
+                    let clipboard_combo = if cfg!(target_os = "macos") {
+                        mods.logo() && !mods.control() && !mods.alt() && !mods.shift()
+                    } else {
+                        mods.control() && mods.shift() && !mods.alt() && !mods.logo()
+                    };
+                    if clipboard_combo
+                        && let keyboard::Key::Character(c) = &key
+                    {
+                        match c.as_str().to_ascii_lowercase().as_str() {
+                            "c" => {
+                                let selection = state
+                                    .interaction_mut(routing_key)
+                                    .and_then(|ix| ix.terminal.as_ref())
+                                    .and_then(|ts| ts.selection_text());
+                                if let Some(text) = selection {
+                                    return iced::clipboard::write(text);
+                                }
+                                return Task::none();
+                            }
+                            "v" => {
+                                let route = routing_key.clone();
+                                return iced::clipboard::read().map(move |opt| {
+                                    Message::TerminalPaste(route.clone(), opt)
+                                });
+                            }
+                            _ => {}
                         }
+                    }
+
+                    if let Some(ix) = state.interaction_mut(routing_key)
+                        && let Some(ref mut ts) = ix.terminal
+                    {
+                        ts.write_key(key, mods, text.as_deref());
+                    }
+                }
             }
         }
     }

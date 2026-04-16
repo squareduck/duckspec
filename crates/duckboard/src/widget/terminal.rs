@@ -10,6 +10,8 @@ use std::sync::{Arc, Mutex};
 
 use alacritty_terminal::event::{Event as TermEvent, EventListener};
 use alacritty_terminal::grid::{Dimensions, Scroll};
+use alacritty_terminal::index::{Column, Line, Point as GridPoint, Side};
+use alacritty_terminal::selection::{Selection, SelectionType};
 use alacritty_terminal::term::cell::Flags;
 use alacritty_terminal::term::{Config, Term, TermMode};
 use alacritty_terminal::vte::ansi::{self, Color as AnsiColor, NamedColor, Rgb};
@@ -43,6 +45,7 @@ struct RenderCell {
     bg: Color,
     bold: bool,
     italic: bool,
+    selected: bool,
 }
 
 impl Default for RenderCell {
@@ -53,6 +56,7 @@ impl Default for RenderCell {
             bg: theme::bg_base(),
             bold: false,
             italic: false,
+            selected: false,
         }
     }
 }
@@ -216,8 +220,17 @@ pub struct TerminalState {
     pending_resize: Cell<Option<(usize, usize)>>,
     /// Scroll delta queued by Canvas update(). Applied in next feed().
     pending_scroll: Cell<isize>,
+    /// Selection event queued by Canvas update(). Applied in next feed().
+    pending_selection: Cell<Option<PendingSelection>>,
     /// The portable-pty master handle, needed for resize signals.
     pty_master: Option<Box<dyn portable_pty::MasterPty + Send>>,
+}
+
+/// A selection mutation queued from the canvas thread.
+#[derive(Clone, Copy)]
+enum PendingSelection {
+    Start(GridPoint, Side),
+    Update(GridPoint, Side),
 }
 
 impl TerminalState {
@@ -252,6 +265,7 @@ impl TerminalState {
             rows: DEFAULT_ROWS,
             pending_resize: Cell::new(None),
             pending_scroll: Cell::new(0),
+            pending_selection: Cell::new(None),
             pty_master: None,
         })
     }
@@ -267,23 +281,48 @@ impl TerminalState {
         if scroll != 0 {
             self.term.scroll_display(Scroll::Delta(scroll as i32));
         }
+        // Apply any pending selection mutation.
+        self.apply_pending_selection();
         self.parser.advance(&mut self.term, bytes);
         self.flush_writeback();
         self.rebuild_buffer();
         self.generation += 1;
     }
 
-    /// Apply pending scroll without waiting for PTY output.
+    /// Apply pending scroll / selection without waiting for PTY output.
     pub fn apply_scroll(&mut self) {
+        let mut dirty = false;
         let scroll = self.pending_scroll.replace(0);
         if scroll != 0 {
             self.term.scroll_display(Scroll::Delta(scroll as i32));
+            dirty = true;
+        }
+        if self.apply_pending_selection() {
+            dirty = true;
+        }
+        if dirty {
             self.rebuild_buffer();
             self.generation += 1;
         }
         if let Some((cols, rows)) = self.pending_resize.take() {
             self.resize(cols, rows);
         }
+    }
+
+    fn apply_pending_selection(&mut self) -> bool {
+        let Some(ev) = self.pending_selection.take() else { return false };
+        match ev {
+            PendingSelection::Start(pt, side) => {
+                self.term.selection =
+                    Some(Selection::new(SelectionType::Simple, pt, side));
+            }
+            PendingSelection::Update(pt, side) => {
+                if let Some(ref mut sel) = self.term.selection {
+                    sel.update(pt, side);
+                }
+            }
+        }
+        true
     }
 
     /// Set the PTY writer (called once when the PTY subscription is ready).
@@ -307,6 +346,51 @@ impl TerminalState {
     pub fn request_scroll(&self, delta: isize) {
         let current = self.pending_scroll.get();
         self.pending_scroll.set(current + delta);
+    }
+
+    /// Begin a new selection at the given canvas-local pixel coordinates.
+    pub fn queue_selection_start(&self, px: f32, py: f32) {
+        let (pt, side) = self.point_from_canvas(px, py);
+        self.pending_selection.set(Some(PendingSelection::Start(pt, side)));
+    }
+
+    /// Extend the active selection to the given canvas-local pixel coordinates.
+    pub fn queue_selection_update(&self, px: f32, py: f32) {
+        let (pt, side) = self.point_from_canvas(px, py);
+        self.pending_selection.set(Some(PendingSelection::Update(pt, side)));
+    }
+
+    /// Return the currently selected text, if any.
+    pub fn selection_text(&self) -> Option<String> {
+        self.term.selection_to_string().filter(|s| !s.is_empty())
+    }
+
+    /// Write text to the PTY, honoring bracketed paste mode.
+    pub fn paste_text(&mut self, text: &str) {
+        let Some(ref mut writer) = self.pty_writer else { return };
+        let bracketed = self.term.mode().contains(TermMode::BRACKETED_PASTE);
+        if bracketed {
+            let _ = writer.write_all(b"\x1b[200~");
+            let _ = writer.write_all(text.as_bytes());
+            let _ = writer.write_all(b"\x1b[201~");
+        } else {
+            let _ = writer.write_all(text.as_bytes());
+        }
+        let _ = writer.flush();
+    }
+
+    /// Convert a canvas-local pixel position to a grid point (clamped to grid).
+    fn point_from_canvas(&self, px: f32, py: f32) -> (GridPoint, Side) {
+        let cols = self.cols.max(1);
+        let rows = self.rows.max(1);
+        let col_float = ((px - PAD_X) / CELL_WIDTH).max(0.0);
+        let col = (col_float as usize).min(cols - 1);
+        let side = if col_float - col as f32 <= 0.5 { Side::Left } else { Side::Right };
+        let row_float = ((py - PAD_Y) / CELL_HEIGHT).max(0.0);
+        let row = (row_float as usize).min(rows - 1);
+        let display_offset = self.term.grid().display_offset() as i32;
+        let line = (row as i32) - display_offset;
+        (GridPoint::new(Line(line), Column(col)), side)
     }
 
     /// Encode a keyboard event and write it to the PTY.
@@ -365,6 +449,11 @@ impl TerminalState {
     }
 
     fn rebuild_buffer(&mut self) {
+        let selection_range = self
+            .term
+            .selection
+            .as_ref()
+            .and_then(|s| s.to_range(&self.term));
         let content = self.term.renderable_content();
         let term_colors = content.colors;
         let fallback = &self.default_colors;
@@ -440,6 +529,10 @@ impl TerminalState {
                 std::mem::swap(&mut fg, &mut bg);
             }
 
+            let selected = selection_range
+                .as_ref()
+                .is_some_and(|r| r.contains(indexed.point));
+
             let idx = row_idx * snap_cols + col_idx;
             if idx < self.buffer.cells.len() {
                 self.buffer.cells[idx] = RenderCell {
@@ -448,6 +541,7 @@ impl TerminalState {
                     bg,
                     bold,
                     italic,
+                    selected,
                 };
             }
         }
@@ -493,10 +587,11 @@ pub struct TerminalCanvas<'a> {
     state: &'a TerminalState,
 }
 
-/// Internal canvas state — just the geometry cache.
+/// Internal canvas state — geometry cache + drag tracking.
 pub struct CanvasState {
     cache: Cache,
     last_generation: Cell<u64>,
+    dragging: Cell<bool>,
 }
 
 impl Default for CanvasState {
@@ -504,6 +599,7 @@ impl Default for CanvasState {
         Self {
             cache: Cache::default(),
             last_generation: Cell::new(0),
+            dragging: Cell::new(false),
         }
     }
 }
@@ -513,21 +609,46 @@ impl<'a> canvas::Program<()> for TerminalCanvas<'a> {
 
     fn update(
         &self,
-        _state: &mut Self::State,
+        state: &mut Self::State,
         event: &canvas::Event,
-        _bounds: Rectangle,
-        _cursor: mouse::Cursor,
+        bounds: Rectangle,
+        cursor: mouse::Cursor,
     ) -> Option<canvas::Action<()>> {
         match event {
             canvas::Event::Mouse(mouse::Event::WheelScrolled { delta }) => {
+                if !cursor.is_over(bounds) {
+                    return None;
+                }
+                // macOS natural scrolling: swipe up (positive y) reveals older
+                // scrollback, which in alacritty is a positive Scroll::Delta.
                 let lines = match delta {
-                    mouse::ScrollDelta::Lines { y, .. } => -*y as isize,
-                    mouse::ScrollDelta::Pixels { y, .. } => {
-                        -(*y / CELL_HEIGHT) as isize
-                    }
+                    mouse::ScrollDelta::Lines { y, .. } => *y as isize,
+                    mouse::ScrollDelta::Pixels { y, .. } => (*y / CELL_HEIGHT) as isize,
                 };
                 if lines != 0 {
                     self.state.request_scroll(lines);
+                    return Some(canvas::Action::publish(()).and_capture());
+                }
+                None
+            }
+            canvas::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => {
+                let Some(pos) = cursor.position_in(bounds) else { return None };
+                self.state.queue_selection_start(pos.x, pos.y);
+                state.dragging.set(true);
+                Some(canvas::Action::publish(()).and_capture())
+            }
+            canvas::Event::Mouse(mouse::Event::CursorMoved { .. }) => {
+                if state.dragging.get()
+                    && let Some(pos) = cursor.position_from(bounds.position())
+                {
+                    self.state.queue_selection_update(pos.x, pos.y);
+                    return Some(canvas::Action::publish(()).and_capture());
+                }
+                None
+            }
+            canvas::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) => {
+                if state.dragging.get() {
+                    state.dragging.set(false);
                     return Some(canvas::Action::publish(()).and_capture());
                 }
                 None
@@ -578,6 +699,18 @@ impl<'a> canvas::Program<()> for TerminalCanvas<'a> {
                             IcedPoint::new(x, y),
                             Size::new(CELL_WIDTH, CELL_HEIGHT),
                             cell.bg,
+                        );
+                    }
+
+                    // Overlay selection tint.
+                    if cell.selected {
+                        frame.fill_rectangle(
+                            IcedPoint::new(x, y),
+                            Size::new(CELL_WIDTH, CELL_HEIGHT),
+                            Color {
+                                a: 0.35,
+                                ..theme::accent()
+                            },
                         );
                     }
 
