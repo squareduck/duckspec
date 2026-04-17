@@ -287,36 +287,86 @@ fn handle_chat_action_on(
     editor: &mut EditorState,
     action: crate::widget::text_edit::EditorAction,
 ) {
-    use crate::widget::text_edit::EditorAction;
-    match action {
-        EditorAction::Click(pos) => {
-            editor.cursor = pos;
-            editor.anchor = None;
-        }
-        EditorAction::Drag(pos) => {
-            if editor.anchor.is_none() {
-                editor.anchor = Some(editor.cursor);
-            }
-            editor.cursor = pos;
-        }
-        EditorAction::Scroll { dy, dx, viewport_height, content_height, viewport_width, content_width } => {
-            let max_y = (content_height - viewport_height).max(0.0);
-            editor.scroll_y = (editor.scroll_y + dy).clamp(0.0, max_y);
-            let max_x = (content_width - viewport_width).max(0.0);
-            editor.scroll_x = (editor.scroll_x + dx).clamp(0.0, max_x);
-        }
-        EditorAction::SelectAll => editor.select_all(),
-        EditorAction::MoveLeft(sel) => editor.move_left(sel),
-        EditorAction::MoveRight(sel) => editor.move_right(sel),
-        EditorAction::MoveUp(sel) => editor.move_up(sel),
-        EditorAction::MoveDown(sel) => editor.move_down(sel),
-        EditorAction::MoveHome(sel) => editor.move_home(sel),
-        EditorAction::MoveEnd(sel) => editor.move_end(sel),
-        EditorAction::MoveWordLeft(sel) => editor.move_word_left(sel),
-        EditorAction::MoveWordRight(sel) => editor.move_word_right(sel),
-        EditorAction::Copy => {}
-        _ => {}
+    // Chat editors are read-only — skip mutating actions.
+    if !action.is_mutating() {
+        editor.apply_action(action);
     }
+}
+
+// ── Agent chat keyboard routing ────────────────────────────────────────────
+
+/// Result of handling an agent-chat keyboard event.
+pub enum AgentChatKeyResult {
+    /// The key was consumed; caller should return `Task::none()`.
+    Handled,
+    /// The key maps to a chat message to dispatch through the update cycle.
+    Dispatch(agent_chat::Msg),
+    /// The key was not consumed by agent chat keyboard handling.
+    NotHandled,
+}
+
+/// Handle agent-chat-specific keyboard shortcuts: completion navigation,
+/// Esc-Esc cancel, Enter to send, Shift+Enter for newline. Returns how the
+/// caller should proceed.
+pub fn handle_agent_chat_key(
+    ix: &mut InteractionState,
+    key: &iced::keyboard::Key,
+    mods: iced::keyboard::Modifiers,
+) -> AgentChatKeyResult {
+    use iced::keyboard;
+    use iced::keyboard::key::Named;
+
+    let Some(ax) = ix.active_mut() else {
+        return AgentChatKeyResult::NotHandled;
+    };
+
+    // Completion shortcuts (Tab, Esc, Ctrl+N/P) when popup is visible.
+    if ax.chat_completion.visible {
+        let completion_msg = match key {
+            keyboard::Key::Named(Named::Tab) => Some(agent_chat::Msg::CompletionAccept),
+            keyboard::Key::Named(Named::Escape) => Some(agent_chat::Msg::CompletionDismiss),
+            _ if mods.control() && *key == keyboard::Key::Character("n".into()) => {
+                Some(agent_chat::Msg::CompletionNext)
+            }
+            _ if mods.control() && *key == keyboard::Key::Character("p".into()) => {
+                Some(agent_chat::Msg::CompletionPrev)
+            }
+            _ => None,
+        };
+        if let Some(msg) = completion_msg {
+            return AgentChatKeyResult::Dispatch(msg);
+        }
+    }
+
+    // Esc-Esc to cancel streaming.
+    if *key == keyboard::Key::Named(Named::Escape) && ax.session.is_streaming {
+        ax.esc_count += 1;
+        if ax.esc_count >= 2 {
+            return AgentChatKeyResult::Dispatch(agent_chat::Msg::CancelPressed);
+        }
+        return AgentChatKeyResult::Handled;
+    }
+
+    // Reset esc counter on any non-Esc key.
+    if *key != keyboard::Key::Named(Named::Escape) {
+        ax.esc_count = 0;
+    }
+
+    // Enter sends; Shift+Enter inserts newline.
+    if *key == keyboard::Key::Named(Named::Enter) {
+        if mods.shift() {
+            ax.chat_input.perform(
+                iced::widget::text_editor::Action::Edit(
+                    iced::widget::text_editor::Edit::Enter,
+                ),
+            );
+        } else {
+            return AgentChatKeyResult::Dispatch(agent_chat::Msg::SendPressed);
+        }
+        return AgentChatKeyResult::Handled;
+    }
+
+    AgentChatKeyResult::NotHandled
 }
 
 // ── Completion helpers ──────────────────────────────────────────────────────
@@ -355,6 +405,57 @@ fn completion_accept(ax: &mut AgentSession) {
         ax.chat_input.perform(text_editor::Action::Move(text_editor::Motion::DocumentEnd));
     }
     ax.chat_completion.visible = false;
+}
+
+// ── High-level update with side effects ────────────────────────────────────
+
+/// Handle an interaction message with the standard side effects: spawn a
+/// terminal or ensure agent sessions when the panel opens or mode switches.
+/// Suitable for the common `other =>` arm shared by Caps, Codex, and Change.
+pub fn update_with_side_effects(
+    state: &mut InteractionState,
+    msg: Msg,
+    scope: &str,
+    project_root: Option<&std::path::Path>,
+    highlighter: &SyntaxHighlighter,
+) {
+    let is_mode_switch = matches!(msg, Msg::SwitchMode(_));
+    let just_opened = update(state, msg, highlighter);
+
+    if (just_opened || is_mode_switch) && state.mode == InteractionMode::Terminal {
+        spawn_terminal(state);
+    }
+
+    if (just_opened || is_mode_switch) && state.mode == InteractionMode::AgentChat {
+        ensure_sessions(state, scope, project_root, highlighter);
+    }
+
+    state.terminal_focused = state.visible && state.mode == InteractionMode::Terminal;
+}
+
+// ── Session management ─────────────────────────────────────────────────────
+
+/// Clear and reset the active session for single-session areas (Caps, Codex).
+pub fn clear_single_session(
+    ix: &mut InteractionState,
+    scope: &str,
+    project_root: Option<&std::path::Path>,
+) {
+    if ix.sessions.is_empty() {
+        ix.sessions.push(AgentSession::new(scope.to_string()));
+        ix.active_session = 0;
+        return;
+    }
+    let idx = ix.active_session.min(ix.sessions.len() - 1);
+    if let Some(ax) = ix.sessions.get(idx) {
+        if let Some(handle) = &ax.agent_handle {
+            handle.cancel();
+        }
+        crate::chat_store::delete_session(&ax.session.scope, &ax.session.id, project_root);
+    }
+    ix.sessions[idx] = AgentSession::new(scope.to_string());
+    ix.active_session = idx;
+    reconcile_display_names(&mut ix.sessions);
 }
 
 // ── Spawn helpers ───────────────────────────────────────────────────────────
@@ -426,6 +527,56 @@ pub fn reconcile_display_names(sessions: &mut [AgentSession]) {
             }
         }
     }
+}
+
+// ── Shared area layout ────────────────────────────────────────────────────
+
+/// Standard area layout: list | divider | content | toggle | [interaction column].
+/// Used by Caps and Codex (and potentially others with the same structure).
+pub fn area_layout<'a, M: 'a + Clone>(
+    list: Element<'a, M>,
+    content: Element<'a, M>,
+    interaction: &'a InteractionState,
+    controls: SessionControls,
+    wrap: impl Fn(Msg) -> M + 'a + Clone,
+) -> Element<'a, M> {
+    use iced::widget::{container, row, Space};
+    use iced::Length;
+
+    let divider = container(Space::new().height(Length::Fill))
+        .width(1.0)
+        .style(crate::theme::divider);
+
+    let toggle = crate::widget::interaction_toggle::view(
+        interaction.visible,
+        interaction.width,
+        {
+            let w = wrap.clone();
+            move |m| w(Msg::Handle(m))
+        },
+    );
+
+    let mut main_row = row![
+        container(list)
+            .width(crate::theme::LIST_COLUMN_WIDTH)
+            .height(Length::Fill)
+            .style(crate::theme::surface),
+        divider,
+        container(content).width(Length::Fill).height(Length::Fill),
+        toggle,
+    ];
+
+    if interaction.visible {
+        let interaction_col = view_column(interaction, wrap, controls);
+        main_row = main_row.push(
+            container(interaction_col)
+                .width(interaction.width)
+                .height(Length::Fill)
+                .style(crate::theme::surface),
+        );
+    }
+
+    main_row.height(Length::Fill).into()
 }
 
 // ── View ────────────────────────────────────────────────────────────────────

@@ -1,14 +1,14 @@
 //! Codex area — browse codex entries.
 
-use iced::widget::{button, column, container, row, scrollable, svg, text, Space};
+use iced::widget::{button, column, row, scrollable, svg, text};
 use iced::widget::text::Wrapping;
 use iced::{Element, Length};
 
 use crate::data::ProjectData;
 use crate::theme;
-use crate::widget::{collapsible, interaction_toggle, tab_bar};
+use crate::widget::{collapsible, tab_bar};
 
-use super::interaction::{self, AgentSession, InteractionMode, InteractionState, SessionControls};
+use super::interaction::{self, InteractionState, SessionControls};
 
 const ICON_FILE: &[u8] = include_bytes!("../../assets/icon_file.svg");
 const ICON_SIZE: f32 = 14.0;
@@ -63,35 +63,16 @@ pub fn update(
         Message::Interaction(msg) => {
             match msg {
                 interaction::Msg::ClearSession => {
-                    clear_single_session(&mut state.interaction, "codex", project.project_root.as_deref());
+                    interaction::clear_single_session(&mut state.interaction, "codex", project.project_root.as_deref());
                 }
                 interaction::Msg::NewSession | interaction::Msg::SelectSession(_) => {
                     // Codex is single-session; ignore.
                 }
                 other => {
-                    let is_mode_switch = matches!(other, interaction::Msg::SwitchMode(_));
-                    let just_opened = interaction::update(&mut state.interaction, other, highlighter);
-
-                    if just_opened && state.interaction.mode == InteractionMode::Terminal {
-                        interaction::spawn_terminal(&mut state.interaction);
-                    }
-                    if is_mode_switch && state.interaction.mode == InteractionMode::Terminal {
-                        interaction::spawn_terminal(&mut state.interaction);
-                    }
-
-                    let wants_agent = (just_opened || is_mode_switch)
-                        && state.interaction.mode == InteractionMode::AgentChat;
-                    if wants_agent {
-                        interaction::ensure_sessions(
-                            &mut state.interaction,
-                            "codex",
-                            project.project_root.as_deref(),
-                            highlighter,
-                        );
-                    }
-
-                    state.interaction.terminal_focused = state.interaction.visible
-                        && state.interaction.mode == InteractionMode::Terminal;
+                    interaction::update_with_side_effects(
+                        &mut state.interaction, other, "codex",
+                        project.project_root.as_deref(), highlighter,
+                    );
                 }
             }
         }
@@ -107,38 +88,13 @@ pub fn view<'a>(
     state: &'a State,
     project: &'a ProjectData,
 ) -> Element<'a, Message> {
-    let list = view_list(state, project);
-    let content = view_content(state);
-    let divider = container(Space::new().height(Length::Fill))
-        .width(1.0)
-        .style(theme::divider);
-
-    let toggle =
-        interaction_toggle::view(state.interaction.visible, state.interaction.width, |m| Message::Interaction(interaction::Msg::Handle(m)));
-
-    let mut main_row = row![
-        container(list)
-            .width(theme::LIST_COLUMN_WIDTH)
-            .height(Length::Fill)
-            .style(theme::surface),
-        divider,
-        container(content)
-            .width(Length::Fill)
-            .height(Length::Fill),
-        toggle,
-    ];
-
-    if state.interaction.visible {
-        let interaction_col = interaction::view_column(&state.interaction, Message::Interaction, SessionControls::Single);
-        main_row = main_row.push(
-            container(interaction_col)
-                .width(state.interaction.width)
-                .height(Length::Fill)
-                .style(theme::surface),
-        );
-    }
-
-    main_row.height(Length::Fill).into()
+    interaction::area_layout(
+        view_list(state, project),
+        view_content(state),
+        &state.interaction,
+        SessionControls::Single,
+        Message::Interaction,
+    )
 }
 
 fn view_list<'a>(state: &'a State, project: &'a ProjectData) -> Element<'a, Message> {
@@ -217,24 +173,3 @@ fn open_artifact(
     }
 }
 
-fn clear_single_session(
-    ix: &mut InteractionState,
-    scope: &str,
-    project_root: Option<&std::path::Path>,
-) {
-    if ix.sessions.is_empty() {
-        ix.sessions.push(AgentSession::new(scope.to_string()));
-        ix.active_session = 0;
-        return;
-    }
-    let idx = ix.active_session.min(ix.sessions.len() - 1);
-    if let Some(ax) = ix.sessions.get(idx) {
-        if let Some(handle) = &ax.agent_handle {
-            handle.cancel();
-        }
-        crate::chat_store::delete_session(&ax.session.scope, &ax.session.id, project_root);
-    }
-    ix.sessions[idx] = AgentSession::new(scope.to_string());
-    ix.active_session = idx;
-    interaction::reconcile_display_names(&mut ix.sessions);
-}

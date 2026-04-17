@@ -219,22 +219,10 @@ pub fn update(
                 }
                 other => {
                     let Some(ix) = state.active_interaction_mut() else { return };
-                    let is_mode_switch = matches!(other, interaction::Msg::SwitchMode(_));
-                    let just_opened = interaction::update(ix, other, highlighter);
-
-                    if just_opened && ix.mode == InteractionMode::Terminal {
-                        interaction::spawn_terminal(ix);
-                    }
-                    if is_mode_switch && ix.mode == InteractionMode::Terminal {
-                        interaction::spawn_terminal(ix);
-                    }
-
-                    let wants_agent = (just_opened || is_mode_switch) && ix.mode == InteractionMode::AgentChat;
-                    if wants_agent {
-                        interaction::ensure_sessions(ix, &scope, project.project_root.as_deref(), highlighter);
-                    }
-
-                    ix.terminal_focused = ix.visible && ix.mode == InteractionMode::Terminal;
+                    interaction::update_with_side_effects(
+                        ix, other, &scope,
+                        project.project_root.as_deref(), highlighter,
+                    );
                 }
             }
         }

@@ -203,6 +203,172 @@ fn parse_frontmatter_description(path: &Path) -> Option<String> {
     None
 }
 
+// ── Protocol types ─────────────────────────────────────────────────────────
+
+/// Top-level protocol message from `claude -p --output-format stream-json`.
+#[derive(Debug, serde::Deserialize)]
+struct ProtocolMsg {
+    #[serde(rename = "type")]
+    type_: String,
+    // stream_event
+    event: Option<StreamEvent>,
+    // assistant / tool_result / user
+    message: Option<MessageBody>,
+    // system
+    model: Option<String>,
+    // result
+    session_id: Option<String>,
+    #[serde(default)]
+    usage: Option<UsageBlock>,
+    #[serde(rename = "modelUsage")]
+    model_usage: Option<serde_json::Value>,
+    is_error: Option<bool>,
+    result: Option<serde_json::Value>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct StreamEvent {
+    #[serde(rename = "type")]
+    type_: String,
+    delta: Option<DeltaBlock>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct DeltaBlock {
+    text: Option<String>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct MessageBody {
+    content: Option<Vec<ContentBlock>>,
+    usage: Option<UsageBlock>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct ContentBlock {
+    #[serde(rename = "type")]
+    type_: String,
+    // tool_use
+    id: Option<String>,
+    name: Option<String>,
+    input: Option<serde_json::Value>,
+    // tool_result
+    tool_use_id: Option<String>,
+    content: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+struct UsageBlock {
+    #[serde(default)]
+    input_tokens: u64,
+    #[serde(default)]
+    output_tokens: u64,
+    #[serde(default)]
+    cache_read_input_tokens: u64,
+    #[serde(default)]
+    cache_creation_input_tokens: u64,
+}
+
+/// Parse a single protocol line into zero or more AgentEvents.
+fn parse_protocol_line(msg: &ProtocolMsg) -> Vec<AgentEvent> {
+    let mut events = Vec::new();
+
+    match msg.type_.as_str() {
+        "stream_event" => {
+            if let Some(event) = &msg.event {
+                if event.type_ == "content_block_delta" {
+                    if let Some(delta) = &event.delta {
+                        if let Some(text) = &delta.text {
+                            events.push(AgentEvent::ContentDelta { text: text.clone() });
+                        }
+                    }
+                }
+            }
+        }
+        "assistant" => {
+            if let Some(body) = &msg.message {
+                if let Some(usage) = &body.usage {
+                    let input_t = usage.input_tokens as usize;
+                    let output_t = usage.output_tokens as usize;
+                    if input_t > 0 || output_t > 0 {
+                        events.push(AgentEvent::UsageUpdate {
+                            model: None,
+                            input_tokens: input_t,
+                            output_tokens: output_t,
+                            context_window: None,
+                        });
+                    }
+                }
+                if let Some(content) = &body.content {
+                    for block in content {
+                        if block.type_ == "tool_use" {
+                            events.push(AgentEvent::ToolUse {
+                                id: block.id.clone().unwrap_or_default(),
+                                name: block.name.clone().unwrap_or_default(),
+                                input: block.input.as_ref().map_or(String::new(), |v| v.to_string()),
+                            });
+                        }
+                    }
+                }
+            }
+        }
+        "tool_result" | "user" => {
+            if let Some(body) = &msg.message {
+                if let Some(content) = &body.content {
+                    for block in content {
+                        if block.type_ == "tool_result" {
+                            let output = block.content.as_ref().map_or(String::new(), |v| {
+                                v.as_str().map_or_else(|| v.to_string(), |s| s.to_string())
+                            });
+                            events.push(AgentEvent::ToolResult {
+                                id: block.tool_use_id.clone().unwrap_or_default(),
+                                name: String::new(),
+                                output,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+        "system" => {
+            if let Some(model) = &msg.model {
+                events.push(AgentEvent::UsageUpdate {
+                    model: Some(model.clone()),
+                    input_tokens: 0,
+                    output_tokens: 0,
+                    context_window: None,
+                });
+            }
+        }
+        "result" => {
+            if let Some(usage) = &msg.usage {
+                let input_tokens = (usage.input_tokens
+                    + usage.cache_read_input_tokens
+                    + usage.cache_creation_input_tokens) as usize;
+                let output_tokens = usage.output_tokens as usize;
+                let context_window = msg.model_usage
+                    .as_ref()
+                    .and_then(|mu| mu.as_object())
+                    .and_then(|mu| mu.values().next())
+                    .and_then(|v| v["contextWindow"].as_u64())
+                    .map(|v| v as usize);
+
+                if input_tokens > 0 || output_tokens > 0 || context_window.is_some() {
+                    events.push(AgentEvent::UsageUpdate {
+                        model: None,
+                        input_tokens,
+                        output_tokens,
+                        context_window,
+                    });
+                }
+            }
+        }
+        _ => {}
+    }
+
+    events
+}
+
 /// Clonable handle for sending commands to the worker.
 #[derive(Clone)]
 pub struct AgentHandle {
@@ -396,124 +562,29 @@ async fn run_prompt_turn(
         if line.is_empty() {
             continue;
         }
-        let Ok(msg) = serde_json::from_str::<serde_json::Value>(&line) else {
+        let Ok(msg) = serde_json::from_str::<ProtocolMsg>(&line) else {
             continue;
         };
 
-        let msg_type = msg["type"].as_str().unwrap_or("");
+        // Handle result-level fields (session_id, is_error) that don't map
+        // to AgentEvent variants cleanly.
+        if msg.type_ == "result" {
+            tracing::debug!(result_line = %line, "agent result message");
+            if let Some(sid) = &msg.session_id {
+                result_session_id = sid.clone();
+            }
+            if msg.is_error == Some(true) {
+                let error_msg = msg.result
+                    .as_ref()
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unknown error")
+                    .to_string();
+                return Err(anyhow::anyhow!("{error_msg}"));
+            }
+        }
 
-        match msg_type {
-            "stream_event" => {
-                if let Some(event) = msg.get("event") {
-                    let event_type = event["type"].as_str().unwrap_or("");
-                    if event_type == "content_block_delta"
-                        && let Some(text) = event["delta"]["text"].as_str() {
-                            let _ = sender
-                                .send(AgentEvent::ContentDelta {
-                                    text: text.to_string(),
-                                })
-                                .await;
-                        }
-                }
-            }
-            "assistant" => {
-                // Extract usage from assistant message.
-                let input_t = msg["message"]["usage"]["input_tokens"].as_u64().unwrap_or(0) as usize;
-                let output_t = msg["message"]["usage"]["output_tokens"].as_u64().unwrap_or(0) as usize;
-                if input_t > 0 || output_t > 0 {
-                    let _ = sender
-                        .send(AgentEvent::UsageUpdate {
-                            model: None,
-                            input_tokens: input_t,
-                            output_tokens: output_t,
-                            context_window: None,
-                        })
-                        .await;
-                }
-                if let Some(content) = msg["message"]["content"].as_array() {
-                    for block in content {
-                        if block["type"].as_str().unwrap_or("") == "tool_use" {
-                            let _ = sender
-                                .send(AgentEvent::ToolUse {
-                                    id: block["id"].as_str().unwrap_or("").to_string(),
-                                    name: block["name"].as_str().unwrap_or("").to_string(),
-                                    input: block["input"].to_string(),
-                                })
-                                .await;
-                        }
-                    }
-                }
-            }
-            "tool_result" | "user" => {
-                if let Some(content) = msg["message"]["content"].as_array() {
-                    for block in content {
-                        if block["type"].as_str() == Some("tool_result") {
-                            let _ = sender
-                                .send(AgentEvent::ToolResult {
-                                    id: block["tool_use_id"].as_str().unwrap_or("").to_string(),
-                                    name: String::new(),
-                                    output: block["content"]
-                                        .as_str()
-                                        .unwrap_or(&block["content"].to_string())
-                                        .to_string(),
-                                })
-                                .await;
-                        }
-                    }
-                }
-            }
-            "system" => {
-                // Extract model name from system init message.
-                if let Some(model) = msg["model"].as_str() {
-                    let _ = sender
-                        .send(AgentEvent::UsageUpdate {
-                            model: Some(model.to_string()),
-                            input_tokens: 0,
-                            output_tokens: 0,
-                            context_window: None,
-                        })
-                        .await;
-                }
-            }
-            "result" => {
-                tracing::debug!(result_msg = %msg, "agent result message");
-                if let Some(sid) = msg["session_id"].as_str() {
-                    result_session_id = sid.to_string();
-                }
-                // Extract usage — sum all token types for total context.
-                let usage = &msg["usage"];
-                let input_tokens = usage["input_tokens"].as_u64().unwrap_or(0)
-                    + usage["cache_read_input_tokens"].as_u64().unwrap_or(0)
-                    + usage["cache_creation_input_tokens"].as_u64().unwrap_or(0);
-                let input_tokens = input_tokens as usize;
-                let output_tokens = usage["output_tokens"].as_u64()
-                    .unwrap_or(0) as usize;
-                // Extract contextWindow from modelUsage.
-                let context_window = msg["modelUsage"]
-                    .as_object()
-                    .and_then(|mu| mu.values().next())
-                    .and_then(|v| v["contextWindow"].as_u64())
-                    .map(|v| v as usize);
-
-                if input_tokens > 0 || output_tokens > 0 || context_window.is_some() {
-                    let _ = sender
-                        .send(AgentEvent::UsageUpdate {
-                            model: None,
-                            input_tokens,
-                            output_tokens,
-                            context_window,
-                        })
-                        .await;
-                }
-                if msg["is_error"].as_bool() == Some(true) {
-                    let error_msg = msg["result"]
-                        .as_str()
-                        .unwrap_or("unknown error")
-                        .to_string();
-                    return Err(anyhow::anyhow!("{error_msg}"));
-                }
-            }
-            _ => {}
+        for event in parse_protocol_line(&msg) {
+            let _ = sender.send(event).await;
         }
     }
 

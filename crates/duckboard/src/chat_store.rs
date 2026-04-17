@@ -207,12 +207,20 @@ pub fn save_session(session: &ChatSession, project_root: Option<&Path>) -> anyho
 
 /// Delete a single session file.
 pub fn delete_session(scope: &str, session_id: &str, project_root: Option<&Path>) {
-    let _ = std::fs::remove_file(session_path(scope, session_id, project_root));
+    if let Err(e) = std::fs::remove_file(session_path(scope, session_id, project_root)) {
+        if e.kind() != std::io::ErrorKind::NotFound {
+            tracing::warn!(scope, session_id, "failed to delete session file: {e}");
+        }
+    }
 }
 
 /// Delete all sessions for a scope (directory removal).
 pub fn delete_scope(scope: &str, project_root: Option<&Path>) {
-    let _ = std::fs::remove_dir_all(scope_dir(scope, project_root));
+    if let Err(e) = std::fs::remove_dir_all(scope_dir(scope, project_root)) {
+        if e.kind() != std::io::ErrorKind::NotFound {
+            tracing::warn!(scope, "failed to delete scope directory: {e}");
+        }
+    }
 }
 
 /// Rename a scope directory: `chats/<old>` → `chats/<new>`.
@@ -220,7 +228,9 @@ pub fn rename_scope(old: &str, new: &str, project_root: Option<&Path>) {
     let old_dir = scope_dir(old, project_root);
     let new_dir = scope_dir(new, project_root);
     if old_dir.exists() {
-        let _ = std::fs::rename(&old_dir, &new_dir);
+        if let Err(e) = std::fs::rename(&old_dir, &new_dir) {
+            tracing::warn!(from = old, to = new, "failed to rename scope directory: {e}");
+        }
     }
 }
 
@@ -245,12 +255,19 @@ pub fn load_explorations(project_root: Option<&Path>) -> (Vec<String>, usize) {
 
 pub fn save_explorations(explorations: &[String], counter: usize, project_root: Option<&Path>) {
     let dir = crate::config::data_dir(project_root);
-    let _ = std::fs::create_dir_all(&dir);
-    let state = ExplorationData {
+    if let Err(e) = std::fs::create_dir_all(&dir) {
+        tracing::warn!("failed to create explorations directory: {e}");
+        return;
+    }
+    match serde_json::to_string_pretty(&ExplorationData {
         explorations: explorations.to_vec(),
         counter,
-    };
-    if let Ok(data) = serde_json::to_string_pretty(&state) {
-        let _ = std::fs::write(dir.join("explorations.json"), data);
+    }) {
+        Ok(data) => {
+            if let Err(e) = std::fs::write(dir.join("explorations.json"), data) {
+                tracing::warn!("failed to write explorations.json: {e}");
+            }
+        }
+        Err(e) => tracing::warn!("failed to serialize explorations: {e}"),
     }
 }

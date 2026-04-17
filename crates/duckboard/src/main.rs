@@ -503,86 +503,29 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
 
             // Get the active area's interaction state for keyboard routing.
             let active_info = state.active_interaction().map(|(i, _key)| {
-                let active_session = i.active();
                 let agent_chat_active = i.visible
                     && i.mode == InteractionMode::AgentChat
-                    && active_session.is_some();
+                    && i.active().is_some();
                 let terminal_focused = i.terminal_focused;
-                let is_streaming = active_session.is_some_and(|ax| ax.session.is_streaming);
-                let completion_visible = active_session.is_some_and(|ax| ax.chat_completion.visible);
-                (agent_chat_active, terminal_focused, is_streaming, completion_visible)
+                (agent_chat_active, terminal_focused)
             });
             // We need the key separately (can't hold borrow across mutable calls).
             let active_key = state.active_interaction_key();
 
-            if let (Some((agent_chat_active, terminal_focused, is_streaming, completion_visible)), Some(routing_key)) = (active_info, &active_key) {
-                // Agent chat completion keyboard shortcuts.
-                if agent_chat_active && completion_visible {
-                    use keyboard::key::Named;
-                    let completion_msg = match &key {
-                        keyboard::Key::Named(Named::Tab) => {
-                            Some(widget::agent_chat::Msg::CompletionAccept)
-                        }
-                        keyboard::Key::Named(Named::Escape) => {
-                            Some(widget::agent_chat::Msg::CompletionDismiss)
-                        }
-                        _ if mods.control() && key == keyboard::Key::Character("n".into()) => {
-                            Some(widget::agent_chat::Msg::CompletionNext)
-                        }
-                        _ if mods.control() && key == keyboard::Key::Character("p".into()) => {
-                            Some(widget::agent_chat::Msg::CompletionPrev)
-                        }
-                        _ => None,
-                    };
-                    if let Some(msg) = completion_msg {
-                        return dispatch_interaction_msg(state, routing_key, interaction::Msg::AgentChat(msg));
-                    }
-                }
-
-                // Agent chat: Esc-Esc to cancel streaming.
-                if agent_chat_active
-                    && key == keyboard::Key::Named(keyboard::key::Named::Escape)
-                    && is_streaming {
-                        if let Some(ix) = state.interaction_mut(routing_key)
-                            && let Some(ax) = ix.active_mut()
-                        {
-                            ax.esc_count += 1;
-                            if ax.esc_count >= 2 {
-                                return dispatch_interaction_msg(state, routing_key,
-                                    interaction::Msg::AgentChat(widget::agent_chat::Msg::CancelPressed));
+            if let (Some((agent_chat_active, terminal_focused, ..)), Some(routing_key)) = (active_info, &active_key) {
+                // Agent chat keyboard shortcuts (completion, esc-cancel, enter-send).
+                if agent_chat_active {
+                    if let Some(ix) = state.interaction_mut(routing_key) {
+                        match interaction::handle_agent_chat_key(ix, &key, mods) {
+                            interaction::AgentChatKeyResult::Handled => return Task::none(),
+                            interaction::AgentChatKeyResult::Dispatch(msg) => {
+                                return dispatch_interaction_msg(
+                                    state, routing_key, interaction::Msg::AgentChat(msg),
+                                );
                             }
+                            interaction::AgentChatKeyResult::NotHandled => {}
                         }
-                        return Task::none();
                     }
-
-                // Reset esc counter on any non-Esc key.
-                if agent_chat_active
-                    && key != keyboard::Key::Named(keyboard::key::Named::Escape)
-                    && let Some(ix) = state.interaction_mut(routing_key)
-                    && let Some(ax) = ix.active_mut()
-                {
-                    ax.esc_count = 0;
-                }
-
-                // Agent chat: Enter sends, Shift+Enter inserts newline.
-                if agent_chat_active
-                    && key == keyboard::Key::Named(keyboard::key::Named::Enter)
-                {
-                    if mods.shift() {
-                        if let Some(ix) = state.interaction_mut(routing_key)
-                            && let Some(ax) = ix.active_mut()
-                        {
-                            ax.chat_input.perform(
-                                iced::widget::text_editor::Action::Edit(
-                                    iced::widget::text_editor::Edit::Enter,
-                                ),
-                            );
-                        }
-                    } else {
-                        return dispatch_interaction_msg(state, routing_key,
-                            interaction::Msg::AgentChat(widget::agent_chat::Msg::SendPressed));
-                    }
-                    return Task::none();
                 }
 
                 // Terminal keyboard capture.
@@ -707,8 +650,6 @@ pub fn handle_editor_action(
     action: widget::text_edit::EditorAction,
     highlighter: &highlight::SyntaxHighlighter,
 ) {
-    use widget::text_edit::EditorAction;
-
     let tab = match tabs.active_tab_mut() {
         Some(t) => t,
         None => return,
@@ -718,61 +659,7 @@ pub fn handle_editor_action(
         tab_bar::TabView::Diff { editor, .. } => (editor, tab.id.as_str()),
     };
 
-    let mutates_text = matches!(
-        action,
-        EditorAction::Insert(_)
-            | EditorAction::Paste(_)
-            | EditorAction::Backspace
-            | EditorAction::Delete
-            | EditorAction::Enter
-            | EditorAction::Cut
-            | EditorAction::Undo
-            | EditorAction::Redo
-    );
-
-    match action {
-        EditorAction::Insert(ch) => editor.insert_char(ch),
-        EditorAction::Paste(text) => editor.insert_text(&text),
-        EditorAction::Backspace => editor.backspace(),
-        EditorAction::Delete => editor.delete(),
-        EditorAction::Enter => editor.insert_char('\n'),
-        EditorAction::MoveLeft(sel) => editor.move_left(sel),
-        EditorAction::MoveRight(sel) => editor.move_right(sel),
-        EditorAction::MoveUp(sel) => editor.move_up(sel),
-        EditorAction::MoveDown(sel) => editor.move_down(sel),
-        EditorAction::MoveHome(sel) => editor.move_home(sel),
-        EditorAction::MoveEnd(sel) => editor.move_end(sel),
-        EditorAction::MoveWordLeft(sel) => editor.move_word_left(sel),
-        EditorAction::MoveWordRight(sel) => editor.move_word_right(sel),
-        EditorAction::SelectAll => editor.select_all(),
-        EditorAction::Copy => {}
-        EditorAction::Cut => {
-            editor.delete_selection();
-        }
-        EditorAction::Undo => editor.undo(),
-        EditorAction::Redo => editor.redo(),
-        EditorAction::Click(pos) => {
-            editor.cursor = pos;
-            editor.anchor = None;
-        }
-        EditorAction::Drag(pos) => {
-            if editor.anchor.is_none() {
-                editor.anchor = Some(editor.cursor);
-            }
-            editor.cursor = pos;
-        }
-        EditorAction::Scroll { dy, dx, viewport_height, content_height, viewport_width, content_width } => {
-            let max_y = (content_height - viewport_height).max(0.0);
-            editor.scroll_y = (editor.scroll_y + dy).clamp(0.0, max_y);
-            let max_x = (content_width - viewport_width).max(0.0);
-            editor.scroll_x = (editor.scroll_x + dx).clamp(0.0, max_x);
-        }
-        EditorAction::SaveRequested => {
-            tracing::info!("save requested (not yet implemented)");
-        }
-    }
-
-    if mutates_text {
+    if editor.apply_action(action) {
         rehighlight(editor, tab_id, highlighter);
     }
 }

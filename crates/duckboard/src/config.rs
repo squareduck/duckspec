@@ -71,7 +71,17 @@ fn project_hash(project_root: &Path) -> String {
 pub fn load() -> Config {
     let path = config_path();
     match std::fs::read_to_string(&path) {
-        Ok(data) => toml::from_str(&data).unwrap_or_default(),
+        Ok(data) => match toml::from_str(&data) {
+            Ok(config) => config,
+            Err(e) => {
+                tracing::warn!(path = %path.display(), "failed to parse config, using defaults: {e}");
+                Config::default()
+            }
+        },
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+            tracing::warn!(path = %path.display(), "failed to read config, using defaults: {e}");
+            Config::default()
+        }
         Err(_) => Config::default(),
     }
 }
