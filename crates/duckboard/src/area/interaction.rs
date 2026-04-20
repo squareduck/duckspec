@@ -1,5 +1,7 @@
 //! Shared interaction state — terminal + agent chat — used by Change, Caps, and Codex areas.
 
+use std::sync::atomic::{AtomicU64, Ordering};
+
 use iced::widget::text_editor;
 use iced::Element;
 
@@ -8,6 +10,11 @@ use crate::chat_store::ChatSession;
 use crate::highlight::SyntaxHighlighter;
 use crate::theme;
 use crate::widget::{agent_chat, interaction_toggle, text_edit::{Block, EditorState}};
+
+/// Monotonic counter used to mint a stable `InteractionState::instance_id`.
+/// The ID keys long-lived subscriptions (PTY, agent) so they survive when the
+/// interaction's scope name changes (e.g. exploration promoted to a real change).
+static NEXT_INSTANCE_ID: AtomicU64 = AtomicU64::new(1);
 
 // ── Interaction mode ────────────────────────────────────────────────────────
 
@@ -74,6 +81,11 @@ impl AgentSession {
 // ── Interaction state ───────────────────────────────────────────────────────
 
 pub struct InteractionState {
+    /// Stable ID for subscription routing. Set once at construction and never
+    /// changed — in particular, promoting an exploration to a real change moves
+    /// the `InteractionState` between HashMap keys but leaves this untouched,
+    /// so the underlying PTY / agent subscriptions survive the rename.
+    pub instance_id: u64,
     pub visible: bool,
     pub width: f32,
     pub mode: InteractionMode,
@@ -88,6 +100,7 @@ pub struct InteractionState {
 impl Default for InteractionState {
     fn default() -> Self {
         Self {
+            instance_id: NEXT_INSTANCE_ID.fetch_add(1, Ordering::Relaxed),
             visible: false,
             width: theme::INTERACTION_COLUMN_WIDTH,
             mode: InteractionMode::AgentChat,

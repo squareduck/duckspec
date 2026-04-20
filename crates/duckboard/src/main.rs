@@ -87,10 +87,30 @@ impl State {
         }
     }
 
-    /// Resolve a composite routing key `<scope>/<session_id>` to the session bundle.
+    /// Resolve a stable `InteractionState::instance_id` to its state.
+    /// Used for routing long-lived subscription events (PTY, agent) that must
+    /// survive scope renames like exploration→change promotion.
+    fn interaction_mut_by_ix_id(
+        &mut self,
+        ix_id: u64,
+    ) -> Option<&mut interaction::InteractionState> {
+        if self.caps.interaction.instance_id == ix_id {
+            return Some(&mut self.caps.interaction);
+        }
+        if self.codex.interaction.instance_id == ix_id {
+            return Some(&mut self.codex.interaction);
+        }
+        self.change
+            .interactions
+            .values_mut()
+            .find(|ix| ix.instance_id == ix_id)
+    }
+
+    /// Resolve a composite routing key `<instance_id>/<session_id>` to the session bundle.
     fn agent_session_mut(&mut self, key: &str) -> Option<&mut interaction::AgentSession> {
-        let (scope, session_id) = key.split_once('/')?;
-        let ix = self.interaction_mut(scope)?;
+        let (ix_id_str, session_id) = key.split_once('/')?;
+        let ix_id: u64 = ix_id_str.parse().ok()?;
+        let ix = self.interaction_mut_by_ix_id(ix_id)?;
         ix.find_session_mut(session_id)
     }
 
@@ -135,11 +155,11 @@ enum Message {
     FileChanged(Vec<watcher::FileEvent>),
     // Keyboard
     KeyPress(keyboard::Key, keyboard::Modifiers, Option<String>),
-    // Per-instance PTY events (key identifies the interaction)
-    PtyEvent(String, widget::terminal::PtyEvent),
-    // Clipboard → PTY paste (key identifies the interaction)
+    // Per-instance PTY events. `ix_id` is the stable `InteractionState::instance_id`.
+    PtyEvent(u64, widget::terminal::PtyEvent),
+    // Clipboard → PTY paste (scope name identifies the interaction).
     TerminalPaste(String, Option<String>),
-    // Per-instance agent events (key identifies the interaction)
+    // Per-instance agent events. Key format: `<instance_id>/<session_id>`.
     AgentEvent(String, agent::AgentEvent),
     // Settings
     Settings(area::settings::Message),
@@ -361,15 +381,15 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
         }
         Message::TerminalPaste(_, None) => {}
         // Per-instance PTY events
-        Message::PtyEvent(key, evt) => {
+        Message::PtyEvent(ix_id, evt) => {
             use widget::terminal::PtyEvent;
-            let Some(ix) = state.interaction_mut(&key) else { return Task::none() };
+            let Some(ix) = state.interaction_mut_by_ix_id(ix_id) else { return Task::none() };
             match evt {
                 PtyEvent::Ready(writer, master) => {
                     if let Some(ref mut ts) = ix.terminal {
                         ts.set_writer(writer.into_writer());
                         ts.set_master(master.into_master());
-                        tracing::info!(key, "PTY writer ready");
+                        tracing::info!(ix_id, "PTY writer ready");
                     }
                 }
                 PtyEvent::Output(bytes) => {
@@ -378,7 +398,7 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                     }
                 }
                 PtyEvent::Exited => {
-                    tracing::info!(key, "PTY child exited");
+                    tracing::info!(ix_id, "PTY child exited");
                     ix.terminal = None;
                     ix.terminal_focused = false;
                 }
@@ -572,7 +592,7 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
     Task::none()
 }
 
-/// Resolve a composite routing key `<scope>/<session_id>` to its AgentSession
+/// Resolve a composite routing key `<instance_id>/<session_id>` to its AgentSession
 /// by borrowing only the three area substates. Useful when the caller needs
 /// to also hold a borrow on other fields (e.g. `highlighter`) of `State`.
 fn resolve_session_mut<'a>(
@@ -581,11 +601,17 @@ fn resolve_session_mut<'a>(
     codex: &'a mut area::codex::State,
     key: &str,
 ) -> Option<&'a mut interaction::AgentSession> {
-    let (scope, session_id) = key.split_once('/')?;
-    let ix = match scope {
-        KEY_CAPS => &mut caps.interaction,
-        KEY_CODEX => &mut codex.interaction,
-        _ => change.interactions.get_mut(scope)?,
+    let (ix_id_str, session_id) = key.split_once('/')?;
+    let ix_id: u64 = ix_id_str.parse().ok()?;
+    let ix = if caps.interaction.instance_id == ix_id {
+        &mut caps.interaction
+    } else if codex.interaction.instance_id == ix_id {
+        &mut codex.interaction
+    } else {
+        change
+            .interactions
+            .values_mut()
+            .find(|ix| ix.instance_id == ix_id)?
     };
     ix.find_session_mut(session_id)
 }
@@ -768,41 +794,36 @@ fn subscription(state: &State) -> Subscription<Message> {
         );
     }
 
-    // Per-change PTY subscriptions.
+    // Per-instance PTY subscriptions. Keyed by the stable `instance_id` so the
+    // subscription (and its live shell) survives scope renames like promoting
+    // an exploration to a real change.
     let pty_cwd = state.project.project_root.clone();
-    for (name, ix) in &state.change.interactions {
+    let push_pty = |ix: &interaction::InteractionState, subs: &mut Vec<Subscription<Message>>| {
         if ix.terminal.is_some() {
-            let key = format!("pty:change:{name}");
+            let key = format!("pty:ix:{}", ix.instance_id);
             subs.push(widget::terminal::pty_subscription(key, pty_cwd.clone()).map(tagged_pty));
         }
+    };
+    for ix in state.change.interactions.values() {
+        push_pty(ix, &mut subs);
     }
-    // Caps / Codex PTY subscriptions.
-    if state.caps.interaction.terminal.is_some() {
-        subs.push(
-            widget::terminal::pty_subscription(format!("pty:{KEY_CAPS}"), pty_cwd.clone())
-                .map(tagged_pty),
-        );
-    }
-    if state.codex.interaction.terminal.is_some() {
-        subs.push(
-            widget::terminal::pty_subscription(format!("pty:{KEY_CODEX}"), pty_cwd.clone())
-                .map(tagged_pty),
-        );
-    }
+    push_pty(&state.caps.interaction, &mut subs);
+    push_pty(&state.codex.interaction, &mut subs);
 
-    // Per-session agent subscriptions. Key format: `agent:<scope>/<session_id>`.
+    // Per-session agent subscriptions. Key format: `agent:ix:<instance_id>/<session_id>`.
+    // Like PTYs, keyed by `instance_id` so in-flight agent streams survive renames.
     if let Some(root) = state.project.project_root.as_ref() {
-        let push_scope = |scope: &str, ix: &interaction::InteractionState, subs: &mut Vec<Subscription<Message>>| {
+        let push_scope = |ix: &interaction::InteractionState, subs: &mut Vec<Subscription<Message>>| {
             for session in &ix.sessions {
-                let key = format!("agent:{scope}/{}", session.session.id);
+                let key = format!("agent:ix:{}/{}", ix.instance_id, session.session.id);
                 subs.push(agent::agent_subscription(key, root.clone()).map(tagged_agent));
             }
         };
-        for (name, ix) in &state.change.interactions {
-            push_scope(name, ix, &mut subs);
+        for ix in state.change.interactions.values() {
+            push_scope(ix, &mut subs);
         }
-        push_scope(KEY_CAPS, &state.caps.interaction, &mut subs);
-        push_scope(KEY_CODEX, &state.codex.interaction, &mut subs);
+        push_scope(&state.caps.interaction, &mut subs);
+        push_scope(&state.codex.interaction, &mut subs);
     }
 
     // Global keyboard events.
@@ -837,14 +858,15 @@ fn theme_detect_stream() -> impl iced::futures::Stream<Item = theme::ColorMode> 
 // Non-capturing mapper functions for Subscription::map.
 // The key embedded in the tuple carries the routing info.
 fn tagged_pty((key, e): (String, widget::terminal::PtyEvent)) -> Message {
-    // Strip the "pty:" or "pty:change:" prefix to get the routing key.
-    let routing_key = key.strip_prefix("pty:change:").unwrap_or(
-        key.strip_prefix("pty:").unwrap_or(&key)
-    ).to_string();
-    Message::PtyEvent(routing_key, e)
+    let ix_id = key
+        .strip_prefix("pty:ix:")
+        .and_then(|s| s.parse::<u64>().ok())
+        .unwrap_or(0);
+    Message::PtyEvent(ix_id, e)
 }
 fn tagged_agent((key, e): (String, agent::AgentEvent)) -> Message {
-    let routing_key = key.strip_prefix("agent:").unwrap_or(&key).to_string();
+    // Strip the `agent:ix:` prefix; the remainder is `<instance_id>/<session_id>`.
+    let routing_key = key.strip_prefix("agent:ix:").unwrap_or(&key).to_string();
     Message::AgentEvent(routing_key, e)
 }
 
