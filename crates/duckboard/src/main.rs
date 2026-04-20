@@ -291,6 +291,12 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                     .iter()
                     .map(|c| c.name.clone())
                     .collect();
+                let old_archived_names: std::collections::HashSet<String> = state
+                    .project
+                    .archived_changes
+                    .iter()
+                    .map(|c| c.name.clone())
+                    .collect();
 
                 state.project.reload();
                 tracing::debug!("project reloaded (file watcher)");
@@ -314,6 +320,34 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                             "promoting exploration to real change"
                         );
                         state.change.promote_exploration(&exploration_name, new_name, state.project.project_root.as_deref());
+                    }
+                }
+
+                // Detect new archived change directories and migrate subscriptions
+                // from the matching active-change name (archival happened externally).
+                let new_archived: Vec<String> = state
+                    .project
+                    .archived_changes
+                    .iter()
+                    .filter(|c| !old_archived_names.contains(&c.name))
+                    .map(|c| c.name.clone())
+                    .collect();
+
+                for archived_name in new_archived {
+                    let Some(base_name) = data::strip_archive_prefix(&archived_name) else {
+                        continue;
+                    };
+                    if state.change.interactions.contains_key(base_name) {
+                        tracing::info!(
+                            from = base_name,
+                            to = archived_name.as_str(),
+                            "migrating subscriptions to archived change"
+                        );
+                        state.change.archive_change(
+                            base_name,
+                            &archived_name,
+                            state.project.project_root.as_deref(),
+                        );
                     }
                 }
             }

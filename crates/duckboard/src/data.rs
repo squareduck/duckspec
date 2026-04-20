@@ -147,6 +147,54 @@ impl ProjectData {
     }
 }
 
+// ── Archive naming ───────────────────────────────────────────────────────────
+
+/// Strip the `YYYY-MM-DD-NN-` prefix from an archived change folder name,
+/// returning the base name. Returns `None` if the prefix doesn't match.
+pub fn strip_archive_prefix(name: &str) -> Option<&str> {
+    let bytes = name.as_bytes();
+    if bytes.len() <= 14 {
+        return None;
+    }
+    let is_digit = |i: usize| bytes[i].is_ascii_digit();
+    let is_dash = |i: usize| bytes[i] == b'-';
+    let ok = is_digit(0) && is_digit(1) && is_digit(2) && is_digit(3)
+        && is_dash(4)
+        && is_digit(5) && is_digit(6)
+        && is_dash(7)
+        && is_digit(8) && is_digit(9)
+        && is_dash(10)
+        && is_digit(11) && is_digit(12)
+        && is_dash(13);
+    if !ok {
+        return None;
+    }
+    Some(&name[14..])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn strips_valid_archive_prefix() {
+        assert_eq!(strip_archive_prefix("2026-04-20-01-foo"), Some("foo"));
+        assert_eq!(
+            strip_archive_prefix("2026-12-31-99-my-change"),
+            Some("my-change")
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_prefix() {
+        assert_eq!(strip_archive_prefix("foo"), None);
+        assert_eq!(strip_archive_prefix("2026-04-20-foo"), None);
+        assert_eq!(strip_archive_prefix("26-04-20-01-foo"), None);
+        assert_eq!(strip_archive_prefix("2026-4-20-01-foo"), None);
+        assert_eq!(strip_archive_prefix("2026-04-20-01-"), None);
+    }
+}
+
 // ── Filesystem helpers ───────────────────────────────────────────────────────
 
 /// Find the repository root by walking up from cwd looking for `.git` or `.jj`.

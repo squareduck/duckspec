@@ -115,6 +115,28 @@ impl State {
             project_root,
         );
     }
+
+    /// Migrate interaction state and chat sessions from a change that was just
+    /// archived externally (via CLI, agent tool, etc.) to its new archived name.
+    /// Mirrors `promote_exploration` but without exploration bookkeeping.
+    pub fn archive_change(
+        &mut self,
+        old_name: &str,
+        archived_name: &str,
+        project_root: Option<&Path>,
+    ) {
+        if let Some(mut ix) = self.interactions.remove(old_name) {
+            for ax in ix.sessions.iter_mut() {
+                ax.session.scope = archived_name.to_string();
+            }
+            interaction::reconcile_display_names(&mut ix.sessions);
+            self.interactions.insert(archived_name.to_string(), ix);
+        }
+        if self.selected_change.as_deref() == Some(old_name) {
+            self.selected_change = Some(archived_name.to_string());
+        }
+        crate::chat_store::rename_scope(old_name, archived_name, project_root);
+    }
 }
 
 // ── Messages ─────────────────────────────────────────────────────────────────

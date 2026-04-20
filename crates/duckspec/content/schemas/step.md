@@ -54,6 +54,7 @@ processed in its own `/ds-apply` invocation.
 **Prerequisite content:**
 
 - `@step <slug>` — reference to another step in the same change.
+  Slug only — do **not** include the `NN-` filename prefix.
 - Freeform text — any other precondition.
 
 ## Quality
