@@ -71,6 +71,11 @@ single agent session. Steps are ordered, and each is processed in its own
   create the table before writing the query that uses it.
 - **Prerequisites are informational.** The CLI doesn't enforce them, but the
   applying agent reads them to understand dependencies.
+- **Context is the exception, not the rule.** Include a Context section only
+  when the applying agent needs information the change's design and proposal
+  don't provide — e.g., no design exists, or the design doesn't cover this
+  step's implementation details. If the design already describes what this step
+  implements, omit Context; don't duplicate.
 
 ## Example
 
@@ -79,11 +84,6 @@ single agent session. Steps are ordered, and each is processed in its own
 
 Add server-side session timeout logic and cover the scenarios with integration
 tests.
-
-## Context
-
-The session middleware currently does not track last-access time. This step adds
-that tracking and the expiration check.
 
 ## Tasks
 

@@ -43,6 +43,10 @@ concrete, ordered, and independently completable.
    coverage is complete.
 5. **Draft steps.** Load the schema with `ds schema step` for the format. Number
    steps from 01.
+   - **Decide on Context per step.** If the design covers what this step
+     implements, skip Context. Include it only when there's no design, or when
+     the design leaves gaps the applying agent needs (specific file paths,
+     gotchas, project-specific details).
 
 ## Write gate
 
