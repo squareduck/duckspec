@@ -343,6 +343,11 @@ pub fn view<'a>(
     let is_exploration = state.is_exploration_selected();
     let ix = state.active_interaction();
 
+    let breadcrumb_bar = view_breadcrumbs(breadcrumbs(state, project));
+    let bar_divider = container(Space::new().width(Length::Fill))
+        .height(1.0)
+        .style(theme::divider);
+
     // Exploration mode: no content column or toggle, interaction fills remaining width.
     if is_exploration {
         let mut main_row = row![
@@ -363,7 +368,9 @@ pub fn view<'a>(
             );
         }
 
-        return main_row.height(Length::Fill).into();
+        return column![breadcrumb_bar, bar_divider, main_row.height(Length::Fill)]
+            .height(Length::Fill)
+            .into();
     }
 
     // Normal mode: content column + optional interaction panel.
@@ -402,7 +409,254 @@ pub fn view<'a>(
             );
         }
 
-    main_row.height(Length::Fill).into()
+    column![breadcrumb_bar, bar_divider, main_row.height(Length::Fill)]
+        .height(Length::Fill)
+        .into()
+}
+
+// ── Breadcrumbs ──────────────────────────────────────────────────────────────
+
+fn breadcrumbs(state: &State, project: &ProjectData) -> Vec<String> {
+    let Some(selected) = state.selected_change.as_deref() else {
+        return vec![];
+    };
+
+    // Exploration mode renders no tab; show only the exploration root.
+    if state.explorations.iter().any(|e| e == selected) {
+        return vec!["Explorations".into(), selected.into()];
+    }
+
+    let is_archived = project.archived_changes.iter().any(|c| c.name == selected);
+
+    if let Some(tab) = state.tabs.active_tab() {
+        return tab_breadcrumbs(&tab.id, selected, is_archived);
+    }
+
+    let root = if is_archived { "Archive" } else { "Changes" };
+    vec![root.into(), selected.into()]
+}
+
+fn tab_breadcrumbs(id: &str, selected: &str, selected_archived: bool) -> Vec<String> {
+    if let Some(path) = id.strip_prefix("file:") {
+        return vec!["Files".into(), path.into()];
+    }
+
+    if let Some(path) = id.strip_prefix("vcs:") {
+        let root = if selected_archived { "Archive" } else { "Changes" };
+        return vec![
+            root.into(),
+            selected.into(),
+            "Changed files".into(),
+            path.into(),
+        ];
+    }
+
+    let root_rest = id
+        .strip_prefix("changes/")
+        .map(|r| ("Changes", r))
+        .or_else(|| id.strip_prefix("archive/").map(|r| ("Archive", r)));
+
+    if let Some((root, rest)) = root_rest {
+        let (change, inner) = rest.split_once('/').unwrap_or((rest, ""));
+        let mut segs = vec![root.into(), change.into()];
+        segs.extend(parse_change_inner(inner));
+        return segs;
+    }
+
+    vec![id.into()]
+}
+
+fn parse_change_inner(path: &str) -> Vec<String> {
+    if path.is_empty() {
+        return vec![];
+    }
+    if path == "proposal.md" {
+        return vec!["Proposal".into()];
+    }
+    if path == "design.md" {
+        return vec!["Design".into()];
+    }
+    if let Some(rest) = path.strip_prefix("caps/") {
+        let mut segs = vec!["Capabilities".into()];
+        segs.extend(rest.split('/').map(str::to_string));
+        return segs;
+    }
+    if let Some(rest) = path.strip_prefix("steps/") {
+        return vec!["Steps".into(), rest.into()];
+    }
+    path.split('/').map(str::to_string).collect()
+}
+
+fn view_breadcrumbs(segments: Vec<String>) -> Element<'static, Message> {
+    let mut bar = row![].spacing(theme::SPACING_XS);
+    let last = segments.len().saturating_sub(1);
+    for (i, seg) in segments.into_iter().enumerate() {
+        if i > 0 {
+            bar = bar.push(
+                text("\u{203a}")
+                    .size(theme::font_sm())
+                    .color(theme::text_muted()),
+            );
+        }
+        let color = if i == last {
+            theme::text_primary()
+        } else {
+            theme::text_muted()
+        };
+        bar = bar.push(
+            text(seg)
+                .size(theme::font_sm())
+                .wrapping(Wrapping::None)
+                .color(color),
+        );
+    }
+    container(bar)
+        .padding([theme::SPACING_XS, theme::SPACING_LG])
+        .width(Length::Fill)
+        .style(theme::surface)
+        .into()
+}
+
+#[cfg(test)]
+mod breadcrumb_tests {
+    use super::*;
+
+    #[test]
+    fn tab_proposal() {
+        assert_eq!(
+            tab_breadcrumbs("changes/foo/proposal.md", "foo", false),
+            vec!["Changes", "foo", "Proposal"]
+        );
+    }
+
+    #[test]
+    fn tab_design() {
+        assert_eq!(
+            tab_breadcrumbs("changes/foo/design.md", "foo", false),
+            vec!["Changes", "foo", "Design"]
+        );
+    }
+
+    #[test]
+    fn tab_step() {
+        assert_eq!(
+            tab_breadcrumbs("changes/foo/steps/01-bar.md", "foo", false),
+            vec!["Changes", "foo", "Steps", "01-bar.md"]
+        );
+    }
+
+    #[test]
+    fn tab_cap_nested() {
+        assert_eq!(
+            tab_breadcrumbs("changes/foo/caps/auth/session.md", "foo", false),
+            vec!["Changes", "foo", "Capabilities", "auth", "session.md"]
+        );
+    }
+
+    #[test]
+    fn tab_cap_deeply_nested() {
+        assert_eq!(
+            tab_breadcrumbs("changes/foo/caps/a/b/c/d.md", "foo", false),
+            vec!["Changes", "foo", "Capabilities", "a", "b", "c", "d.md"]
+        );
+    }
+
+    #[test]
+    fn tab_archive_proposal() {
+        assert_eq!(
+            tab_breadcrumbs("archive/2026-04-20-01-foo/proposal.md", "2026-04-20-01-foo", true),
+            vec!["Archive", "2026-04-20-01-foo", "Proposal"]
+        );
+    }
+
+    #[test]
+    fn tab_vcs_active() {
+        assert_eq!(
+            tab_breadcrumbs("vcs:src/main.rs", "foo", false),
+            vec!["Changes", "foo", "Changed files", "src/main.rs"]
+        );
+    }
+
+    #[test]
+    fn tab_vcs_archived() {
+        assert_eq!(
+            tab_breadcrumbs("vcs:src/main.rs", "2026-04-20-01-foo", true),
+            vec!["Archive", "2026-04-20-01-foo", "Changed files", "src/main.rs"]
+        );
+    }
+
+    #[test]
+    fn tab_file_finder() {
+        assert_eq!(
+            tab_breadcrumbs("file:Cargo.toml", "foo", false),
+            vec!["Files", "Cargo.toml"]
+        );
+    }
+
+    #[test]
+    fn tab_unknown_falls_back() {
+        assert_eq!(tab_breadcrumbs("weird-id", "foo", false), vec!["weird-id"]);
+    }
+
+    fn make_state(selected: &str, explorations: &[&str]) -> State {
+        State {
+            selected_change: Some(selected.to_string()),
+            expanded_sections: HashSet::new(),
+            expanded_nodes: HashSet::new(),
+            tabs: tab_bar::TabState::default(),
+            changed_files: vec![],
+            interactions: HashMap::new(),
+            explorations: explorations.iter().map(|s| s.to_string()).collect(),
+            exploration_counter: 0,
+            audit_active: false,
+        }
+    }
+
+    fn make_project(active: &[&str], archived: &[&str]) -> ProjectData {
+        use crate::data::ChangeData;
+        let mk = |name: &str, prefix_root: &str| ChangeData {
+            name: name.to_string(),
+            prefix: format!("{prefix_root}/{name}"),
+            has_proposal: false,
+            has_design: false,
+            cap_tree: vec![],
+            steps: vec![],
+        };
+        ProjectData {
+            active_changes: active.iter().map(|n| mk(n, "changes")).collect(),
+            archived_changes: archived.iter().map(|n| mk(n, "archive")).collect(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn exploration_root_after_selection() {
+        let state = make_state("Exploration 1", &["Exploration 1"]);
+        let project = make_project(&[], &[]);
+        assert_eq!(breadcrumbs(&state, &project), vec!["Explorations", "Exploration 1"]);
+    }
+
+    #[test]
+    fn exploration_promoted_to_change_shows_changes_root() {
+        // After promote_exploration: selected_change → new name,
+        // explorations list no longer contains the old name,
+        // active_changes contains the new name.
+        let state = make_state("real-change", &[]);
+        let project = make_project(&["real-change"], &[]);
+        assert_eq!(breadcrumbs(&state, &project), vec!["Changes", "real-change"]);
+    }
+
+    #[test]
+    fn change_archived_shows_archive_root() {
+        // After archive_change: selected_change → archived name,
+        // archived_changes contains it.
+        let state = make_state("2026-04-20-01-foo", &[]);
+        let project = make_project(&[], &["2026-04-20-01-foo"]);
+        assert_eq!(
+            breadcrumbs(&state, &project),
+            vec!["Archive", "2026-04-20-01-foo"]
+        );
+    }
 }
 
 /// Reset the active session for a scope: cancel agent, delete persisted file,
