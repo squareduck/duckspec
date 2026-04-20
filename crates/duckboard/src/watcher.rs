@@ -24,14 +24,20 @@ pub enum FileEvent {
 
 // ── Subscription ────────────────────────────────────────────────────────────
 
-/// Hashable wrapper so `Subscription::run_with` can deduplicate.
+/// Hashable wrapper so `Subscription::run_with` can deduplicate. Only
+/// `project_root` contributes to the hash — the subscription should survive
+/// changes to other fields so its watcher and in-flight debounce state are
+/// preserved.
 #[derive(Clone)]
-struct WatchId(PathBuf);
+struct WatchId {
+    project_root: PathBuf,
+    duckspec_root: Option<PathBuf>,
+}
 
 impl Hash for WatchId {
     fn hash<H: Hasher>(&self, state: &mut H) {
         "file-watcher".hash(state);
-        self.0.hash(state);
+        self.project_root.hash(state);
     }
 }
 
@@ -39,12 +45,19 @@ impl Hash for WatchId {
 ///
 /// Returns batches of [`FileEvent`]s after debouncing. The subscription keeps
 /// running until the application exits.
-pub fn watch_subscription(project_root: PathBuf) -> iced::Subscription<Vec<FileEvent>> {
-    iced::Subscription::run_with(WatchId(project_root), |id| watch_stream(id.0.clone()))
+pub fn watch_subscription(
+    project_root: PathBuf,
+    duckspec_root: Option<PathBuf>,
+) -> iced::Subscription<Vec<FileEvent>> {
+    iced::Subscription::run_with(
+        WatchId { project_root, duckspec_root },
+        |id| watch_stream(id.project_root.clone(), id.duckspec_root.clone()),
+    )
 }
 
 fn watch_stream(
     project_root: PathBuf,
+    duckspec_root: Option<PathBuf>,
 ) -> impl iced::futures::Stream<Item = Vec<FileEvent>> {
     iced::stream::channel(32, |mut sender: iced::futures::channel::mpsc::Sender<Vec<FileEvent>>| async move {
         use iced::futures::SinkExt;
@@ -84,7 +97,7 @@ fn watch_stream(
                     Ok(Ok(events)) => {
                         let file_events: Vec<FileEvent> = events
                             .into_iter()
-                            .filter(|ev| !is_ignored(&ev.path, &gitignore))
+                            .filter(|ev| !is_ignored(&ev.path, &gitignore, duckspec_root.as_deref()))
                             .filter_map(|ev| classify(&ev.path, ev.kind))
                             .collect();
 
@@ -136,7 +149,18 @@ fn build_gitignore(project_root: &Path) -> ignore::gitignore::Gitignore {
     })
 }
 
-fn is_ignored(path: &Path, gitignore: &ignore::gitignore::Gitignore) -> bool {
+fn is_ignored(
+    path: &Path,
+    gitignore: &ignore::gitignore::Gitignore,
+    duckspec_root: Option<&Path>,
+) -> bool {
+    // The duckspec directory is duckboard's source of truth, so always observe
+    // events there even when the host project's .gitignore lists it.
+    if let Some(root) = duckspec_root
+        && path.starts_with(root)
+    {
+        return false;
+    }
     let is_dir = path.is_dir();
     gitignore
         .matched_path_or_any_parents(path, is_dir)

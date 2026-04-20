@@ -182,10 +182,9 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
             }
         }
         Message::Refresh => {
-            state.project.reload();
+            reload_and_reconcile(state);
             refresh_open_tabs(state);
             refresh_changed_files(state);
-            area::change::refresh_obvious_command(&mut state.change, &state.project);
             tracing::info!("project reloaded");
         }
         Message::FileFinder(msg) => {
@@ -284,83 +283,10 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                 }
             }
 
-            if tree_changed {
-                // Snapshot known change names before reload for promotion detection.
-                let old_change_names: std::collections::HashSet<String> = state
-                    .project
-                    .active_changes
-                    .iter()
-                    .map(|c| c.name.clone())
-                    .collect();
-                let old_archived_names: std::collections::HashSet<String> = state
-                    .project
-                    .archived_changes
-                    .iter()
-                    .map(|c| c.name.clone())
-                    .collect();
-
-                state.project.reload();
-                tracing::debug!("project reloaded (file watcher)");
-
-                // Detect new change directories and promote exploration if active.
-                if state.change.is_exploration_selected() {
-                    let new_changes: Vec<String> = state
-                        .project
-                        .active_changes
-                        .iter()
-                        .filter(|c| !old_change_names.contains(&c.name))
-                        .map(|c| c.name.clone())
-                        .collect();
-
-                    if let Some(new_name) = new_changes.first()
-                        && let Some(exploration_name) = state.change.selected_change.clone()
-                    {
-                        tracing::info!(
-                            from = exploration_name,
-                            to = new_name.as_str(),
-                            "promoting exploration to real change"
-                        );
-                        state.change.promote_exploration(&exploration_name, new_name, state.project.project_root.as_deref());
-                    }
-                }
-
-                // Detect new archived change directories and migrate subscriptions
-                // from the matching active-change name (archival happened externally).
-                let new_archived: Vec<String> = state
-                    .project
-                    .archived_changes
-                    .iter()
-                    .filter(|c| !old_archived_names.contains(&c.name))
-                    .map(|c| c.name.clone())
-                    .collect();
-
-                let mut archived_any = false;
-                for archived_name in new_archived {
-                    let Some(base_name) = data::strip_archive_prefix(&archived_name) else {
-                        continue;
-                    };
-                    if state.change.interactions.contains_key(base_name) {
-                        tracing::info!(
-                            from = base_name,
-                            to = archived_name.as_str(),
-                            "migrating subscriptions to archived change"
-                        );
-                        state.change.archive_change(
-                            base_name,
-                            &archived_name,
-                            state.project.project_root.as_deref(),
-                        );
-                        archived_any = true;
-                    }
-                }
-
-                if archived_any {
-                    // Tab IDs were rewritten to the new archive paths; re-read
-                    // their content from disk so editors reflect the moved files.
-                    refresh_open_tabs(state);
-                }
-
-                area::change::refresh_obvious_command(&mut state.change, &state.project);
+            if tree_changed && reload_and_reconcile(state) {
+                // Tab IDs were rewritten to new archive paths; re-read
+                // their content from disk so editors reflect the moved files.
+                refresh_open_tabs(state);
             }
 
             refresh_changed_files(state);
@@ -688,6 +614,88 @@ fn rehighlight_all(state: &mut State) {
     }
 }
 
+/// Reload `ProjectData` and reconcile duckboard-local state: promote a selected
+/// exploration if a new change appeared, migrate subscriptions when a change
+/// was archived externally, and refresh the obvious-command hint. Returns
+/// `true` when tab IDs were rewritten for an external archival, so the caller
+/// can refresh open-tab contents from disk.
+fn reload_and_reconcile(state: &mut State) -> bool {
+    use std::collections::HashSet;
+
+    let old_change_names: HashSet<String> = state
+        .project
+        .active_changes
+        .iter()
+        .map(|c| c.name.clone())
+        .collect();
+    let old_archived_names: HashSet<String> = state
+        .project
+        .archived_changes
+        .iter()
+        .map(|c| c.name.clone())
+        .collect();
+
+    state.project.reload();
+
+    // Detect new change directories and promote exploration if active.
+    if state.change.is_exploration_selected() {
+        let new_change = state
+            .project
+            .active_changes
+            .iter()
+            .find(|c| !old_change_names.contains(&c.name))
+            .map(|c| c.name.clone());
+
+        if let Some(new_name) = new_change
+            && let Some(exploration_name) = state.change.selected_change.clone()
+        {
+            tracing::info!(
+                from = exploration_name,
+                to = new_name.as_str(),
+                "promoting exploration to real change"
+            );
+            state.change.promote_exploration(
+                &exploration_name,
+                &new_name,
+                state.project.project_root.as_deref(),
+            );
+        }
+    }
+
+    // Detect new archived change directories and migrate subscriptions from
+    // the matching active-change name (archival happened externally).
+    let new_archived: Vec<String> = state
+        .project
+        .archived_changes
+        .iter()
+        .filter(|c| !old_archived_names.contains(&c.name))
+        .map(|c| c.name.clone())
+        .collect();
+
+    let mut archived_any = false;
+    for archived_name in new_archived {
+        let Some(base_name) = data::strip_archive_prefix(&archived_name) else {
+            continue;
+        };
+        if state.change.interactions.contains_key(base_name) {
+            tracing::info!(
+                from = base_name,
+                to = archived_name.as_str(),
+                "migrating subscriptions to archived change"
+            );
+            state.change.archive_change(
+                base_name,
+                &archived_name,
+                state.project.project_root.as_deref(),
+            );
+            archived_any = true;
+        }
+    }
+
+    area::change::refresh_obvious_command(&mut state.change, &state.project);
+    archived_any
+}
+
 /// Re-read content for all open text tabs from disk.
 fn refresh_open_tabs(state: &mut State) {
     for tabs in [&mut state.change.tabs, &mut state.caps.tabs, &mut state.codex.tabs] {
@@ -835,7 +843,11 @@ fn subscription(state: &State) -> Subscription<Message> {
     // File watcher: active when project root is known.
     if let Some(root) = state.project.project_root.as_ref() {
         subs.push(
-            watcher::watch_subscription(root.clone()).map(Message::FileChanged),
+            watcher::watch_subscription(
+                root.clone(),
+                state.project.duckspec_root.clone(),
+            )
+            .map(Message::FileChanged),
         );
     }
 
