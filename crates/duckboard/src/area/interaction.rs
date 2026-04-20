@@ -50,6 +50,9 @@ pub struct AgentSession {
     pub agent_input_tokens: usize,
     pub agent_output_tokens: usize,
     pub agent_context_window: usize,
+    /// Suggested /ds-* command for the current stage (without the leading slash).
+    /// Used as the "press Enter on empty input" shortcut and for placeholder text.
+    pub obvious_command: Option<String>,
 }
 
 impl AgentSession {
@@ -74,6 +77,7 @@ impl AgentSession {
             agent_input_tokens: 0,
             agent_output_tokens: 0,
             agent_context_window: 200_000,
+            obvious_command: None,
         }
     }
 }
@@ -233,9 +237,14 @@ fn handle_agent_chat(state: &mut InteractionState, msg: agent_chat::Msg, highlig
         }
         agent_chat::Msg::SendPressed => {
             if let Some(handle) = &ax.agent_handle {
-                let text = ax.chat_input.text();
-                let text = text.trim().to_string();
-                if !text.is_empty() {
+                let typed = ax.chat_input.text();
+                let typed = typed.trim().to_string();
+                let text = if typed.is_empty() {
+                    ax.obvious_command.as_ref().map(|c| format!("/{c}"))
+                } else {
+                    Some(typed)
+                };
+                if let Some(text) = text {
                     ax.session.messages.push(crate::chat_store::ChatMessage {
                         role: crate::chat_store::Role::User,
                         content: vec![crate::chat_store::ContentBlock::Text(text.clone())],
@@ -637,6 +646,7 @@ pub fn view_column<'a, M: 'a + Clone>(
                     &ax.chat_commands,
                     &ax.chat_completion,
                     status,
+                    ax.obvious_command.as_deref(),
                 )
                 .map(move |m| w(Msg::AgentChat(m)));
 

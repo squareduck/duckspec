@@ -185,6 +185,7 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
             state.project.reload();
             refresh_open_tabs(state);
             refresh_changed_files(state);
+            area::change::refresh_obvious_command(&mut state.change, &state.project);
             tracing::info!("project reloaded");
         }
         Message::FileFinder(msg) => {
@@ -350,6 +351,8 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                         );
                     }
                 }
+
+                area::change::refresh_obvious_command(&mut state.change, &state.project);
             }
 
             refresh_changed_files(state);

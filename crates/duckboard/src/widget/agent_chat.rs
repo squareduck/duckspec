@@ -273,6 +273,7 @@ pub fn view<'a>(
     commands: &'a [SlashCommand],
     completion: &CompletionState,
     status: StatusInfo,
+    obvious_command: Option<&str>,
 ) -> Element<'a, Msg> {
     // Chat content — scrollable column of full-width sections.
     let mut chat_col = column![].spacing(0.0);
@@ -327,11 +328,14 @@ pub fn view<'a>(
         .into();
 
     // Input area.
-    let input = text_editor(input_value)
+    let mut input = text_editor(input_value)
         .on_action(Msg::EditorAction)
         .size(theme::font_md())
         .height(Length::Shrink)
         .id(INPUT_ID);
+    if let Some(cmd) = obvious_command {
+        input = input.placeholder(format!("Press Enter to run /{cmd}"));
+    }
 
     let input_row = container(input)
         .padding(theme::SPACING_SM)

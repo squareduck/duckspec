@@ -327,6 +327,61 @@ pub fn update(
             open_artifact(state, &artifact_id, project, highlighter);
         }
     }
+
+    refresh_obvious_command(state, project);
+}
+
+/// Compute the suggested next /ds-* command (without the leading slash) given
+/// the selected change's artifact state. Returns `None` for archived changes
+/// or when nothing is selected.
+pub fn compute_obvious_command(state: &State, project: &ProjectData) -> Option<String> {
+    let selected = state.selected_change.as_deref()?;
+
+    // Exploration (virtual) — always orient first.
+    if state.explorations.iter().any(|e| e == selected) {
+        return Some("ds-explore".into());
+    }
+
+    // Archived changes are terminal — no further action.
+    if project.archived_changes.iter().any(|c| c.name == selected) {
+        return None;
+    }
+
+    let change = project.active_changes.iter().find(|c| c.name == selected)?;
+
+    // Steps exist → either apply (unfinished) or archive (all done).
+    if !change.steps.is_empty() {
+        let all_done = change
+            .steps
+            .iter()
+            .all(|s| matches!(s.completion, StepCompletion::Done));
+        return Some(if all_done { "ds-archive".into() } else { "ds-apply".into() });
+    }
+
+    // Caps exist → feature flow needs steps next; refinement/doc-only is ready to archive.
+    if !change.cap_tree.is_empty() {
+        return Some(if change.has_design { "ds-step".into() } else { "ds-archive".into() });
+    }
+
+    // No caps yet — walk the feature-flow ladder.
+    if change.has_design {
+        return Some("ds-spec".into());
+    }
+    if change.has_proposal {
+        return Some("ds-design".into());
+    }
+    Some("ds-propose".into())
+}
+
+/// Refresh the `obvious_command` on every session of the active interaction.
+/// Call after update() and after project reload.
+pub fn refresh_obvious_command(state: &mut State, project: &ProjectData) {
+    let cmd = compute_obvious_command(state, project);
+    let Some(name) = state.selected_change.clone() else { return };
+    let Some(ix) = state.interactions.get_mut(&name) else { return };
+    for ax in ix.sessions.iter_mut() {
+        ax.obvious_command = cmd.clone();
+    }
 }
 
 // ── View ─────────────────────────────────────────────────────────────────────
@@ -656,6 +711,140 @@ mod breadcrumb_tests {
             breadcrumbs(&state, &project),
             vec!["Archive", "2026-04-20-01-foo"]
         );
+    }
+
+    // ── compute_obvious_command ─────────────────────────────────────────────
+
+    fn tree_node(id: &str) -> crate::data::TreeNode {
+        crate::data::TreeNode { id: id.into(), label: id.into(), children: vec![] }
+    }
+
+    fn step(done: bool) -> crate::data::StepInfo {
+        crate::data::StepInfo {
+            id: "changes/foo/steps/01-bar.md".into(),
+            label: "bar".into(),
+            number: 1,
+            completion: if done {
+                StepCompletion::Done
+            } else {
+                StepCompletion::Partial(0, 1)
+            },
+        }
+    }
+
+    fn set_change(project: &mut ProjectData, name: &str, mutate: impl FnOnce(&mut ChangeData)) {
+        let ch = project
+            .active_changes
+            .iter_mut()
+            .find(|c| c.name == name)
+            .expect("change exists");
+        mutate(ch);
+    }
+
+    #[test]
+    fn obvious_nothing_selected() {
+        let state = State {
+            selected_change: None,
+            expanded_sections: HashSet::new(),
+            expanded_nodes: HashSet::new(),
+            tabs: tab_bar::TabState::default(),
+            changed_files: vec![],
+            interactions: HashMap::new(),
+            explorations: vec![],
+            exploration_counter: 0,
+            audit_active: false,
+        };
+        let project = make_project(&[], &[]);
+        assert_eq!(compute_obvious_command(&state, &project), None);
+    }
+
+    #[test]
+    fn obvious_exploration_always_explore() {
+        let state = make_state("Exploration 1", &["Exploration 1"]);
+        let project = make_project(&[], &[]);
+        assert_eq!(compute_obvious_command(&state, &project).as_deref(), Some("ds-explore"));
+    }
+
+    #[test]
+    fn obvious_archived_is_none() {
+        let state = make_state("2026-04-20-01-foo", &[]);
+        let project = make_project(&[], &["2026-04-20-01-foo"]);
+        assert_eq!(compute_obvious_command(&state, &project), None);
+    }
+
+    #[test]
+    fn obvious_empty_change_suggests_propose() {
+        let state = make_state("foo", &[]);
+        let project = make_project(&["foo"], &[]);
+        assert_eq!(compute_obvious_command(&state, &project).as_deref(), Some("ds-propose"));
+    }
+
+    #[test]
+    fn obvious_with_proposal_suggests_design() {
+        let state = make_state("foo", &[]);
+        let mut project = make_project(&["foo"], &[]);
+        set_change(&mut project, "foo", |c| c.has_proposal = true);
+        assert_eq!(compute_obvious_command(&state, &project).as_deref(), Some("ds-design"));
+    }
+
+    #[test]
+    fn obvious_with_design_suggests_spec() {
+        let state = make_state("foo", &[]);
+        let mut project = make_project(&["foo"], &[]);
+        set_change(&mut project, "foo", |c| {
+            c.has_proposal = true;
+            c.has_design = true;
+        });
+        assert_eq!(compute_obvious_command(&state, &project).as_deref(), Some("ds-spec"));
+    }
+
+    #[test]
+    fn obvious_feature_flow_with_caps_suggests_step() {
+        let state = make_state("foo", &[]);
+        let mut project = make_project(&["foo"], &[]);
+        set_change(&mut project, "foo", |c| {
+            c.has_proposal = true;
+            c.has_design = true;
+            c.cap_tree = vec![tree_node("caps/auth")];
+        });
+        assert_eq!(compute_obvious_command(&state, &project).as_deref(), Some("ds-step"));
+    }
+
+    #[test]
+    fn obvious_refinement_with_caps_suggests_archive() {
+        // Spec refinement / doc-only: caps present but no design.
+        let state = make_state("foo", &[]);
+        let mut project = make_project(&["foo"], &[]);
+        set_change(&mut project, "foo", |c| {
+            c.cap_tree = vec![tree_node("caps/auth")];
+        });
+        assert_eq!(compute_obvious_command(&state, &project).as_deref(), Some("ds-archive"));
+    }
+
+    #[test]
+    fn obvious_steps_unfinished_suggests_apply() {
+        let state = make_state("foo", &[]);
+        let mut project = make_project(&["foo"], &[]);
+        set_change(&mut project, "foo", |c| {
+            c.has_proposal = true;
+            c.has_design = true;
+            c.cap_tree = vec![tree_node("caps/auth")];
+            c.steps = vec![step(false), step(true)];
+        });
+        assert_eq!(compute_obvious_command(&state, &project).as_deref(), Some("ds-apply"));
+    }
+
+    #[test]
+    fn obvious_all_steps_done_suggests_archive() {
+        let state = make_state("foo", &[]);
+        let mut project = make_project(&["foo"], &[]);
+        set_change(&mut project, "foo", |c| {
+            c.has_proposal = true;
+            c.has_design = true;
+            c.cap_tree = vec![tree_node("caps/auth")];
+            c.steps = vec![step(true), step(true)];
+        });
+        assert_eq!(compute_obvious_command(&state, &project).as_deref(), Some("ds-archive"));
     }
 }
 
