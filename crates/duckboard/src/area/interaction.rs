@@ -633,7 +633,6 @@ pub fn view_column<'a, M: 'a + Clone>(
                     &ax.chat_blocks,
                     &ax.chat_editors,
                     &ax.chat_collapsed,
-                    ax.session.is_streaming,
                     &ax.chat_input,
                     &ax.chat_commands,
                     &ax.chat_completion,

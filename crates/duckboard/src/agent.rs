@@ -218,8 +218,6 @@ struct ProtocolMsg {
     model: Option<String>,
     // result
     session_id: Option<String>,
-    #[serde(default)]
-    usage: Option<UsageBlock>,
     #[serde(rename = "modelUsage")]
     model_usage: Option<serde_json::Value>,
     is_error: Option<bool>,
@@ -288,7 +286,15 @@ fn parse_protocol_line(msg: &ProtocolMsg) -> Vec<AgentEvent> {
         "assistant" => {
             if let Some(body) = &msg.message {
                 if let Some(usage) = &body.usage {
-                    let input_t = usage.input_tokens as usize;
+                    // Assistant messages report per-request usage. Summing all
+                    // three input fields gives the prompt size at this turn —
+                    // i.e. current context-window fill. (Do NOT use the `result`
+                    // message for this: its usage is cumulative across every
+                    // internal model call, which inflates `cache_read` N-fold
+                    // when the agent loops through tool use.)
+                    let input_t = (usage.input_tokens
+                        + usage.cache_read_input_tokens
+                        + usage.cache_creation_input_tokens) as usize;
                     let output_t = usage.output_tokens as usize;
                     if input_t > 0 || output_t > 0 {
                         events.push(AgentEvent::UsageUpdate {
@@ -341,26 +347,24 @@ fn parse_protocol_line(msg: &ProtocolMsg) -> Vec<AgentEvent> {
             }
         }
         "result" => {
-            if let Some(usage) = &msg.usage {
-                let input_tokens = (usage.input_tokens
-                    + usage.cache_read_input_tokens
-                    + usage.cache_creation_input_tokens) as usize;
-                let output_tokens = usage.output_tokens as usize;
-                let context_window = msg.model_usage
-                    .as_ref()
-                    .and_then(|mu| mu.as_object())
-                    .and_then(|mu| mu.values().next())
-                    .and_then(|v| v["contextWindow"].as_u64())
-                    .map(|v| v as usize);
+            // Only propagate the context-window capacity here. `msg.usage` on
+            // result messages is cumulative across every internal model call
+            // in the turn (with prompt caching that multiplies `cache_read`
+            // several-fold), so it's unusable as a current-prompt-size signal.
+            let context_window = msg.model_usage
+                .as_ref()
+                .and_then(|mu| mu.as_object())
+                .and_then(|mu| mu.values().next())
+                .and_then(|v| v["contextWindow"].as_u64())
+                .map(|v| v as usize);
 
-                if input_tokens > 0 || output_tokens > 0 || context_window.is_some() {
-                    events.push(AgentEvent::UsageUpdate {
-                        model: None,
-                        input_tokens,
-                        output_tokens,
-                        context_window,
-                    });
-                }
+            if let Some(cw) = context_window {
+                events.push(AgentEvent::UsageUpdate {
+                    model: None,
+                    input_tokens: 0,
+                    output_tokens: 0,
+                    context_window: Some(cw),
+                });
             }
         }
         _ => {}

@@ -140,9 +140,12 @@ pub fn build_chat_blocks(session: &ChatSession) -> Vec<Block> {
 /// non-printable characters that cause rendering artifacts.
 fn truncate_output(output: &str) -> Vec<String> {
     const MAX_LINES: usize = 10;
-    let all_lines: Vec<String> = output
+    let cleaned = strip_ansi_escapes(output);
+    let cleaned = strip_tool_wrapper_tags(&cleaned);
+    let all_lines: Vec<String> = cleaned
         .lines()
         .map(sanitize_line)
+        .map(|s| s.trim_end().to_string())
         .collect();
     let mut lines = if all_lines.len() > MAX_LINES {
         let mut truncated = all_lines[..MAX_LINES].to_vec();
@@ -151,15 +154,62 @@ fn truncate_output(output: &str) -> Vec<String> {
     } else {
         all_lines
     };
-    // Skip entirely empty output.
-    if lines.len() == 1 && lines[0].is_empty() {
-        lines.clear();
+    while lines.last().is_some_and(|s| s.is_empty()) {
+        lines.pop();
     }
     lines
 }
 
-/// Replace non-printable / non-standard-whitespace characters with a space
-/// to avoid rendering rectangles in the monospace font.
+/// Remove ANSI CSI escape sequences (e.g. `\x1B[32m`). Parses the sequence
+/// greedily through its final byte so the parameter bytes don't leak through.
+fn strip_ansi_escapes(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    let mut chars = input.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c != '\x1B' {
+            out.push(c);
+            continue;
+        }
+        match chars.next() {
+            Some('[') => {
+                for next in chars.by_ref() {
+                    let n = next as u32;
+                    if (0x40..=0x7E).contains(&n) {
+                        break;
+                    }
+                }
+            }
+            Some(']') => {
+                // OSC: terminate on BEL (0x07) or ESC \\.
+                let mut prev_esc = false;
+                for next in chars.by_ref() {
+                    if next == '\x07' {
+                        break;
+                    }
+                    if prev_esc && next == '\\' {
+                        break;
+                    }
+                    prev_esc = next == '\x1B';
+                }
+            }
+            Some(_) | None => {}
+        }
+    }
+    out
+}
+
+/// Strip `<tool_use_error>` / `<tool_use_result>` wrapper tags that some
+/// agent backends emit around tool output.
+fn strip_tool_wrapper_tags(input: &str) -> String {
+    input
+        .replace("<tool_use_error>", "")
+        .replace("</tool_use_error>", "")
+        .replace("<tool_use_result>", "")
+        .replace("</tool_use_result>", "")
+}
+
+/// Replace remaining non-printable / non-standard-whitespace characters with a
+/// space to avoid rendering rectangles in the monospace font.
 fn sanitize_line(line: &str) -> String {
     line.chars()
         .map(|c| {
@@ -219,7 +269,6 @@ pub fn view<'a>(
     blocks: &'a [Block],
     editors: &'a [EditorState],
     collapsed: &'a [bool],
-    is_streaming: bool,
     input_value: &'a text_editor::Content,
     commands: &'a [SlashCommand],
     completion: &CompletionState,
@@ -234,31 +283,48 @@ pub fn view<'a>(
         chat_col = chat_col.push(block_el);
     }
 
-    let mut chat_scroll = scrollable(chat_col)
+    let chat_scroll = scrollable(chat_col)
         .direction(theme::thin_scrollbar_direction())
         .style(theme::thin_scrollbar)
         .width(Length::Fill)
         .height(Length::Fill)
+        .anchor_bottom()
         .id(CHAT_SCROLLABLE_ID);
 
-    if is_streaming {
-        chat_scroll = chat_scroll.anchor_bottom();
-    }
-
-    // Completion popup — always present in the tree to keep input_row at a
-    // stable index (prevents iced from losing text_editor focus).
-    let completion_el: Element<'a, Msg> = if completion.visible {
+    // Completion popup — always rendered with the same widget type so iced's
+    // tree diff preserves text_editor focus. When hidden, the inner column
+    // is empty and the border is suppressed so the popup collapses cleanly.
+    let has_completion = completion.visible && {
+        let input_text = input_value.text();
+        let query = input_text.trim_start_matches('/');
+        !filter_commands(commands, query).is_empty()
+    };
+    let completion_col = if completion.visible {
         let input_text = input_value.text();
         let query = input_text.trim_start_matches('/');
         let filtered = filter_commands(commands, query);
-        if filtered.is_empty() {
-            Space::new().height(0).into()
-        } else {
-            view_completion(commands, &filtered, completion.selected)
-        }
+        view_completion_col(commands, &filtered, completion.selected)
     } else {
-        Space::new().height(0).into()
+        column![].spacing(0.0)
     };
+    let completion_el: Element<'a, Msg> = container(completion_col)
+        .width(Length::Fill)
+        .style(move |_theme: &iced::Theme| {
+            if has_completion {
+                container::Style {
+                    background: Some(iced::Background::Color(theme::bg_elevated())),
+                    border: iced::Border {
+                        color: theme::border_color(),
+                        width: 1.0,
+                        radius: 0.0.into(),
+                    },
+                    ..Default::default()
+                }
+            } else {
+                container::Style::default()
+            }
+        })
+        .into();
 
     // Input area.
     let input = text_editor(input_value)
@@ -489,11 +555,11 @@ fn view_status_bar<'a>(status: StatusInfo) -> Element<'a, Msg> {
 
 // ── Completion popup ────────────────────────────────────────────────────────
 
-fn view_completion<'a>(
+fn view_completion_col<'a>(
     commands: &'a [SlashCommand],
     filtered: &[(usize, i32)],
     selected: usize,
-) -> Element<'a, Msg> {
+) -> iced::widget::Column<'a, Msg> {
     let mut items = column![].spacing(0.0);
     for (i, &(cmd_idx, _score)) in filtered.iter().enumerate() {
         let cmd = &commands[cmd_idx];
@@ -523,10 +589,7 @@ fn view_completion<'a>(
                 }),
         );
     }
-    container(items)
-        .width(Length::Fill)
-        .style(completion_style)
-        .into()
+    items
 }
 
 // ── Fuzzy matching ──────────────────────────────────────────────────────────
@@ -592,21 +655,44 @@ fn header_style(_theme: &iced::Theme) -> container::Style {
     }
 }
 
-fn completion_style(_theme: &iced::Theme) -> container::Style {
-    container::Style {
-        background: Some(iced::Background::Color(theme::bg_elevated())),
-        border: iced::Border {
-            color: theme::border_color(),
-            width: 1.0,
-            radius: 0.0.into(),
-        },
-        ..Default::default()
-    }
-}
-
 fn status_bar_style(_theme: &iced::Theme) -> container::Style {
     container::Style {
         background: Some(iced::Background::Color(theme::bg_surface())),
         ..Default::default()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn strips_csi_color_codes() {
+        let input = "\x1B[32mcreated \x1B[39m changes/foo/proposal.md";
+        assert_eq!(strip_ansi_escapes(input), "created  changes/foo/proposal.md");
+    }
+
+    #[test]
+    fn strips_tool_use_error_tags() {
+        let input = "<tool_use_error>File has not been read yet.</tool_use_error>";
+        assert_eq!(
+            strip_tool_wrapper_tags(input),
+            "File has not been read yet.",
+        );
+    }
+
+    #[test]
+    fn truncate_output_cleans_color_and_tags() {
+        let raw = "\x1B[32mcreated \x1B[39m changes/foo/proposal.md";
+        assert_eq!(
+            truncate_output(raw),
+            vec!["created  changes/foo/proposal.md".to_string()],
+        );
+
+        let raw = "<tool_use_error>File has not been read yet.</tool_use_error>";
+        assert_eq!(
+            truncate_output(raw),
+            vec!["File has not been read yet.".to_string()],
+        );
     }
 }
