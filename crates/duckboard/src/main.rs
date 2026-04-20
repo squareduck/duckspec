@@ -769,18 +769,25 @@ fn subscription(state: &State) -> Subscription<Message> {
     }
 
     // Per-change PTY subscriptions.
+    let pty_cwd = state.project.project_root.clone();
     for (name, ix) in &state.change.interactions {
         if ix.terminal.is_some() {
             let key = format!("pty:change:{name}");
-            subs.push(widget::terminal::pty_subscription(key).map(tagged_pty));
+            subs.push(widget::terminal::pty_subscription(key, pty_cwd.clone()).map(tagged_pty));
         }
     }
     // Caps / Codex PTY subscriptions.
     if state.caps.interaction.terminal.is_some() {
-        subs.push(widget::terminal::pty_subscription(format!("pty:{KEY_CAPS}")).map(tagged_pty));
+        subs.push(
+            widget::terminal::pty_subscription(format!("pty:{KEY_CAPS}"), pty_cwd.clone())
+                .map(tagged_pty),
+        );
     }
     if state.codex.interaction.terminal.is_some() {
-        subs.push(widget::terminal::pty_subscription(format!("pty:{KEY_CODEX}")).map(tagged_pty));
+        subs.push(
+            widget::terminal::pty_subscription(format!("pty:{KEY_CODEX}"), pty_cwd.clone())
+                .map(tagged_pty),
+        );
     }
 
     // Per-session agent subscriptions. Key format: `agent:<scope>/<session_id>`.

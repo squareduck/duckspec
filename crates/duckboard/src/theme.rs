@@ -179,6 +179,9 @@ struct FontState {
     ui_size: f32,
     content_font: iced::Font,
     content_size: f32,
+    /// Pixel advance of a single monospace cell at `content_size`, cached from
+    /// a cosmic-text layout of the current content font. Lazily measured.
+    mono_cell: std::sync::OnceLock<(f32, f32)>,
 }
 
 impl Default for FontState {
@@ -188,6 +191,7 @@ impl Default for FontState {
             ui_size: 13.0,
             content_font: iced::Font::MONOSPACE,
             content_size: 13.0,
+            mono_cell: std::sync::OnceLock::new(),
         }
     }
 }
@@ -204,6 +208,7 @@ pub fn set_fonts(config: &crate::config::Config) {
         ui_size: config.ui.font_size,
         content_font: crate::config::content_font(config),
         content_size: config.content.font_size,
+        mono_cell: std::sync::OnceLock::new(),
     };
     *fonts().write().unwrap() = state;
 }
@@ -222,6 +227,48 @@ pub fn ui_size() -> f32 {
 
 pub fn content_size() -> f32 {
     fonts().read().unwrap().content_size
+}
+
+/// Measure the monospace advance width and line height for the current content
+/// font & size using cosmic-text (via iced's Paragraph). Cached per font state
+/// so repeated calls are cheap. Falls back to heuristic ratios if the font
+/// system isn't ready (shouldn't happen after the iced app starts).
+fn mono_cell_measured() -> (f32, f32) {
+    use iced::advanced::graphics::text::Paragraph;
+    use iced::advanced::text::Paragraph as _;
+
+    let guard = fonts().read().unwrap();
+    *guard.mono_cell.get_or_init(|| {
+        const SAMPLE_LEN: usize = 32;
+        let sample: String = "M".repeat(SAMPLE_LEN);
+        let text = iced::advanced::text::Text {
+            content: sample.as_str(),
+            bounds: iced::Size::INFINITE,
+            size: iced::Pixels(guard.content_size),
+            line_height: iced::widget::text::LineHeight::default(),
+            font: guard.content_font,
+            align_x: iced::advanced::text::Alignment::Left,
+            align_y: iced::alignment::Vertical::Top,
+            shaping: iced::widget::text::Shaping::Basic,
+            wrapping: iced::widget::text::Wrapping::None,
+        };
+        let paragraph = Paragraph::with_text(text);
+        let bounds = paragraph.min_bounds();
+        let advance = bounds.width / SAMPLE_LEN as f32;
+        if advance.is_finite() && advance > 0.0 {
+            (advance, bounds.height.max(guard.content_size * 1.2))
+        } else {
+            (guard.content_size * 0.6, guard.content_size * 1.4)
+        }
+    })
+}
+
+pub fn content_cell_width() -> f32 {
+    mono_cell_measured().0
+}
+
+pub fn content_cell_height() -> f32 {
+    mono_cell_measured().1
 }
 
 // ── Font size helpers ─────────────────────────────────────────────────────

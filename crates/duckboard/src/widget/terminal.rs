@@ -27,8 +27,10 @@ use crate::theme;
 // ── Constants ────────────────────────────────────────────────────────────────
 
 fn font_size() -> f32 { theme::content_size() }
-const CELL_WIDTH: f32 = 8.4;
-const CELL_HEIGHT: f32 = 18.0;
+// Cell dimensions are measured from the configured content font via cosmic-text
+// so glyphs sit flush regardless of which monospace the user picked.
+fn cell_width() -> f32 { theme::content_cell_width() }
+fn cell_height() -> f32 { theme::content_cell_height() }
 const PAD_X: f32 = 6.0;
 const PAD_Y: f32 = 4.0;
 const DEFAULT_COLS: usize = 80;
@@ -383,10 +385,10 @@ impl TerminalState {
     fn point_from_canvas(&self, px: f32, py: f32) -> (GridPoint, Side) {
         let cols = self.cols.max(1);
         let rows = self.rows.max(1);
-        let col_float = ((px - PAD_X) / CELL_WIDTH).max(0.0);
+        let col_float = ((px - PAD_X) / cell_width()).max(0.0);
         let col = (col_float as usize).min(cols - 1);
         let side = if col_float - col as f32 <= 0.5 { Side::Left } else { Side::Right };
-        let row_float = ((py - PAD_Y) / CELL_HEIGHT).max(0.0);
+        let row_float = ((py - PAD_Y) / cell_height()).max(0.0);
         let row = (row_float as usize).min(rows - 1);
         let display_offset = self.term.grid().display_offset() as i32;
         let line = (row as i32) - display_offset;
@@ -426,8 +428,8 @@ impl TerminalState {
             let _ = master.resize(portable_pty::PtySize {
                 rows: rows as u16,
                 cols: cols as u16,
-                pixel_width: (cols as f32 * CELL_WIDTH) as u16,
-                pixel_height: (rows as f32 * CELL_HEIGHT) as u16,
+                pixel_width: (cols as f32 * cell_width()) as u16,
+                pixel_height: (rows as f32 * cell_height()) as u16,
             });
         }
 
@@ -510,13 +512,10 @@ impl TerminalState {
 
             let cell = &indexed.cell;
 
-            // Skip wide char spacers.
-            if cell.flags.contains(Flags::WIDE_CHAR_SPACER)
-                || cell.flags.contains(Flags::LEADING_WIDE_CHAR_SPACER)
-            {
-                continue;
-            }
-
+            // Wide-char spacer cells carry the same fg/bg as their leading
+            // wide char (alacritty writes them with `write_at_cursor(' ')` and
+            // the active template), so we fall through for bg painting and let
+            // the ' ' grapheme check below skip the glyph.
             let grapheme = cell.c;
             let bold = cell.flags.contains(Flags::BOLD);
             let italic = cell.flags.contains(Flags::ITALIC);
@@ -592,6 +591,10 @@ pub struct CanvasState {
     cache: Cache,
     last_generation: Cell<u64>,
     dragging: Cell<bool>,
+    /// Residual pixel delta from trackpad wheel events that did not amount to
+    /// a full line. Carried across events so small per-frame deltas eventually
+    /// trigger a scroll instead of being silently dropped.
+    scroll_accum: Cell<f32>,
 }
 
 impl Default for CanvasState {
@@ -600,6 +603,7 @@ impl Default for CanvasState {
             cache: Cache::default(),
             last_generation: Cell::new(0),
             dragging: Cell::new(false),
+            scroll_accum: Cell::new(0.0),
         }
     }
 }
@@ -621,15 +625,29 @@ impl<'a> canvas::Program<()> for TerminalCanvas<'a> {
                 }
                 // macOS natural scrolling: swipe up (positive y) reveals older
                 // scrollback, which in alacritty is a positive Scroll::Delta.
+                let ch = cell_height();
                 let lines = match delta {
-                    mouse::ScrollDelta::Lines { y, .. } => *y as isize,
-                    mouse::ScrollDelta::Pixels { y, .. } => (*y / CELL_HEIGHT) as isize,
+                    mouse::ScrollDelta::Lines { y, .. } => {
+                        state.scroll_accum.set(0.0);
+                        *y as isize
+                    }
+                    mouse::ScrollDelta::Pixels { y, .. } => {
+                        // Accumulate sub-line pixel deltas so trackpad scroll
+                        // doesn't feel stuck.
+                        let accum = state.scroll_accum.get() + *y;
+                        let whole = (accum / ch).trunc();
+                        state.scroll_accum.set(accum - whole * ch);
+                        whole as isize
+                    }
                 };
                 if lines != 0 {
                     self.state.request_scroll(lines);
-                    return Some(canvas::Action::publish(()).and_capture());
+                    Some(canvas::Action::publish(()).and_capture())
+                } else {
+                    // Still capture so the wheel event doesn't bubble to a
+                    // parent scrollable while we're busy accumulating.
+                    Some(canvas::Action::capture())
                 }
-                None
             }
             canvas::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => {
                 let Some(pos) = cursor.position_in(bounds) else { return None };
@@ -641,6 +659,18 @@ impl<'a> canvas::Program<()> for TerminalCanvas<'a> {
                 if state.dragging.get()
                     && let Some(pos) = cursor.position_from(bounds.position())
                 {
+                    // Auto-scroll when the user drags past the top or bottom
+                    // of the canvas so selection can extend beyond the visible
+                    // viewport.
+                    let ch = cell_height();
+                    if pos.y < 0.0 {
+                        let overshoot = ((-pos.y) / ch).ceil().max(1.0) as isize;
+                        self.state.request_scroll(overshoot);
+                    } else if pos.y > bounds.height {
+                        let overshoot =
+                            ((pos.y - bounds.height) / ch).ceil().max(1.0) as isize;
+                        self.state.request_scroll(-overshoot);
+                    }
                     self.state.queue_selection_update(pos.x, pos.y);
                     return Some(canvas::Action::publish(()).and_capture());
                 }
@@ -668,10 +698,12 @@ impl<'a> canvas::Program<()> for TerminalCanvas<'a> {
         let buffer = &self.state.buffer;
 
         // Request resize if widget bounds changed (account for padding).
-        let inner_w = (bounds.width - PAD_X * 2.0).max(CELL_WIDTH);
-        let inner_h = (bounds.height - PAD_Y * 2.0).max(CELL_HEIGHT);
-        let desired_cols = (inner_w / CELL_WIDTH).floor().max(1.0) as usize;
-        let desired_rows = (inner_h / CELL_HEIGHT).floor().max(1.0) as usize;
+        let cw = cell_width();
+        let ch = cell_height();
+        let inner_w = (bounds.width - PAD_X * 2.0).max(cw);
+        let inner_h = (bounds.height - PAD_Y * 2.0).max(ch);
+        let desired_cols = (inner_w / cw).floor().max(1.0) as usize;
+        let desired_rows = (inner_h / ch).floor().max(1.0) as usize;
         self.state.request_resize(desired_cols, desired_rows);
 
         // Invalidate cache when terminal content changes.
@@ -690,14 +722,14 @@ impl<'a> canvas::Program<()> for TerminalCanvas<'a> {
             for row in 0..rows {
                 for col in 0..cols {
                     let cell = buffer.cell(row, col);
-                    let x = PAD_X + col as f32 * CELL_WIDTH;
-                    let y = PAD_Y + row as f32 * CELL_HEIGHT;
+                    let x = PAD_X + col as f32 * cw;
+                    let y = PAD_Y + row as f32 * ch;
 
                     // Draw cell background if it differs from the terminal default.
                     if cell.bg != buffer.default_bg {
                         frame.fill_rectangle(
                             IcedPoint::new(x, y),
-                            Size::new(CELL_WIDTH, CELL_HEIGHT),
+                            Size::new(cw, ch),
                             cell.bg,
                         );
                     }
@@ -706,7 +738,7 @@ impl<'a> canvas::Program<()> for TerminalCanvas<'a> {
                     if cell.selected {
                         frame.fill_rectangle(
                             IcedPoint::new(x, y),
-                            Size::new(CELL_WIDTH, CELL_HEIGHT),
+                            Size::new(cw, ch),
                             Color {
                                 a: 0.35,
                                 ..theme::accent()
@@ -751,11 +783,11 @@ impl<'a> canvas::Program<()> for TerminalCanvas<'a> {
             if let Some(ref cursor) = buffer.cursor
                 && cursor.visible
             {
-                let cx = PAD_X + cursor.x as f32 * CELL_WIDTH;
-                let cy = PAD_Y + cursor.y as f32 * CELL_HEIGHT;
+                let cx = PAD_X + cursor.x as f32 * cw;
+                let cy = PAD_Y + cursor.y as f32 * ch;
                 frame.fill_rectangle(
                     IcedPoint::new(cx, cy),
-                    Size::new(CELL_WIDTH, CELL_HEIGHT),
+                    Size::new(cw, ch),
                     Color {
                         a: 0.5,
                         ..theme::text_primary()
@@ -842,15 +874,22 @@ impl Write for ArcWriter {
 }
 
 /// Create a subscription that spawns a PTY child and streams its output.
-pub fn pty_subscription(key: String) -> Subscription<(String, PtyEvent)> {
-    Subscription::run_with(key, |key| {
+///
+/// `cwd`, when `Some`, is used as the working directory of the spawned shell.
+/// It is part of the subscription identity, so changing the project root
+/// tears down the old shell and spawns a fresh one in the new directory.
+pub fn pty_subscription(
+    key: String,
+    cwd: Option<std::path::PathBuf>,
+) -> Subscription<(String, PtyEvent)> {
+    Subscription::run_with((key, cwd), |(key, cwd)| {
         use iced::futures::StreamExt;
         let key = key.clone();
-        pty_worker().map(move |e| (key.clone(), e))
+        pty_worker(cwd.clone()).map(move |e| (key.clone(), e))
     })
 }
 
-fn pty_worker() -> impl iced::futures::Stream<Item = PtyEvent> {
+fn pty_worker(cwd: Option<std::path::PathBuf>) -> impl iced::futures::Stream<Item = PtyEvent> {
     iced::stream::channel(
         256,
         |mut sender: iced::futures::channel::mpsc::Sender<PtyEvent>| async move {
@@ -874,6 +913,9 @@ fn pty_worker() -> impl iced::futures::Stream<Item = PtyEvent> {
             // Spawn default shell.
             let mut cmd = portable_pty::CommandBuilder::new_default_prog();
             cmd.env("PROMPT_EOL_MARK", "");
+            if let Some(ref path) = cwd {
+                cmd.cwd(path);
+            }
             let _child = match pair.slave.spawn_command(cmd) {
                 Ok(child) => child,
                 Err(e) => {
