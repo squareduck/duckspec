@@ -334,6 +334,7 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                     .map(|c| c.name.clone())
                     .collect();
 
+                let mut archived_any = false;
                 for archived_name in new_archived {
                     let Some(base_name) = data::strip_archive_prefix(&archived_name) else {
                         continue;
@@ -349,7 +350,14 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                             &archived_name,
                             state.project.project_root.as_deref(),
                         );
+                        archived_any = true;
                     }
+                }
+
+                if archived_any {
+                    // Tab IDs were rewritten to the new archive paths; re-read
+                    // their content from disk so editors reflect the moved files.
+                    refresh_open_tabs(state);
                 }
 
                 area::change::refresh_obvious_command(&mut state.change, &state.project);

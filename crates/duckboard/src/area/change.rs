@@ -135,7 +135,48 @@ impl State {
         if self.selected_change.as_deref() == Some(old_name) {
             self.selected_change = Some(archived_name.to_string());
         }
+        rewrite_tab_ids_for_archive(&mut self.tabs, old_name, archived_name);
         crate::chat_store::rename_scope(old_name, archived_name, project_root);
+    }
+}
+
+/// Rewrite tab IDs that reference a change being archived so breadcrumbs, the
+/// path header below the tab bar, and content lookups point to the new archive
+/// location. Handles artifact tabs (`changes/<old>/…`) and VCS diff tabs
+/// (`vcs:…/changes/<old>/…`). Tab titles are unchanged (they're filenames).
+fn rewrite_tab_ids_for_archive(
+    tabs: &mut tab_bar::TabState,
+    old_name: &str,
+    archived_name: &str,
+) {
+    let artifact_old = format!("changes/{old_name}/");
+    let artifact_new = format!("archive/{archived_name}/");
+    let vcs_old = format!("/changes/{old_name}/");
+    let vcs_new = format!("/archive/{archived_name}/");
+
+    let rewrite = |id: &str| -> Option<String> {
+        if let Some(rest) = id.strip_prefix(&artifact_old) {
+            return Some(format!("{artifact_new}{rest}"));
+        }
+        if let Some(rest) = id.strip_prefix("vcs:") {
+            if let Some(idx) = rest.find(&vcs_old) {
+                let (lead, tail) = rest.split_at(idx);
+                let tail = &tail[vcs_old.len()..];
+                return Some(format!("vcs:{lead}{vcs_new}{tail}"));
+            }
+        }
+        None
+    };
+
+    if let Some(tab) = tabs.preview.as_mut()
+        && let Some(new_id) = rewrite(&tab.id)
+    {
+        tab.id = new_id;
+    }
+    for tab in tabs.file_tabs.iter_mut() {
+        if let Some(new_id) = rewrite(&tab.id) {
+            tab.id = new_id;
+        }
     }
 }
 
@@ -832,6 +873,76 @@ mod breadcrumb_tests {
             c.steps = vec![step(false), step(true)];
         });
         assert_eq!(compute_obvious_command(&state, &project).as_deref(), Some("ds-apply"));
+    }
+
+    // ── rewrite_tab_ids_for_archive ─────────────────────────────────────────
+
+    fn make_tab(id: &str) -> crate::widget::tab_bar::Tab {
+        crate::widget::tab_bar::Tab {
+            id: id.into(),
+            title: id.rsplit('/').next().unwrap_or(id).into(),
+            view: crate::widget::tab_bar::TabView::Editor {
+                editor: crate::widget::text_edit::EditorState::new(""),
+            },
+        }
+    }
+
+    #[test]
+    fn rewrite_rewrites_artifact_preview_and_file_tabs() {
+        let mut tabs = tab_bar::TabState {
+            preview: Some(make_tab("changes/foo/proposal.md")),
+            file_tabs: vec![
+                make_tab("changes/foo/caps/auth/spec.md"),
+                make_tab("changes/bar/proposal.md"),
+                make_tab("file:Cargo.toml"),
+            ],
+            active: Default::default(),
+        };
+
+        rewrite_tab_ids_for_archive(&mut tabs, "foo", "2026-04-20-01-foo");
+
+        assert_eq!(
+            tabs.preview.as_ref().map(|t| t.id.as_str()),
+            Some("archive/2026-04-20-01-foo/proposal.md"),
+        );
+        assert_eq!(tabs.file_tabs[0].id, "archive/2026-04-20-01-foo/caps/auth/spec.md");
+        // Unrelated change left alone.
+        assert_eq!(tabs.file_tabs[1].id, "changes/bar/proposal.md");
+        // Non-change tab left alone.
+        assert_eq!(tabs.file_tabs[2].id, "file:Cargo.toml");
+    }
+
+    #[test]
+    fn rewrite_rewrites_vcs_tab_ids() {
+        let mut tabs = tab_bar::TabState {
+            preview: Some(make_tab("vcs:duckspec/changes/foo/proposal.md")),
+            file_tabs: vec![],
+            active: Default::default(),
+        };
+
+        rewrite_tab_ids_for_archive(&mut tabs, "foo", "2026-04-20-01-foo");
+
+        assert_eq!(
+            tabs.preview.as_ref().map(|t| t.id.as_str()),
+            Some("vcs:duckspec/archive/2026-04-20-01-foo/proposal.md"),
+        );
+    }
+
+    #[test]
+    fn rewrite_leaves_similar_but_different_names_alone() {
+        // "foo2" must not match "foo".
+        let mut tabs = tab_bar::TabState {
+            preview: Some(make_tab("changes/foo2/proposal.md")),
+            file_tabs: vec![],
+            active: Default::default(),
+        };
+
+        rewrite_tab_ids_for_archive(&mut tabs, "foo", "2026-04-20-01-foo");
+
+        assert_eq!(
+            tabs.preview.as_ref().map(|t| t.id.as_str()),
+            Some("changes/foo2/proposal.md"),
+        );
     }
 
     #[test]
