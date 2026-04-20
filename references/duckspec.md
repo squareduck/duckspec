@@ -431,10 +431,10 @@ Structure:
 
 ### Scenario: <scenario name>
 
-- **GIVEN** ...
-- **WHEN** ...
-- **THEN** ...
-- **AND** ...
+- **GIVEN** ...      (initial state — optional)
+- **WHEN** ...       (trigger or action)
+- **THEN** ...       (expected outcome)
+- **AND** ...        (continues whichever of GIVEN, WHEN, or THEN came before)
 
 > test: code    (optional, overrides requirement default)
 ```

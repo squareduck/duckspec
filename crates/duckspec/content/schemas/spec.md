@@ -21,12 +21,17 @@ commitment.
 ### Scenario: <scenario name>
 
 - **GIVEN** <initial state or context>
+- **AND** <more initial state — continues GIVEN>
 - **WHEN** <trigger or action>
+- **AND** <co-occurring trigger condition — continues WHEN>
 - **THEN** <expected outcome>
-- **AND** <additional outcome>
+- **AND** <additional outcome — continues THEN>
 
 > test: code
 ```
+
+`**AND**` is optional after any clause. Use it wherever you need a continuation
+bullet — not just after `**THEN**`.
 
 ## Rules
 
@@ -41,7 +46,11 @@ commitment.
 - A scenario body is exactly one unordered list of GWT bullets, optionally
   followed by a test marker blockquote. Nothing else.
 - Every scenario must have at least one `**WHEN**` and one `**THEN**`.
-- Clause keywords: `**GIVEN**`, `**WHEN**`, `**THEN**`, `**AND**`.
+- Clause keywords: `**GIVEN**`, `**WHEN**`, `**THEN**`, `**AND**`. `**AND**`
+  continues whichever of the three came immediately before it — `**AND**` after
+  `**GIVEN**` adds state, after `**WHEN**` adds a trigger condition, after
+  `**THEN**` adds an outcome. All four keywords are positionally equal; the
+  schema imposes no order beyond "at least one WHEN and one THEN."
 - Every scenario must resolve to a test marker — either its own or inherited
   from the parent requirement.
 - Test marker prefixes: `test: code`, `manual: <reason>`, `skip: <reason>`.
@@ -95,8 +104,9 @@ The timeout is measured from the last request, not from login time.
 ### Scenario: Session expires after inactivity
 
 - **GIVEN** an authenticated user
-- **WHEN** the user makes no requests for 30 minutes
-- **THEN** the next request returns 401
+- **AND** their last request was more than 30 minutes ago
+- **WHEN** the user makes a new request
+- **THEN** the response is 401
 - **AND** the session token is invalidated server-side
 
 ### Scenario: Activity resets the timer
@@ -105,3 +115,7 @@ The timeout is measured from the last request, not from login time.
 - **WHEN** the user makes a request at minute 29
 - **THEN** the session remains valid for another 30 minutes
 ```
+
+The first scenario uses `**AND**` after both `**GIVEN**` (to add a second state
+fact) and `**THEN**` (to add a second outcome). The second scenario omits
+`**AND**` entirely — it is never required.
