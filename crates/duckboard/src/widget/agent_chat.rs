@@ -328,8 +328,26 @@ pub fn view<'a>(
         .into();
 
     // Input area.
+    // Enter (without Shift) is rebound to send the prompt instead of
+    // inserting a newline. Scoping this to the text_editor's own binding —
+    // which only fires when the widget is focused — prevents Enter pressed
+    // in other editors (e.g. the content column) from triggering a send.
     let mut input = text_editor(input_value)
         .on_action(Msg::EditorAction)
+        .key_binding(|key_press| {
+            use iced::keyboard;
+            use iced::keyboard::key::Named;
+            if key_press.key == keyboard::Key::Named(Named::Enter)
+                && !key_press.modifiers.shift()
+                && matches!(
+                    key_press.status,
+                    text_editor::Status::Focused { .. },
+                )
+            {
+                return Some(text_editor::Binding::Custom(Msg::SendPressed));
+            }
+            text_editor::Binding::from_key_press(key_press)
+        })
         .size(theme::font_md())
         .height(Length::Shrink)
         .id(INPUT_ID);

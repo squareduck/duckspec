@@ -201,9 +201,6 @@ fn handle_agent_chat(state: &mut InteractionState, msg: agent_chat::Msg, highlig
                     _ => {}
                 }
             }
-            if matches!(action, text_editor::Action::Edit(text_editor::Edit::Enter)) {
-                return;
-            }
             ax.chat_input.perform(action);
             let input_text = ax.chat_input.text();
             let trimmed = input_text.trim_end();
@@ -374,19 +371,10 @@ pub fn handle_agent_chat_key(
         ax.esc_count = 0;
     }
 
-    // Enter sends; Shift+Enter inserts newline.
-    if *key == keyboard::Key::Named(Named::Enter) {
-        if mods.shift() {
-            ax.chat_input.perform(
-                iced::widget::text_editor::Action::Edit(
-                    iced::widget::text_editor::Edit::Enter,
-                ),
-            );
-        } else {
-            return AgentChatKeyResult::Dispatch(agent_chat::Msg::SendPressed);
-        }
-        return AgentChatKeyResult::Handled;
-    }
+    // Enter-to-send is now handled by the chat text_editor's own key
+    // binding (in agent_chat::view) so it only fires when the chat input
+    // is focused. Shift+Enter falls through to the default Binding::Enter
+    // which inserts a newline via Msg::EditorAction.
 
     AgentChatKeyResult::NotHandled
 }

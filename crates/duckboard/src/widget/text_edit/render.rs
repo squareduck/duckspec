@@ -327,6 +327,7 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for TextEdit<'a, M> {
             }) if internal.focused => {
                 let cmd = modifiers.command();
                 let shift = modifiers.shift();
+                let mut handled = true;
 
                 match key {
                     // Navigation — always allowed.
@@ -397,19 +398,30 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for TextEdit<'a, M> {
                     keyboard::Key::Character(c) if cmd && c.as_str() == "s" && !self.read_only => {
                         shell.publish((self.on_action)(EditorAction::SaveRequested));
                     }
-                    _ if !self.read_only => {
-                        if !cmd && !modifiers.control()
-                            && let Some(txt) = key_text {
-                                for ch in txt.chars() {
-                                    if !ch.is_control() {
-                                        shell.publish(
-                                            (self.on_action)(EditorAction::Insert(ch)),
-                                        );
-                                    }
+                    _ if !self.read_only
+                        && !cmd
+                        && !modifiers.control()
+                        && key_text.as_ref().is_some_and(|t| t.chars().any(|c| !c.is_control())) =>
+                    {
+                        if let Some(txt) = key_text {
+                            for ch in txt.chars() {
+                                if !ch.is_control() {
+                                    shell.publish(
+                                        (self.on_action)(EditorAction::Insert(ch)),
+                                    );
                                 }
                             }
+                        }
                     }
-                    _ => {}
+                    _ => {
+                        handled = false;
+                    }
+                }
+
+                // Mark events we consumed as captured so app-level keyboard
+                // handlers (agent chat, etc.) don't also react to them.
+                if handled {
+                    shell.capture_event();
                 }
             }
             _ => {}

@@ -946,7 +946,12 @@ fn theme_fn(_state: &State) -> iced::Theme {
     theme::app_theme()
 }
 
-fn handle_key_event(event: Event, _status: event::Status, _window: iced::window::Id) -> Option<Message> {
+fn handle_key_event(event: Event, status: event::Status, _window: iced::window::Id) -> Option<Message> {
+    // Skip events already consumed by a focused widget (e.g. Enter typed into
+    // the content editor). Otherwise the chat column would also react to them.
+    if matches!(status, event::Status::Captured) {
+        return None;
+    }
     if let Event::Keyboard(keyboard::Event::KeyPressed {
         key, modifiers, text, ..
     }) = event
