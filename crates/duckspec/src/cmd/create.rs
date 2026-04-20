@@ -174,8 +174,16 @@ pub fn run(cmd: CreateCommand) -> anyhow::Result<()> {
             fs::create_dir_all(parent)?;
         }
         if abs.extension().is_some() {
-            // It's a file — write skeleton content for hooks, empty otherwise.
-            let content = hook_content.as_deref().unwrap_or("");
+            // It's a file — write hook skeleton, or an H1 placeholder
+            // for artifacts so editors that require a non-empty Read
+            // before Write don't trip on a fresh create.
+            let filename = abs
+                .file_name()
+                .and_then(|f| f.to_str())
+                .unwrap_or_default();
+            let content = hook_content
+                .clone()
+                .unwrap_or_else(|| placeholder_for(filename));
             fs::write(&abs, content)?;
         } else {
             // It's a directory.
@@ -205,6 +213,36 @@ fn capitalize(s: &str) -> String {
         None => String::new(),
         Some(c) => c.to_uppercase().to_string() + chars.as_str(),
     }
+}
+
+/// Return the H1 placeholder content for a freshly-created artifact file.
+///
+/// The LLM is expected to replace this with the real H1 (typically a
+/// title) when it populates the file. The placeholder exists only so
+/// that tools requiring a non-empty Read before Write don't trip on a
+/// just-created file.
+fn placeholder_for(filename: &str) -> String {
+    let title = match filename {
+        "proposal.md" => "Proposal",
+        "design.md" => "Design",
+        "spec.md" => "Spec",
+        "spec.delta.md" => "Spec Delta",
+        "doc.md" => "Doc",
+        "doc.delta.md" => "Doc Delta",
+        _ if is_step_filename(filename) => "Step",
+        _ => return String::new(),
+    };
+    format!("# {title}\n")
+}
+
+/// Step files are named `NN-<slug>.md` where `NN` is two digits.
+fn is_step_filename(filename: &str) -> bool {
+    let bytes = filename.as_bytes();
+    bytes.len() >= 4
+        && bytes[0].is_ascii_digit()
+        && bytes[1].is_ascii_digit()
+        && bytes[2] == b'-'
+        && filename.ends_with(".md")
 }
 
 /// List filenames (not directories) directly in a directory.
@@ -248,4 +286,32 @@ fn scan_caps(dir: &Path, caps_root: &Path, out: &mut Vec<String>) -> anyhow::Res
                 }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn placeholder_for_named_artifacts() {
+        assert_eq!(placeholder_for("proposal.md"), "# Proposal\n");
+        assert_eq!(placeholder_for("design.md"), "# Design\n");
+        assert_eq!(placeholder_for("spec.md"), "# Spec\n");
+        assert_eq!(placeholder_for("spec.delta.md"), "# Spec Delta\n");
+        assert_eq!(placeholder_for("doc.md"), "# Doc\n");
+        assert_eq!(placeholder_for("doc.delta.md"), "# Doc Delta\n");
+    }
+
+    #[test]
+    fn placeholder_for_step_files() {
+        assert_eq!(placeholder_for("01-add-validate.md"), "# Step\n");
+        assert_eq!(placeholder_for("12-x.md"), "# Step\n");
+    }
+
+    #[test]
+    fn placeholder_for_unknown_returns_empty() {
+        assert_eq!(placeholder_for("notes.md"), "");
+        assert_eq!(placeholder_for("README.md"), "");
+        assert_eq!(placeholder_for("1-missing-leading-zero.md"), "");
+    }
 }
