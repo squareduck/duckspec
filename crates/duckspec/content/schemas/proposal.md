@@ -1,8 +1,8 @@
 # Proposal schema
 
-A proposal describes **why** a change is needed and **what** it will
-do at a high level. It is the pitch for the work — not the design,
-not the spec, not the plan. Keep it short and persuasive.
+A proposal describes **why** a change is needed and **what** it will do at a
+high level. It is the pitch for the work — not the design, not the spec, not the
+plan. Keep it short and persuasive.
 
 ## Structure
 
@@ -35,34 +35,33 @@ not the spec, not the plan. Keep it short and persuasive.
 
 - H1 title is required.
 - A summary paragraph directly follows the H1.
-- The body is freeform markdown — the sections above are recommended,
-  not enforced by `ds check`.
+- The body is freeform markdown — the sections above are recommended, not
+  enforced by `ds check`.
 
 ## Quality
 
-- **Motivation** answers "why" and "why now", not "what". If the
-  motivation section reads like a feature list, it belongs in Scope.
-- **Scope** is the contract between proposal and later stages. Name
-  exact capability paths — the spec author works directly from this
-  list. Be explicit about what is out of scope to prevent drift.
-- **Impact** is for downstream effects: breaking changes, migration
-  needs, affected teams or systems. Skip it if the change is
-  self-contained.
-- The entire proposal should fit on one screen. If it doesn't, the
-  change is probably too big — split it.
+- **Motivation** answers "why" and "why now", not "what". If the motivation
+  section reads like a feature list, it belongs in Scope.
+- **Scope** is the contract between proposal and later stages. Name exact
+  capability paths — the spec author works directly from this list. Be explicit
+  about what is out of scope to prevent drift.
+- **Impact** is for downstream effects: breaking changes, migration needs,
+  affected teams or systems. Skip it if the change is self-contained.
+- The entire proposal should fit on one screen. If it doesn't, the change is
+  probably too big — split it.
 
 ## Example
 
 ```markdown
 # Add Google OAuth login
 
-Introduce Google as a third-party login option to reduce signup
-friction for new users.
+Introduce Google as a third-party login option to reduce signup friction for new
+users.
 
 ## Motivation
 
-Analytics show 40% of signup drop-offs happen at password creation.
-Google OAuth removes that friction for the largest user segment.
+Analytics show 40% of signup drop-offs happen at password creation. Google OAuth
+removes that friction for the largest user segment.
 
 ## Scope
 

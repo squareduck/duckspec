@@ -1,8 +1,7 @@
 # Spec delta schema
 
-A spec delta describes **modifications** to an existing capability
-spec. Every header carries a marker declaring what operation to
-perform on the source spec.
+A spec delta describes **modifications** to an existing capability spec. Every
+header carries a marker declaring what operation to perform on the source spec.
 
 ## Structure
 
@@ -22,36 +21,35 @@ perform on the source spec.
 
 ## Markers
 
-| Marker | Name    | Operation                                        |
-|--------|---------|--------------------------------------------------|
-| `+`    | add     | Insert new header and body                       |
-| `-`    | remove  | Delete header and entire subtree                 |
-| `~`    | replace | Replace body and all children                    |
-| `=`    | rename  | Rename header, preserve children                 |
-| `@`    | anchor  | Optionally replace body, descend into children   |
+| Marker | Name    | Operation                                      |
+| ------ | ------- | ---------------------------------------------- |
+| `+`    | add     | Insert new header and body                     |
+| `-`    | remove  | Delete header and entire subtree               |
+| `~`    | replace | Replace body and all children                  |
+| `=`    | rename  | Rename header, preserve children               |
+| `@`    | anchor  | Optionally replace body, descend into children |
 
 ## Rules
 
-- Every H1, H2, and H3 must carry a marker. Unmarked headers are
-  invalid.
+- Every H1, H2, and H3 must carry a marker. Unmarked headers are invalid.
 - `+` targets a header that does not exist in the source.
 - `-`, `~`, `=`, `@` target headers that exist in the source.
 - `-` entries must have an empty body.
-- `=` entries contain only the new name on the first non-blank line
-  after the header. No other content.
+- `=` entries contain only the new name on the first non-blank line after the
+  header. No other content.
 - `@` is not valid on H3 (scenarios have no children — use `~`).
 - Each header name at a given level appears at most once.
-- Entries appear in canonical order within each level:
-  `=` → `-` → `~` → `@` → `+`.
+- Entries appear in canonical order within each level: `=` → `-` → `~` → `@` →
+  `+`.
 
 ## Quality
 
-- Prefer deltas over full-file replacements. Deltas make the change
-  visible — reviewers see exactly what moved.
-- Use `@` (anchor) to add scenarios to an existing requirement
-  without disturbing its prose or other scenarios.
-- When renaming and modifying, use `=` for the rename and a separate
-  `@` entry with the new name for the modification.
+- Prefer deltas over full-file replacements. Deltas make the change visible —
+  reviewers see exactly what moved.
+- Use `@` (anchor) to add scenarios to an existing requirement without
+  disturbing its prose or other scenarios.
+- When renaming and modifying, use `=` for the rename and a separate `@` entry
+  with the new name for the modification.
 
 ## Example
 

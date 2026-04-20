@@ -1,11 +1,11 @@
 # Codex entry schema
 
-A codex entry captures **cross-cutting knowledge** that spans
-capabilities or stands outside them: architecture overviews, domain
-glossaries, design philosophy, engineering conventions.
+A codex entry captures **cross-cutting knowledge** that spans capabilities or
+stands outside them: architecture overviews, domain glossaries, design
+philosophy, engineering conventions.
 
-Codex entries are edited directly — no deltas, no change workflow,
-no archive lifecycle.
+Codex entries are edited directly — no deltas, no change workflow, no archive
+lifecycle.
 
 ## Structure
 
@@ -27,30 +27,28 @@ no archive lifecycle.
 
 ## Quality
 
-- **Write codex entries for knowledge that no single capability
-  owns.** If it belongs to one capability, put it in that
-  capability's doc instead.
+- **Write codex entries for knowledge that no single capability owns.** If it
+  belongs to one capability, put it in that capability's doc instead.
 - Keep entries focused. One entry per topic. A glossary is one entry;
   architecture is another.
-- Summaries are used by `ds index` — make them informative enough
-  to orient a reader scanning the index.
+- Summaries are used by `ds index` — make them informative enough to orient a
+  reader scanning the index.
 
 ## Example
 
 ```markdown
 # Error handling conventions
 
-All crates in this workspace use a two-tier error strategy:
-typed enums in libraries, anyhow wrapping in binaries.
+All crates in this workspace use a two-tier error strategy: typed enums in
+libraries, anyhow wrapping in binaries.
 
 ## Library crates
 
-Use `thiserror` to define per-module error enums. Each variant
-carries enough context to diagnose the failure without access to
-the call site.
+Use `thiserror` to define per-module error enums. Each variant carries enough
+context to diagnose the failure without access to the call site.
 
 ## Binary crates
 
-Use `anyhow::Result` at the application boundary. Attach context
-with `.context()` at each layer crossing.
+Use `anyhow::Result` at the application boundary. Attach context with
+`.context()` at each layer crossing.
 ```
