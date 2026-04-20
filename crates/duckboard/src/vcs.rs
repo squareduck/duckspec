@@ -72,6 +72,10 @@ pub fn changed_files(repo_root: &Path) -> Vec<ChangedFile> {
         }
     };
 
+    // Emit one entry per untracked file rather than collapsing whole new
+    // directories into a single entry (git's default --untracked-files=normal).
+    let status = status.untracked_files(gix::status::UntrackedFiles::Files);
+
     let iter = match status.into_iter(std::iter::empty::<gix::bstr::BString>()) {
         Ok(i) => i,
         Err(e) => {
