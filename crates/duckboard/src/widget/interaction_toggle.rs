@@ -6,15 +6,26 @@
 use iced::advanced::layout;
 use iced::advanced::mouse as adv_mouse;
 use iced::advanced::renderer;
+use iced::advanced::svg;
 use iced::advanced::widget::{self, Tree, Widget};
 use iced::advanced::{Clipboard, Layout, Shell};
 use iced::mouse;
-use iced::{alignment, Border, Element, Event, Length, Rectangle, Size, Theme};
+use iced::{Border, Element, Event, Length, Rectangle, Size, Theme};
 
 use crate::theme;
 
 const HANDLE_WIDTH: f32 = 16.0;
+const CHEVRON_SIZE: f32 = 12.0;
+/// Horizontal inset centers the chevron in the strip.
+const CHEVRON_INSET_X: f32 = (HANDLE_WIDTH - CHEVRON_SIZE) / 2.0;
+/// Top inset sits the chevron a bit further down so it has some breathing
+/// room from the window chrome above.
+const CHEVRON_INSET_Y: f32 = 6.0;
 const DRAG_THRESHOLD: f32 = 4.0;
+
+const ICON_CHEVRON_RIGHT: &[u8] =
+    include_bytes!("../../assets/icon_chevron_right.svg");
+const ICON_CHEVRON_LEFT: &[u8] = include_bytes!("../../assets/icon_chevron_left.svg");
 
 /// Messages produced by the divider handle.
 #[derive(Debug, Clone)]
@@ -28,6 +39,12 @@ struct DragState {
     start_x: f32,
     base_width: f32,
     dragging: bool,
+}
+
+#[derive(Default)]
+struct HandleState {
+    drag: Option<DragState>,
+    hovered: bool,
 }
 
 const MIN_PANEL_WIDTH: f32 = 200.0;
@@ -69,8 +86,12 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for InteractionHandle<'a, M>
         layout::Node::new(limits.resolve(HANDLE_WIDTH, Length::Fill, Size::ZERO))
     }
 
+    fn tag(&self) -> widget::tree::Tag {
+        widget::tree::Tag::of::<HandleState>()
+    }
+
     fn state(&self) -> widget::tree::State {
-        widget::tree::State::new(Option::<DragState>::None)
+        widget::tree::State::new(HandleState::default())
     }
 
     fn update(
@@ -85,13 +106,28 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for InteractionHandle<'a, M>
         _viewport: &Rectangle,
     ) {
         let bounds = layout.bounds();
-        let drag = tree.state.downcast_mut::<Option<DragState>>();
+        let widget_state = tree.state.downcast_mut::<HandleState>();
+
+        // Track hover in internal state so the visual reliably reverts when
+        // the cursor leaves. Relying on `cursor.is_over(bounds)` in `draw`
+        // alone caused stuck-hover when iced skipped a redraw between the
+        // last over-the-widget CursorMoved and the next one off-widget.
+        if let Event::Mouse(
+            mouse::Event::CursorMoved { .. } | mouse::Event::CursorLeft,
+        ) = event
+        {
+            let now_hovered = cursor.is_over(bounds);
+            if widget_state.hovered != now_hovered {
+                widget_state.hovered = now_hovered;
+                shell.request_redraw();
+            }
+        }
 
         match event {
             Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => {
                 if cursor.is_over(bounds) {
                     let pos = cursor.position().unwrap();
-                    *drag = Some(DragState {
+                    widget_state.drag = Some(DragState {
                         start_x: pos.x,
                         base_width: self.current_width,
                         dragging: false,
@@ -99,13 +135,10 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for InteractionHandle<'a, M>
                 }
             }
             Event::Mouse(mouse::Event::CursorMoved { position }) => {
-                if let Some(state) = drag {
+                if let Some(state) = widget_state.drag.as_mut() {
                     let dx = position.x - state.start_x;
                     if !state.dragging && dx.abs() > DRAG_THRESHOLD {
                         state.dragging = true;
-                        // When panel is visible, handle is left of panel.
-                        // Dragging left = growing panel. Use the total
-                        // displacement from start as the resize delta.
                     }
                     if state.dragging {
                         // Negative dx (drag left) = grow panel.
@@ -116,10 +149,11 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for InteractionHandle<'a, M>
                 }
             }
             Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) => {
-                if let Some(state) = drag.take()
-                    && !state.dragging {
-                        shell.publish((self.on_event)(HandleMsg::Toggle));
-                    }
+                if let Some(state) = widget_state.drag.take()
+                    && !state.dragging
+                {
+                    shell.publish((self.on_event)(HandleMsg::Toggle));
+                }
             }
             _ => {}
         }
@@ -133,8 +167,8 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for InteractionHandle<'a, M>
         _viewport: &Rectangle,
         _renderer: &iced::Renderer,
     ) -> mouse::Interaction {
-        let drag = tree.state.downcast_ref::<Option<DragState>>();
-        if drag.is_some() {
+        let widget_state = tree.state.downcast_ref::<HandleState>();
+        if widget_state.drag.is_some() {
             return mouse::Interaction::ResizingHorizontally;
         }
         if cursor.is_over(layout.bounds()) {
@@ -146,18 +180,20 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for InteractionHandle<'a, M>
 
     fn draw(
         &self,
-        _tree: &Tree,
+        tree: &Tree,
         renderer: &mut iced::Renderer,
         _theme: &Theme,
         _style: &renderer::Style,
         layout: Layout<'_>,
-        cursor: adv_mouse::Cursor,
+        _cursor: adv_mouse::Cursor,
         _viewport: &Rectangle,
     ) {
         let bounds = layout.bounds();
-        let hovered = cursor.is_over(bounds);
+        let hovered = tree.state.downcast_ref::<HandleState>().hovered;
 
-        let bg = if hovered { theme::bg_hover() } else { theme::bg_elevated() };
+        // Background — lighter than the surrounding surface so the strip
+        // reads as a lifted divider. Hover bumps it one step.
+        let bg = if hovered { theme::bg_surface() } else { theme::bg_base() };
         renderer::Renderer::fill_quad(
             renderer,
             renderer::Quad {
@@ -168,29 +204,56 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for InteractionHandle<'a, M>
             bg,
         );
 
-        // Arrow indicator — top of the strip, centered horizontally.
-        let arrow: &str = if self.expanded { "\u{25b8}" } else { "\u{25c2}" };
-        let arrow_size = 16.0;
-        let arrow_y = bounds.y + theme::SPACING_SM;
-        // Center the glyph by placing it at the midpoint minus half glyph width.
-        let glyph_width = arrow_size * 0.6;
-        let arrow_x = bounds.x + (bounds.width - glyph_width) / 2.0;
-
-        use iced::advanced::text::Renderer as TextRenderer;
-        renderer.fill_text(
-            iced::advanced::Text {
-                content: arrow.to_string(),
-                bounds: Size::new(arrow_size, arrow_size),
-                size: iced::Pixels(arrow_size),
-                line_height: iced::advanced::text::LineHeight::Absolute(iced::Pixels(arrow_size)),
-                font: theme::ui_font(),
-                align_x: alignment::Horizontal::Left.into(),
-                align_y: alignment::Vertical::Top,
-                shaping: iced::advanced::text::Shaping::Basic,
-                wrapping: iced::advanced::text::Wrapping::None,
+        // Vertical separators on both edges so the drag strip reads as a
+        // distinct, hit-testable zone between the main content and the chat.
+        let sep_color = theme::border_color();
+        renderer::Renderer::fill_quad(
+            renderer,
+            renderer::Quad {
+                bounds: Rectangle {
+                    x: bounds.x,
+                    y: bounds.y,
+                    width: 1.0,
+                    height: bounds.height,
+                },
+                border: Border::default(),
+                ..renderer::Quad::default()
             },
-            iced::Point::new(arrow_x, arrow_y),
-            theme::text_muted(),
+            sep_color,
+        );
+        renderer::Renderer::fill_quad(
+            renderer,
+            renderer::Quad {
+                bounds: Rectangle {
+                    x: bounds.x + bounds.width - 1.0,
+                    y: bounds.y,
+                    width: 1.0,
+                    height: bounds.height,
+                },
+                border: Border::default(),
+                ..renderer::Quad::default()
+            },
+            sep_color,
+        );
+
+        // Chevron icon — top-aligned, with equal padding on top / left /
+        // right so the icon's optical whitespace matches the strip width.
+        let chevron_bytes = if self.expanded {
+            ICON_CHEVRON_RIGHT
+        } else {
+            ICON_CHEVRON_LEFT
+        };
+        let chevron_bounds = Rectangle {
+            x: bounds.x + CHEVRON_INSET_X,
+            y: bounds.y + CHEVRON_INSET_Y,
+            width: CHEVRON_SIZE,
+            height: CHEVRON_SIZE,
+        };
+        <iced::Renderer as svg::Renderer>::draw_svg(
+            renderer,
+            svg::Svg::new(svg::Handle::from_memory(chevron_bytes))
+                .color(theme::text_muted()),
+            chevron_bounds,
             bounds,
         );
     }

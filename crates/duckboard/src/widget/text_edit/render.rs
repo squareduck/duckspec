@@ -136,6 +136,9 @@ pub struct TextEdit<'a, M> {
     fit_content: bool,
     read_only: bool,
     word_wrap: bool,
+    placeholder: Option<String>,
+    on_submit: Option<M>,
+    transparent_bg: bool,
 }
 
 impl<'a, M> TextEdit<'a, M> {
@@ -150,6 +153,9 @@ impl<'a, M> TextEdit<'a, M> {
             fit_content: false,
             read_only: false,
             word_wrap: false,
+            placeholder: None,
+            on_submit: None,
+            transparent_bg: false,
         }
     }
 
@@ -170,6 +176,25 @@ impl<'a, M> TextEdit<'a, M> {
 
     pub fn word_wrap(mut self, wrap: bool) -> Self {
         self.word_wrap = wrap;
+        self
+    }
+
+    /// Text shown in muted color when the editor is empty.
+    pub fn placeholder(mut self, text: impl Into<String>) -> Self {
+        self.placeholder = Some(text.into());
+        self
+    }
+
+    /// When set, plain Enter (without Shift) fires this message instead of
+    /// inserting a newline. Shift+Enter always inserts a newline.
+    pub fn on_submit(mut self, msg: M) -> Self {
+        self.on_submit = Some(msg);
+        self
+    }
+
+    /// Skip painting the editor background — the parent container provides it.
+    pub fn transparent_bg(mut self, transparent: bool) -> Self {
+        self.transparent_bg = transparent;
         self
     }
 }
@@ -372,7 +397,11 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for TextEdit<'a, M> {
                         shell.publish((self.on_action)(EditorAction::Delete));
                     }
                     keyboard::Key::Named(Named::Enter) if !self.read_only => {
-                        shell.publish((self.on_action)(EditorAction::Enter));
+                        if !shift && let Some(msg) = self.on_submit.as_ref() {
+                            shell.publish(msg.clone());
+                        } else {
+                            shell.publish((self.on_action)(EditorAction::Enter));
+                        }
                     }
                     keyboard::Key::Character(c) if cmd && c.as_str() == "x" && !self.read_only => {
                         if let Some(sel) = self.state.selection_text() {
@@ -497,18 +526,54 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for TextEdit<'a, M> {
         };
 
         // Clip to the intersection of layout bounds and the visible viewport.
-        let clip = bounds.intersection(viewport).unwrap_or(bounds);
+        // If the widget is fully outside the viewport (e.g. scrolled well
+        // past), skip drawing entirely so `fill_text`/`fill_quad` can't bleed
+        // beyond the scrollable.
+        let Some(clip) = bounds.intersection(viewport) else {
+            return;
+        };
         renderer.with_layer(clip, |renderer: &mut iced::Renderer| {
             // Background.
-            renderer::Renderer::fill_quad(
-                renderer,
-                renderer::Quad {
-                    bounds,
-                    border: Border::default(),
-                    ..renderer::Quad::default()
-                },
-                theme::bg_base(),
-            );
+            if !self.transparent_bg {
+                renderer::Renderer::fill_quad(
+                    renderer,
+                    renderer::Quad {
+                        bounds,
+                        border: Border::default(),
+                        ..renderer::Quad::default()
+                    },
+                    theme::bg_base(),
+                );
+            }
+
+            // Placeholder: drawn when the editor is empty and a placeholder
+            // was configured. Rendered before content, so the cursor still
+            // paints on top.
+            let is_empty = self.state.lines.len() <= 1
+                && self.state.lines.first().is_none_or(|l| l.is_empty());
+            if is_empty
+                && let Some(ph) = self.placeholder.as_ref()
+                && !ph.is_empty()
+            {
+                let px = content_x + CONTENT_PAD - scroll_x;
+                let py = bounds.y + CONTENT_PAD_Y;
+                renderer.fill_text(
+                    iced::advanced::Text {
+                        content: ph.clone(),
+                        bounds: Size::new(content_w, LINE_HEIGHT),
+                        size: Pixels(font_size()),
+                        line_height: text::LineHeight::Absolute(Pixels(LINE_HEIGHT)),
+                        font: theme::content_font(),
+                        align_x: alignment::Horizontal::Left.into(),
+                        align_y: alignment::Vertical::Top,
+                        shaping: text::Shaping::Basic,
+                        wrapping: text::Wrapping::None,
+                    },
+                    Point::new(px, py),
+                    theme::text_muted(),
+                    clip,
+                );
+            }
 
             let first_vrow = (scroll_y / LINE_HEIGHT).floor() as usize;
             let visible_vrows = (bounds.height / LINE_HEIGHT).ceil() as usize + 1;
@@ -517,13 +582,19 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for TextEdit<'a, M> {
             let selection = self.state.selection_range();
             let has_blocks = !self.state.blocks.is_empty();
 
-            // Content area clipping rectangle (excludes gutter).
+            // Content area clipping rectangle (excludes gutter). Intersected
+            // with the scrollable's visible viewport so tall editors scrolled
+            // partially off-screen can't render text past the scrollable's
+            // bounds (fill_text's own clip is not hierarchical with
+            // with_layer for text rendering).
             let content_clip = Rectangle {
                 x: content_x,
                 y: bounds.y,
                 width: content_w,
                 height: bounds.height,
-            };
+            }
+            .intersection(&clip)
+            .unwrap_or(clip);
 
             for vrow in first_vrow..last_vrow {
                 let y = bounds.y + CONTENT_PAD_Y + (vrow as f32) * LINE_HEIGHT - scroll_y;
@@ -793,7 +864,7 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for TextEdit<'a, M> {
                             },
                             Point::new(bounds.x + GUTTER_PAD, y),
                             num_color,
-                            bounds,
+                            clip,
                         );
                     }
                 }

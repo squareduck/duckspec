@@ -1,21 +1,23 @@
 //! Agent chat widget — per-message text editors in a scrollable column.
 
-use iced::widget::{button, column, container, row, rule, scrollable, text, text_editor, Space};
+use iced::widget::{button, column, container, row, rule, scrollable, stack, text, Space};
 
-pub const INPUT_ID: &str = "agent-chat-input";
 pub const CHAT_SCROLLABLE_ID: &str = "agent-chat-scroll";
 use iced::{Element, Length};
 
 use crate::agent::SlashCommand;
 use crate::chat_store::{ChatSession, ContentBlock, Role};
 use crate::theme;
+use crate::widget::collapsible;
+use crate::widget::streaming_indicator;
 use crate::widget::text_edit::{self, Block, BlockKind, EditorState};
 
 // ── Messages ────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone)]
 pub enum Msg {
-    EditorAction(text_editor::Action),
+    /// Action from the chat input editor.
+    InputAction(text_edit::EditorAction),
     SendPressed,
     CancelPressed,
     CompletionAccept,
@@ -223,7 +225,7 @@ fn sanitize_line(line: &str) -> String {
 }
 
 /// Produce a short human-readable summary of a tool call.
-/// E.g. `⚙ Read /src/main.rs` or `⚙ Edit /src/lib.rs`.
+/// E.g. `Read /src/main.rs` or `Edit /src/lib.rs`.
 fn format_tool_summary(name: &str, input: &str) -> String {
     // Try to extract key fields from JSON.
     if let Ok(serde_json::Value::Object(map)) = serde_json::from_str(input) {
@@ -242,23 +244,23 @@ fn format_tool_summary(name: &str, input: &str) -> String {
                 .rev()
                 .collect::<Vec<_>>()
                 .join("/");
-            return format!("⚙ {} {}", name, short);
+            return format!("{name} {short}");
         }
 
         let pattern = map.get("pattern").and_then(|v| v.as_str());
         if let Some(pat) = pattern {
             let truncated = if pat.len() > 40 { &pat[..40] } else { pat };
-            return format!("⚙ {} \"{}\"", name, truncated);
+            return format!("{name} \"{truncated}\"");
         }
 
         let command = map.get("command").and_then(|v| v.as_str());
         if let Some(cmd) = command {
             let truncated = if cmd.len() > 50 { &cmd[..50] } else { cmd };
-            return format!("⚙ {} `{}`", name, truncated);
+            return format!("{name} `{truncated}`");
         }
     }
 
-    format!("⚙ {name}")
+    name.to_string()
 }
 
 // ── View ────────────────────────────────────────────────────────────────────
@@ -269,19 +271,37 @@ pub fn view<'a>(
     blocks: &'a [Block],
     editors: &'a [EditorState],
     collapsed: &'a [bool],
-    input_value: &'a text_editor::Content,
+    input_value: &'a EditorState,
     commands: &'a [SlashCommand],
     completion: &CompletionState,
     status: StatusInfo,
     obvious_command: Option<&str>,
 ) -> Element<'a, Msg> {
     // Chat content — scrollable column of full-width sections.
-    let mut chat_col = column![].spacing(0.0);
+    let mut chat_col = column![]
+        .spacing(theme::SPACING_XS)
+        .padding([theme::SPACING_SM, 0.0]);
 
     for (i, block) in blocks.iter().enumerate() {
         let is_collapsed = collapsed.get(i).copied().unwrap_or(false);
         let block_el = view_block(i, block, editors.get(i), is_collapsed);
         chat_col = chat_col.push(block_el);
+    }
+
+    // Streaming indicator: animated pulsing dots + inline cancel hint at
+    // the bottom of the transcript, visible only while the agent is
+    // producing a response. The left padding (`SPACING_MD + SPACING_SM`)
+    // mirrors the block-container padding + `TextEdit`'s internal
+    // `CONTENT_PAD`, so the dots land at the same x as message body text.
+    if status.is_streaming {
+        chat_col = chat_col.push(
+            container(streaming_indicator::view(status.esc_count))
+                .padding([
+                    theme::SPACING_SM,
+                    theme::SPACING_MD + theme::SPACING_SM,
+                ])
+                .width(Length::Fill),
+        );
     }
 
     let chat_scroll = scrollable(chat_col)
@@ -291,20 +311,30 @@ pub fn view<'a>(
         .height(Length::Fill)
         .anchor_bottom()
         .id(CHAT_SCROLLABLE_ID);
+    let chat_area = container(chat_scroll)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .style(theme::chat_area);
 
     // Completion popup — always rendered with the same widget type so iced's
-    // tree diff preserves text_editor focus. When hidden, the inner column
-    // is empty and the border is suppressed so the popup collapses cleanly.
+    // tree diff preserves input focus. When hidden, the inner column is
+    // empty and the background is suppressed so the popup collapses cleanly.
+    // When shown it shares the chat input's "paper" bg so the popup reads as
+    // a continuation of the input field with a top hairline separating it
+    // from the chat transcript.
     let has_completion = completion.visible && {
         let input_text = input_value.text();
         let query = input_text.trim_start_matches('/');
         !filter_commands(commands, query).is_empty()
     };
-    let completion_col = if completion.visible {
+    let completion_col = if has_completion {
         let input_text = input_value.text();
         let query = input_text.trim_start_matches('/');
         let filtered = filter_commands(commands, query);
-        view_completion_col(commands, &filtered, completion.selected)
+        let mut col = column![].spacing(0.0);
+        col = col.push(completion_divider());
+        col = col.push(view_completion_col(commands, &filtered, completion.selected));
+        col
     } else {
         column![].spacing(0.0)
     };
@@ -313,12 +343,7 @@ pub fn view<'a>(
         .style(move |_theme: &iced::Theme| {
             if has_completion {
                 container::Style {
-                    background: Some(iced::Background::Color(theme::bg_elevated())),
-                    border: iced::Border {
-                        color: theme::border_color(),
-                        width: 1.0,
-                        radius: 0.0.into(),
-                    },
+                    background: Some(iced::Background::Color(theme::bg_base())),
                     ..Default::default()
                 }
             } else {
@@ -327,157 +352,207 @@ pub fn view<'a>(
         })
         .into();
 
-    // Input area.
-    // Enter (without Shift) is rebound to send the prompt instead of
-    // inserting a newline. Scoping this to the text_editor's own binding —
-    // which only fires when the widget is focused — prevents Enter pressed
-    // in other editors (e.g. the content column) from triggering a send.
-    let mut input = text_editor(input_value)
-        .on_action(Msg::EditorAction)
-        .key_binding(|key_press| {
-            use iced::keyboard;
-            use iced::keyboard::key::Named;
-            if key_press.key == keyboard::Key::Named(Named::Enter)
-                && !key_press.modifiers.shift()
-                && matches!(
-                    key_press.status,
-                    text_editor::Status::Focused { .. },
-                )
-            {
-                return Some(text_editor::Binding::Custom(Msg::SendPressed));
-            }
-            text_editor::Binding::from_key_press(key_press)
-        })
-        .size(theme::font_md())
-        .height(Length::Shrink)
-        .id(INPUT_ID);
+    // Input area — promoted to the custom TextEdit widget so prompts get
+    // markdown syntax highlighting and the full editor toolkit (undo,
+    // word-nav, selection). Plain Enter sends via `on_submit`; Shift+Enter
+    // falls through to the default newline action.
+    let mut input = text_edit::TextEdit::new(input_value, Msg::InputAction)
+        .show_gutter(false)
+        .word_wrap(true)
+        .fit_content(true)
+        .transparent_bg(true)
+        .on_submit(Msg::SendPressed);
     if let Some(cmd) = obvious_command {
         input = input.placeholder(format!("Press Enter to run /{cmd}"));
     }
 
-    let input_row = container(input)
-        .padding(theme::SPACING_SM)
-        .style(header_style);
-
-    // Status bar below input.
-    let status_bar = view_status_bar(status);
-
-    column![chat_scroll, completion_el, input_row, status_bar]
-        .height(Length::Fill)
-        .into()
-}
-
-/// Render a single chat block as a full-width section followed by a subtle divider.
-fn view_block<'a>(
-    idx: usize,
-    block: &'a Block,
-    editor: Option<&'a EditorState>,
-    collapsed: bool,
-) -> Element<'a, Msg> {
-    let bg = text_edit::block_kind_bg(block.kind);
-    let header_color = block_header_color(block.kind);
-    let has_content = !block.lines.is_empty();
-    let is_tool = matches!(block.kind, BlockKind::ToolUse | BlockKind::ToolResult);
-
-    let section_bg = move |_theme: &iced::Theme| container::Style {
-        background: Some(iced::Background::Color(bg)),
-        ..Default::default()
-    };
-
-    let divider = rule::horizontal(1).style(move |_theme: &iced::Theme| rule::Style {
+    let input_divider = rule::horizontal(1).style(|_theme: &iced::Theme| rule::Style {
         color: theme::border_color(),
         radius: 0.0.into(),
         fill_mode: rule::FillMode::Full,
         snap: true,
     });
 
-    // ── Tool blocks ─────────────────────────────────────────────────────
-    if is_tool {
-        let label = text(&block.label).size(theme::font_sm()).color(header_color);
-
-        if !has_content {
-            let header_container = container(label)
-                .padding([theme::SPACING_SM, theme::SPACING_SM]);
-            let section = container(header_container)
-                .width(Length::Fill)
-                .style(section_bg);
-            return column![section, divider].into();
-        }
-
-        let arrow = text(if collapsed { "▸" } else { "▾" })
+    // Meta row — model + context tokens — sits inside the input container
+    // below the editor, blending into the "paper" surface (à la Zed). The
+    // extra `SPACING_SM` horizontal padding lines the meta text up with the
+    // input's own text (container XS + TextEdit CONTENT_PAD = 12px).
+    let ctx_pct = if status.context_max > 0 {
+        (status.context_tokens as f32 / status.context_max as f32 * 100.0) as usize
+    } else {
+        0
+    };
+    let ctx_color = if ctx_pct >= 90 {
+        theme::error()
+    } else if ctx_pct >= 75 {
+        theme::warning()
+    } else {
+        theme::text_muted()
+    };
+    let meta_row = container(
+        row![
+            Space::new().width(Length::Fill),
+            text(status.model).size(theme::font_sm()).color(theme::text_muted()),
+            text(format!(
+                "{} / {} ({}%)",
+                format_number(status.context_tokens),
+                format_number(status.context_max),
+                ctx_pct,
+            ))
             .size(theme::font_sm())
-            .color(header_color);
-        let header_row = row![arrow, label]
+            .color(ctx_color),
+        ]
+        .spacing(theme::SPACING_SM)
+        .align_y(iced::Alignment::Center),
+    )
+    .padding([0.0, theme::SPACING_SM])
+    .width(Length::Fill);
+
+    // Horizontal padding here sums with TextEdit's internal CONTENT_PAD (8px)
+    // to land the input's text at the same 12px the chat headers and the
+    // completion rows use.
+    let input_row = container(
+        column![input, meta_row].spacing(theme::SPACING_XS),
+    )
+    .padding([theme::SPACING_SM, theme::SPACING_XS])
+    .width(Length::Fill)
+    .style(theme::chat_input);
+
+    column![chat_area, completion_el, input_divider, input_row]
+        .height(Length::Fill)
+        .into()
+}
+
+/// Render a single chat block, Zed-style:
+///
+/// - **User**: bordered card on the "paper" surface (no label, no chevron).
+/// - **Assistant / System**: plain text flowing directly on the chat
+///   background — no header, no chevron, no card.
+/// - **Tool use / tool result**: bordered card with a chevron + label header
+///   (collapsible), visually distinct from message text.
+fn view_block<'a>(
+    idx: usize,
+    block: &'a Block,
+    editor: Option<&'a EditorState>,
+    collapsed: bool,
+) -> Element<'a, Msg> {
+    let is_tool = matches!(block.kind, BlockKind::ToolUse | BlockKind::ToolResult);
+    if is_tool {
+        return view_tool_block(idx, block, editor, collapsed);
+    }
+
+    // User / Assistant / System: no header, no chevron.
+    let has_content = !block.lines.is_empty();
+    if !has_content {
+        return Space::new().into();
+    }
+    let Some(ed) = editor else {
+        return Space::new().into();
+    };
+
+    let content = text_edit::TextEdit::new(ed, move |action| Msg::ChatAction(idx, action))
+        .show_gutter(false)
+        .word_wrap(true)
+        .read_only(true)
+        .fit_content(true)
+        .transparent_bg(true);
+
+    let padded = container(content)
+        .padding([theme::SPACING_SM, theme::SPACING_MD])
+        .width(Length::Fill);
+
+    match block.kind {
+        BlockKind::User => container(padded.style(theme::chat_user_card))
+            .padding([0.0, theme::SPACING_SM])
+            .width(Length::Fill)
+            .into(),
+        _ => padded.into(),
+    }
+}
+
+/// Tool-use / tool-result rendering: framed card with a quieter header
+/// surface and a `bg_base` body that matches the user bubble. Clicking the
+/// header toggles `collapsed`.
+fn view_tool_block<'a>(
+    idx: usize,
+    block: &'a Block,
+    editor: Option<&'a EditorState>,
+    collapsed: bool,
+) -> Element<'a, Msg> {
+    let label_color = block_header_color(block.kind);
+    let has_content = !block.lines.is_empty();
+    let body_shown = has_content && !collapsed && editor.is_some();
+
+    // Tool headers use the content (monospace) font so tool names and
+    // paths read like code, matching the highlighted result body below.
+    let header_content: Element<'a, Msg> = if has_content {
+        let label = text(&block.label)
+            .size(theme::content_size())
+            .font(theme::content_font())
+            .color(label_color);
+        let header_row = row![collapsible::chevron(!collapsed), label]
             .spacing(theme::SPACING_XS)
             .align_y(iced::Alignment::Center);
-        let header_btn = button(header_row)
+        button(header_row)
             .on_press(Msg::ToggleCollapse(idx))
             .padding(0.0)
             .style(|_theme, _status| iced::widget::button::Style {
                 background: None,
                 ..Default::default()
-            });
+            })
+            .into()
+    } else {
+        text(&block.label)
+            .size(theme::content_size())
+            .font(theme::content_font())
+            .color(label_color)
+            .into()
+    };
 
-        let header_container = container(header_btn)
-            .padding([theme::SPACING_SM, theme::SPACING_SM]);
+    let header_style = if body_shown {
+        theme::chat_tool_card_header_open
+    } else {
+        theme::chat_tool_card_header_alone
+    };
+    let header = container(header_content)
+        .padding([theme::SPACING_SM, theme::SPACING_MD])
+        .width(Length::Fill)
+        .style(header_style);
 
-        let mut block_col = column![header_container];
+    let mut card_col = column![header].width(Length::Fill);
 
-        if !collapsed && let Some(ed) = editor {
-            block_col = block_col.push(
-                text_edit::TextEdit::new(ed, move |action| Msg::ChatAction(idx, action))
-                    .show_gutter(false)
-                    .word_wrap(true)
-                    .read_only(true)
-                    .fit_content(true),
-            );
-        }
-
-        let section = container(block_col)
-            .width(Length::Fill)
-            .style(section_bg);
-        return column![section, divider].into();
-    }
-
-    // ── User / Assistant / System: message sections ─────────────────────
-
-    let arrow = text(if collapsed { "▸" } else { "▾" })
-        .size(theme::font_sm())
-        .color(header_color);
-    let label = text(&block.label).size(theme::font_sm()).color(header_color);
-
-    let header_row = row![arrow, label]
-        .spacing(theme::SPACING_XS)
-        .align_y(iced::Alignment::Center);
-
-    let header_btn = button(header_row)
-        .on_press(Msg::ToggleCollapse(idx))
-        .padding(0.0)
-        .style(|_theme, _status| iced::widget::button::Style {
-            background: None,
-            ..Default::default()
-        });
-
-    let header_container = container(header_btn)
-        .padding([theme::SPACING_SM, theme::SPACING_SM]);
-
-    let mut block_col = column![header_container];
-
-    if has_content && !collapsed && let Some(ed) = editor {
-        block_col = block_col.push(
+    if body_shown
+        && let Some(ed) = editor
+    {
+        let body = container(
             text_edit::TextEdit::new(ed, move |action| Msg::ChatAction(idx, action))
                 .show_gutter(false)
                 .word_wrap(true)
                 .read_only(true)
-                .fit_content(true),
-        );
+                .fit_content(true)
+                .transparent_bg(true),
+        )
+        .padding([theme::SPACING_SM, theme::SPACING_MD])
+        .width(Length::Fill)
+        .style(theme::chat_tool_card_body);
+        card_col = card_col.push(body);
     }
 
-    let section = container(block_col)
+    // Outer: stack the column underneath a transparent-bg, border-only
+    // overlay so the 1px frame draws on top of the header/body surfaces.
+    // (A plain outer container doesn't work here: children fill the full
+    // bounds and cover the parent's border stroke, so the frame needs to
+    // sit *above* the children in draw order.)
+    let border_overlay = container(Space::new())
         .width(Length::Fill)
-        .style(section_bg);
+        .height(Length::Fill)
+        .style(theme::chat_tool_card_frame);
+    let framed = stack![card_col, border_overlay];
 
-    column![section, divider].into()
+    container(framed)
+        .padding([0.0, theme::SPACING_SM])
+        .width(Length::Fill)
+        .into()
 }
 
 /// Header label color for a block kind (re-exported from text_edit for convenience).
@@ -485,8 +560,10 @@ fn block_header_color(kind: BlockKind) -> iced::Color {
     match kind {
         BlockKind::User => theme::accent(),
         BlockKind::Assistant => theme::text_secondary(),
-        BlockKind::ToolUse => theme::accent_dim(),
-        BlockKind::ToolResult => theme::success(),
+        // Tool blocks sit in a neutral palette (primary text) so tool names
+        // stay legible without competing with the accent-colored User card.
+        BlockKind::ToolUse => theme::text_primary(),
+        BlockKind::ToolResult => theme::text_secondary(),
         BlockKind::System => theme::text_muted(),
     }
 }
@@ -503,77 +580,8 @@ fn format_number(n: usize) -> String {
     result
 }
 
-fn view_status_bar<'a>(status: StatusInfo) -> Element<'a, Msg> {
-    // Left side: status + cancel hint.
-    let (status_text, status_color) = if status.is_streaming && status.esc_count >= 2 {
-        ("cancelling…", theme::error())
-    } else if status.is_streaming {
-        ("streaming", theme::accent_dim())
-    } else {
-        ("ready", theme::text_muted())
-    };
-
-    let mut left = row![
-        text(status_text).size(theme::font_sm()).color(status_color),
-    ]
-    .spacing(theme::SPACING_SM)
-    .align_y(iced::Alignment::Center);
-
-    if status.is_streaming && status.esc_count < 2 {
-        let hint = match status.esc_count {
-            0 => "esc esc to cancel",
-            _ => "esc to cancel",
-        };
-        left = left.push(
-            text(hint).size(theme::font_sm()).color(theme::text_muted()),
-        );
-    }
-
-    // Right side: model + context tokens + percentage.
-    let ctx_pct = if status.context_max > 0 {
-        (status.context_tokens as f32 / status.context_max as f32 * 100.0) as usize
-    } else {
-        0
-    };
-    let ctx_color = if ctx_pct >= 90 {
-        theme::error()
-    } else if ctx_pct >= 75 {
-        theme::warning()
-    } else {
-        theme::text_muted()
-    };
-    let right = row![
-        text(status.model).size(theme::font_sm()).color(theme::text_muted()),
-        text(format!(
-            "{} / {} ({}%)",
-            format_number(status.context_tokens),
-            format_number(status.context_max),
-            ctx_pct,
-        ))
-        .size(theme::font_sm())
-        .color(ctx_color),
-    ]
-    .spacing(theme::SPACING_SM)
-    .align_y(iced::Alignment::Center);
-
-    let bar = container(
-        row![left, Space::new().width(Length::Fill), right]
-            .align_y(iced::Alignment::Center),
-    )
-    .padding([theme::SPACING_XS, theme::SPACING_SM])
-    .style(status_bar_style);
-
-    column![
-        rule::horizontal(1).style(|_theme: &iced::Theme| rule::Style {
-            color: theme::border_color(),
-            radius: 0.0.into(),
-            fill_mode: rule::FillMode::Full,
-            snap: true,
-        }),
-        bar,
-    ]
-    .into()
-}
+// view_status_bar removed: model + context now blend into the input area
+// (see `view`), and stream state is conveyed by the streaming indicator.
 
 // ── Completion popup ────────────────────────────────────────────────────────
 
@@ -586,32 +594,46 @@ fn view_completion_col<'a>(
     for (i, &(cmd_idx, _score)) in filtered.iter().enumerate() {
         let cmd = &commands[cmd_idx];
         let is_selected = i == selected;
-        let bg = if is_selected {
-            theme::bg_hover()
-        } else {
-            theme::bg_elevated()
-        };
         let label = row![
             text(format!("/{}", cmd.name))
-                .size(theme::font_md())
-                .color(if is_selected { theme::text_primary() } else { theme::accent() }),
+                .size(theme::font_sm())
+                .color(theme::text_primary()),
             Space::new().width(theme::SPACING_SM),
             text(&cmd.description)
-                .size(theme::font_md())
-                .color(if is_selected { theme::text_secondary() } else { theme::text_muted() }),
+                .size(theme::font_sm())
+                .color(theme::text_muted()),
         ]
         .align_y(iced::Alignment::Center);
         items = items.push(
             container(label)
                 .width(Length::Fill)
-                .padding([theme::SPACING_XS, theme::SPACING_SM])
-                .style(move |_theme: &iced::Theme| container::Style {
-                    background: Some(iced::Background::Color(bg)),
-                    ..Default::default()
+                .padding([theme::SPACING_XS, theme::SPACING_MD])
+                .style(move |_theme: &iced::Theme| {
+                    if is_selected {
+                        container::Style {
+                            background: Some(iced::Background::Color(theme::bg_list_hover())),
+                            ..Default::default()
+                        }
+                    } else {
+                        container::Style::default()
+                    }
                 }),
         );
     }
     items
+}
+
+/// Hairline separator used at the top of the completion popup so it reads
+/// as a distinct surface sitting above the chat transcript.
+fn completion_divider<'a>() -> Element<'a, Msg> {
+    rule::horizontal(1)
+        .style(|_theme: &iced::Theme| rule::Style {
+            color: theme::border_color(),
+            radius: 0.0.into(),
+            fill_mode: rule::FillMode::Full,
+            snap: true,
+        })
+        .into()
 }
 
 // ── Fuzzy matching ──────────────────────────────────────────────────────────
@@ -660,27 +682,6 @@ fn fuzzy_score(query: &str, target: &str) -> Option<i32> {
         Some(score)
     } else {
         None
-    }
-}
-
-// ── Styles ──────────────────────────────────────────────────────────────────
-
-fn header_style(_theme: &iced::Theme) -> container::Style {
-    container::Style {
-        background: Some(iced::Background::Color(theme::bg_surface())),
-        border: iced::Border {
-            color: theme::border_color(),
-            width: 0.0,
-            radius: 0.0.into(),
-        },
-        ..Default::default()
-    }
-}
-
-fn status_bar_style(_theme: &iced::Theme) -> container::Style {
-    container::Style {
-        background: Some(iced::Background::Color(theme::bg_surface())),
-        ..Default::default()
     }
 }
 

@@ -8,8 +8,5 @@ mod state;
 mod render;
 
 // Re-export public API so existing `use crate::widget::text_edit::*` continues to work.
-pub use state::{
-    Block, BlockKind, EditorAction, EditorState,
-    block_kind_bg,
-};
+pub use state::{Block, BlockKind, EditorAction, EditorState, Pos};
 pub use render::{TextEdit, view};

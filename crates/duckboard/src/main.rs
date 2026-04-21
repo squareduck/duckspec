@@ -165,6 +165,9 @@ enum Message {
     Settings(area::settings::Message),
     // System theme changed
     ThemeChanged(theme::ColorMode),
+    // Animation tick for the streaming indicator; only fires while a session
+    // is streaming (see `subscription`).
+    StreamTick,
 }
 
 // ── Update ───────────────────────────────────────────────────────────────────
@@ -458,6 +461,9 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
         Message::ThemeChanged(mode) => {
             theme::set_mode(mode);
             rehighlight_all(state);
+        }
+        Message::StreamTick => {
+            widget::streaming_indicator::bump_tick();
         }
         Message::KeyPress(key, mods, text) => {
             // Cmd+P: open file finder.
@@ -922,7 +928,31 @@ fn subscription(state: &State) -> Subscription<Message> {
     // Poll system dark/light mode.
     subs.push(theme_subscription());
 
+    // Animation tick for the streaming indicator. Only subscribed when at
+    // least one session is actively streaming, so idle chats don't wake
+    // the render loop. Uses iced's built-in `time::every` so the timer runs
+    // on iced's tokio runtime — the earlier handcrafted `tokio::time::sleep`
+    // stream panicked silently under the default thread-pool backend.
+    if any_session_streaming(state) {
+        subs.push(
+            iced::time::every(std::time::Duration::from_millis(
+                widget::streaming_indicator::TICK_MS,
+            ))
+            .map(|_instant| Message::StreamTick),
+        );
+    }
+
     Subscription::batch(subs)
+}
+
+/// True if any session across all interaction panels is actively streaming.
+fn any_session_streaming(state: &State) -> bool {
+    let check = |ix: &interaction::InteractionState| {
+        ix.sessions.iter().any(|s| s.session.is_streaming)
+    };
+    check(&state.caps.interaction)
+        || check(&state.codex.interaction)
+        || state.change.interactions.values().any(check)
 }
 
 fn theme_subscription() -> Subscription<Message> {

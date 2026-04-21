@@ -132,6 +132,20 @@ pub fn bg_list_hover() -> Color {
     }
 }
 
+/// Background for the chat transcript — a tone halfway between `bg_base` and
+/// `bg_surface`, so the "paper-white" input (on `bg_base`) reads as a lifted
+/// field above the transcript.
+pub fn bg_chat_area() -> Color {
+    let a = bg_base();
+    let b = bg_surface();
+    Color {
+        r: (a.r + b.r) * 0.5,
+        g: (a.g + b.g) * 0.5,
+        b: (a.b + b.b) * 0.5,
+        a: 1.0,
+    }
+}
+
 // ── Chat message backgrounds ───────────────────────────────────────────────
 // All sit in a narrow brightness band, distinguished by subtle colour tints.
 
@@ -189,6 +203,7 @@ pub fn lavender() -> Color { pick(macchiato::LAVENDER, latte::LAVENDER) }
 use std::sync::{OnceLock, RwLock};
 
 struct FontState {
+    #[allow(dead_code)]
     ui_font: iced::Font,
     ui_size: f32,
     content_font: iced::Font,
@@ -227,6 +242,7 @@ pub fn set_fonts(config: &crate::config::Config) {
     *fonts().write().unwrap() = state;
 }
 
+#[allow(dead_code)]
 pub fn ui_font() -> iced::Font {
     fonts().read().unwrap().ui_font
 }
@@ -410,6 +426,105 @@ pub fn surface(_theme: &Theme) -> container::Style {
 pub fn elevated(_theme: &Theme) -> container::Style {
     container::Style {
         background: Some(bg_elevated().into()),
+        ..Default::default()
+    }
+}
+
+/// Background for the chat scroll area: a tone sitting between `bg_base` and
+/// `bg_surface`, so the transcript reads as a slightly recessed surface
+/// underneath the lifted input field.
+pub fn chat_area(_theme: &Theme) -> container::Style {
+    container::Style {
+        background: Some(bg_chat_area().into()),
+        ..Default::default()
+    }
+}
+
+/// Container style for the chat input: the lightest surface in the palette so
+/// it reads as a lifted "paper" field above the chat transcript.
+pub fn chat_input(_theme: &Theme) -> container::Style {
+    container::Style {
+        background: Some(bg_base().into()),
+        ..Default::default()
+    }
+}
+
+/// Outer frame for tool-use / tool-result cards: 1px border + full radius,
+/// no background. Inner header/body containers paint the surface colors.
+pub fn chat_tool_card_frame(_theme: &Theme) -> container::Style {
+    container::Style {
+        border: Border {
+            color: border_color(),
+            width: 1.0,
+            radius: BORDER_RADIUS.into(),
+        },
+        ..Default::default()
+    }
+}
+
+/// Header surface of an open tool card — `bg_surface` (quiet, only one step
+/// from the chat area) with the top corners rounded and bottom corners
+/// square so it seats flush against the body below.
+pub fn chat_tool_card_header_open(_theme: &Theme) -> container::Style {
+    container::Style {
+        background: Some(bg_surface().into()),
+        border: Border {
+            radius: iced::border::Radius {
+                top_left: BORDER_RADIUS,
+                top_right: BORDER_RADIUS,
+                bottom_right: 0.0,
+                bottom_left: 0.0,
+            },
+            ..Default::default()
+        },
+        ..Default::default()
+    }
+}
+
+/// Header surface of a collapsed tool card — same tint as the open header
+/// but rounded on all four corners because there's no body beneath it.
+pub fn chat_tool_card_header_alone(_theme: &Theme) -> container::Style {
+    container::Style {
+        background: Some(bg_surface().into()),
+        border: Border {
+            radius: BORDER_RADIUS.into(),
+            ..Default::default()
+        },
+        ..Default::default()
+    }
+}
+
+/// Body surface of an open tool card — matches the user bubble's "paper"
+/// background (`bg_base`) with bottom corners rounded and top square so it
+/// seats flush against the header above.
+pub fn chat_tool_card_body(_theme: &Theme) -> container::Style {
+    container::Style {
+        background: Some(bg_base().into()),
+        border: Border {
+            radius: iced::border::Radius {
+                top_left: 0.0,
+                top_right: 0.0,
+                bottom_right: BORDER_RADIUS,
+                bottom_left: BORDER_RADIUS,
+            },
+            ..Default::default()
+        },
+        ..Default::default()
+    }
+}
+
+/// Card treatment for user messages in the chat — matches the input's
+/// "paper" surface and framed border so prompts read as a distinct object
+/// on the chat transcript, while assistant text flows unwrapped on the
+/// chat background.
+pub fn chat_user_card(_theme: &Theme) -> container::Style {
+    container::Style {
+        background: Some(bg_base().into()),
+        border: Border {
+            color: border_color(),
+            width: 1.0,
+            radius: BORDER_RADIUS.into(),
+        },
         ..Default::default()
     }
 }

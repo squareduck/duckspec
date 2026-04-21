@@ -14,7 +14,7 @@ anyhow.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 
-iced = { version = "0.14", features = ["advanced", "canvas", "svg"] }
+iced = { version = "0.14", features = ["advanced", "canvas", "svg", "tokio"] }
 alacritty_terminal = "0.26"
 vte = "0.15"
 portable-pty = "0.9"

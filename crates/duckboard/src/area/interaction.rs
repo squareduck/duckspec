@@ -2,14 +2,13 @@
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use iced::widget::text_editor;
 use iced::Element;
 
 use crate::agent::{AgentHandle, SlashCommand};
 use crate::chat_store::ChatSession;
 use crate::highlight::SyntaxHighlighter;
 use crate::theme;
-use crate::widget::{agent_chat, interaction_toggle, text_edit::{Block, EditorState}};
+use crate::widget::{agent_chat, interaction_toggle, text_edit::{self, Block, EditorState}};
 
 /// Monotonic counter used to mint a stable `InteractionState::instance_id`.
 /// The ID keys long-lived subscriptions (PTY, agent) so they survive when the
@@ -39,7 +38,7 @@ pub enum SessionControls {
 pub struct AgentSession {
     pub session: ChatSession,
     pub agent_handle: Option<AgentHandle>,
-    pub chat_input: text_editor::Content,
+    pub chat_input: EditorState,
     pub chat_commands: Vec<SlashCommand>,
     pub chat_completion: agent_chat::CompletionState,
     pub chat_blocks: Vec<Block>,
@@ -66,7 +65,7 @@ impl AgentSession {
         Self {
             session,
             agent_handle: None,
-            chat_input: text_editor::Content::new(),
+            chat_input: EditorState::new(""),
             chat_commands: Vec::new(),
             chat_completion: agent_chat::CompletionState::default(),
             chat_blocks: Vec::new(),
@@ -187,21 +186,24 @@ pub fn update(state: &mut InteractionState, msg: Msg, highlighter: &SyntaxHighli
 fn handle_agent_chat(state: &mut InteractionState, msg: agent_chat::Msg, highlighter: &SyntaxHighlighter) {
     let Some(ax) = state.active_mut() else { return };
     match msg {
-        agent_chat::Msg::EditorAction(action) => {
+        agent_chat::Msg::InputAction(action) => {
             if ax.chat_completion.visible {
                 match &action {
-                    text_editor::Action::Move(text_editor::Motion::Up) => {
+                    text_edit::EditorAction::MoveUp(_) => {
                         completion_prev(ax);
                         return;
                     }
-                    text_editor::Action::Move(text_editor::Motion::Down) => {
+                    text_edit::EditorAction::MoveDown(_) => {
                         completion_next(ax);
                         return;
                     }
                     _ => {}
                 }
             }
-            ax.chat_input.perform(action);
+            let mutated = ax.chat_input.apply_action(action);
+            if mutated {
+                rehighlight_input(&mut ax.chat_input, highlighter);
+            }
             let input_text = ax.chat_input.text();
             let trimmed = input_text.trim_end();
             if trimmed.starts_with('/') && !trimmed.contains(' ') {
@@ -213,7 +215,7 @@ fn handle_agent_chat(state: &mut InteractionState, msg: agent_chat::Msg, highlig
         }
         agent_chat::Msg::CompletionNext => completion_next(ax),
         agent_chat::Msg::CompletionPrev => completion_prev(ax),
-        agent_chat::Msg::CompletionAccept => completion_accept(ax),
+        agent_chat::Msg::CompletionAccept => completion_accept(ax, highlighter),
         agent_chat::Msg::CompletionDismiss => {
             ax.chat_completion.visible = false;
         }
@@ -250,7 +252,8 @@ fn handle_agent_chat(state: &mut InteractionState, msg: agent_chat::Msg, highlig
                     ax.session.is_streaming = true;
                     ax.session.pending_text.clear();
                     handle.send_prompt(text, None);
-                    ax.chat_input = text_editor::Content::new();
+                    ax.chat_input = EditorState::new("");
+                    rehighlight_input(&mut ax.chat_input, highlighter);
                     ax.chat_completion.visible = false;
                     rebuild_chat_editor(ax, highlighter);
                 }
@@ -262,6 +265,12 @@ fn handle_agent_chat(state: &mut InteractionState, msg: agent_chat::Msg, highlig
             }
         }
     }
+}
+
+/// Re-run markdown syntax highlighting on the chat input.
+fn rehighlight_input(input: &mut EditorState, highlighter: &SyntaxHighlighter) {
+    let syntax = highlighter.find_syntax("md");
+    input.highlight_spans = Some(highlighter.highlight_lines(&input.lines, syntax));
 }
 
 // ── Chat editor ─────────────────────────────────────────────────────────────
@@ -371,10 +380,9 @@ pub fn handle_agent_chat_key(
         ax.esc_count = 0;
     }
 
-    // Enter-to-send is now handled by the chat text_editor's own key
-    // binding (in agent_chat::view) so it only fires when the chat input
-    // is focused. Shift+Enter falls through to the default Binding::Enter
-    // which inserts a newline via Msg::EditorAction.
+    // Enter-to-send is handled by the chat input's TextEdit widget via
+    // `on_submit`, so it only fires when the input is focused. Shift+Enter
+    // falls through to the default Enter action which inserts a newline.
 
     AgentChatKeyResult::NotHandled
 }
@@ -403,7 +411,7 @@ fn completion_prev(ax: &mut AgentSession) {
     }
 }
 
-fn completion_accept(ax: &mut AgentSession) {
+fn completion_accept(ax: &mut AgentSession, highlighter: &SyntaxHighlighter) {
     let input_text = ax.chat_input.text();
     let query = input_text.trim_end().trim_start_matches('/');
     let filtered = agent_chat::filter_commands(&ax.chat_commands, query);
@@ -411,8 +419,12 @@ fn completion_accept(ax: &mut AgentSession) {
     if let Some(&(cmd_idx, _)) = filtered.get(selected) {
         let cmd_name = &ax.chat_commands[cmd_idx].name;
         let new_text = format!("/{} ", cmd_name);
-        ax.chat_input = text_editor::Content::with_text(&new_text);
-        ax.chat_input.perform(text_editor::Action::Move(text_editor::Motion::DocumentEnd));
+        let mut new_state = EditorState::new(&new_text);
+        let last_line = new_state.lines.len().saturating_sub(1);
+        let last_col = new_state.lines[last_line].len();
+        new_state.cursor = text_edit::Pos::new(last_line, last_col);
+        ax.chat_input = new_state;
+        rehighlight_input(&mut ax.chat_input, highlighter);
     }
     ax.chat_completion.visible = false;
 }

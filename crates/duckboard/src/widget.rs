@@ -6,6 +6,7 @@ pub mod interaction_toggle;
 pub mod list_view;
 pub mod sidebar;
 pub mod status_bar;
+pub mod streaming_indicator;
 pub mod tab_bar;
 pub mod terminal;
 pub mod text_edit;
