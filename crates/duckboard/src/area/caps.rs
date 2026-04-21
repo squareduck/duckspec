@@ -160,3 +160,14 @@ fn open_artifact(
         crate::open_artifact_tab(&mut state.tabs, id.to_string(), title, content, id, highlighter);
     }
 }
+
+// ── Breadcrumbs ──────────────────────────────────────────────────────────────
+
+pub fn breadcrumbs(state: &State) -> Vec<String> {
+    let mut crumbs = vec!["Capabilities".into()];
+    if let Some(tab) = state.tabs.active_tab() {
+        let rest = tab.id.strip_prefix("caps/").unwrap_or(&tab.id);
+        crumbs.extend(rest.split('/').map(String::from));
+    }
+    crumbs
+}

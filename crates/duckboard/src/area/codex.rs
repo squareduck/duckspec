@@ -1,17 +1,16 @@
 //! Codex area — browse codex entries.
 
-use iced::widget::{button, column, row, scrollable, svg, text};
-use iced::widget::text::Wrapping;
+use iced::widget::{column, scrollable};
 use iced::{Element, Length};
 
 use crate::data::ProjectData;
 use crate::theme;
-use crate::widget::{collapsible, tab_bar};
+use crate::widget::list_view::ListRow;
+use crate::widget::{collapsible, list_view, tab_bar};
 
 use super::interaction::{self, InteractionState, SessionControls};
 
 const ICON_FILE: &[u8] = include_bytes!("../../assets/icon_file.svg");
-const ICON_SIZE: f32 = 14.0;
 
 // ── State ────────────────────────────────────────────────────────────────────
 
@@ -98,44 +97,23 @@ pub fn view<'a>(
 }
 
 fn view_list<'a>(state: &'a State, project: &'a ProjectData) -> Element<'a, Message> {
-    let mut items = column![].spacing(theme::SPACING_XS);
-
-    if project.codex_entries.is_empty() {
-        items = items.push(text("No codex entries").size(theme::font_md()).color(theme::text_muted()));
-    } else {
-        for entry in &project.codex_entries {
-            let is_active = state
-                .tabs
-                .active_tab()
-                .is_some_and(|t| t.id == entry.id);
-            let style = if is_active {
-                theme::list_item_active
-                    as fn(&iced::Theme, button::Status) -> button::Style
-            } else {
-                theme::list_item
-            };
-            let icon = svg(svg::Handle::from_memory(ICON_FILE))
-                .width(ICON_SIZE)
-                .height(ICON_SIZE)
-                .style(theme::svg_tint(theme::text_muted()));
-            let label = row![icon, text(&entry.label).size(theme::font_md()).wrapping(Wrapping::None)]
-                .spacing(theme::SPACING_XS)
-                .align_y(iced::Center);
-            items = items.push(
-                button(label)
-                    .on_press(Message::SelectItem(entry.id.clone()))
-                    .width(Length::Fill)
-                    .padding([2.0, theme::SPACING_SM])
-                    .style(style),
-            );
-        }
-    }
+    let active_id = state.tabs.active_tab().map(|t| t.id.as_str());
+    let rows: Vec<ListRow<'a, Message>> = project
+        .codex_entries
+        .iter()
+        .map(|entry| {
+            ListRow::new(entry.label.as_str())
+                .icon(ICON_FILE)
+                .selected(active_id == Some(entry.id.as_str()))
+                .on_press(Message::SelectItem(entry.id.clone()))
+        })
+        .collect();
 
     let section = collapsible::view(
         "Codex",
         state.section_expanded,
         Message::ToggleSection,
-        items.into(),
+        list_view::view(rows, Some("No codex entries")),
     );
 
     scrollable(column![section].spacing(0.0))
@@ -171,5 +149,20 @@ fn open_artifact(
             .to_string();
         crate::open_artifact_tab(&mut state.tabs, id.to_string(), title, content, id, highlighter);
     }
+}
+
+// ── Breadcrumbs ──────────────────────────────────────────────────────────────
+
+pub fn breadcrumbs(state: &State, project: &ProjectData) -> Vec<String> {
+    let Some(tab) = state.tabs.active_tab() else {
+        return vec!["Codex".into()];
+    };
+    let label = project
+        .codex_entries
+        .iter()
+        .find(|e| e.id == tab.id)
+        .map(|e| e.label.clone())
+        .unwrap_or_else(|| tab.id.clone());
+    vec!["Codex".into(), label]
 }
 

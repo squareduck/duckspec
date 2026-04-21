@@ -64,7 +64,6 @@ pub enum StepCompletion {
 pub struct StepInfo {
     pub id: String,
     pub label: String,
-    pub number: u32,
     pub completion: StepCompletion,
 }
 
@@ -342,13 +341,12 @@ fn build_steps(dir: &Path, change_prefix: &str) -> Vec<StepInfo> {
             continue;
         }
         let stem = name.trim_end_matches(".md");
-        if let Some((num_str, slug)) = stem.split_once('-')
-            && let Ok(number) = num_str.parse::<u32>() {
+        if let Some((num_str, _)) = stem.split_once('-')
+            && num_str.parse::<u32>().is_ok() {
                 let completion = compute_step_completion(&entry.path());
                 steps.push(StepInfo {
                     id: format!("{}/steps/{}", change_prefix, name),
-                    label: slug.replace('-', " "),
-                    number,
+                    label: name.clone(),
                     completion,
                 });
             }

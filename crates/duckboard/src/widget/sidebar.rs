@@ -11,6 +11,7 @@ const ICON_CHANGE: &[u8] = include_bytes!("../../assets/icon_change.svg");
 const ICON_CAPS: &[u8] = include_bytes!("../../assets/icon_caps.svg");
 const ICON_CODEX: &[u8] = include_bytes!("../../assets/icon_codex.svg");
 const ICON_REFRESH: &[u8] = include_bytes!("../../assets/icon_refresh.svg");
+const ICON_THEME: &[u8] = include_bytes!("../../assets/icon_theme.svg");
 const ICON_SETTINGS: &[u8] = include_bytes!("../../assets/icon_settings.svg");
 
 fn area_icon(area: Area) -> svg::Handle {
@@ -28,6 +29,7 @@ pub fn view<'a, M: Clone + 'a>(
     active: &Area,
     on_area: impl Fn(Area) -> M + 'a,
     on_refresh: M,
+    on_toggle_theme: M,
 ) -> Element<'a, M> {
     let mut nav = column![].spacing(theme::SPACING_XS).align_x(Center);
 
@@ -70,6 +72,22 @@ pub fn view<'a, M: Clone + 'a>(
     .on_press(on_refresh)
     .style(theme::nav_button);
 
+    let theme_icon = svg(svg::Handle::from_memory(ICON_THEME))
+        .width(18)
+        .height(18)
+        .style(theme::svg_tint(theme::text_secondary()));
+    let theme_toggle = button(
+        container(theme_icon)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .align_x(Center)
+            .align_y(Center),
+    )
+    .width(36)
+    .height(36)
+    .on_press(on_toggle_theme)
+    .style(theme::nav_button);
+
     let is_settings = *active == Area::Settings;
     let settings_style = if is_settings {
         theme::nav_button_active as fn(&iced::Theme, button::Status) -> button::Style
@@ -94,7 +112,7 @@ pub fn view<'a, M: Clone + 'a>(
     .style(settings_style);
 
     container(
-        column![nav, Space::new().height(Length::Fill), refresh, settings]
+        column![nav, Space::new().height(Length::Fill), refresh, theme_toggle, settings]
             .align_x(Center)
             .spacing(theme::SPACING_XS)
             .height(Length::Fill),

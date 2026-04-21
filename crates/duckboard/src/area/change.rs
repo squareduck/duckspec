@@ -4,12 +4,12 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use iced::widget::{button, column, container, row, scrollable, svg, text, Space};
-use iced::widget::text::Wrapping;
 use iced::{Element, Length};
 
 use crate::data::{ChangeData, ProjectData, StepCompletion};
 use crate::theme;
 use crate::vcs::{self, ChangedFile, FileStatus};
+use crate::widget::list_view::{self, Badge, ListRow};
 use crate::widget::{collapsible, interaction_toggle, tab_bar, tree_view};
 
 use super::interaction::{self, AgentSession, InteractionMode, InteractionState, SessionControls};
@@ -24,8 +24,6 @@ const ICON_STEP: &[u8] = include_bytes!("../../assets/icon_step.svg");
 const ICON_STEP_DONE: &[u8] = include_bytes!("../../assets/icon_step_done.svg");
 const ICON_STEP_PARTIAL: &[u8] = include_bytes!("../../assets/icon_step_partial.svg");
 const ICON_EXPLORE: &[u8] = include_bytes!("../../assets/icon_explore.svg");
-
-const ICON_SIZE: f32 = 14.0;
 
 // ── State ────────────────────────────────────────────────────────────────────
 
@@ -52,6 +50,7 @@ pub struct State {
 impl State {
     pub fn new(project_root: Option<&Path>) -> Self {
         let mut sections = HashSet::new();
+        sections.insert("picker".to_string());
         sections.insert("overview".to_string());
         sections.insert("capabilities".to_string());
         sections.insert("steps".to_string());
@@ -449,11 +448,6 @@ pub fn view<'a>(
     let is_exploration = state.is_exploration_selected();
     let ix = state.active_interaction();
 
-    let breadcrumb_bar = view_breadcrumbs(breadcrumbs(state, project));
-    let bar_divider = container(Space::new().width(Length::Fill))
-        .height(1.0)
-        .style(theme::divider);
-
     // Exploration mode: no content column or toggle, interaction fills remaining width.
     if is_exploration {
         let mut main_row = row![
@@ -474,9 +468,7 @@ pub fn view<'a>(
             );
         }
 
-        return column![breadcrumb_bar, bar_divider, main_row.height(Length::Fill)]
-            .height(Length::Fill)
-            .into();
+        return main_row.height(Length::Fill).into();
     }
 
     // Normal mode: content column + optional interaction panel.
@@ -515,16 +507,18 @@ pub fn view<'a>(
             );
         }
 
-    column![breadcrumb_bar, bar_divider, main_row.height(Length::Fill)]
-        .height(Length::Fill)
-        .into()
+    main_row.height(Length::Fill).into()
 }
 
 // ── Breadcrumbs ──────────────────────────────────────────────────────────────
 
-fn breadcrumbs(state: &State, project: &ProjectData) -> Vec<String> {
+pub fn breadcrumbs(state: &State, project: &ProjectData) -> Vec<String> {
+    if state.audit_active {
+        return vec!["Changes".into(), "Audit".into()];
+    }
+
     let Some(selected) = state.selected_change.as_deref() else {
-        return vec![];
+        return vec!["Changes".into()];
     };
 
     // Exploration mode renders no tab; show only the exploration root.
@@ -591,36 +585,6 @@ fn parse_change_inner(path: &str) -> Vec<String> {
         return vec!["Steps".into(), rest.into()];
     }
     path.split('/').map(str::to_string).collect()
-}
-
-fn view_breadcrumbs(segments: Vec<String>) -> Element<'static, Message> {
-    let mut bar = row![].spacing(theme::SPACING_XS);
-    let last = segments.len().saturating_sub(1);
-    for (i, seg) in segments.into_iter().enumerate() {
-        if i > 0 {
-            bar = bar.push(
-                text("\u{203a}")
-                    .size(theme::font_sm())
-                    .color(theme::text_muted()),
-            );
-        }
-        let color = if i == last {
-            theme::text_primary()
-        } else {
-            theme::text_muted()
-        };
-        bar = bar.push(
-            text(seg)
-                .size(theme::font_sm())
-                .wrapping(Wrapping::None)
-                .color(color),
-        );
-    }
-    container(bar)
-        .padding([theme::SPACING_XS, theme::SPACING_LG])
-        .width(Length::Fill)
-        .style(theme::surface)
-        .into()
 }
 
 #[cfg(test)]
@@ -774,8 +738,7 @@ mod breadcrumb_tests {
     fn step(done: bool) -> crate::data::StepInfo {
         crate::data::StepInfo {
             id: "changes/foo/steps/01-bar.md".into(),
-            label: "bar".into(),
-            number: 1,
+            label: "01-bar.md".into(),
             completion: if done {
                 StepCompletion::Done
             } else {
@@ -1000,98 +963,90 @@ fn clear_active_session(
 }
 
 fn view_list<'a>(state: &'a State, project: &'a ProjectData) -> Element<'a, Message> {
-    let mut selector = column![].spacing(theme::SPACING_XS);
+    let mut rows: Vec<ListRow<'a, Message>> = vec![];
 
     // Exploration changes (virtual) — listed first.
     for name in &state.explorations {
-        let is_selected = state.selected_change.as_deref() == Some(name);
-        let style = if is_selected {
-            theme::list_item_active as fn(&iced::Theme, button::Status) -> button::Style
-        } else {
-            theme::list_item
-        };
-        let icon = svg(svg::Handle::from_memory(ICON_EXPLORE))
-            .width(ICON_SIZE)
-            .height(ICON_SIZE)
-            .style(theme::svg_tint(theme::text_muted()));
-        let close_btn = button(text("\u{00d7}").size(theme::font_md()))
+        let is_selected = state.selected_change.as_deref() == Some(name.as_str());
+        let close_btn: Element<'a, Message> = button(text("\u{00d7}").size(theme::font_md()))
             .on_press(Message::RemoveExploration(name.clone()))
             .padding(0.0)
-            .style(theme::icon_button);
-        let label = row![
-            icon,
-            text(name).size(theme::font_md()).wrapping(Wrapping::None),
-            Space::new().width(Length::Fill),
-            close_btn,
-        ]
-        .spacing(theme::SPACING_XS)
-        .align_y(iced::Center);
-        selector = selector.push(
-            button(label)
-                .on_press(Message::SelectChange(name.clone()))
-                .width(Length::Fill)
-                .padding([theme::SPACING_XS, theme::SPACING_SM])
-                .style(style),
+            .style(theme::icon_button)
+            .into();
+        rows.push(
+            ListRow::new(name.as_str())
+                .icon(ICON_EXPLORE)
+                .trailing(close_btn)
+                .selected(is_selected)
+                .on_press(Message::SelectChange(name.clone())),
         );
     }
 
-    // Real changes from duckspec.
-    let all_changes: Vec<_> = project
-        .active_changes
-        .iter()
-        .chain(project.archived_changes.iter())
-        .collect();
-
-    for ch in &all_changes {
-        let is_selected = state
-            .selected_change
-            .as_ref() == Some(&ch.name);
-        let style = if is_selected {
-            theme::list_item_active as fn(&iced::Theme, button::Status) -> button::Style
-        } else {
-            theme::list_item
-        };
-        let icon = svg(svg::Handle::from_memory(ICON_BRANCH))
-            .width(ICON_SIZE)
-            .height(ICON_SIZE)
-            .style(theme::svg_tint(theme::text_muted()));
-        let mut label = row![icon, text(&ch.name).size(theme::font_md()).wrapping(Wrapping::None)]
-            .spacing(theme::SPACING_XS)
-            .align_y(iced::Center);
+    // Active changes from duckspec.
+    for ch in &project.active_changes {
+        let is_selected = state.selected_change.as_ref() == Some(&ch.name);
+        let mut r = ListRow::new(ch.name.as_str())
+            .icon(ICON_BRANCH)
+            .selected(is_selected)
+            .on_press(Message::SelectChange(ch.name.clone()));
         if let Some(v) = project.validations.get(&ch.name) {
             let count = v.total_count();
             if count > 0 {
-                label = label.push(Space::new().width(Length::Fill));
-                label = label.push(
-                    text(count.to_string())
-                        .size(theme::font_sm())
-                        .color(theme::error()),
-                );
+                r = r.badge(Badge::ErrorCount(count as u32));
             }
         }
-        selector = selector.push(
-            button(label)
-                .on_press(Message::SelectChange(ch.name.clone()))
-                .width(Length::Fill)
-                .padding([theme::SPACING_XS, theme::SPACING_SM])
-                .style(style),
-        );
+        rows.push(r);
     }
 
+    let selector = list_view::view(rows, None);
+
+    // Archived changes — separate collapsible section.
+    let archived_rows: Vec<ListRow<'a, Message>> = project
+        .archived_changes
+        .iter()
+        .map(|ch| {
+            let is_selected = state.selected_change.as_ref() == Some(&ch.name);
+            let mut r = ListRow::new(ch.name.as_str())
+                .icon(ICON_BRANCH)
+                .selected(is_selected)
+                .on_press(Message::SelectChange(ch.name.clone()));
+            if let Some(v) = project.validations.get(&ch.name) {
+                let count = v.total_count();
+                if count > 0 {
+                    r = r.badge(Badge::ErrorCount(count as u32));
+                }
+            }
+            r
+        })
+        .collect();
+
+    let archived_section = if project.archived_changes.is_empty() {
+        None
+    } else {
+        Some(collapsible::view(
+            "Archived",
+            state.expanded_sections.contains("archived"),
+            Message::ToggleSection("archived".to_string()),
+            list_view::view(archived_rows, None),
+        ))
+    };
+
     let change_section = {
-        let arrow = if state.expanded_sections.contains("picker") { "\u{25bf}" } else { "\u{25b9}" };
+        let expanded = state.expanded_sections.contains("picker");
         let header = button(
             row![
+                collapsible::chevron(expanded),
                 text("CHANGE")
                     .size(theme::font_sm())
                     .color(theme::text_secondary()),
-                Space::new().width(Length::Fill),
-                text(arrow).size(theme::font_sm()).color(theme::text_muted()),
             ]
+            .spacing(theme::SPACING_XS)
+            .align_y(iced::Center)
             .width(Length::Fill),
         )
         .on_press(Message::ToggleSection("picker".to_string()))
         .width(Length::Fill)
+        .height(32.0)
         .style(theme::section_header)
         .padding([theme::SPACING_SM, theme::SPACING_SM]);
 
@@ -1100,12 +1055,13 @@ fn view_list<'a>(state: &'a State, project: &'a ProjectData) -> Element<'a, Mess
                 container(header).width(Length::Fill),
                 button(text("+").size(theme::font_sm()).color(theme::text_secondary()))
                     .on_press(Message::AddExploration)
+                    .height(32.0)
                     .padding([theme::SPACING_SM, theme::SPACING_SM])
                     .style(theme::section_header),
             ]
         ].spacing(0.0);
 
-        if state.expanded_sections.contains("picker") {
+        if expanded {
             col = col.push(selector);
         }
         col
@@ -1141,13 +1097,23 @@ fn view_list<'a>(state: &'a State, project: &'a ProjectData) -> Element<'a, Mess
         button(label)
             .on_press(Message::ShowAudit)
             .width(Length::Fill)
+            .height(32.0)
             .style(style)
             .padding([theme::SPACING_SM, theme::SPACING_SM])
     };
 
     let change = find_change(state, project);
     let is_exploration = state.is_exploration_selected();
-    let mut list_col = column![audit_section, change_section].spacing(0.0);
+    let mut list_col = column![
+        audit_section,
+        collapsible::top_divider(),
+        change_section,
+    ]
+    .spacing(0.0);
+
+    if let Some(section) = archived_section {
+        list_col = list_col.push(section);
+    }
 
     if is_exploration {
         // Explorations only show the interaction column, no overview/caps/steps.
@@ -1172,17 +1138,6 @@ fn view_list<'a>(state: &'a State, project: &'a ProjectData) -> Element<'a, Mess
         }
     }
 
-    if !state.audit_active && change.is_none() && !is_exploration {
-        list_col = list_col.push(
-            container(
-                text("Select a change")
-                    .size(theme::font_md())
-                    .color(theme::text_muted()),
-            )
-            .padding([theme::SPACING_SM, theme::SPACING_SM]),
-        );
-    }
-
     // Changed files section (always visible, independent of selected change).
     list_col = list_col.push(view_changed_files_section(state));
 
@@ -1198,30 +1153,36 @@ fn view_overview_section<'a>(
     change: &'a ChangeData,
     error_ids: &HashSet<String>,
 ) -> Element<'a, Message> {
-    let mut items = column![].spacing(theme::SPACING_XS);
+    let active_id = state.tabs.active_tab().map(|t| t.id.as_str());
+    let mut rows: Vec<ListRow<'a, Message>> = vec![];
+
+    let mut push_file = |label: &'static str, id: String, has_err: bool| {
+        let mut r = ListRow::new(label)
+            .icon(icon_for_artifact(label))
+            .selected(active_id == Some(id.as_str()))
+            .on_press(Message::SelectItem(id));
+        if has_err {
+            r = r.badge(Badge::ErrorDot);
+        }
+        rows.push(r);
+    };
 
     if change.has_proposal {
         let id = format!("{}/proposal.md", change.prefix);
         let has_err = error_ids.contains(&id);
-        items = items.push(file_item("proposal.md", &id, has_err, state));
+        push_file("proposal.md", id, has_err);
     }
     if change.has_design {
         let id = format!("{}/design.md", change.prefix);
         let has_err = error_ids.contains(&id);
-        items = items.push(file_item("design.md", &id, has_err, state));
-    }
-    if !change.has_proposal && !change.has_design {
-        items = items.push(
-            container(text("No overview files").size(theme::font_md()).color(theme::text_muted()))
-                .padding([2.0, theme::SPACING_SM]),
-        );
+        push_file("design.md", id, has_err);
     }
 
     collapsible::view(
         "Overview",
         state.expanded_sections.contains("overview"),
         Message::ToggleSection("overview".to_string()),
-        items.into(),
+        list_view::view(rows, Some("No overview files")),
     )
 }
 
@@ -1258,58 +1219,32 @@ fn view_steps_section<'a>(
     change: &'a ChangeData,
     error_ids: &HashSet<String>,
 ) -> Element<'a, Message> {
-    let mut items = column![].spacing(theme::SPACING_XS);
-
-    if change.steps.is_empty() {
-        items = items.push(
-            container(text("No steps").size(theme::font_md()).color(theme::text_muted()))
-                .padding([2.0, theme::SPACING_SM]),
-        );
-    } else {
-        for step in &change.steps {
-            let is_active = state.tabs.active_tab().is_some_and(|t| t.id == step.id);
-            let has_error = error_ids.contains(&step.id);
-            let style = if is_active {
-                theme::list_item_active as fn(&iced::Theme, button::Status) -> button::Style
-            } else {
-                theme::list_item
-            };
-            let icon_bytes: &[u8] = match step.completion {
+    let active_id = state.tabs.active_tab().map(|t| t.id.as_str());
+    let rows: Vec<ListRow<'a, Message>> = change
+        .steps
+        .iter()
+        .map(|step| {
+            let icon_bytes: &'static [u8] = match step.completion {
                 StepCompletion::Done => ICON_STEP_DONE,
                 StepCompletion::Partial(_, _) => ICON_STEP_PARTIAL,
                 StepCompletion::NoTasks => ICON_STEP,
             };
-            let icon = svg(svg::Handle::from_memory(icon_bytes))
-                .width(ICON_SIZE)
-                .height(ICON_SIZE)
-                .style(theme::svg_tint(theme::text_muted()));
-            let mut label = row![
-                icon,
-                text(format!("{:02}-{}", step.number, step.label)).size(theme::font_md()).wrapping(Wrapping::None),
-            ]
-            .spacing(theme::SPACING_XS)
-            .align_y(iced::Center);
-            if has_error {
-                label = label.push(Space::new().width(Length::Fill));
-                label = label.push(
-                    text("\u{2022}").size(theme::font_md()).color(theme::error()),
-                );
+            let mut r = ListRow::new(step.label.as_str())
+                .icon(icon_bytes)
+                .selected(active_id == Some(step.id.as_str()))
+                .on_press(Message::SelectItem(step.id.clone()));
+            if error_ids.contains(&step.id) {
+                r = r.badge(Badge::ErrorDot);
             }
-            items = items.push(
-                button(label)
-                    .on_press(Message::SelectItem(step.id.clone()))
-                    .width(Length::Fill)
-                    .padding([2.0, theme::SPACING_SM])
-                    .style(style),
-            );
-        }
-    }
+            r
+        })
+        .collect();
 
     collapsible::view(
         "Steps",
         state.expanded_sections.contains("steps"),
         Message::ToggleSection("steps".to_string()),
-        items.into(),
+        list_view::view(rows, Some("No steps")),
     )
 }
 
@@ -1431,23 +1366,20 @@ fn status_char(status: FileStatus) -> &'static str {
 }
 
 fn view_changed_files_section<'a>(state: &'a State) -> Element<'a, Message> {
-    let mut items = column![].spacing(theme::SPACING_XS);
-
-    if state.changed_files.is_empty() {
-        items = items.push(
-            container(text("No changes").size(theme::font_md()).color(theme::text_muted()))
-                .padding([2.0, theme::SPACING_SM]),
-        );
+    let rows: Vec<ListRow<'a, Message>> = if state.changed_files.is_empty() {
+        vec![]
     } else {
         let mut tree = FileTree::new(PathBuf::new());
         for cf in &state.changed_files {
             tree.insert(cf.clone());
         }
-        let mut rows = Vec::new();
-        flatten_file_tree(&tree, 0, &state.expanded_file_dirs, &mut rows);
+        let mut flat = Vec::new();
+        flatten_file_tree(&tree, 0, &state.expanded_file_dirs, &mut flat);
 
-        for row_data in rows {
-            match row_data {
+        let active_tab_id = state.tabs.active_tab().map(|t| t.id.as_str());
+
+        flat.into_iter()
+            .map(|row_data| match row_data {
                 FileTreeRow::Dir {
                     key,
                     name,
@@ -1455,80 +1387,63 @@ fn view_changed_files_section<'a>(state: &'a State) -> Element<'a, Message> {
                     is_expanded,
                     agg,
                 } => {
-                    let arrow = if is_expanded { "\u{25be}" } else { "\u{25b8}" };
                     let (sc, color) = match agg {
                         Some(s) => (status_char(s), theme::vcs_status_color(&s)),
                         None => ("~", theme::text_muted()),
                     };
-                    let indent = (depth as f32) * theme::SPACING_LG;
-                    let label = row![
-                        Space::new().width(indent),
-                        text(arrow).size(theme::font_sm()).color(theme::text_muted()),
+                    let leading: Element<'a, Message> = row![
+                        collapsible::chevron(is_expanded),
                         text(sc)
                             .size(theme::font_md())
                             .font(theme::content_font())
                             .color(color),
-                        text(format!("{}/", name))
-                            .size(theme::font_md())
-                            .wrapping(Wrapping::None),
                     ]
                     .spacing(theme::SPACING_SM)
-                    .align_y(iced::Center);
-
-                    items = items.push(
-                        button(label)
-                            .on_press(Message::ToggleFileDir(key))
-                            .width(Length::Fill)
-                            .padding([2.0, theme::SPACING_SM])
-                            .style(theme::list_item),
-                    );
+                    .align_y(iced::Center)
+                    .into();
+                    ListRow::new(format!("{}/", name))
+                        .leading(leading)
+                        .indent(depth)
+                        .spacing(theme::SPACING_SM)
+                        .on_press(Message::ToggleFileDir(key))
                 }
                 FileTreeRow::File { file, depth } => {
                     let sc = status_char(file.status);
                     let color = theme::vcs_status_color(&file.status);
                     let tab_id = format!("vcs:{}", file.path.display());
-                    let is_active = state.tabs.active_tab().is_some_and(|t| t.id == tab_id);
-                    let style = if is_active {
-                        theme::list_item_active as fn(&iced::Theme, button::Status) -> button::Style
-                    } else {
-                        theme::list_item
-                    };
+                    let is_active = active_tab_id == Some(tab_id.as_str());
                     let name = file
                         .path
                         .file_name()
                         .map(|s| s.to_string_lossy().to_string())
                         .unwrap_or_else(|| file.path.display().to_string());
-                    let indent = (depth as f32) * theme::SPACING_LG;
-                    let label = row![
-                        Space::new().width(indent),
+                    let leading: Element<'a, Message> = row![
                         // Keep file rows aligned with the arrow column used by dirs.
                         Space::new().width(theme::font_sm()),
                         text(sc)
                             .size(theme::font_md())
                             .font(theme::content_font())
                             .color(color),
-                        text(name).size(theme::font_md()).wrapping(Wrapping::None),
                     ]
                     .spacing(theme::SPACING_SM)
-                    .align_y(iced::Center);
-
-                    items = items.push(
-                        button(label)
-                            .on_press(Message::SelectChangedFile(file.path.clone()))
-                            .width(Length::Fill)
-                            .padding([2.0, theme::SPACING_SM])
-                            .style(style),
-                    );
+                    .align_y(iced::Center)
+                    .into();
+                    ListRow::new(name)
+                        .leading(leading)
+                        .indent(depth)
+                        .spacing(theme::SPACING_SM)
+                        .selected(is_active)
+                        .on_press(Message::SelectChangedFile(file.path.clone()))
                 }
-            }
-        }
-    }
+            })
+            .collect()
+    };
 
     collapsible::view(
         "Changed Files",
         state.expanded_sections.contains("changed_files"),
         Message::ToggleSection("changed_files".to_string()),
-        items.into(),
+        list_view::view(rows, Some("No changes")),
     )
 }
 
@@ -1690,34 +1605,6 @@ fn icon_for_artifact(label: &str) -> &'static [u8] {
         l if l.starts_with("doc") => ICON_DOC,
         _ => ICON_FILE,
     }
-}
-
-fn file_item<'a>(label: &str, id: &str, has_error: bool, state: &State) -> Element<'a, Message> {
-    let is_active = state.tabs.active_tab().is_some_and(|t| t.id == id);
-    let style = if is_active {
-        theme::list_item_active as fn(&iced::Theme, button::Status) -> button::Style
-    } else {
-        theme::list_item
-    };
-    let icon = svg(svg::Handle::from_memory(icon_for_artifact(label)))
-        .width(ICON_SIZE)
-        .height(ICON_SIZE)
-        .style(theme::svg_tint(theme::text_muted()));
-    let mut content = row![icon, text(label.to_string()).size(theme::font_md()).wrapping(Wrapping::None)]
-        .spacing(theme::SPACING_XS)
-        .align_y(iced::Center);
-    if has_error {
-        content = content.push(Space::new().width(Length::Fill));
-        content = content.push(
-            text("\u{2022}").size(theme::font_md()).color(theme::error()),
-        );
-    }
-    button(content)
-        .on_press(Message::SelectItem(id.to_string()))
-        .width(Length::Fill)
-        .padding([2.0, theme::SPACING_SM])
-        .style(style)
-        .into()
 }
 
 fn view_content<'a>(state: &'a State, project: &'a ProjectData) -> Element<'a, Message> {

@@ -759,8 +759,8 @@ fn view_mode_tabs<'a, M: 'a + Clone>(
 
     let mut tabs_row = row![].spacing(0.0).height(32.0);
 
-    for (label, mode) in modes {
-        let is_active = active == mode;
+    for (i, (label, mode)) in modes.iter().enumerate() {
+        let is_active = active == *mode;
         let tab_style = if is_active {
             theme::tab_active as fn(&iced::Theme, iced::widget::button::Status) -> iced::widget::button::Style
         } else {
@@ -768,8 +768,8 @@ fn view_mode_tabs<'a, M: 'a + Clone>(
         };
 
         let w = wrap.clone();
-        let tab_btn = button(text(label).size(theme::font_md()))
-            .on_press(w(Msg::SwitchMode(mode)))
+        let tab_btn = button(text(*label).size(theme::font_md()))
+            .on_press(w(Msg::SwitchMode(*mode)))
             .padding([theme::SPACING_SM, theme::SPACING_MD])
             .style(tab_style);
 
@@ -778,12 +778,15 @@ fn view_mode_tabs<'a, M: 'a + Clone>(
             .width(Length::Fill)
             .style(underline_style);
 
-        let sep = container(Space::new().width(1.0).height(Length::Fill))
-            .style(theme::divider);
-        tabs_row = tabs_row.push(sep);
+        if i > 0 {
+            let sep = container(Space::new().width(1.0).height(Length::Fill))
+                .style(theme::divider);
+            tabs_row = tabs_row.push(sep);
+        }
         tabs_row = tabs_row.push(column![tab_btn, underline].width(Length::Shrink));
     }
 
+    // Trailing separator after the last tab.
     let sep = container(Space::new().width(1.0).height(Length::Fill))
         .style(theme::divider);
     tabs_row = tabs_row.push(sep);

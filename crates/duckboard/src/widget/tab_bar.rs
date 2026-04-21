@@ -257,7 +257,7 @@ pub fn view_bar<'a, M: Clone + 'a>(
 
     let mut tabs_row = row![].spacing(0.0).height(32.0);
 
-    for (logical_idx, tab) in &all {
+    for (i, (logical_idx, tab)) in all.iter().enumerate() {
         let is_active = match state.active {
             ActiveTab::Preview => state.preview.as_ref().map(|p| &p.id) == Some(&tab.id),
             ActiveTab::File(fi) => state.file_tabs.get(fi).map(|t| &t.id) == Some(&tab.id),
@@ -298,20 +298,25 @@ pub fn view_bar<'a, M: Clone + 'a>(
             .width(Length::Fill)
             .style(underline_style);
 
-        // Vertical separator before each tab
-        let sep = container(Space::new().width(1.0).height(Length::Fill))
-            .style(theme::divider);
-        tabs_row = tabs_row.push(sep);
+        // Vertical separator between tabs only (no leading/trailing — outer
+        // containers provide those borders).
+        if i > 0 {
+            let sep = container(Space::new().width(1.0).height(Length::Fill))
+                .style(theme::divider);
+            tabs_row = tabs_row.push(sep);
+        }
 
         tabs_row = tabs_row.push(
             column![tab_btn, underline].width(Length::Shrink),
         );
     }
 
-    // Closing separator after the last tab
-    let sep = container(Space::new().width(1.0).height(Length::Fill))
-        .style(theme::divider);
-    tabs_row = tabs_row.push(sep);
+    // Trailing separator after the last tab.
+    if !all.is_empty() {
+        let sep = container(Space::new().width(1.0).height(Length::Fill))
+            .style(theme::divider);
+        tabs_row = tabs_row.push(sep);
+    }
 
     let tabs_scroll = scrollable(tabs_row)
         .direction(theme::thin_scrollbar_direction_horizontal())

@@ -309,3 +309,9 @@ fn exploration_row(name: &str) -> Element<'_, Message> {
         .style(theme::list_item)
         .into()
 }
+
+// ── Breadcrumbs ──────────────────────────────────────────────────────────────
+
+pub fn breadcrumbs() -> Vec<String> {
+    vec!["Dashboard".into()]
+}

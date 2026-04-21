@@ -118,6 +118,20 @@ pub fn bg_surface() -> Color { pick(macchiato::MANTLE, latte::MANTLE) }
 pub fn bg_elevated() -> Color { pick(macchiato::SURFACE0, latte::SURFACE0) }
 pub fn bg_hover() -> Color { pick(macchiato::SURFACE1, latte::SURFACE1) }
 
+/// Hover tint for list rows — halfway between the sidebar's surface and the
+/// elevated header bg, so hover reads as a subtle step toward "lifted" without
+/// matching the header shade.
+pub fn bg_list_hover() -> Color {
+    let a = bg_surface();
+    let b = bg_elevated();
+    Color {
+        r: (a.r + b.r) * 0.5,
+        g: (a.g + b.g) * 0.5,
+        b: (a.b + b.b) * 0.5,
+        a: 1.0,
+    }
+}
+
 // ── Chat message backgrounds ───────────────────────────────────────────────
 // All sit in a narrow brightness band, distinguished by subtle colour tints.
 
@@ -459,7 +473,7 @@ pub fn nav_button(_theme: &Theme, status: button::Status) -> button::Style {
 
 pub fn list_item(_theme: &Theme, status: button::Status) -> button::Style {
     let bg = match status {
-        button::Status::Hovered => Some(bg_hover().into()),
+        button::Status::Hovered => Some(bg_list_hover().into()),
         _ => None,
     };
     button::Style {
@@ -470,9 +484,13 @@ pub fn list_item(_theme: &Theme, status: button::Status) -> button::Style {
     }
 }
 
-pub fn list_item_active(_theme: &Theme, _status: button::Status) -> button::Style {
+pub fn list_item_active(_theme: &Theme, status: button::Status) -> button::Style {
+    let bg = match status {
+        button::Status::Hovered => Some(bg_list_hover().into()),
+        _ => None,
+    };
     button::Style {
-        background: Some(bg_elevated().into()),
+        background: bg,
         text_color: accent(),
         border: Border::default(),
         ..Default::default()
@@ -509,11 +527,7 @@ pub fn section_header(_theme: &Theme, status: button::Status) -> button::Style {
     button::Style {
         background: bg,
         text_color: text_secondary(),
-        border: Border {
-            color: border_color(),
-            width: 1.0,
-            radius: 0.0.into(),
-        },
+        border: Border::default(),
         ..Default::default()
     }
 }

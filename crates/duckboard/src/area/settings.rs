@@ -183,3 +183,9 @@ fn font_section<'a>(
     .spacing(theme::SPACING_XS)
     .into()
 }
+
+// ── Breadcrumbs ──────────────────────────────────────────────────────────────
+
+pub fn breadcrumbs() -> Vec<String> {
+    vec!["Settings".into()]
+}

@@ -3,7 +3,7 @@
 
 use iced::event;
 use iced::keyboard;
-use iced::widget::{container, row, stack, Space};
+use iced::widget::{column, container, row, stack, Space};
 use iced::{Element, Event, Length, Subscription, Task};
 
 mod agent;
@@ -800,8 +800,16 @@ fn flush_pending_text(session: &mut chat_store::ChatSession) {
 // ── View ─────────────────────────────────────────────────────────────────────
 
 fn view(state: &State) -> Element<'_, Message> {
-    let sidebar =
-        widget::sidebar::view(&state.active_area, Message::AreaSelected, Message::Refresh);
+    let next_mode = match theme::mode() {
+        theme::ColorMode::Dark => theme::ColorMode::Light,
+        theme::ColorMode::Light => theme::ColorMode::Dark,
+    };
+    let sidebar = widget::sidebar::view(
+        &state.active_area,
+        Message::AreaSelected,
+        Message::Refresh,
+        Message::ThemeChanged(next_mode),
+    );
 
     let area_content: Element<'_, Message> = match state.active_area {
         Area::Dashboard => {
@@ -822,10 +830,35 @@ fn view(state: &State) -> Element<'_, Message> {
         }
     };
 
+    let segments = match state.active_area {
+        Area::Dashboard => area::dashboard::breadcrumbs(),
+        Area::Change => area::change::breadcrumbs(&state.change, &state.project),
+        Area::Caps => area::caps::breadcrumbs(&state.caps),
+        Area::Codex => area::codex::breadcrumbs(&state.codex, &state.project),
+        Area::Settings => area::settings::breadcrumbs(),
+    };
+    let status_bar = widget::status_bar::view(segments);
+    let status_divider = container(Space::new().width(Length::Fill))
+        .height(1.0)
+        .style(theme::divider);
+    let area_with_status = column![
+        container(area_content).height(Length::Fill),
+        status_divider,
+        status_bar,
+    ]
+    .height(Length::Fill);
+
     let sidebar_divider = container(Space::new().height(Length::Fill))
         .width(1.0)
         .style(theme::divider);
-    let main_view = row![sidebar, sidebar_divider, area_content];
+    let top_divider = container(Space::new().width(Length::Fill))
+        .height(1.0)
+        .style(theme::divider);
+    let main_view = column![
+        top_divider,
+        row![sidebar, sidebar_divider, area_with_status].height(Length::Fill),
+    ]
+    .height(Length::Fill);
 
     if state.file_finder.visible {
         let overlay = widget::file_finder::view(&state.file_finder).map(Message::FileFinder);
