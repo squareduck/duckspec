@@ -15,7 +15,7 @@ use iced::{
 
 use crate::theme;
 use super::state::{
-    block_header_color, block_kind_bg,
+    block_header_color, block_kind_bg, line_bg_color,
     EditorAction, EditorState, Pos,
     CONTENT_PAD_Y, LINE_HEIGHT,
 };
@@ -644,8 +644,9 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for TextEdit<'a, M> {
                             );
                         }
 
-                // Per-line background (e.g. diff added/removed).
-                if let Some(Some(bg)) = self.state.line_backgrounds.get(line_idx) {
+                // Per-line background (e.g. diff added/removed). Resolve the
+                // color here so theme toggles take effect without rebuild.
+                if let Some(Some(kind)) = self.state.line_backgrounds.get(line_idx) {
                     renderer::Renderer::fill_quad(
                         renderer,
                         renderer::Quad {
@@ -658,7 +659,7 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for TextEdit<'a, M> {
                             border: Border::default(),
                             ..renderer::Quad::default()
                         },
-                        *bg,
+                        line_bg_color(*kind),
                     );
                 }
 

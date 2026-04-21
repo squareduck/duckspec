@@ -2,7 +2,7 @@
 
 use std::collections::HashSet;
 
-use iced::widget::{column, text};
+use iced::widget::{column, container, text};
 use iced::{Element, Length};
 
 use crate::data::ProjectData;
@@ -105,11 +105,12 @@ pub fn view<'a>(
 
 fn view_list<'a>(state: &'a State, project: &'a ProjectData) -> Element<'a, Message> {
     let tree = if project.cap_tree.is_empty() {
-        column![
-            text("No capabilities found")
+        container(
+            text("No capabilities")
                 .size(theme::font_md())
-                .color(theme::text_muted())
-        ]
+                .color(theme::text_muted()),
+        )
+        .padding([theme::SPACING_XS, theme::SPACING_SM])
         .into()
     } else {
         tree_view::view(

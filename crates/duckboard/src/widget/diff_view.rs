@@ -3,13 +3,11 @@
 //! Builds an EditorState from diff data so it can be rendered via the TextEdit
 //! widget, inheriting selection, copy, and horizontal scroll for free.
 
-use iced::Color;
-
 use crate::highlight::HighlightSpan;
 use crate::theme;
 use crate::vcs::{DiffData, DiffLine, LineKind};
 
-use super::text_edit::EditorState;
+use super::text_edit::{EditorState, LineBgKind};
 
 /// Pre-computed syntax highlight data for a diff.
 #[derive(Debug, Clone)]
@@ -23,13 +21,13 @@ pub struct DiffHighlight {
 /// Build a read-only EditorState from diff data with syntax highlighting.
 pub fn build_editor(diff: &DiffData, highlight: Option<&DiffHighlight>) -> EditorState {
     let mut lines = Vec::new();
-    let mut backgrounds: Vec<Option<Color>> = Vec::new();
+    let mut backgrounds: Vec<Option<LineBgKind>> = Vec::new();
     let mut spans_per_line: Vec<Vec<HighlightSpan>> = Vec::new();
 
     for hunk in &diff.hunks {
         // Hunk header line.
         lines.push(hunk.header.trim_end().to_string());
-        backgrounds.push(Some(theme::diff_hunk_bg()));
+        backgrounds.push(Some(LineBgKind::DiffHunk));
         spans_per_line.push(vec![HighlightSpan {
             text: hunk.header.trim_end().to_string(),
             color: theme::text_muted(),
@@ -37,8 +35,8 @@ pub fn build_editor(diff: &DiffData, highlight: Option<&DiffHighlight>) -> Edito
 
         for dl in &hunk.lines {
             let (prefix, prefix_color, bg) = match dl.kind {
-                LineKind::Added => ("+ ", theme::success(), Some(theme::diff_added_bg())),
-                LineKind::Removed => ("- ", theme::error(), Some(theme::diff_removed_bg())),
+                LineKind::Added => ("+ ", theme::success(), Some(LineBgKind::DiffAdded)),
+                LineKind::Removed => ("- ", theme::error(), Some(LineBgKind::DiffRemoved)),
                 LineKind::Context => ("  ", theme::text_muted(), None),
             };
 

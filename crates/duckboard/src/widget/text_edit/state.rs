@@ -49,6 +49,23 @@ pub fn block_kind_bg(kind: BlockKind) -> Color {
     }
 }
 
+/// Semantic tag for a per-line background. Resolved to a Color at render time
+/// so theme toggles are reflected without rebuilding the editor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LineBgKind {
+    DiffHunk,
+    DiffAdded,
+    DiffRemoved,
+}
+
+pub(crate) fn line_bg_color(kind: LineBgKind) -> Color {
+    match kind {
+        LineBgKind::DiffHunk => theme::diff_hunk_bg(),
+        LineBgKind::DiffAdded => theme::diff_added_bg(),
+        LineBgKind::DiffRemoved => theme::diff_removed_bg(),
+    }
+}
+
 /// Header label color for a block kind.
 pub(crate) fn block_header_color(kind: BlockKind) -> Color {
     match kind {
@@ -103,8 +120,10 @@ pub struct EditorState {
     redo_stack: Vec<UndoOp>,
     /// Cached syntax-highlighted spans per line. `None` means stale/unset.
     pub highlight_spans: Option<Vec<Vec<HighlightSpan>>>,
-    /// Per-line background colors (e.g. diff added/removed). Empty = no backgrounds.
-    pub line_backgrounds: Vec<Option<Color>>,
+    /// Per-line background tags (e.g. diff added/removed). Empty = no
+    /// backgrounds. Resolved to a Color at render time so theme toggles
+    /// take effect without rebuilding the editor.
+    pub line_backgrounds: Vec<Option<LineBgKind>>,
     /// Block definitions for block-aware rendering (e.g. chat view).
     pub blocks: Vec<Block>,
     /// Maps each visible line index to its block and position within the block.

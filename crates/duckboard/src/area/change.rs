@@ -1137,7 +1137,7 @@ fn view_caps_section<'a>(
 ) -> Element<'a, Message> {
     let content = if change.cap_tree.is_empty() {
         container(text("No capability changes").size(theme::font_md()).color(theme::text_muted()))
-            .padding([2.0, theme::SPACING_SM])
+            .padding([theme::SPACING_XS, theme::SPACING_SM])
             .into()
     } else {
         tree_view::view(
@@ -1170,8 +1170,8 @@ fn view_steps_section<'a>(
         .map(|step| {
             let icon_bytes: &'static [u8] = match step.completion {
                 StepCompletion::Done => ICON_STEP_DONE,
+                StepCompletion::Partial(0, _) | StepCompletion::NoTasks => ICON_STEP,
                 StepCompletion::Partial(_, _) => ICON_STEP_PARTIAL,
-                StepCompletion::NoTasks => ICON_STEP,
             };
             let mut r = ListRow::new(step.label.as_str())
                 .icon(icon_bytes)
