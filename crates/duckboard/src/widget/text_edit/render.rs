@@ -4,7 +4,7 @@ use iced::advanced::layout;
 use iced::advanced::mouse as adv_mouse;
 use iced::advanced::renderer::{self, Renderer as _};
 use iced::advanced::text::{self, Paragraph as _, Renderer as TextRenderer};
-use iced::advanced::widget::{self, Tree, Widget};
+use iced::advanced::widget::{self, operation, Id, Tree, Widget};
 use iced::advanced::{Clipboard, Layout, Shell};
 use iced::keyboard::key::Named;
 use iced::mouse;
@@ -42,6 +42,18 @@ struct InternalState {
     dragging: bool,
     cell_width: f32,
     gutter_width: f32,
+}
+
+impl operation::Focusable for InternalState {
+    fn is_focused(&self) -> bool {
+        self.focused
+    }
+    fn focus(&mut self) {
+        self.focused = true;
+    }
+    fn unfocus(&mut self) {
+        self.focused = false;
+    }
 }
 
 // ── Word wrap ─────────────────────────────────────────────────────────────
@@ -147,6 +159,7 @@ pub struct TextEdit<'a, M> {
     placeholder: Option<String>,
     on_submit: Option<M>,
     transparent_bg: bool,
+    id: Option<Id>,
 }
 
 impl<'a, M> TextEdit<'a, M> {
@@ -164,7 +177,15 @@ impl<'a, M> TextEdit<'a, M> {
             placeholder: None,
             on_submit: None,
             transparent_bg: false,
+            id: None,
         }
+    }
+
+    /// Assign an [`Id`] so the editor can be targeted by focus operations
+    /// like `iced::widget::operation::focus(id)`.
+    pub fn id(mut self, id: impl Into<Id>) -> Self {
+        self.id = Some(id.into());
+        self
     }
 
     pub fn show_gutter(mut self, show: bool) -> Self {
@@ -253,6 +274,17 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for TextEdit<'a, M> {
 
     fn state(&self) -> widget::tree::State {
         widget::tree::State::new(InternalState::default())
+    }
+
+    fn operate(
+        &mut self,
+        tree: &mut Tree,
+        layout: Layout<'_>,
+        _renderer: &iced::Renderer,
+        operation: &mut dyn widget::Operation,
+    ) {
+        let internal = tree.state.downcast_mut::<InternalState>();
+        operation.focusable(self.id.as_ref(), layout.bounds(), internal);
     }
 
     fn update(

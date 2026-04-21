@@ -18,6 +18,7 @@ pub struct State {
     pub section_expanded: bool,
     pub tabs: tab_bar::TabState,
     pub interaction: InteractionState,
+    pub list_scroll: f32,
 }
 
 impl Default for State {
@@ -27,6 +28,7 @@ impl Default for State {
             section_expanded: true,
             tabs: tab_bar::TabState::default(),
             interaction: InteractionState::default(),
+            list_scroll: 0.0,
         }
     }
 }
@@ -42,6 +44,7 @@ pub enum Message {
     CloseTab(usize),
     Interaction(interaction::Msg),
     TabContent(tab_bar::TabContentMsg),
+    ScrollList(f32),
 }
 
 // ── Update ───────────────────────────────────────────────────────────────────
@@ -84,6 +87,9 @@ pub fn update(
         }
         Message::TabContent(tab_bar::TabContentMsg::EditorAction(action)) => {
             crate::handle_editor_action(&mut state.tabs, action, highlighter);
+        }
+        Message::ScrollList(offset) => {
+            state.list_scroll = offset;
         }
     }
 }
@@ -130,7 +136,7 @@ fn view_list<'a>(state: &'a State, project: &'a ProjectData) -> Element<'a, Mess
         tree,
     );
 
-    vertical_scroll::view(column![section].spacing(0.0))
+    vertical_scroll::view(state.list_scroll, Message::ScrollList, column![section].spacing(0.0))
 }
 
 fn view_content<'a>(state: &'a State) -> Element<'a, Message> {

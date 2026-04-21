@@ -10,6 +10,11 @@
 //! event in a different axis without contention.
 //!
 //! Renders the same 4 px thin scrollbar overlay the rest of the chrome uses.
+//!
+//! Controlled component: the parent owns the offset and updates it via the
+//! `on_scroll` callback. This keeps scroll position stable across data
+//! refreshes and structural rebuilds (where iced's per-tree widget state
+//! would otherwise be discarded).
 
 use iced::advanced::widget::{tree, Tree, Widget};
 use iced::advanced::{layout, mouse as adv_mouse, renderer as adv_renderer};
@@ -24,30 +29,40 @@ const SCROLLBAR_WIDTH: f32 = 4.0;
 const SCROLLBAR_RADIUS: f32 = 2.0;
 const SCROLLBAR_MIN_SCROLLER: f32 = 20.0;
 
-#[derive(Debug, Default)]
-struct InternalState {
-    offset_y: f32,
-}
-
 pub struct VerticalScroll<'a, M> {
     content: Element<'a, M>,
+    offset_y: f32,
+    on_scroll: Box<dyn Fn(f32) -> M + 'a>,
 }
 
 impl<'a, M> VerticalScroll<'a, M> {
-    pub fn new(content: impl Into<Element<'a, M>>) -> Self {
+    pub fn new(
+        offset_y: f32,
+        on_scroll: impl Fn(f32) -> M + 'a,
+        content: impl Into<Element<'a, M>>,
+    ) -> Self {
         Self {
             content: content.into(),
+            offset_y: offset_y.max(0.0),
+            on_scroll: Box::new(on_scroll),
         }
+    }
+
+    /// Effective offset for layout/draw — never below 0, never past
+    /// `max_offset`. Lets us survive a momentary content shrink without
+    /// snapping the externally-stored offset to 0 on every reload.
+    fn effective_offset(&self, max_offset: f32) -> f32 {
+        self.offset_y.clamp(0.0, max_offset)
     }
 }
 
 impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for VerticalScroll<'a, M> {
     fn tag(&self) -> tree::Tag {
-        tree::Tag::of::<InternalState>()
+        tree::Tag::stateless()
     }
 
     fn state(&self) -> tree::State {
-        tree::State::new(InternalState::default())
+        tree::State::None
     }
 
     fn children(&self) -> Vec<Tree> {
@@ -124,12 +139,10 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for VerticalScroll<'a, M> {
         let bounds = layout.bounds();
         let content_layout = layout.children().next().unwrap();
         let content_bounds = content_layout.bounds();
-        let internal = tree.state.downcast_mut::<InternalState>();
-
         let max_offset = (content_bounds.height - bounds.height).max(0.0);
-        internal.offset_y = internal.offset_y.clamp(0.0, max_offset);
+        let effective = self.effective_offset(max_offset);
 
-        let cursor_for_child = cursor + Vector::new(0.0, internal.offset_y);
+        let cursor_for_child = cursor + Vector::new(0.0, effective);
 
         self.content.as_widget_mut().update(
             &mut tree.children[0],
@@ -155,9 +168,9 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for VerticalScroll<'a, M> {
                 mouse::ScrollDelta::Pixels { y, .. } => -*y,
             };
             if dy != 0.0 {
-                let new_offset = (internal.offset_y + dy).clamp(0.0, max_offset);
-                if new_offset != internal.offset_y {
-                    internal.offset_y = new_offset;
+                let new_offset = (effective + dy).clamp(0.0, max_offset);
+                if new_offset != effective {
+                    shell.publish((self.on_scroll)(new_offset));
                     shell.request_redraw();
                 }
                 // Intentionally not capturing — nested horizontal_pan will
@@ -176,9 +189,11 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for VerticalScroll<'a, M> {
         renderer: &iced::Renderer,
     ) -> mouse::Interaction {
         let bounds = layout.bounds();
-        let internal = tree.state.downcast_ref::<InternalState>();
+        let content_bounds = layout.children().next().unwrap().bounds();
+        let max_offset = (content_bounds.height - bounds.height).max(0.0);
+        let effective = self.effective_offset(max_offset);
         let cursor_for_child = if cursor.is_over(bounds) {
-            cursor + Vector::new(0.0, internal.offset_y)
+            cursor + Vector::new(0.0, effective)
         } else {
             cursor
         };
@@ -207,8 +222,9 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for VerticalScroll<'a, M> {
         };
         let content_layout = layout.children().next().unwrap();
         let content_bounds = content_layout.bounds();
-        let internal = tree.state.downcast_ref::<InternalState>();
-        let translation = Vector::new(0.0, -internal.offset_y);
+        let max_offset = (content_bounds.height - bounds.height).max(0.0);
+        let effective = self.effective_offset(max_offset);
+        let translation = Vector::new(0.0, -effective);
 
         let cursor_for_child = if cursor.is_over(bounds) {
             cursor - translation
@@ -245,7 +261,7 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for VerticalScroll<'a, M> {
                 (track_h * ratio).max(SCROLLBAR_MIN_SCROLLER).min(track_h);
             let max_scroll_y = content_bounds.height - track_h;
             let t = if max_scroll_y > 0.0 {
-                (internal.offset_y / max_scroll_y).clamp(0.0, 1.0)
+                (effective / max_scroll_y).clamp(0.0, 1.0)
             } else {
                 0.0
             };
@@ -279,6 +295,10 @@ impl<'a, M: Clone + 'a> From<VerticalScroll<'a, M>> for Element<'a, M> {
     }
 }
 
-pub fn view<'a, M: Clone + 'a>(content: impl Into<Element<'a, M>>) -> Element<'a, M> {
-    VerticalScroll::new(content).into()
+pub fn view<'a, M: Clone + 'a>(
+    offset_y: f32,
+    on_scroll: impl Fn(f32) -> M + 'a,
+    content: impl Into<Element<'a, M>>,
+) -> Element<'a, M> {
+    VerticalScroll::new(offset_y, on_scroll, content).into()
 }

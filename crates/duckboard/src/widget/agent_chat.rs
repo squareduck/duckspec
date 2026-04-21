@@ -3,6 +3,7 @@
 use iced::widget::{button, column, container, row, rule, scrollable, stack, text, Space};
 
 pub const CHAT_SCROLLABLE_ID: &str = "agent-chat-scroll";
+pub const CHAT_INPUT_ID: &str = "agent-chat-input";
 use iced::{Element, Length};
 
 use crate::agent::SlashCommand;
@@ -357,6 +358,7 @@ pub fn view<'a>(
     // word-nav, selection). Plain Enter sends via `on_submit`; Shift+Enter
     // falls through to the default newline action.
     let mut input = text_edit::TextEdit::new(input_value, Msg::InputAction)
+        .id(CHAT_INPUT_ID)
         .show_gutter(false)
         .word_wrap(true)
         .fit_content(true)

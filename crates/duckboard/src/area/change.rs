@@ -34,6 +34,10 @@ pub struct State {
     /// Directory paths (repo-relative, as display strings) expanded in the
     /// changed-files tree.
     pub expanded_file_dirs: HashSet<String>,
+    /// Directory paths previously surfaced by `set_changed_files`. Used to
+    /// auto-expand only directories the user has never seen, so refreshes
+    /// don't keep re-opening folders the user explicitly collapsed.
+    known_file_dirs: HashSet<String>,
     pub tabs: tab_bar::TabState,
     pub changed_files: Vec<ChangedFile>,
     /// Per-change interaction states keyed by change name.
@@ -43,6 +47,8 @@ pub struct State {
     pub explorations: Vec<String>,
     /// Counter for generating unique exploration names.
     pub exploration_counter: usize,
+    /// Vertical scroll offset for the list column.
+    pub list_scroll: f32,
 }
 
 impl State {
@@ -60,11 +66,13 @@ impl State {
             expanded_sections: sections,
             expanded_nodes: HashSet::new(),
             expanded_file_dirs: HashSet::new(),
+            known_file_dirs: HashSet::new(),
             tabs: tab_bar::TabState::default(),
             changed_files: vec![],
             interactions: HashMap::new(),
             explorations,
             exploration_counter,
+            list_scroll: 0.0,
         }
     }
 }
@@ -82,10 +90,13 @@ impl State {
         Some(self.interactions.entry(name.clone()).or_default())
     }
 
-    /// Replace the changed-files list and expand every parent directory in
-    /// the tree, so a freshly-loaded changeset surfaces all files without
-    /// the user having to click through collapsed folders.
+    /// Replace the changed-files list. Auto-expands only directories the
+    /// user has never seen before, so a freshly-loaded changeset surfaces
+    /// new files without re-opening folders the user explicitly collapsed
+    /// during a previous refresh. Dirs that no longer appear are forgotten,
+    /// so they auto-expand again if they ever come back.
     pub fn set_changed_files(&mut self, files: Vec<ChangedFile>) {
+        let mut current_dirs: HashSet<String> = HashSet::new();
         for f in &files {
             let parts: Vec<&str> = f
                 .path
@@ -98,11 +109,31 @@ impl State {
             let mut current = PathBuf::new();
             for part in &parts[..parts.len() - 1] {
                 current.push(part);
-                self.expanded_file_dirs.insert(current.display().to_string());
+                current_dirs.insert(current.display().to_string());
             }
         }
+
+        for dir in &current_dirs {
+            if !self.known_file_dirs.contains(dir) && !is_collapse_by_default(dir) {
+                self.expanded_file_dirs.insert(dir.clone());
+            }
+        }
+        self.expanded_file_dirs.retain(|d| current_dirs.contains(d));
+        self.known_file_dirs = current_dirs;
+
         self.changed_files = files;
     }
+}
+
+/// Directories the changed-files tree should leave collapsed even on first
+/// appearance. The duckspec root is usually noise — the user is typically
+/// looking at the project's own changes, not their tracked spec edits — but
+/// can still be expanded by hand when wanted.
+fn is_collapse_by_default(dir: &str) -> bool {
+    dir == "duckspec"
+}
+
+impl State {
 
     /// Whether the currently selected change is an exploration (virtual).
     pub fn is_exploration_selected(&self) -> bool {
@@ -220,6 +251,7 @@ pub enum Message {
     RemoveExploration(String),
     /// Navigate to a change and open one of its artifacts.
     OpenArtifact { change: String, artifact_id: String },
+    ScrollList(f32),
 }
 
 // ── Update ───────────────────────────────────────────────────────────────────
@@ -383,6 +415,9 @@ pub fn update(
                 );
             }
             open_artifact(state, &artifact_id, project, highlighter);
+        }
+        Message::ScrollList(offset) => {
+            state.list_scroll = offset;
         }
     }
 
@@ -711,6 +746,8 @@ mod breadcrumb_tests {
             interactions: HashMap::new(),
             explorations: explorations.iter().map(|s| s.to_string()).collect(),
             exploration_counter: 0,
+            list_scroll: 0.0,
+            known_file_dirs: HashSet::new(),
         }
     }
 
@@ -799,6 +836,8 @@ mod breadcrumb_tests {
             interactions: HashMap::new(),
             explorations: vec![],
             exploration_counter: 0,
+            list_scroll: 0.0,
+            known_file_dirs: HashSet::new(),
         };
         let project = make_project(&[], &[]);
         assert_eq!(compute_obvious_command(&state, &project), None);
@@ -1121,7 +1160,7 @@ fn view_list<'a>(state: &'a State, project: &'a ProjectData) -> Element<'a, Mess
     // Changed files section (always visible, independent of selected change).
     list_col = list_col.push(view_changed_files_section(state));
 
-    vertical_scroll::view(list_col)
+    vertical_scroll::view(state.list_scroll, Message::ScrollList, list_col)
 }
 
 fn view_overview_section<'a>(

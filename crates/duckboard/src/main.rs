@@ -336,13 +336,25 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
             area::dashboard::update(&mut state.dashboard, msg);
         }
         Message::Change(msg) => {
+            let needs_focus = is_chat_focus_msg(extract_change_interaction_msg(&msg));
             area::change::update(&mut state.change, msg, &state.project, &state.highlighter);
+            if needs_focus {
+                return focus_chat_input();
+            }
         }
         Message::Caps(msg) => {
+            let needs_focus = is_chat_focus_msg(extract_caps_interaction_msg(&msg));
             area::caps::update(&mut state.caps, msg, &state.project, &state.highlighter);
+            if needs_focus {
+                return focus_chat_input();
+            }
         }
         Message::Codex(msg) => {
+            let needs_focus = is_chat_focus_msg(extract_codex_interaction_msg(&msg));
             area::codex::update(&mut state.codex, msg, &state.project, &state.highlighter);
+            if needs_focus {
+                return focus_chat_input();
+            }
         }
         Message::Settings(msg) => {
             area::settings::update(&mut state.settings, &mut state.config, msg);
@@ -526,6 +538,20 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                             interaction::AgentChatKeyResult::NotHandled => {}
                         }
                     }
+
+                    // Cmd-N (Ctrl-N off-mac): new chat session in the change area.
+                    // Only fires while agent chat is the active interaction so it
+                    // doesn't shadow the rest of the app.
+                    if state.active_area == Area::Change
+                        && mods.command()
+                        && key == keyboard::Key::Character("n".into())
+                    {
+                        return dispatch_interaction_msg(
+                            state,
+                            routing_key,
+                            interaction::Msg::NewSession,
+                        );
+                    }
                 }
 
                 // Terminal keyboard capture.
@@ -602,6 +628,45 @@ fn dispatch_interaction_msg(state: &mut State, key: &str, msg: interaction::Msg)
         KEY_CAPS => update(state, Message::Caps(area::caps::Message::Interaction(msg))),
         KEY_CODEX => update(state, Message::Codex(area::codex::Message::Interaction(msg))),
         _ => update(state, Message::Change(area::change::Message::Interaction(msg))),
+    }
+}
+
+/// Focus the chat input. Used after creating, switching, or clearing a
+/// session so the user can immediately type — no extra click required.
+fn focus_chat_input() -> Task<Message> {
+    iced::widget::operation::focus(widget::agent_chat::CHAT_INPUT_ID)
+}
+
+/// True when an interaction message changes the active session in a way that
+/// should re-focus the chat input (new session created, current cleared).
+fn is_chat_focus_msg(msg: Option<&interaction::Msg>) -> bool {
+    matches!(
+        msg,
+        Some(interaction::Msg::NewSession | interaction::Msg::ClearSession)
+    )
+}
+
+fn extract_change_interaction_msg(msg: &area::change::Message) -> Option<&interaction::Msg> {
+    if let area::change::Message::Interaction(m) = msg {
+        Some(m)
+    } else {
+        None
+    }
+}
+
+fn extract_caps_interaction_msg(msg: &area::caps::Message) -> Option<&interaction::Msg> {
+    if let area::caps::Message::Interaction(m) = msg {
+        Some(m)
+    } else {
+        None
+    }
+}
+
+fn extract_codex_interaction_msg(msg: &area::codex::Message) -> Option<&interaction::Msg> {
+    if let area::codex::Message::Interaction(m) = msg {
+        Some(m)
+    } else {
+        None
     }
 }
 
