@@ -148,6 +148,21 @@ pub fn bg_section_header() -> Color {
     }
 }
 
+/// Background for inactive tabs — a tone halfway between `bg_base` (the
+/// active-tab / content color) and `bg_section_header` (the bar bg). This
+/// gives the tab bar three distinct shades: bar > inactive > active, so
+/// inactive tabs read as cards sitting on the bar rather than blending in.
+pub fn bg_tab_inactive() -> Color {
+    let a = bg_base();
+    let b = bg_section_header();
+    Color {
+        r: (a.r + b.r) * 0.5,
+        g: (a.g + b.g) * 0.5,
+        b: (a.b + b.b) * 0.5,
+        a: 1.0,
+    }
+}
+
 /// Background for the chat transcript — a tone halfway between `bg_base` and
 /// `bg_surface`, so the "paper-white" input (on `bg_base`) reads as a lifted
 /// field above the transcript.
@@ -564,13 +579,6 @@ pub fn divider(_theme: &Theme) -> container::Style {
     }
 }
 
-pub fn accent_bar(_theme: &Theme) -> container::Style {
-    container::Style {
-        background: Some(accent().into()),
-        ..Default::default()
-    }
-}
-
 // ── Button styles ──────────────────────────────────────────────────────────
 
 pub fn nav_button_active(_theme: &Theme, _status: button::Status) -> button::Style {
@@ -628,24 +636,41 @@ pub fn list_item_active(_theme: &Theme, status: button::Status) -> button::Style
     }
 }
 
+/// Active tab: lifted background that visually merges with the content area
+/// below. Square corners — flush with the content edge.
 pub fn tab_active(_theme: &Theme, _status: button::Status) -> button::Style {
     button::Style {
-        background: Some(bg_surface().into()),
+        background: Some(bg_base().into()),
         text_color: text_primary(),
         border: Border::default(),
         ..Default::default()
     }
 }
 
+/// Inactive tab: a mid tone sitting between the bar and the active tab so
+/// the tabs read as cards on the bar.
 pub fn tab_inactive(_theme: &Theme, status: button::Status) -> button::Style {
+    let bg = match status {
+        button::Status::Hovered => bg_list_hover(),
+        _ => bg_tab_inactive(),
+    };
     let text = match status {
         button::Status::Hovered => text_primary(),
-        _ => text_muted(),
+        _ => text_secondary(),
     };
     button::Style {
-        background: Some(bg_surface().into()),
+        background: Some(bg.into()),
         text_color: text,
         border: Border::default(),
+        ..Default::default()
+    }
+}
+
+/// Background for the tab bar itself — matches list-column section headers
+/// so the chrome reads consistently across panels.
+pub fn tab_bar(_theme: &Theme) -> container::Style {
+    container::Style {
+        background: Some(bg_section_header().into()),
         ..Default::default()
     }
 }

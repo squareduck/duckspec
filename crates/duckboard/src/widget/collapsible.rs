@@ -8,6 +8,23 @@ use crate::theme;
 const ICON_CHEVRON_RIGHT: &[u8] = include_bytes!("../../assets/icon_chevron_right.svg");
 const ICON_CHEVRON_DOWN: &[u8] = include_bytes!("../../assets/icon_chevron_down.svg");
 pub const ICON_PLUS: &[u8] = include_bytes!("../../assets/icon_plus.svg");
+pub const ICON_CLOSE: &[u8] = include_bytes!("../../assets/icon_close.svg");
+
+/// Icon-only `×` close button. Renders the same `font_sm × font_sm` SVG used
+/// by `add_button`, so it visually matches a section-header `+` when both
+/// sit at the right edge of a row that supplies the surrounding padding.
+/// No internal padding — the caller's row owns the spacing.
+pub fn close_button<'a, M: Clone + 'a>(on_press: M) -> Element<'a, M> {
+    let icon = svg(svg::Handle::from_memory(ICON_CLOSE))
+        .width(theme::font_sm())
+        .height(theme::font_sm())
+        .style(theme::svg_tint(theme::text_muted()));
+    button(icon)
+        .on_press(on_press)
+        .padding(0.0)
+        .style(theme::icon_button)
+        .into()
+}
 
 pub fn view<'a, M: Clone + 'a>(
     title: &'a str,

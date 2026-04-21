@@ -17,7 +17,6 @@ const ICON_SPEC: &[u8] = include_bytes!("../../assets/icon_spec.svg");
 const ICON_DOC: &[u8] = include_bytes!("../../assets/icon_doc.svg");
 const ICON_SPEC_DELTA: &[u8] = include_bytes!("../../assets/icon_spec_delta.svg");
 const ICON_DOC_DELTA: &[u8] = include_bytes!("../../assets/icon_doc_delta.svg");
-const ICON_SIZE: f32 = 14.0;
 
 fn icon_for_title(title: &str) -> &'static [u8] {
     match title {
@@ -255,7 +254,7 @@ pub fn view_bar<'a, M: Clone + 'a>(
         return Space::new().into();
     }
 
-    let mut tabs_row = row![].spacing(0.0).height(32.0);
+    let mut tabs_row = row![].spacing(0.0);
 
     for (i, (logical_idx, tab)) in all.iter().enumerate() {
         let is_active = match state.active {
@@ -271,52 +270,37 @@ pub fn view_bar<'a, M: Clone + 'a>(
         };
 
         let mut tab_row = row![
-            text(&tab.title).size(theme::font_md()),
+            text(&tab.title).size(theme::font_sm()),
         ]
         .spacing(theme::SPACING_XS)
         .align_y(Center);
 
         // File tabs get a close button; the preview tab doesn't.
         if !is_preview {
-            let close_btn =
-                button(text("\u{00d7}").size(theme::font_md()).color(theme::text_muted()))
-                    .on_press(on_close(*logical_idx))
-                    .padding(0.0)
-                    .style(theme::icon_button);
+            let close_btn = crate::widget::collapsible::close_button(on_close(*logical_idx));
             tab_row = tab_row.push(Space::new().width(theme::SPACING_SM));
             tab_row = tab_row.push(close_btn);
         }
 
+        // Asymmetric padding: tabs with a close × use less right padding so
+        // the × hugs the tab's right edge.
+        let pad = if is_preview {
+            iced::Padding { top: theme::SPACING_XS, right: theme::SPACING_MD, bottom: theme::SPACING_XS, left: theme::SPACING_MD }
+        } else {
+            iced::Padding { top: theme::SPACING_XS, right: theme::SPACING_SM, bottom: theme::SPACING_XS, left: theme::SPACING_MD }
+        };
         let tab_btn = button(tab_row)
             .on_press(on_select(*logical_idx))
-            .padding([theme::SPACING_SM, theme::SPACING_MD])
+            .padding(pad)
             .style(tab_style);
 
-        // Active tab gets an accent underline
-        let underline_style = if is_active { theme::accent_bar } else { theme::surface };
-        let underline = container(Space::new().width(Length::Fill).height(2.0))
-            .width(Length::Fill)
-            .style(underline_style);
-
-        // Vertical separator between tabs only (no leading/trailing — outer
-        // containers provide those borders).
         if i > 0 {
-            let sep = container(Space::new().width(1.0).height(Length::Fill))
-                .style(theme::divider);
-            tabs_row = tabs_row.push(sep);
+            tabs_row = tabs_row.push(tab_separator());
         }
-
-        tabs_row = tabs_row.push(
-            column![tab_btn, underline].width(Length::Shrink),
-        );
+        tabs_row = tabs_row.push(tab_btn);
     }
-
-    // Trailing separator after the last tab.
-    if !all.is_empty() {
-        let sep = container(Space::new().width(1.0).height(Length::Fill))
-            .style(theme::divider);
-        tabs_row = tabs_row.push(sep);
-    }
+    // Trailing separator caps the row.
+    tabs_row = tabs_row.push(tab_separator());
 
     let tabs_scroll = scrollable(tabs_row)
         .direction(theme::thin_scrollbar_direction_horizontal())
@@ -328,62 +312,63 @@ pub fn view_bar<'a, M: Clone + 'a>(
         .style(theme::divider);
 
     column![
-        container(tabs_scroll).width(Length::Fill).style(theme::surface),
+        container(tabs_scroll).width(Length::Fill).style(theme::tab_bar),
         bar_border,
     ]
     .into()
 }
 
+/// 1px vertical hairline used between adjacent tabs and as a trailing cap.
+/// Sized to the tab's natural height (computed the same way as
+/// `collapsible::add_button`) so it doesn't stretch the parent row.
+fn tab_separator<'a, M: 'a>() -> Element<'a, M> {
+    let h = theme::font_sm() * 1.3 + 2.0 * theme::SPACING_XS;
+    container(Space::new().width(1.0).height(h))
+        .style(theme::divider)
+        .into()
+}
+
 pub fn view_content(state: &TabState) -> Element<'_, TabContentMsg> {
     match state.active_tab() {
         Some(tab) => {
-            let header: Element<'_, TabContentMsg> = match &tab.view {
-                TabView::Diff { path, status, .. } => {
-                    let status_char = match status {
-                        FileStatus::Modified => "M",
-                        FileStatus::Added => "A",
-                        FileStatus::Deleted => "D",
-                    };
-                    let color = theme::vcs_status_color(status);
-                    container(
-                        row![
-                            text(status_char)
-                                .size(theme::font_md())
-                                .font(theme::content_font())
-                                .color(color),
-                            text(path.display().to_string())
-                                .size(theme::font_md())
-                                .color(theme::text_secondary()),
-                        ]
-                        .spacing(theme::SPACING_SM)
-                        .align_y(Center),
-                    )
-                    .padding([theme::SPACING_SM, theme::SPACING_SM])
-                    .width(Length::Fill)
-                    .style(theme::surface)
-                    .into()
-                }
+            // Both diff and non-diff path bars render the same shape: an SVG
+            // file-type icon followed by the path. Diff tabs differ only by
+            // the icon's tint (status color) — keeping the row construction
+            // identical guarantees both bars render at the same height.
+            let (icon_bytes, icon_color, path_text) = match &tab.view {
+                TabView::Diff { path, status, .. } => (
+                    icon_for_title(&tab.title),
+                    theme::vcs_status_color(status),
+                    path.display().to_string(),
+                ),
                 _ => {
-                    let icon = svg(svg::Handle::from_memory(icon_for_title(&tab.title)))
-                        .width(ICON_SIZE)
-                        .height(ICON_SIZE)
-                        .style(theme::svg_tint(theme::text_muted()));
-                    container(
-                        row![
-                            icon,
-                            text(&tab.id)
-                                .size(theme::font_md())
-                                .color(theme::text_secondary()),
-                        ]
-                        .spacing(theme::SPACING_XS)
-                        .align_y(Center),
-                    )
-                    .padding([theme::SPACING_SM, theme::SPACING_SM])
-                    .width(Length::Fill)
-                    .style(theme::surface)
-                    .into()
+                    let display = tab.id.strip_prefix("file:").unwrap_or(&tab.id).to_string();
+                    (icon_for_title(&tab.title), theme::text_muted(), display)
                 }
             };
+            let leading: Element<'_, TabContentMsg> = svg(svg::Handle::from_memory(icon_bytes))
+                .width(theme::font_sm())
+                .height(theme::font_sm())
+                .style(theme::svg_tint(icon_color))
+                .into();
+            let path_row = container(
+                row![
+                    leading,
+                    text(path_text)
+                        .size(theme::font_sm())
+                        .color(theme::text_secondary()),
+                ]
+                .spacing(theme::SPACING_XS)
+                .align_y(Center),
+            )
+            .padding([theme::SPACING_XS, theme::SPACING_SM])
+            .width(Length::Fill);
+            let header: Element<'_, TabContentMsg> = column![
+                path_row,
+                container(Space::new().width(Length::Fill).height(1.0))
+                    .style(theme::divider),
+            ]
+            .into();
 
             let body: Element<'_, TabContentMsg> = match &tab.view {
                 TabView::Editor { editor, .. } => {

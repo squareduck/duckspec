@@ -829,7 +829,14 @@ fn view_mode_tabs<'a, M: 'a + Clone>(
         ("Terminal", InteractionMode::Terminal),
     ];
 
-    let mut tabs_row = row![].spacing(0.0).height(32.0);
+    let mut tabs_row = row![].spacing(0.0);
+
+    let separator = || -> Element<'a, M> {
+        let h = theme::font_sm() * 1.3 + 2.0 * theme::SPACING_XS;
+        container(Space::new().width(1.0).height(h))
+            .style(theme::divider)
+            .into()
+    };
 
     for (i, (label, mode)) in modes.iter().enumerate() {
         let is_active = active == *mode;
@@ -840,35 +847,24 @@ fn view_mode_tabs<'a, M: 'a + Clone>(
         };
 
         let w = wrap.clone();
-        let tab_btn = button(text(*label).size(theme::font_md()))
+        let tab_btn = button(text(*label).size(theme::font_sm()))
             .on_press(w(Msg::SwitchMode(*mode)))
-            .padding([theme::SPACING_SM, theme::SPACING_MD])
+            .padding([theme::SPACING_XS, theme::SPACING_MD])
             .style(tab_style);
 
-        let underline_style = if is_active { theme::accent_bar } else { theme::surface };
-        let underline = container(Space::new().width(Length::Fill).height(2.0))
-            .width(Length::Fill)
-            .style(underline_style);
-
         if i > 0 {
-            let sep = container(Space::new().width(1.0).height(Length::Fill))
-                .style(theme::divider);
-            tabs_row = tabs_row.push(sep);
+            tabs_row = tabs_row.push(separator());
         }
-        tabs_row = tabs_row.push(column![tab_btn, underline].width(Length::Shrink));
+        tabs_row = tabs_row.push(tab_btn);
     }
-
-    // Trailing separator after the last tab.
-    let sep = container(Space::new().width(1.0).height(Length::Fill))
-        .style(theme::divider);
-    tabs_row = tabs_row.push(sep);
+    tabs_row = tabs_row.push(separator());
 
     let bar_border = container(Space::new().width(Length::Fill).height(1.0))
         .width(Length::Fill)
         .style(theme::divider);
 
     column![
-        container(tabs_row).width(Length::Fill).style(theme::surface),
+        container(tabs_row).width(Length::Fill).style(theme::tab_bar),
         bar_border,
     ]
     .into()

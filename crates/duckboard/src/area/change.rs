@@ -3,7 +3,7 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
-use iced::widget::{button, column, container, row, scrollable, svg, text, Space};
+use iced::widget::{button, column, container, row, scrollable, text, Space};
 use iced::{Element, Length};
 
 use crate::data::{ChangeData, ProjectData, StepCompletion};
@@ -43,8 +43,6 @@ pub struct State {
     pub explorations: Vec<String>,
     /// Counter for generating unique exploration names.
     pub exploration_counter: usize,
-    /// When true, content column shows the audit view.
-    pub audit_active: bool,
 }
 
 impl State {
@@ -67,7 +65,6 @@ impl State {
             interactions: HashMap::new(),
             explorations,
             exploration_counter,
-            audit_active: false,
         }
     }
 }
@@ -83,6 +80,28 @@ impl State {
     pub fn active_interaction_mut(&mut self) -> Option<&mut InteractionState> {
         let name = self.selected_change.as_ref()?;
         Some(self.interactions.entry(name.clone()).or_default())
+    }
+
+    /// Replace the changed-files list and expand every parent directory in
+    /// the tree, so a freshly-loaded changeset surfaces all files without
+    /// the user having to click through collapsed folders.
+    pub fn set_changed_files(&mut self, files: Vec<ChangedFile>) {
+        for f in &files {
+            let parts: Vec<&str> = f
+                .path
+                .components()
+                .filter_map(|c| c.as_os_str().to_str())
+                .collect();
+            if parts.len() < 2 {
+                continue;
+            }
+            let mut current = PathBuf::new();
+            for part in &parts[..parts.len() - 1] {
+                current.push(part);
+                self.expanded_file_dirs.insert(current.display().to_string());
+            }
+        }
+        self.changed_files = files;
     }
 
     /// Whether the currently selected change is an exploration (virtual).
@@ -199,9 +218,8 @@ pub enum Message {
     TabContent(tab_bar::TabContentMsg),
     AddExploration,
     RemoveExploration(String),
-    ShowAudit,
-    RefreshAudit,
-    SelectAuditError { change: String, artifact_id: String },
+    /// Navigate to a change and open one of its artifacts.
+    OpenArtifact { change: String, artifact_id: String },
 }
 
 // ── Update ───────────────────────────────────────────────────────────────────
@@ -215,7 +233,6 @@ pub fn update(
     match message {
         Message::SelectChange(name) => {
             state.selected_change = Some(name.clone());
-            state.audit_active = false;
             state.expanded_nodes.clear();
 
             // Expand tree nodes for real changes.
@@ -299,7 +316,6 @@ pub fn update(
             }
         }
         Message::SelectChangedFile(path) => {
-            state.audit_active = false;
             if let Some(root) = &project.project_root
                 && let Some(diff) = vcs::file_diff(root, &path) {
                     let id = format!("vcs:{}", path.display());
@@ -352,15 +368,7 @@ pub fn update(
             crate::chat_store::delete_scope(&name, project.project_root.as_deref());
             crate::chat_store::save_explorations(&state.explorations, state.exploration_counter, project.project_root.as_deref());
         }
-        Message::ShowAudit => {
-            state.audit_active = true;
-            state.selected_change = None;
-        }
-        Message::RefreshAudit => {
-            // Handled by main.rs — calls project.revalidate().
-        }
-        Message::SelectAuditError { change, artifact_id } => {
-            state.audit_active = false;
+        Message::OpenArtifact { change, artifact_id } => {
             state.selected_change = Some(change.clone());
             state.expanded_nodes.clear();
             if let Some(ch) = project
@@ -472,11 +480,7 @@ pub fn view<'a>(
     }
 
     // Normal mode: content column + optional interaction panel.
-    let content = if state.audit_active {
-        view_audit(project)
-    } else {
-        view_content(state, project)
-    };
+    let content = view_content(state, project);
     let visible = ix.is_some_and(|i| i.visible);
     let width = ix.map_or(theme::INTERACTION_COLUMN_WIDTH, |i| i.width);
 
@@ -513,10 +517,6 @@ pub fn view<'a>(
 // ── Breadcrumbs ──────────────────────────────────────────────────────────────
 
 pub fn breadcrumbs(state: &State, project: &ProjectData) -> Vec<String> {
-    if state.audit_active {
-        return vec!["Changes".into(), "Audit".into()];
-    }
-
     let Some(selected) = state.selected_change.as_deref() else {
         return vec!["Changes".into()];
     };
@@ -679,7 +679,6 @@ mod breadcrumb_tests {
             interactions: HashMap::new(),
             explorations: explorations.iter().map(|s| s.to_string()).collect(),
             exploration_counter: 0,
-            audit_active: false,
         }
     }
 
@@ -768,7 +767,6 @@ mod breadcrumb_tests {
             interactions: HashMap::new(),
             explorations: vec![],
             exploration_counter: 0,
-            audit_active: false,
         };
         let project = make_project(&[], &[]);
         assert_eq!(compute_obvious_command(&state, &project), None);
@@ -968,11 +966,7 @@ fn view_list<'a>(state: &'a State, project: &'a ProjectData) -> Element<'a, Mess
     // Exploration changes (virtual) — listed first.
     for name in &state.explorations {
         let is_selected = state.selected_change.as_deref() == Some(name.as_str());
-        let close_btn: Element<'a, Message> = button(text("\u{00d7}").size(theme::font_md()))
-            .on_press(Message::RemoveExploration(name.clone()))
-            .padding(0.0)
-            .style(theme::icon_button)
-            .into();
+        let close_btn = collapsible::close_button(Message::RemoveExploration(name.clone()));
         rows.push(
             ListRow::new(name.as_str())
                 .icon(ICON_EXPLORE)
@@ -1063,49 +1057,9 @@ fn view_list<'a>(state: &'a State, project: &'a ProjectData) -> Element<'a, Mess
         col
     };
 
-    // Audit header — always visible.
-    let audit_section = {
-        let total_errors: usize = project.validations.values().map(|v| v.total_count()).sum();
-        let title_color = if state.audit_active {
-            theme::accent()
-        } else {
-            theme::text_secondary()
-        };
-        let style = if state.audit_active {
-            theme::list_item_active as fn(&iced::Theme, button::Status) -> button::Style
-        } else {
-            theme::section_header
-        };
-        let mut label = row![
-            text("AUDIT")
-                .size(theme::font_sm())
-                .color(title_color),
-        ]
-        .align_y(iced::Center)
-        .width(Length::Fill);
-        if total_errors > 0 {
-            label = label.push(Space::new().width(Length::Fill));
-            label = label.push(
-                text(total_errors.to_string())
-                    .size(theme::font_sm())
-                    .color(theme::error()),
-            );
-        }
-        button(label)
-            .on_press(Message::ShowAudit)
-            .width(Length::Fill)
-            .style(style)
-            .padding([theme::SPACING_XS, theme::SPACING_SM])
-    };
-
     let change = find_change(state, project);
     let is_exploration = state.is_exploration_selected();
-    let mut list_col = column![
-        audit_section,
-        collapsible::top_divider(),
-        change_section,
-    ]
-    .spacing(0.0);
+    let mut list_col = column![change_section].spacing(0.0);
 
     if let Some(section) = archived_section {
         list_col = list_col.push(section);
@@ -1121,17 +1075,15 @@ fn view_list<'a>(state: &'a State, project: &'a ProjectData) -> Element<'a, Mess
             )
             .padding([theme::SPACING_SM, theme::SPACING_SM]),
         );
-    } else if !state.audit_active {
-        if let Some(change) = change {
-            let error_ids: HashSet<String> = project
-                .validations
-                .get(&change.name)
-                .map(|v| v.file_errors.iter().map(|(p, _)| p.clone()).collect())
-                .unwrap_or_default();
-            list_col = list_col.push(view_overview_section(state, change, &error_ids));
-            list_col = list_col.push(view_caps_section(state, change, &error_ids));
-            list_col = list_col.push(view_steps_section(state, change, &error_ids));
-        }
+    } else if let Some(change) = change {
+        let error_ids: HashSet<String> = project
+            .validations
+            .get(&change.name)
+            .map(|v| v.file_errors.iter().map(|(p, _)| p.clone()).collect())
+            .unwrap_or_default();
+        list_col = list_col.push(view_overview_section(state, change, &error_ids));
+        list_col = list_col.push(view_caps_section(state, change, &error_ids));
+        list_col = list_col.push(view_steps_section(state, change, &error_ids));
     }
 
     // Changed files section (always visible, independent of selected change).
@@ -1441,156 +1393,6 @@ fn view_changed_files_section<'a>(state: &'a State) -> Element<'a, Message> {
         Message::ToggleSection("changed_files".to_string()),
         list_view::view(rows, Some("No changes")),
     )
-}
-
-fn view_audit<'a>(project: &'a ProjectData) -> Element<'a, Message> {
-    let total_errors: usize = project.validations.values().map(|v| v.total_count()).sum();
-
-    // ── Header ─────────────────────────────────────────────────────────
-    let summary = if total_errors == 0 {
-        text("All checks passed")
-            .size(theme::font_md())
-            .color(theme::success())
-    } else {
-        text(format!(
-            "{} error{}",
-            total_errors,
-            if total_errors == 1 { "" } else { "s" }
-        ))
-        .size(theme::font_md())
-        .color(theme::error())
-    };
-
-    let header = container(
-        row![
-            column![
-                text("Audit").size(22.0).color(theme::text_primary()),
-                summary,
-            ]
-            .spacing(theme::SPACING_XS),
-            Space::new().width(Length::Fill),
-            button(
-                text("Refresh")
-                    .size(theme::font_md())
-                    .color(theme::accent()),
-            )
-            .on_press(Message::RefreshAudit)
-            .padding([theme::SPACING_SM, theme::SPACING_LG])
-            .style(theme::dashboard_action),
-        ]
-        .align_y(iced::Center)
-        .width(Length::Fill),
-    )
-    .padding([theme::SPACING_LG, theme::SPACING_XL]);
-
-    let mut content = column![header].spacing(theme::SPACING_MD);
-
-    if total_errors > 0 {
-        let mut changes: Vec<_> = project.validations.iter().collect();
-        changes.sort_by_key(|(name, _)| name.as_str());
-
-        for (change_name, validation) in changes {
-            content = content.push(view_audit_change(change_name, validation));
-        }
-    }
-
-    scrollable(
-        container(content)
-            .padding([0.0, theme::SPACING_XL])
-            .width(Length::Fill),
-    )
-    .direction(theme::thin_scrollbar_direction())
-    .style(theme::thin_scrollbar)
-    .height(Length::Fill)
-    .width(Length::Fill)
-    .into()
-}
-
-/// Render a single change's errors as a card.
-fn view_audit_change<'a>(
-    change_name: &'a str,
-    validation: &'a crate::data::ChangeValidation,
-) -> Element<'a, Message> {
-    let icon = svg(svg::Handle::from_memory(ICON_BRANCH))
-        .width(16.0)
-        .height(16.0)
-        .style(theme::svg_tint(theme::text_muted()));
-    let change_header = row![
-        icon,
-        text(change_name).size(15.0).color(theme::text_primary()),
-        Space::new().width(Length::Fill),
-        text(format!(
-            "{} error{}",
-            validation.total_count(),
-            if validation.total_count() == 1 { "" } else { "s" }
-        ))
-        .size(theme::font_sm())
-        .color(theme::text_muted()),
-    ]
-    .spacing(theme::SPACING_SM)
-    .align_y(iced::Center);
-
-    let mut card = column![change_header].spacing(theme::SPACING_MD);
-
-    // Per-file error groups.
-    for (path, errors) in &validation.file_errors {
-        let artifact_id = path.clone();
-        let change = change_name.to_string();
-        let file_link = button(
-            text(path.as_str())
-                .size(theme::font_md())
-                .color(theme::accent()),
-        )
-        .on_press(Message::SelectAuditError {
-            change,
-            artifact_id,
-        })
-        .padding(0.0)
-        .style(theme::link_button);
-
-        let mut error_list = column![].spacing(theme::SPACING_XS);
-        for err in errors {
-            error_list = error_list.push(
-                text(err.as_str())
-                    .size(theme::font_md())
-                    .color(theme::error()),
-            );
-        }
-
-        let group = column![
-            file_link,
-            container(error_list).padding([0.0, theme::SPACING_LG]),
-        ]
-        .spacing(theme::SPACING_XS);
-
-        card = card.push(group);
-    }
-
-    // Cross-file change-level errors.
-    if !validation.change_errors.is_empty() {
-        let mut structural = column![
-            text("Structural").size(theme::font_md()).color(theme::text_secondary()),
-        ]
-        .spacing(theme::SPACING_XS);
-
-        for err in &validation.change_errors {
-            structural = structural.push(
-                container(
-                    text(err.as_str())
-                        .size(theme::font_md())
-                        .color(theme::error()),
-                )
-                .padding([0.0, theme::SPACING_LG]),
-            );
-        }
-        card = card.push(structural);
-    }
-
-    container(card)
-        .padding(theme::SPACING_LG)
-        .width(Length::Fill)
-        .style(theme::audit_card)
-        .into()
 }
 
 fn icon_for_artifact(label: &str) -> &'static [u8] {

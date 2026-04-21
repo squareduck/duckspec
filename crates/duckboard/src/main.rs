@@ -54,7 +54,7 @@ impl State {
         );
         let mut change = area::change::State::new(project.project_root.as_deref());
         if let Some(root) = &project.project_root {
-            change.changed_files = vcs::changed_files(root);
+            change.set_changed_files(vcs::changed_files(root));
         }
 
         // Expand all tree nodes by default.
@@ -317,11 +317,17 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                     );
                     state.active_area = Area::Change;
                 }
-                area::dashboard::Message::ShowAudit => {
+                area::dashboard::Message::RefreshAudit => {
+                    state.project.revalidate();
+                }
+                area::dashboard::Message::SelectAuditError { change, artifact_id } => {
                     state.active_area = Area::Change;
                     area::change::update(
                         &mut state.change,
-                        area::change::Message::ShowAudit,
+                        area::change::Message::OpenArtifact {
+                            change: change.clone(),
+                            artifact_id: artifact_id.clone(),
+                        },
                         &state.project,
                         &state.highlighter,
                     );
@@ -330,9 +336,6 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
             area::dashboard::update(&mut state.dashboard, msg);
         }
         Message::Change(msg) => {
-            if matches!(msg, area::change::Message::RefreshAudit) {
-                state.project.revalidate();
-            }
             area::change::update(&mut state.change, msg, &state.project, &state.highlighter);
         }
         Message::Caps(msg) => {
@@ -602,7 +605,10 @@ fn dispatch_interaction_msg(state: &mut State, key: &str, msg: interaction::Msg)
     }
 }
 
-/// Re-highlight all open tabs (e.g. after a theme switch).
+/// Re-highlight all open tabs and chat editors (e.g. after a theme switch).
+///
+/// `EditorState::highlight_spans` bake in concrete RGB colors at highlight
+/// time, so a theme switch is invisible until every editor is re-highlighted.
 fn rehighlight_all(state: &mut State) {
     for tabs in [&mut state.change.tabs, &mut state.caps.tabs, &mut state.codex.tabs] {
         let all_tabs = tabs
@@ -617,6 +623,28 @@ fn rehighlight_all(state: &mut State) {
                 }
             }
         }
+    }
+
+    let md_syntax = state.highlighter.find_syntax("md");
+    let rehighlight_session = |ax: &mut interaction::AgentSession,
+                               highlighter: &highlight::SyntaxHighlighter| {
+        ax.chat_input.highlight_spans =
+            Some(highlighter.highlight_lines(&ax.chat_input.lines, md_syntax));
+        for editor in ax.chat_editors.iter_mut() {
+            editor.highlight_spans =
+                Some(highlighter.highlight_lines(&editor.lines, md_syntax));
+        }
+    };
+    for ix in state.change.interactions.values_mut() {
+        for ax in ix.sessions.iter_mut() {
+            rehighlight_session(ax, &state.highlighter);
+        }
+    }
+    for ax in state.caps.interaction.sessions.iter_mut() {
+        rehighlight_session(ax, &state.highlighter);
+    }
+    for ax in state.codex.interaction.sessions.iter_mut() {
+        rehighlight_session(ax, &state.highlighter);
     }
 }
 
@@ -767,7 +795,7 @@ pub fn rehighlight(
 /// Refresh the VCS changed files list.
 fn refresh_changed_files(state: &mut State) {
     if let Some(root) = &state.project.project_root {
-        state.change.changed_files = vcs::changed_files(root);
+        state.change.set_changed_files(vcs::changed_files(root));
     }
 }
 
