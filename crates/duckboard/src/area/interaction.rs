@@ -293,10 +293,13 @@ pub fn rebuild_chat_editor(ax: &mut AgentSession, highlighter: &SyntaxHighlighte
     let old_len = ax.chat_collapsed.len();
     ax.chat_collapsed.resize(new_blocks.len(), false);
     for (i, block) in new_blocks.iter().enumerate().skip(old_len) {
+        // Collapse tool blocks on first appearance regardless of current
+        // content — during streaming they show up empty and get filled in
+        // later, and we don't want them flashing expanded then snapping shut.
         ax.chat_collapsed[i] = matches!(
             block.kind,
             crate::widget::text_edit::BlockKind::ToolUse | crate::widget::text_edit::BlockKind::ToolResult
-        ) && !block.lines.is_empty();
+        );
     }
 
     let mut new_editors = Vec::with_capacity(new_blocks.len());

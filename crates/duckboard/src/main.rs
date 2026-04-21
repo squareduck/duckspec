@@ -1038,15 +1038,22 @@ fn theme_fn(_state: &State) -> iced::Theme {
 }
 
 fn handle_key_event(event: Event, status: event::Status, _window: iced::window::Id) -> Option<Message> {
-    // Skip events already consumed by a focused widget (e.g. Enter typed into
-    // the content editor). Otherwise the chat column would also react to them.
-    if matches!(status, event::Status::Captured) {
-        return None;
-    }
     if let Event::Keyboard(keyboard::Event::KeyPressed {
         key, modifiers, text, ..
     }) = event
     {
+        // Skip events already consumed by a focused widget (e.g. Enter typed
+        // into the content editor). Otherwise the chat column would also
+        // react to them. Escape is exempt: iced's `text_input` captures it to
+        // clear focus, so without the exemption the file finder would need
+        // two Escape presses to close.
+        let is_escape = matches!(
+            &key,
+            keyboard::Key::Named(keyboard::key::Named::Escape)
+        );
+        if !is_escape && matches!(status, event::Status::Captured) {
+            return None;
+        }
         Some(Message::KeyPress(key, modifiers, text.map(|s| s.to_string())))
     } else {
         None
