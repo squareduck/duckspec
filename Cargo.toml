@@ -26,3 +26,9 @@ time = "0.3"
 toml = "0.8"
 ignore = "0.4"
 tempfile = "3"
+
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.release]
+strip = "debuginfo"

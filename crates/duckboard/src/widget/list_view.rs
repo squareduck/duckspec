@@ -15,6 +15,8 @@ use iced::widget::{button, column, container, row, svg, text, Space};
 use iced::{Element, Length};
 
 use crate::theme;
+use crate::widget::horizontal_pan;
+use crate::widget::pan_row::PanRow;
 
 const ICON_SIZE: f32 = 14.0;
 
@@ -35,6 +37,7 @@ pub struct ListRow<'a, Msg> {
     selected: bool,
     on_press: Option<Msg>,
     spacing: f32,
+    fill_width: bool,
 }
 
 impl<'a, Msg: Clone + 'a> ListRow<'a, Msg> {
@@ -49,7 +52,17 @@ impl<'a, Msg: Clone + 'a> ListRow<'a, Msg> {
             selected: false,
             on_press: None,
             spacing: theme::SPACING_XS,
+            fill_width: true,
         }
+    }
+
+    /// When `false`, the row's button uses `Length::Shrink` so the column
+    /// has a discoverable natural max-row width. Required by sectioned
+    /// lists wrapped in `horizontal_pan` — Fill-width buttons collapse
+    /// during the pan widget's measure pass.
+    pub fn fill_width(mut self, fill: bool) -> Self {
+        self.fill_width = fill;
+        self
     }
 
     /// Override horizontal spacing between leading / icon / label / trailing.
@@ -134,14 +147,27 @@ impl<'a, Msg: Clone + 'a> ListRow<'a, Msg> {
             theme::list_item
         };
 
-        let mut btn = button(content)
-            .width(Length::Fill)
-            .padding([theme::SPACING_XS, theme::SPACING_SM])
-            .style(style);
-        if let Some(msg) = self.on_press {
-            btn = btn.on_press(msg);
+        if self.fill_width {
+            let mut btn = button(content)
+                .width(Length::Fill)
+                .padding([theme::SPACING_XS, theme::SPACING_SM])
+                .style(style);
+            if let Some(msg) = self.on_press {
+                btn = btn.on_press(msg);
+            }
+            btn.into()
+        } else {
+            // Shrink-width path: a button at natural width can't paint a
+            // viewport-spanning highlight. PanRow reads the visible viewport
+            // and paints/hits across it instead.
+            let mut row = PanRow::new(content)
+                .padding([theme::SPACING_XS, theme::SPACING_SM])
+                .style(style);
+            if let Some(msg) = self.on_press {
+                row = row.on_press(msg);
+            }
+            row.into()
         }
-        btn.into()
     }
 }
 
@@ -170,9 +196,9 @@ pub fn view<'a, Msg: Clone + 'a>(
 
     let mut col = column![].spacing(0.0);
     for r in rows {
-        col = col.push(r.into_element());
+        col = col.push(r.fill_width(false).into_element());
     }
-    col.into()
+    horizontal_pan::view(col)
 }
 
 fn icon_svg<'a, Msg: 'a>(bytes: &'static [u8]) -> Element<'a, Msg> {

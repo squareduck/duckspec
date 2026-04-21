@@ -1,12 +1,11 @@
 //! Codex area — browse codex entries.
 
-use iced::widget::{column, scrollable};
+use iced::widget::column;
 use iced::{Element, Length};
 
 use crate::data::ProjectData;
-use crate::theme;
 use crate::widget::list_view::ListRow;
-use crate::widget::{collapsible, list_view, tab_bar};
+use crate::widget::{collapsible, list_view, tab_bar, vertical_scroll};
 
 use super::interaction::{self, InteractionState, SessionControls};
 
@@ -116,11 +115,7 @@ fn view_list<'a>(state: &'a State, project: &'a ProjectData) -> Element<'a, Mess
         list_view::view(rows, Some("No codex entries")),
     );
 
-    scrollable(column![section].spacing(0.0))
-        .direction(theme::thin_scrollbar_direction())
-        .style(theme::thin_scrollbar)
-        .height(Length::Fill)
-        .into()
+    vertical_scroll::view(column![section].spacing(0.0))
 }
 
 fn view_content<'a>(state: &'a State) -> Element<'a, Message> {

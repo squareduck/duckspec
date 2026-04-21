@@ -2,12 +2,12 @@
 
 use std::collections::HashSet;
 
-use iced::widget::{column, scrollable, text};
+use iced::widget::{column, text};
 use iced::{Element, Length};
 
 use crate::data::ProjectData;
 use crate::theme;
-use crate::widget::{collapsible, tab_bar, tree_view};
+use crate::widget::{collapsible, tab_bar, tree_view, vertical_scroll};
 
 use super::interaction::{self, InteractionState, SessionControls};
 
@@ -129,11 +129,7 @@ fn view_list<'a>(state: &'a State, project: &'a ProjectData) -> Element<'a, Mess
         tree,
     );
 
-    scrollable(column![section].spacing(0.0))
-        .direction(theme::thin_scrollbar_direction())
-        .style(theme::thin_scrollbar)
-        .height(Length::Fill)
-        .into()
+    vertical_scroll::view(column![section].spacing(0.0))
 }
 
 fn view_content<'a>(state: &'a State) -> Element<'a, Message> {

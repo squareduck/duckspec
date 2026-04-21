@@ -3,14 +3,14 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
-use iced::widget::{button, column, container, row, scrollable, text, Space};
+use iced::widget::{button, column, container, row, text, Space};
 use iced::{Element, Length};
 
 use crate::data::{ChangeData, ProjectData, StepCompletion};
 use crate::theme;
 use crate::vcs::{self, ChangedFile, FileStatus};
 use crate::widget::list_view::{self, Badge, ListRow};
-use crate::widget::{collapsible, interaction_toggle, tab_bar, tree_view};
+use crate::widget::{collapsible, interaction_toggle, tab_bar, tree_view, vertical_scroll};
 
 use super::interaction::{self, AgentSession, InteractionMode, InteractionState, SessionControls};
 
@@ -1089,11 +1089,7 @@ fn view_list<'a>(state: &'a State, project: &'a ProjectData) -> Element<'a, Mess
     // Changed files section (always visible, independent of selected change).
     list_col = list_col.push(view_changed_files_section(state));
 
-    scrollable(list_col)
-        .direction(theme::thin_scrollbar_direction())
-        .style(theme::thin_scrollbar)
-        .height(Length::Fill)
-        .into()
+    vertical_scroll::view(list_col)
 }
 
 fn view_overview_section<'a>(
