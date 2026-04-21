@@ -456,8 +456,12 @@ pub fn view<'a>(
     let is_exploration = state.is_exploration_selected();
     let ix = state.active_interaction();
 
-    // Exploration mode: no content column or toggle, interaction fills remaining width.
+    // Exploration mode: no content column until a file is opened. Once tabs
+    // exist, fall back to the normal list | content | toggle | interaction
+    // layout so the opened file is actually visible.
     if is_exploration {
+        let has_tabs = state.tabs.preview.is_some() || !state.tabs.file_tabs.is_empty();
+
         let mut main_row = row![
             container(list)
                 .width(theme::LIST_COLUMN_WIDTH)
@@ -466,8 +470,36 @@ pub fn view<'a>(
             divider,
         ];
 
-        if let Some(ix) = ix {
-            let interaction_col = interaction::view_column(ix, Message::Interaction, SessionControls::Single);
+        if has_tabs {
+            let content = view_content(state, project);
+            main_row = main_row.push(
+                container(content)
+                    .width(Length::Fill)
+                    .height(Length::Fill),
+            );
+
+            let visible = ix.is_some_and(|i| i.visible);
+            let width = ix.map_or(theme::INTERACTION_COLUMN_WIDTH, |i| i.width);
+            let toggle = interaction_toggle::view(visible, width, |m| {
+                Message::Interaction(interaction::Msg::Handle(m))
+            });
+            main_row = main_row.push(toggle);
+
+            if let Some(ix) = ix
+                && ix.visible
+            {
+                let interaction_col =
+                    interaction::view_column(ix, Message::Interaction, SessionControls::Single);
+                main_row = main_row.push(
+                    container(interaction_col)
+                        .width(ix.width)
+                        .height(Length::Fill)
+                        .style(theme::surface),
+                );
+            }
+        } else if let Some(ix) = ix {
+            let interaction_col =
+                interaction::view_column(ix, Message::Interaction, SessionControls::Single);
             main_row = main_row.push(
                 container(interaction_col)
                     .width(Length::Fill)
