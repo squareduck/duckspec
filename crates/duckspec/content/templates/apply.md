@@ -52,8 +52,9 @@ Work through the current step's `## Tasks` list in order:
    - Design doesn't match reality → suggest updating the design. Don't silently
      deviate.
    - Test fails unexpectedly → diagnose and report before proceeding.
-   - You discover missing work → note it in `## Outcomes` and flag it to the
-     user, but don't add tasks to the current step without confirmation.
+   - You discover missing work → add a `## Outcomes` section noting it and
+     flag it to the user, but don't add tasks to the current step without
+     confirmation.
 
 ## Write gate
 
@@ -72,7 +73,11 @@ When all tasks in the current step are checked:
   step is NN+1: `<name>`. Run `/ds-apply` in a new session to continue."
 - If all steps are complete: "All steps are done. Ready to archive with
   `/ds-archive`?"
-- Populate `## Outcomes` in the step file with a brief summary of what was
-  implemented and any noteworthy decisions made during implementation.
+- **Only add `## Outcomes` if there's something new and valuable for the next
+  session or the user to know** — an unexpected discovery, a deviation from
+  the design, a follow-up that didn't fit, or a non-obvious decision a later
+  step will depend on. If the step went as planned and the checked-off tasks
+  already tell the story, leave the section off entirely. Don't write
+  "implemented what the tasks said" summaries.
 
 ## Hook - Post

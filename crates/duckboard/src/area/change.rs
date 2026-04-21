@@ -1200,15 +1200,23 @@ fn view_steps_section<'a>(
         .steps
         .iter()
         .map(|step| {
-            let icon_bytes: &'static [u8] = match step.completion {
-                StepCompletion::Done => ICON_STEP_DONE,
-                StepCompletion::Partial(0, _) | StepCompletion::NoTasks => ICON_STEP,
-                StepCompletion::Partial(_, _) => ICON_STEP_PARTIAL,
-            };
+            let (icon_bytes, icon_tint): (&'static [u8], Option<iced::Color>) =
+                match step.completion {
+                    StepCompletion::Done => (ICON_STEP_DONE, Some(theme::success())),
+                    StepCompletion::Partial(0, _) | StepCompletion::NoTasks => {
+                        (ICON_STEP, None)
+                    }
+                    StepCompletion::Partial(_, _) => {
+                        (ICON_STEP_PARTIAL, Some(theme::warning()))
+                    }
+                };
             let mut r = ListRow::new(step.label.as_str())
                 .icon(icon_bytes)
                 .selected(active_id == Some(step.id.as_str()))
                 .on_press(Message::SelectItem(step.id.clone()));
+            if let Some(tint) = icon_tint {
+                r = r.icon_tint(tint);
+            }
             if error_ids.contains(&step.id) {
                 r = r.badge(Badge::ErrorDot);
             }

@@ -1815,9 +1815,10 @@ Structure:
   - [ ] 1.2 <Subtask>
 - [ ] 2. <Another task>
 
-## Outcomes               (optional)
+## Outcomes               (optional, only when noteworthy)
 
-<freeform prose, populated during or after implementation>
+<freeform prose, only added when there's something new and valuable for
+ the next session — see rules below>
 ```
 
 Rules:
@@ -1826,6 +1827,13 @@ Rules:
   equal the slug in the filename.
 - A summary paragraph follows the H1.
 - `## Prerequisites`, `## Context`, and `## Outcomes` are optional.
+- `## Outcomes` is omitted by default. The applying agent only adds it
+  when the implementation produced something the next session or the user
+  needs to know that isn't already obvious from the code, design, or
+  checked-off tasks: an unexpected discovery, a deviation from the design,
+  a follow-up that didn't fit, or a non-obvious decision a later step
+  depends on. A "we did what the tasks said" summary is noise — leave the
+  section off in that case.
 - `## Tasks` is required and must contain at least one task.
 - Tasks are unordered list items with checkboxes and numeric
   prefixes (`1.`, `2.`, `3.`, ...).

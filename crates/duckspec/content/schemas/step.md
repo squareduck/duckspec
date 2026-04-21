@@ -30,7 +30,7 @@ single agent session. Steps are ordered, and each is processed in its own
 
 ## Outcomes
 
-<populated during or after implementation>
+<only added when there's something new and valuable for the next session — see Rules>
 ```
 
 ## Rules
@@ -40,6 +40,13 @@ single agent session. Steps are ordered, and each is processed in its own
 - `<slug>` is the H1 title slugified to kebab-case.
 - `## Tasks` is required with at least one task.
 - `## Prerequisites`, `## Context`, `## Outcomes` are optional.
+- **`## Outcomes` is omitted by default.** Only add it when the
+  implementation produced something the next session or the user needs to
+  know that isn't already obvious from the code, the design, or the
+  checked-off tasks: an unexpected discovery, a deviation from the design,
+  a follow-up that didn't fit, a non-obvious decision the next step
+  depends on. If the step went as planned, leave Outcomes off — a "we did
+  what the tasks said" summary is noise.
 - Tasks use checkboxes with numeric prefixes (`1.`, `2.`, ...).
 - Subtasks nest one level deep. Deeper nesting is invalid.
 - A step is complete when all checkboxes are checked.

@@ -12,7 +12,7 @@ use std::borrow::Cow;
 
 use iced::widget::text::Wrapping;
 use iced::widget::{button, column, container, row, svg, text, Space};
-use iced::{Element, Length};
+use iced::{Color, Element, Length};
 
 use crate::theme;
 use crate::widget::horizontal_pan;
@@ -30,6 +30,7 @@ pub enum Badge {
 pub struct ListRow<'a, Msg> {
     label: Cow<'a, str>,
     icon: Option<&'static [u8]>,
+    icon_tint: Option<Color>,
     leading: Option<Element<'a, Msg>>,
     trailing: Option<Element<'a, Msg>>,
     badge: Option<Badge>,
@@ -45,6 +46,7 @@ impl<'a, Msg: Clone + 'a> ListRow<'a, Msg> {
         Self {
             label: label.into(),
             icon: None,
+            icon_tint: None,
             leading: None,
             trailing: None,
             badge: None,
@@ -73,6 +75,12 @@ impl<'a, Msg: Clone + 'a> ListRow<'a, Msg> {
 
     pub fn icon(mut self, bytes: &'static [u8]) -> Self {
         self.icon = Some(bytes);
+        self
+    }
+
+    /// Override the default `text_muted` tint applied to the icon SVG.
+    pub fn icon_tint(mut self, tint: Color) -> Self {
+        self.icon_tint = Some(tint);
         self
     }
 
@@ -115,7 +123,7 @@ impl<'a, Msg: Clone + 'a> ListRow<'a, Msg> {
             inner = inner.push(leading);
         }
         if let Some(bytes) = self.icon {
-            inner = inner.push(icon_svg(bytes));
+            inner = inner.push(icon_svg(bytes, self.icon_tint));
         }
 
         inner = inner.push(
@@ -201,11 +209,11 @@ pub fn view<'a, Msg: Clone + 'a>(
     horizontal_pan::view(col)
 }
 
-fn icon_svg<'a, Msg: 'a>(bytes: &'static [u8]) -> Element<'a, Msg> {
+fn icon_svg<'a, Msg: 'a>(bytes: &'static [u8], tint: Option<Color>) -> Element<'a, Msg> {
     svg(svg::Handle::from_memory(bytes))
         .width(ICON_SIZE)
         .height(ICON_SIZE)
-        .style(theme::svg_tint(theme::text_muted()))
+        .style(theme::svg_tint(tint.unwrap_or_else(theme::text_muted)))
         .into()
 }
 
