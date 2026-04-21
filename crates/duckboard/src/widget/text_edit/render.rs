@@ -25,6 +25,14 @@ use super::state::{
 fn font_size() -> f32 { theme::content_size() }
 const GUTTER_PAD: f32 = 8.0;
 const CONTENT_PAD: f32 = 8.0;
+/// Width of the overlaid scrollbars drawn by this widget when content
+/// overflows. Matches `theme::thin_scrollbar_direction`'s 4px rail so the
+/// file viewer's scroll chrome reads identically to the list column.
+const SCROLLBAR_WIDTH: f32 = 4.0;
+const SCROLLBAR_RADIUS: f32 = 2.0;
+/// Minimum scroller length so the indicator stays grab-able on very tall or
+/// very wide content.
+const SCROLLBAR_MIN_SCROLLER: f32 = 20.0;
 
 // ── Widget internal state (in iced tree) ───────────────────────────────────
 
@@ -865,6 +873,74 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for TextEdit<'a, M> {
                             Point::new(bounds.x + GUTTER_PAD, y),
                             num_color,
                             clip,
+                        );
+                    }
+                }
+            }
+
+            // Scrollbars — thin overlaid indicators matching the list-column
+            // rail. Skipped in `fit_content` mode because such editors never
+            // overflow internally; their parent scrollable handles scrolling.
+            if !self.fit_content {
+                let scroller_color = theme::text_muted();
+
+                if content_height > bounds.height && bounds.height > 0.0 {
+                    let track_h = bounds.height;
+                    let ratio = (track_h / content_height).clamp(0.0, 1.0);
+                    let scroller_h = (track_h * ratio).max(SCROLLBAR_MIN_SCROLLER).min(track_h);
+                    let max_scroll_y = content_height - track_h;
+                    let t = if max_scroll_y > 0.0 {
+                        (scroll_y / max_scroll_y).clamp(0.0, 1.0)
+                    } else {
+                        0.0
+                    };
+                    let scroller_y = bounds.y + (track_h - scroller_h) * t;
+                    renderer::Renderer::fill_quad(
+                        renderer,
+                        renderer::Quad {
+                            bounds: Rectangle {
+                                x: bounds.x + bounds.width - SCROLLBAR_WIDTH,
+                                y: scroller_y,
+                                width: SCROLLBAR_WIDTH,
+                                height: scroller_h,
+                            },
+                            border: Border { radius: SCROLLBAR_RADIUS.into(), ..Border::default() },
+                            ..renderer::Quad::default()
+                        },
+                        scroller_color,
+                    );
+                }
+
+                if !self.word_wrap && content_w > 0.0 {
+                    let max_chars = self.state.lines.iter()
+                        .map(|l| l.chars().count())
+                        .max()
+                        .unwrap_or(0);
+                    let total_content_w = max_chars as f32 * cell_w + CONTENT_PAD * 2.0;
+                    if total_content_w > content_w {
+                        let track_w = content_w;
+                        let ratio = (track_w / total_content_w).clamp(0.0, 1.0);
+                        let scroller_w = (track_w * ratio).max(SCROLLBAR_MIN_SCROLLER).min(track_w);
+                        let max_scroll_x = total_content_w - track_w;
+                        let t = if max_scroll_x > 0.0 {
+                            (scroll_x / max_scroll_x).clamp(0.0, 1.0)
+                        } else {
+                            0.0
+                        };
+                        let scroller_x = content_x + (track_w - scroller_w) * t;
+                        renderer::Renderer::fill_quad(
+                            renderer,
+                            renderer::Quad {
+                                bounds: Rectangle {
+                                    x: scroller_x,
+                                    y: bounds.y + bounds.height - SCROLLBAR_WIDTH,
+                                    width: scroller_w,
+                                    height: SCROLLBAR_WIDTH,
+                                },
+                                border: Border { radius: SCROLLBAR_RADIUS.into(), ..Border::default() },
+                                ..renderer::Quad::default()
+                            },
+                            scroller_color,
                         );
                     }
                 }

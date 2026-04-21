@@ -417,13 +417,19 @@ pub fn thin_scrollbar(_theme: &iced::Theme, _status: scrollable::Status) -> scro
     }
 }
 
-/// Scrollbar direction: thin vertical-only with reserved gutter space.
+/// Scrollbar direction: thin vertical-only, overlaid on content.
+///
+/// Leaving `spacing` at its default (`None`) tells iced to draw the scrollbar
+/// over content instead of reserving a 4px gutter. This matters for panels
+/// with stacked section headers: a reserved gutter shows the container's
+/// surface color and stops the header's own background from reaching the
+/// right edge, creating a visible mismatched strip wherever the scroller
+/// isn't sitting.
 pub fn thin_scrollbar_direction() -> scrollable::Direction {
     scrollable::Direction::Vertical(
         scrollable::Scrollbar::new()
             .width(4)
-            .scroller_width(4)
-            .spacing(0),
+            .scroller_width(4),
     )
 }
 
