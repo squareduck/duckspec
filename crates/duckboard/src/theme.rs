@@ -7,7 +7,7 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use iced::widget::{button, container, overlay::menu, pick_list, scrollable, svg};
+use iced::widget::{button, container, scrollable, svg};
 use iced::{Background, Border, Color, Theme};
 
 // ── Dark / light mode state ────────────────────────────────────────────────
@@ -128,6 +128,22 @@ pub fn bg_list_hover() -> Color {
         r: (a.r + b.r) * 0.5,
         g: (a.g + b.g) * 0.5,
         b: (a.b + b.b) * 0.5,
+        a: 1.0,
+    }
+}
+
+/// Background for collapsible section headers — a 70% mix toward
+/// `bg_elevated`. The full elevated tone reads as too dark in the light
+/// theme, but a flat halfway value collides with `bg_list_hover`, so the
+/// header sits *above* the hover tint while still feeling softer than a
+/// fully elevated surface.
+pub fn bg_section_header() -> Color {
+    let a = bg_surface();
+    let b = bg_elevated();
+    Color {
+        r: a.r * 0.3 + b.r * 0.7,
+        g: a.g * 0.3 + b.g * 0.7,
+        b: a.b * 0.3 + b.b * 0.7,
         a: 1.0,
     }
 }
@@ -636,8 +652,8 @@ pub fn tab_inactive(_theme: &Theme, status: button::Status) -> button::Style {
 
 pub fn section_header(_theme: &Theme, status: button::Status) -> button::Style {
     let bg = match status {
-        button::Status::Hovered => Some(bg_hover().into()),
-        _ => Some(bg_elevated().into()),
+        button::Status::Hovered => Some(bg_elevated().into()),
+        _ => Some(bg_section_header().into()),
     };
     button::Style {
         background: bg,
@@ -705,41 +721,6 @@ pub fn session_bar_button(_theme: &Theme, status: button::Status) -> button::Sty
             radius: BORDER_RADIUS.into(),
         },
         ..Default::default()
-    }
-}
-
-// ── Pick list / menu styles ────────────────────────────────────────────────
-
-pub fn session_picker(_theme: &Theme, status: pick_list::Status) -> pick_list::Style {
-    let bg = match status {
-        pick_list::Status::Hovered | pick_list::Status::Opened { .. } => bg_hover(),
-        _ => bg_surface(),
-    };
-    pick_list::Style {
-        text_color: text_primary(),
-        placeholder_color: text_muted(),
-        handle_color: text_muted(),
-        background: bg.into(),
-        border: Border {
-            color: border_color(),
-            width: 1.0,
-            radius: BORDER_RADIUS.into(),
-        },
-    }
-}
-
-pub fn session_picker_menu(_theme: &Theme) -> menu::Style {
-    menu::Style {
-        background: bg_surface().into(),
-        border: Border {
-            color: border_color(),
-            width: 1.0,
-            radius: BORDER_RADIUS.into(),
-        },
-        text_color: text_primary(),
-        selected_text_color: text_primary(),
-        selected_background: bg_hover().into(),
-        shadow: iced::Shadow::default(),
     }
 }
 

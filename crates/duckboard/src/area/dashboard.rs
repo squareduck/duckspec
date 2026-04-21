@@ -150,10 +150,14 @@ pub fn view<'a>(
     }
 
     // ── New Exploration button ───────────────────────────────────────────────
+    let plus_icon = svg(svg::Handle::from_memory(crate::widget::collapsible::ICON_PLUS))
+        .width(theme::font_md())
+        .height(theme::font_md())
+        .style(theme::svg_tint(theme::accent()));
     content = content.push(
         button(
             row![
-                text("+").size(theme::font_md()).color(theme::accent()),
+                plus_icon,
                 text("New Exploration")
                     .size(theme::font_md())
                     .color(theme::accent()),

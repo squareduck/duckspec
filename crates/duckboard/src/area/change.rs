@@ -1046,22 +1046,18 @@ fn view_list<'a>(state: &'a State, project: &'a ProjectData) -> Element<'a, Mess
         )
         .on_press(Message::ToggleSection("picker".to_string()))
         .width(Length::Fill)
-        .height(32.0)
         .style(theme::section_header)
-        .padding([theme::SPACING_SM, theme::SPACING_SM]);
+        .padding([theme::SPACING_XS, theme::SPACING_SM]);
 
         let mut col = column![
             row![
                 container(header).width(Length::Fill),
-                button(text("+").size(theme::font_sm()).color(theme::text_secondary()))
-                    .on_press(Message::AddExploration)
-                    .height(32.0)
-                    .padding([theme::SPACING_SM, theme::SPACING_SM])
-                    .style(theme::section_header),
+                collapsible::add_button(Message::AddExploration),
             ]
         ].spacing(0.0);
 
         if expanded {
+            col = col.push(collapsible::top_divider());
             col = col.push(selector);
         }
         col
@@ -1085,6 +1081,7 @@ fn view_list<'a>(state: &'a State, project: &'a ProjectData) -> Element<'a, Mess
                 .size(theme::font_sm())
                 .color(title_color),
         ]
+        .align_y(iced::Center)
         .width(Length::Fill);
         if total_errors > 0 {
             label = label.push(Space::new().width(Length::Fill));
@@ -1097,9 +1094,8 @@ fn view_list<'a>(state: &'a State, project: &'a ProjectData) -> Element<'a, Mess
         button(label)
             .on_press(Message::ShowAudit)
             .width(Length::Fill)
-            .height(32.0)
             .style(style)
-            .padding([theme::SPACING_SM, theme::SPACING_SM])
+            .padding([theme::SPACING_XS, theme::SPACING_SM])
     };
 
     let change = find_change(state, project);

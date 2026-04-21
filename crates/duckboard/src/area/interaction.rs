@@ -8,7 +8,10 @@ use crate::agent::{AgentHandle, SlashCommand};
 use crate::chat_store::ChatSession;
 use crate::highlight::SyntaxHighlighter;
 use crate::theme;
-use crate::widget::{agent_chat, interaction_toggle, text_edit::{self, Block, EditorState}};
+use crate::widget::{
+    agent_chat, collapsible, interaction_toggle, list_view,
+    text_edit::{self, Block, EditorState},
+};
 
 /// Monotonic counter used to mint a stable `InteractionState::instance_id`.
 /// The ID keys long-lived subscriptions (PTY, agent) so they survive when the
@@ -98,6 +101,8 @@ pub struct InteractionState {
     // Agent sessions (sorted newest-first).
     pub sessions: Vec<AgentSession>,
     pub active_session: usize,
+    /// Whether the multi-session "CHATS" section is expanded.
+    pub chat_section_expanded: bool,
 }
 
 impl Default for InteractionState {
@@ -111,6 +116,7 @@ impl Default for InteractionState {
             terminal_focused: false,
             sessions: Vec::new(),
             active_session: 0,
+            chat_section_expanded: false,
         }
     }
 }
@@ -147,6 +153,8 @@ pub enum Msg {
     SelectSession(String),
     /// Reset the active session (single-session UIs). Handled by area.
     ClearSession,
+    /// Collapse / expand the multi-session list.
+    ToggleChatSection,
 }
 
 // ── Update helpers ──────────────────────────────────────────────────────────
@@ -178,6 +186,9 @@ pub fn update(state: &mut InteractionState, msg: Msg, highlighter: &SyntaxHighli
         }
         Msg::NewSession | Msg::SelectSession(_) | Msg::ClearSession => {
             // Area-handled.
+        }
+        Msg::ToggleChatSection => {
+            state.chat_section_expanded = !state.chat_section_expanded;
         }
     }
     just_opened
@@ -666,96 +677,145 @@ fn view_session_bar<'a, M: 'a + Clone>(
     controls: SessionControls,
     wrap: impl Fn(Msg) -> M + 'a + Clone,
 ) -> Element<'a, M> {
-    use iced::widget::{button, column, container, pick_list, row, text, Space};
+    use iced::widget::{button, column, container, row, text, Space};
     use iced::Length;
-
-    let content_row: iced::widget::Row<'a, M> = match controls {
-        SessionControls::Single => {
-            let w = wrap.clone();
-            let clear_btn = button(
-                text("Clear").size(theme::font_sm()),
-            )
-            .on_press(w(Msg::ClearSession))
-            .padding([2.0, theme::SPACING_SM])
-            .style(theme::session_bar_button);
-
-            row![Space::new().width(Length::Fill), clear_btn]
-                .spacing(theme::SPACING_XS)
-                .align_y(iced::Center)
-        }
-        SessionControls::Multi => {
-            let options: Vec<SessionChoice> = state
-                .sessions
-                .iter()
-                .map(|s| SessionChoice {
-                    id: s.session.id.clone(),
-                    label: s.session.display_name.clone(),
-                })
-                .collect();
-            let selected = state.active().map(|ax| SessionChoice {
-                id: ax.session.id.clone(),
-                label: ax.session.display_name.clone(),
-            });
-
-            let w_sel = wrap.clone();
-            let picker = pick_list(options, selected, move |choice: SessionChoice| {
-                w_sel(Msg::SelectSession(choice.id))
-            })
-            .placeholder("Session")
-            .width(Length::Fill)
-            .text_size(theme::font_sm())
-            .padding([2.0, theme::SPACING_SM])
-            .style(theme::session_picker)
-            .menu_style(theme::session_picker_menu);
-
-            let w_new = wrap.clone();
-            let new_btn = button(
-                text("+").size(theme::font_sm()),
-            )
-            .on_press(w_new(Msg::NewSession))
-            .padding([2.0, theme::SPACING_SM])
-            .style(theme::session_bar_button);
-
-            row![picker, new_btn]
-                .spacing(theme::SPACING_XS)
-                .align_y(iced::Center)
-        }
-    };
 
     let bar_border = container(Space::new().width(Length::Fill).height(1.0))
         .width(Length::Fill)
         .style(theme::divider);
 
-    column![
-        container(content_row)
-            .padding([theme::SPACING_XS, theme::SPACING_SM])
+    match controls {
+        SessionControls::Single => {
+            let w = wrap.clone();
+            let clear_btn = button(text("Clear").size(theme::font_sm()))
+                .on_press(w(Msg::ClearSession))
+                .padding([2.0, theme::SPACING_SM])
+                .style(theme::session_bar_button);
+
+            let row = row![Space::new().width(Length::Fill), clear_btn]
+                .spacing(theme::SPACING_XS)
+                .align_y(iced::Center);
+
+            column![
+                container(row)
+                    .padding([theme::SPACING_XS, theme::SPACING_SM])
+                    .width(Length::Fill)
+                    .style(theme::surface),
+                bar_border,
+            ]
+            .into()
+        }
+        SessionControls::Multi => {
+            let expanded = state.chat_section_expanded;
+
+            let active_name = state.active().map(|ax| ax.session.display_name.as_str());
+            // Header layout: chevron + spacing + label inside a button with
+            // SM horizontal padding on each side, then a sibling `+` button
+            // (its own SM padding around the icon). 4px safety margin so the
+            // last glyph doesn't kiss the plus button's edge.
+            let chevron_w = theme::font_sm();
+            let plus_w = theme::font_sm() + theme::SPACING_SM * 2.0;
+            let overhead =
+                theme::SPACING_SM * 2.0 + chevron_w + theme::SPACING_XS + plus_w + 4.0;
+            let available = (state.width - overhead).max(0.0);
+            let label_text = match active_name {
+                Some(name) => truncate_to_width(name, available, theme::font_sm()),
+                None => "CHATS".to_string(),
+            };
+
+            let w_toggle = wrap.clone();
+            let header_btn = button(
+                row![
+                    collapsible::chevron(expanded),
+                    text(label_text)
+                        .size(theme::font_sm())
+                        .color(theme::text_secondary())
+                        .wrapping(iced::widget::text::Wrapping::None),
+                ]
+                .spacing(theme::SPACING_XS)
+                .align_y(iced::Center)
+                .width(Length::Fill),
+            )
+            .on_press(w_toggle(Msg::ToggleChatSection))
             .width(Length::Fill)
-            .style(theme::surface),
-        bar_border,
-    ]
-    .into()
-}
+            .style(theme::section_header)
+            .padding([theme::SPACING_XS, theme::SPACING_SM]);
 
-/// Choice type for the session pick_list (needs Display + Eq + Clone).
-#[derive(Debug, Clone)]
-struct SessionChoice {
-    id: String,
-    label: String,
-}
+            let w_new = wrap.clone();
+            let plus_btn = collapsible::add_button(w_new(Msg::NewSession));
 
-impl std::fmt::Display for SessionChoice {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.label)
+            let header_row = row![
+                container(header_btn).width(Length::Fill),
+                plus_btn,
+            ];
+
+            let mut section = column![header_row].spacing(0.0);
+
+            if expanded {
+                section = section.push(collapsible::top_divider());
+                let active_id = state.active().map(|a| a.session.id.as_str());
+                let mut rows: Vec<list_view::ListRow<'a, M>> = Vec::new();
+                for s in &state.sessions {
+                    let is_selected = active_id == Some(s.session.id.as_str());
+                    let w_sel = wrap.clone();
+                    rows.push(
+                        list_view::ListRow::new(s.session.display_name.as_str())
+                            .selected(is_selected)
+                            .on_press(w_sel(Msg::SelectSession(s.session.id.clone()))),
+                    );
+                }
+                section = section.push(list_view::view(rows, None));
+            }
+
+            column![section, bar_border].spacing(0.0).into()
+        }
     }
 }
 
-impl PartialEq for SessionChoice {
-    fn eq(&self, other: &Self) -> bool {
-        self.id == other.id
-    }
+/// Measure the rendered width of `text` at `size` using iced's default UI font
+/// (matches what `text(...)` renders without a `.font()` override).
+fn measure_text(text: &str, size: f32) -> f32 {
+    use iced::advanced::graphics::text::Paragraph;
+    use iced::advanced::text::Paragraph as _;
+    let t = iced::advanced::text::Text {
+        content: text,
+        bounds: iced::Size::INFINITE,
+        size: iced::Pixels(size),
+        line_height: iced::widget::text::LineHeight::default(),
+        font: iced::Font::DEFAULT,
+        align_x: iced::advanced::text::Alignment::Left,
+        align_y: iced::alignment::Vertical::Top,
+        shaping: iced::widget::text::Shaping::Basic,
+        wrapping: iced::widget::text::Wrapping::None,
+    };
+    Paragraph::with_text(t).min_bounds().width
 }
 
-impl Eq for SessionChoice {}
+/// Truncate `name` (with a trailing `…`) so that the rendered width fits in
+/// `available_px`. Returns the original `name` if it already fits, or just
+/// `…` if no characters fit.
+fn truncate_to_width(name: &str, available_px: f32, font_size: f32) -> String {
+    const ELLIPSIS: &str = "\u{2026}";
+    if available_px <= 0.0 {
+        return ELLIPSIS.to_string();
+    }
+    if measure_text(name, font_size) <= available_px {
+        return name.to_string();
+    }
+    let chars: Vec<char> = name.chars().collect();
+    // Binary search for the longest prefix whose `prefix + …` still fits.
+    let (mut lo, mut hi) = (0usize, chars.len());
+    while lo < hi {
+        let mid = lo + (hi - lo + 1) / 2;
+        let candidate: String = chars[..mid].iter().collect::<String>() + ELLIPSIS;
+        if measure_text(&candidate, font_size) <= available_px {
+            lo = mid;
+        } else {
+            hi = mid - 1;
+        }
+    }
+    chars[..lo].iter().collect::<String>() + ELLIPSIS
+}
 
 fn view_mode_tabs<'a, M: 'a + Clone>(
     active: InteractionMode,

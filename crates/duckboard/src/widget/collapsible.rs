@@ -7,6 +7,7 @@ use crate::theme;
 
 const ICON_CHEVRON_RIGHT: &[u8] = include_bytes!("../../assets/icon_chevron_right.svg");
 const ICON_CHEVRON_DOWN: &[u8] = include_bytes!("../../assets/icon_chevron_down.svg");
+pub const ICON_PLUS: &[u8] = include_bytes!("../../assets/icon_plus.svg");
 
 pub fn view<'a, M: Clone + 'a>(
     title: &'a str,
@@ -27,13 +28,13 @@ pub fn view<'a, M: Clone + 'a>(
     )
     .on_press(on_toggle)
     .width(Length::Fill)
-    .height(32.0)
     .style(theme::section_header)
-    .padding([theme::SPACING_SM, theme::SPACING_SM]);
+    .padding([theme::SPACING_XS, theme::SPACING_SM]);
 
     let mut col = column![top_divider(), header].spacing(0.0);
 
     if expanded {
+        col = col.push(top_divider());
         col = col.push(content);
     }
 
@@ -57,5 +58,25 @@ pub fn chevron<'a, M: 'a>(expanded: bool) -> Element<'a, M> {
         .width(size)
         .height(size)
         .style(theme::svg_tint(theme::text_muted()))
+        .into()
+}
+
+/// `+` button styled to sit flush at the right edge of a section header.
+/// Explicit height is set to match the natural height of the sibling header
+/// button (chevron + text widget at `font_sm` line-height plus the same
+/// `[XS, SM]` padding). Without this, the icon-only button would be shorter
+/// than its sibling and a `Length::Fill` would over-expand inside the
+/// surrounding column.
+pub fn add_button<'a, M: Clone + 'a>(on_press: M) -> Element<'a, M> {
+    let icon = svg(svg::Handle::from_memory(ICON_PLUS))
+        .width(theme::font_sm())
+        .height(theme::font_sm())
+        .style(theme::svg_tint(theme::text_secondary()));
+    let natural_height = theme::font_sm() * 1.3 + 2.0 * theme::SPACING_XS;
+    button(icon)
+        .on_press(on_press)
+        .height(natural_height)
+        .padding([theme::SPACING_XS, theme::SPACING_SM])
+        .style(theme::section_header)
         .into()
 }
