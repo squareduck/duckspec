@@ -1,4 +1,5 @@
 pub mod artifact;
+pub mod audit;
 pub mod backlink;
 pub mod check;
 pub mod config;

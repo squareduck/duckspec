@@ -16,8 +16,11 @@ pub struct ProjectData {
     pub codex_entries: Vec<TreeNode>,
     pub cap_count: usize,
     pub codex_count: usize,
-    /// Validation results per change name, populated on reload.
+    /// Per-change validation results, populated on audit.
     pub validations: HashMap<String, ChangeValidation>,
+    /// Project-level audit findings (artifact errors outside changes,
+    /// backlink/coverage issues), populated on audit.
+    pub project_audit: ProjectAudit,
 }
 
 /// Validation results for a single change.
@@ -38,6 +41,47 @@ impl ChangeValidation {
     pub fn is_empty(&self) -> bool {
         self.file_errors.is_empty() && self.change_errors.is_empty()
     }
+}
+
+/// Audit findings that are not scoped to a single change.
+#[derive(Debug, Clone, Default)]
+pub struct ProjectAudit {
+    /// Per-file parse errors outside `changes/` (under `caps/`, `codex/`, etc.).
+    pub artifact_errors: Vec<(String, Vec<String>)>,
+    /// `@spec` backlinks in source files that do not resolve.
+    pub unresolved_backlinks: Vec<BacklinkIssue>,
+    /// `test:code` scenarios that have no source backlink.
+    pub missing_backlink_scenarios: Vec<String>,
+    /// Per-change `test:code` scenarios not covered by a step task.
+    pub missing_step_coverage: Vec<(String, Vec<String>)>,
+    /// Step `@spec` refs that do not resolve.
+    pub unresolved_step_refs: Vec<(String, String)>,
+}
+
+impl ProjectAudit {
+    pub fn total_count(&self) -> usize {
+        let artifact: usize = self.artifact_errors.iter().map(|(_, e)| e.len()).sum();
+        let coverage: usize = self.missing_step_coverage.iter().map(|(_, s)| s.len()).sum();
+        artifact
+            + self.unresolved_backlinks.len()
+            + self.missing_backlink_scenarios.len()
+            + coverage
+            + self.unresolved_step_refs.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.total_count() == 0
+    }
+}
+
+/// An unresolved `@spec` backlink found in source code.
+#[derive(Debug, Clone)]
+pub struct BacklinkIssue {
+    /// Path relative to the project root when possible, absolute otherwise.
+    pub source_path: String,
+    pub line: usize,
+    /// `cap_path Requirement: Scenario` form.
+    pub scenario_display: String,
 }
 
 #[derive(Debug, Clone)]
@@ -107,10 +151,11 @@ impl ProjectData {
         let codex_count = codex_entries.len();
         let active_changes = build_changes(&root.join("changes"), "changes");
         let archived_changes = build_changes(&root.join("archive"), "archive");
-        let validations = run_validations(root, &active_changes);
+        let project_root = find_repo_root();
+        let (validations, project_audit) = run_audit(root, project_root.as_deref());
 
         Self {
-            project_root: find_repo_root(),
+            project_root,
             duckspec_root: Some(root.to_path_buf()),
             active_changes,
             archived_changes,
@@ -119,24 +164,30 @@ impl ProjectData {
             cap_count,
             codex_count,
             validations,
+            project_audit,
         }
     }
 
     pub fn reload(&mut self) {
         let old_validations = std::mem::take(&mut self.validations);
+        let old_project_audit = std::mem::take(&mut self.project_audit);
         if let Some(root) = self.duckspec_root.clone() {
             *self = Self::load_from(&root);
         } else {
             *self = Self::load();
         }
-        // Preserve existing validations — only refresh on explicit user action.
+        // Preserve existing audit results — only refresh on explicit user action.
         self.validations = old_validations;
+        self.project_audit = old_project_audit;
     }
 
-    /// Re-run validation for all active changes.
+    /// Re-run the full project audit.
     pub fn revalidate(&mut self) {
-        if let Some(root) = &self.duckspec_root {
-            self.validations = run_validations(root, &self.active_changes);
+        if let Some(root) = &self.duckspec_root.clone() {
+            let project_root = self.project_root.clone();
+            let (validations, project_audit) = run_audit(root, project_root.as_deref());
+            self.validations = validations;
+            self.project_audit = project_audit;
         }
     }
 
@@ -400,113 +451,103 @@ fn is_dir(entry: &fs::DirEntry) -> bool {
     entry.file_type().map(|t| t.is_dir()).unwrap_or(false)
 }
 
-// ── Validation ──────────────────────────────────────────────────────────────
+// ── Audit ────────────────────────────────────────────────────────────────────
 
-/// Run `check_change` for all active changes and collect results.
-fn run_validations(
+/// Run the full project audit and split results into per-change validations
+/// and project-level audit findings. When `project_root` is unavailable, the
+/// backlink scan is skipped (it falls back to the duckspec root's parent,
+/// which is still usable for most layouts).
+fn run_audit(
     duckspec_root: &Path,
-    active_changes: &[ChangeData],
-) -> HashMap<String, ChangeValidation> {
-    let state = build_duckspec_state(duckspec_root);
-    let mut results = HashMap::new();
+    project_root: Option<&Path>,
+) -> (HashMap<String, ChangeValidation>, ProjectAudit) {
+    let project_root = project_root
+        .map(Path::to_path_buf)
+        .or_else(|| duckspec_root.parent().map(Path::to_path_buf))
+        .unwrap_or_else(|| duckspec_root.to_path_buf());
 
-    for change in active_changes {
-        let files = load_change_files(duckspec_root, &change.name);
-        let check = duckpond::check::check_change(&change.name, &files, &state);
+    let config = duckpond::config::Config::load(duckspec_root).unwrap_or_default();
 
-        let validation = ChangeValidation {
-            file_errors: check
+    let report = match duckpond::audit::run_audit(
+        duckspec_root,
+        &project_root,
+        &config,
+        duckpond::audit::AuditScope::Full,
+    ) {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::warn!("audit failed: {e}");
+            return (HashMap::new(), ProjectAudit::default());
+        }
+    };
+
+    let mut validations: HashMap<String, ChangeValidation> = HashMap::new();
+    for group in report.change_errors {
+        let v = ChangeValidation {
+            file_errors: group
                 .file_errors
                 .into_iter()
-                .map(|(path, errs)| {
+                .map(|(path, _source, errs)| {
                     (
                         path.display().to_string(),
                         errs.iter().map(|e| e.to_string()).collect(),
                     )
                 })
                 .collect(),
-            change_errors: check
-                .change_errors
-                .iter()
-                .map(|e| e.to_string())
-                .collect(),
+            change_errors: group.change_errors.iter().map(|e| e.to_string()).collect(),
         };
-
-        if !validation.is_empty() {
-            results.insert(change.name.clone(), validation);
+        if !v.is_empty() {
+            validations.insert(group.change_name, v);
         }
     }
 
-    results
-}
-
-/// Build `DuckspecState` by scanning `caps/` for existing spec.md and doc.md files.
-fn build_duckspec_state(duckspec_root: &Path) -> duckpond::check::DuckspecState {
-    let caps_dir = duckspec_root.join("caps");
-    let mut cap_spec_paths = std::collections::HashSet::new();
-    let mut cap_doc_paths = std::collections::HashSet::new();
-
-    if caps_dir.is_dir() {
-        scan_caps_for_state(&caps_dir, &caps_dir, &mut cap_spec_paths, &mut cap_doc_paths);
-    }
-
-    duckpond::check::DuckspecState {
-        cap_spec_paths,
-        cap_doc_paths,
-    }
-}
-
-/// Recursively scan `caps/` for spec.md and doc.md, collecting capability paths.
-fn scan_caps_for_state(
-    dir: &Path,
-    caps_root: &Path,
-    spec_paths: &mut std::collections::HashSet<PathBuf>,
-    doc_paths: &mut std::collections::HashSet<PathBuf>,
-) {
-    let Ok(entries) = fs::read_dir(dir) else { return };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            scan_caps_for_state(&path, caps_root, spec_paths, doc_paths);
-        } else if let Some(filename) = path.file_name().and_then(|f| f.to_str()) {
-            if let Some(cap_path) = path.parent().and_then(|p| p.strip_prefix(caps_root).ok()) {
-                match filename {
-                    "spec.md" => { spec_paths.insert(cap_path.to_path_buf()); }
-                    "doc.md" => { doc_paths.insert(cap_path.to_path_buf()); }
-                    _ => {}
-                }
+    let project_audit = ProjectAudit {
+        artifact_errors: report
+            .artifact_errors
+            .into_iter()
+            .map(|g| {
+                (
+                    g.relative_path.display().to_string(),
+                    g.errors.iter().map(|e| e.to_string()).collect(),
+                )
+            })
+            .collect(),
+        unresolved_backlinks: report
+            .unresolved_backlinks
+            .into_iter()
+            .map(|bl| BacklinkIssue {
+                source_path: bl
+                    .source_file
+                    .strip_prefix(&project_root)
+                    .unwrap_or(&bl.source_file)
+                    .display()
+                    .to_string(),
+                line: bl.line,
+                scenario_display: bl.key.display(),
+            })
+            .collect(),
+        missing_backlink_scenarios: report
+            .missing_backlink_scenarios
+            .iter()
+            .map(|k| k.display())
+            .collect(),
+        missing_step_coverage: {
+            let mut out: HashMap<String, Vec<String>> = HashMap::new();
+            for m in report.missing_step_coverage {
+                out.entry(m.change_name)
+                    .or_default()
+                    .extend(m.missing.iter().map(|k| k.display()));
             }
-        }
-    }
-}
+            let mut v: Vec<_> = out.into_iter().collect();
+            v.sort_by(|a, b| a.0.cmp(&b.0));
+            v
+        },
+        unresolved_step_refs: report
+            .unresolved_step_refs
+            .into_iter()
+            .map(|r| (r.change_name, r.key.display()))
+            .collect(),
+    };
 
-/// Load all classifiable markdown files in a change directory as `LoadedFile`s.
-fn load_change_files(duckspec_root: &Path, change_name: &str) -> Vec<duckpond::check::LoadedFile> {
-    let change_dir = duckspec_root.join("changes").join(change_name);
-    let mut files = Vec::new();
-    collect_md_files_recursive(&change_dir, duckspec_root, &mut files);
-    files
-}
-
-fn collect_md_files_recursive(
-    dir: &Path,
-    duckspec_root: &Path,
-    out: &mut Vec<duckpond::check::LoadedFile>,
-) {
-    let Ok(entries) = fs::read_dir(dir) else { return };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            collect_md_files_recursive(&path, duckspec_root, out);
-        } else if path.extension().and_then(|e| e.to_str()) == Some("md") {
-            let Ok(relative) = path.strip_prefix(duckspec_root) else { continue };
-            let Some(kind) = duckpond::layout::classify(relative) else { continue };
-            let Ok(content) = fs::read_to_string(&path) else { continue };
-            out.push(duckpond::check::LoadedFile {
-                relative_path: relative.to_path_buf(),
-                kind,
-                content,
-            });
-        }
-    }
+    (validations, project_audit)
 }

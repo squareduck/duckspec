@@ -4,7 +4,7 @@ use iced::widget::{button, column, container, row, scrollable, svg, text, Space}
 use iced::widget::text::Wrapping;
 use iced::{Center, Element, Length};
 
-use crate::data::{ChangeValidation, ProjectData};
+use crate::data::{ChangeValidation, ProjectAudit, ProjectData};
 use crate::theme;
 
 // ── State ────────────────────────────────────────────────────────────────────
@@ -197,7 +197,10 @@ fn view_items_panel<'a>(
 // ── Audit panel (right) ────────────────────────────────────────────────────
 
 fn view_audit_panel<'a>(project: &'a ProjectData) -> Element<'a, Message> {
-    let total_errors: usize = project.validations.values().map(|v| v.total_count()).sum();
+    let change_error_total: usize =
+        project.validations.values().map(|v| v.total_count()).sum();
+    let project_audit_total = project.project_audit.total_count();
+    let total_errors = change_error_total + project_audit_total;
     let change_count_with_errors = project
         .validations
         .values()
@@ -205,16 +208,20 @@ fn view_audit_panel<'a>(project: &'a ProjectData) -> Element<'a, Message> {
         .count();
 
     // ── Header ─────────────────────────────────────────────────────────
-    let summary: Element<'a, Message> = if project.active_changes.is_empty() {
-        text("No active changes to audit")
-            .size(theme::font_sm())
-            .color(theme::text_muted())
-            .into()
-    } else if total_errors == 0 {
+    let summary: Element<'a, Message> = if total_errors == 0 {
         text("All checks passed")
             .size(theme::font_sm())
             .color(theme::success())
             .into()
+    } else if change_count_with_errors == 0 {
+        text(format!(
+            "{} project-level error{}",
+            total_errors,
+            if total_errors == 1 { "" } else { "s" },
+        ))
+        .size(theme::font_sm())
+        .color(theme::error())
+        .into()
     } else {
         text(format!(
             "{} error{} across {} change{}",
@@ -228,19 +235,15 @@ fn view_audit_panel<'a>(project: &'a ProjectData) -> Element<'a, Message> {
         .into()
     };
 
-    let refresh_btn: Element<'a, Message> = if project.active_changes.is_empty() {
-        Space::new().into()
-    } else {
-        button(
-            text("Refresh")
-                .size(theme::font_sm())
-                .color(theme::accent()),
-        )
-        .on_press(Message::RefreshAudit)
-        .padding([theme::SPACING_XS, theme::SPACING_MD])
-        .style(theme::dashboard_action)
-        .into()
-    };
+    let refresh_btn: Element<'a, Message> = button(
+        text("Refresh")
+            .size(theme::font_sm())
+            .color(theme::accent()),
+    )
+    .on_press(Message::RefreshAudit)
+    .padding([theme::SPACING_XS, theme::SPACING_MD])
+    .style(theme::dashboard_action)
+    .into();
 
     let header = row![
         column![
@@ -263,24 +266,181 @@ fn view_audit_panel<'a>(project: &'a ProjectData) -> Element<'a, Message> {
     // ── Error cards ────────────────────────────────────────────────────
     let mut content = column![header_section].spacing(theme::SPACING_MD);
 
-    if total_errors > 0 {
-        let mut changes: Vec<_> = project
-            .validations
-            .iter()
-            .filter(|(_, v)| v.total_count() > 0)
-            .collect();
-        changes.sort_by_key(|(name, _)| name.as_str());
-
-        for (change_name, validation) in changes {
-            content = content.push(view_audit_card(change_name, validation));
-        }
+    // Project-level audit card (artifact errors, backlinks, coverage, etc.)
+    if !project.project_audit.is_empty() {
+        content = content.push(view_project_audit_card(&project.project_audit));
     }
 
-    scrollable(content.width(Length::Fill))
+    // Per-change cards.
+    let mut changes: Vec<_> = project
+        .validations
+        .iter()
+        .filter(|(_, v)| v.total_count() > 0)
+        .collect();
+    changes.sort_by_key(|(name, _)| name.as_str());
+
+    for (change_name, validation) in changes {
+        content = content.push(view_audit_card(change_name, validation));
+    }
+
+    // Right padding keeps card borders clear of the overlaid scrollbar,
+    // matching the left gap between the divider and the card.
+    let padded = container(content.width(Length::Fill))
+        .padding(iced::Padding {
+            top: 0.0,
+            right: theme::SPACING_XL,
+            bottom: 0.0,
+            left: 0.0,
+        })
+        .width(Length::Fill);
+
+    scrollable(padded)
         .direction(theme::thin_scrollbar_direction())
         .style(theme::thin_scrollbar)
         .height(Length::Fill)
         .width(Length::Fill)
+        .into()
+}
+
+/// Render the project-level audit card with one section per finding kind.
+fn view_project_audit_card<'a>(audit: &'a ProjectAudit) -> Element<'a, Message> {
+    let icon = svg(svg::Handle::from_memory(ICON_BRANCH))
+        .width(ICON_SIZE)
+        .height(ICON_SIZE)
+        .style(theme::svg_tint(theme::text_muted()));
+    let total = audit.total_count();
+    let header = row![
+        icon,
+        text("Project")
+            .size(theme::font_md())
+            .color(theme::text_primary())
+            .wrapping(Wrapping::None),
+        Space::new().width(Length::Fill),
+        text(format!("{} error{}", total, if total == 1 { "" } else { "s" }))
+            .size(theme::font_sm())
+            .color(theme::text_muted()),
+    ]
+    .spacing(theme::SPACING_SM)
+    .align_y(Center);
+
+    let mut card = column![header].spacing(theme::SPACING_SM);
+
+    // Section: artifact errors (per-file, grouped by path).
+    if !audit.artifact_errors.is_empty() {
+        card = card.push(section_header("Artifacts"));
+        for (path, errs) in &audit.artifact_errors {
+            let mut body = column![
+                text(path.as_str())
+                    .size(theme::font_sm())
+                    .color(theme::text_secondary()),
+            ]
+            .spacing(2.0);
+            for err in errs {
+                body = body.push(
+                    container(
+                        text(err.as_str())
+                            .size(theme::font_sm())
+                            .color(theme::error()),
+                    )
+                    .padding([0.0, theme::SPACING_MD]),
+                );
+            }
+            card = card.push(body);
+        }
+    }
+
+    // Section: unresolved backlinks.
+    if !audit.unresolved_backlinks.is_empty() {
+        card = card.push(section_header("Unresolved backlinks"));
+        for bl in &audit.unresolved_backlinks {
+            card = card.push(
+                container(
+                    column![
+                        text(format!("{}:{}", bl.source_path, bl.line))
+                            .size(theme::font_sm())
+                            .color(theme::text_secondary()),
+                        text(bl.scenario_display.as_str())
+                            .size(theme::font_sm())
+                            .color(theme::error()),
+                    ]
+                    .spacing(2.0),
+                )
+                .padding([0.0, theme::SPACING_MD]),
+            );
+        }
+    }
+
+    // Section: test:code scenarios with no source backlink.
+    if !audit.missing_backlink_scenarios.is_empty() {
+        card = card.push(section_header("Scenarios missing backlinks"));
+        for key in &audit.missing_backlink_scenarios {
+            card = card.push(
+                container(
+                    text(key.as_str())
+                        .size(theme::font_sm())
+                        .color(theme::error()),
+                )
+                .padding([0.0, theme::SPACING_MD]),
+            );
+        }
+    }
+
+    // Section: test:code scenarios not covered by step tasks, grouped per change.
+    if !audit.missing_step_coverage.is_empty() {
+        card = card.push(section_header("Missing step coverage"));
+        for (change_name, keys) in &audit.missing_step_coverage {
+            let mut body = column![
+                text(change_name.as_str())
+                    .size(theme::font_sm())
+                    .color(theme::text_secondary()),
+            ]
+            .spacing(2.0);
+            for key in keys {
+                body = body.push(
+                    container(
+                        text(key.as_str())
+                            .size(theme::font_sm())
+                            .color(theme::error()),
+                    )
+                    .padding([0.0, theme::SPACING_MD]),
+                );
+            }
+            card = card.push(body);
+        }
+    }
+
+    // Section: unresolved step @spec refs.
+    if !audit.unresolved_step_refs.is_empty() {
+        card = card.push(section_header("Unresolved step refs"));
+        for (change_name, key) in &audit.unresolved_step_refs {
+            card = card.push(
+                container(
+                    column![
+                        text(change_name.as_str())
+                            .size(theme::font_sm())
+                            .color(theme::text_secondary()),
+                        text(key.as_str())
+                            .size(theme::font_sm())
+                            .color(theme::error()),
+                    ]
+                    .spacing(2.0),
+                )
+                .padding([0.0, theme::SPACING_MD]),
+            );
+        }
+    }
+
+    container(card)
+        .padding(theme::SPACING_MD)
+        .width(Length::Fill)
+        .style(theme::audit_card)
+        .into()
+}
+
+fn section_header<'a>(title: &'a str) -> Element<'a, Message> {
+    text(title)
+        .size(theme::font_sm())
+        .color(theme::text_secondary())
         .into()
 }
 
