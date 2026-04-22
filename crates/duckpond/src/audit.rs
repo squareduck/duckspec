@@ -24,7 +24,7 @@ use std::path::{Path, PathBuf};
 
 use ignore::WalkBuilder;
 
-use crate::artifact::spec::{Spec, TestMarkerKind};
+use crate::artifact::spec::{Requirement, Scenario, Spec, TestMarkerKind};
 use crate::artifact::step::TaskContent;
 use crate::backlink::{self, SourceBacklink};
 use crate::check::{self, CheckContext, DuckspecState, LoadedFile};
@@ -707,14 +707,7 @@ fn add_spec_to_index(
 ) {
     for req in &spec.requirements {
         for scn in &req.scenarios {
-            let is_test_code = scn
-                .test_marker
-                .as_ref()
-                .is_some_and(|m| matches!(m.kind, TestMarkerKind::Code { .. }))
-                || req
-                    .test_marker
-                    .as_ref()
-                    .is_some_and(|m| matches!(m.kind, TestMarkerKind::Code { .. }));
+            let is_test_code = scenario_is_test_code(req, scn);
 
             let key = ScenarioKey {
                 cap_path: cap_path.to_string(),
@@ -723,6 +716,19 @@ fn add_spec_to_index(
             };
             index.insert(key, is_test_code);
         }
+    }
+}
+
+/// Resolve whether a scenario is `test: code`. A scenario's own marker fully
+/// overrides the requirement default; only when the scenario has no marker
+/// does it inherit.
+fn scenario_is_test_code(req: &Requirement, scn: &Scenario) -> bool {
+    match &scn.test_marker {
+        Some(marker) => matches!(marker.kind, TestMarkerKind::Code { .. }),
+        None => req
+            .test_marker
+            .as_ref()
+            .is_some_and(|m| matches!(m.kind, TestMarkerKind::Code { .. })),
     }
 }
 
@@ -764,16 +770,7 @@ fn build_change_scenarios(
                 if let Ok(spec) = parse::spec::parse_spec(&elements) {
                     for req in &spec.requirements {
                         for scn in &req.scenarios {
-                            let is_test_code = scn
-                                .test_marker
-                                .as_ref()
-                                .is_some_and(|m| matches!(m.kind, TestMarkerKind::Code { .. }))
-                                || req
-                                    .test_marker
-                                    .as_ref()
-                                    .is_some_and(|m| {
-                                        matches!(m.kind, TestMarkerKind::Code { .. })
-                                    });
+                            let is_test_code = scenario_is_test_code(req, scn);
                             scenarios.push(ChangeScenario {
                                 key: ScenarioKey {
                                     cap_path: cap_path.clone(),
@@ -996,4 +993,75 @@ fn walk_md(dir: &Path, out: &mut Vec<PathBuf>) -> Result<(), AuditError> {
 
 fn read_dir(dir: &Path) -> Result<std::fs::ReadDir, AuditError> {
     std::fs::read_dir(dir).map_err(|e| AuditError::io(dir, e))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn find<'a>(spec: &'a Spec, req_name: &str, scn_name: &str) -> (&'a Requirement, &'a Scenario) {
+        let req = spec
+            .requirements
+            .iter()
+            .find(|r| r.name == req_name)
+            .expect("requirement");
+        let scn = req
+            .scenarios
+            .iter()
+            .find(|s| s.name == scn_name)
+            .expect("scenario");
+        (req, scn)
+    }
+
+    #[test]
+    fn scenario_level_skip_overrides_inherited_test_code() {
+        let source = "\
+# X
+
+Summary.
+
+## Requirement: R
+
+> test: code
+
+### Scenario: Inherits code
+
+- **WHEN** something
+- **THEN** something else
+
+### Scenario: Overrides with skip
+
+- **WHEN** something
+- **THEN** something else
+
+> skip: documented only; redundant with redirect integration test
+
+### Scenario: Overrides with manual
+
+- **WHEN** something
+- **THEN** something else
+
+> manual: QA checklist item
+";
+        let elements = parse::parse_elements(source);
+        let spec = parse::spec::parse_spec(&elements).expect("parse");
+
+        let (req, inherits) = find(&spec, "R", "Inherits code");
+        assert!(
+            scenario_is_test_code(req, inherits),
+            "scenario with no marker inherits test:code from requirement"
+        );
+
+        let (req, skipped) = find(&spec, "R", "Overrides with skip");
+        assert!(
+            !scenario_is_test_code(req, skipped),
+            "scenario-level skip must override requirement test:code"
+        );
+
+        let (req, manual) = find(&spec, "R", "Overrides with manual");
+        assert!(
+            !scenario_is_test_code(req, manual),
+            "scenario-level manual must override requirement test:code"
+        );
+    }
 }

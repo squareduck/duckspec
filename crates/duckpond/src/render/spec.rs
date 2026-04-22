@@ -60,17 +60,17 @@ fn render_scenario(out: &mut String, scenario: &Scenario) {
 
         for (i, clause) in scenario.givens.iter().enumerate() {
             let kw = if i == 0 { "GIVEN" } else { "AND" };
-            out.push_str(&format!("\n- **{kw}** {}", clause.text));
+            out.push_str(&format!("\n- **{kw}** {}", indent_continuations(&clause.text)));
         }
 
         for (i, clause) in scenario.whens.iter().enumerate() {
             let kw = if i == 0 { "WHEN" } else { "AND" };
-            out.push_str(&format!("\n- **{kw}** {}", clause.text));
+            out.push_str(&format!("\n- **{kw}** {}", indent_continuations(&clause.text)));
         }
 
         for (i, clause) in scenario.thens.iter().enumerate() {
             let kw = if i == 0 { "THEN" } else { "AND" };
-            out.push_str(&format!("\n- **{kw}** {}", clause.text));
+            out.push_str(&format!("\n- **{kw}** {}", indent_continuations(&clause.text)));
         }
     }
 
@@ -79,6 +79,24 @@ fn render_scenario(out: &mut String, scenario: &Scenario) {
         out.push_str("\n\n");
         render_test_marker(out, marker);
     }
+}
+
+/// Re-indent continuation lines inside a GWT clause so the list item stays
+/// valid after roundtrip. The parser dedents continuations to align with the
+/// list item's content column; here we restore the 2-space prefix that a
+/// `- ` bullet requires.
+fn indent_continuations(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for (i, line) in text.split('\n').enumerate() {
+        if i > 0 {
+            out.push('\n');
+            if !line.is_empty() {
+                out.push_str("  ");
+            }
+        }
+        out.push_str(line);
+    }
+    out
 }
 
 fn render_test_marker(out: &mut String, marker: &TestMarker) {
