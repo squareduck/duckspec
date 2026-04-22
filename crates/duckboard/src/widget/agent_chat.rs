@@ -29,6 +29,10 @@ pub enum Msg {
     ChatAction(usize, text_edit::EditorAction),
     /// Toggle collapse state of a block.
     ToggleCollapse(usize),
+    /// Action from the queued-message read-only editor.
+    QueueAction(text_edit::EditorAction),
+    /// Discard the queued message (from the pill's ✕ button).
+    DiscardQueue,
 }
 
 // ── Status bar info ────────────────────────────────────────────────────────
@@ -271,6 +275,7 @@ pub fn view<'a>(
     editors: &'a [EditorState],
     collapsed: &'a [bool],
     input_value: &'a EditorState,
+    queue_editor: Option<&'a EditorState>,
     commands: &'a [SlashCommand],
     completion: &CompletionState,
     status: StatusInfo,
@@ -411,10 +416,52 @@ pub fn view<'a>(
     .padding([0.0, theme::SPACING_SM])
     .width(Length::Fill);
 
+    // Queue pill — renders above the input when a message is staged while the
+    // agent is still streaming. Uses a read-only TextEdit so it matches the
+    // shape of regular chat messages.
+    let queue_el: Element<'a, Msg> = match queue_editor {
+        Some(ed) => {
+            let editor = text_edit::TextEdit::new(ed, Msg::QueueAction)
+                .show_gutter(false)
+                .word_wrap(true)
+                .read_only(true)
+                .fit_content(true)
+                .transparent_bg(true);
+            let close_btn = button(
+                text("×")
+                    .size(theme::content_size())
+                    .color(theme::text_muted()),
+            )
+            .on_press(Msg::DiscardQueue)
+            .padding([0.0, theme::SPACING_XS])
+            .style(|_theme, _status| iced::widget::button::Style {
+                background: None,
+                ..Default::default()
+            });
+            let label = text("Queued (enter to interrupt and send, backspace to cancel)")
+                .size(theme::font_sm())
+                .color(theme::text_muted());
+            let header_row = row![
+                container(label).width(Length::Fill),
+                container(close_btn).align_y(iced::Alignment::Start),
+            ]
+            .spacing(theme::SPACING_XS)
+            .align_y(iced::Alignment::Center);
+            let pill_col = column![header_row, container(editor).width(Length::Fill)]
+                .spacing(theme::SPACING_XS);
+            container(pill_col)
+                .padding([theme::SPACING_SM, theme::SPACING_MD])
+                .width(Length::Fill)
+                .style(theme::chat_queued_card)
+                .into()
+        }
+        None => Space::new().into(),
+    };
+
     // Horizontal padding here sums with TextEdit's internal CONTENT_PAD (8px)
     // to land the input's text at the same 12px the chat headers and the
     // completion rows use.
-    let input_row = container(column![input, meta_row].spacing(theme::SPACING_XS))
+    let input_row = container(column![queue_el, input, meta_row].spacing(theme::SPACING_XS))
         .padding([theme::SPACING_SM, theme::SPACING_XS])
         .width(Length::Fill)
         .style(theme::chat_input);

@@ -596,6 +596,18 @@ pub fn chat_user_card(_theme: &Theme) -> container::Style {
     }
 }
 
+pub fn chat_queued_card(_theme: &Theme) -> container::Style {
+    container::Style {
+        background: Some(bg_surface().into()),
+        border: Border {
+            color: border_color(),
+            width: 1.0,
+            radius: BORDER_RADIUS.into(),
+        },
+        ..Default::default()
+    }
+}
+
 pub fn audit_card(_theme: &Theme) -> container::Style {
     container::Style {
         background: Some(bg_surface().into()),

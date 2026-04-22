@@ -538,6 +538,18 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                 interaction::rebuild_chat_editor(ax, highlighter);
                 if !is_streaming {
                     ax.esc_count = 0;
+                    // Auto-flush a queued message once the current turn is
+                    // done (natural completion or user-triggered interrupt).
+                    // Only flush if the agent is still attached — on
+                    // ProcessExited the handle is gone and we'd lose the text.
+                    if ax.agent_handle.is_some()
+                        && let Some(q) = ax.queue_editor.take()
+                    {
+                        let text = q.text();
+                        if !text.trim().is_empty() {
+                            interaction::send_prompt_text(ax, text, highlighter);
+                        }
+                    }
                 }
             }
         }

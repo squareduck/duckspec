@@ -55,6 +55,10 @@ pub struct AgentSession {
     /// Suggested /ds-* command for the current stage (without the leading slash).
     /// Used as the "press Enter on empty input" shortcut and for placeholder text.
     pub obvious_command: Option<String>,
+    /// Pending message staged while the agent is streaming. Sent automatically
+    /// when the current turn ends (either naturally or via user-triggered
+    /// interrupt). `None` means the queue is empty.
+    pub queue_editor: Option<EditorState>,
 }
 
 impl AgentSession {
@@ -80,6 +84,7 @@ impl AgentSession {
             agent_output_tokens: 0,
             agent_context_window: 200_000,
             obvious_command: None,
+            queue_editor: None,
         }
     }
 }
@@ -228,6 +233,15 @@ fn handle_agent_chat(
                     _ => {}
                 }
             }
+            // Backspace on an empty input discards a queued message instead of
+            // bouncing off the start of the editor.
+            if matches!(action, text_edit::EditorAction::Backspace)
+                && ax.queue_editor.is_some()
+                && ax.chat_input.text().is_empty()
+            {
+                ax.queue_editor = None;
+                return;
+            }
             let mutated = ax.chat_input.apply_action(action);
             if mutated {
                 rehighlight_input(&mut ax.chat_input, highlighter);
@@ -263,39 +277,43 @@ fn handle_agent_chat(
             }
         }
         agent_chat::Msg::SendPressed => {
-            if let Some(handle) = &ax.agent_handle {
-                let typed = ax.chat_input.text();
-                let typed = typed.trim().to_string();
-                let text = if typed.is_empty() {
+            let typed = ax.chat_input.text().trim().to_string();
+
+            if ax.session.is_streaming {
+                if !typed.is_empty() {
+                    // Streaming + text in input → stage/append to queue,
+                    // clear input. Never interrupts.
+                    let combined = match ax.queue_editor.as_ref() {
+                        Some(q) => format!("{}\n\n{}", q.text(), typed),
+                        None => typed,
+                    };
+                    ax.queue_editor = Some(make_queue_editor(&combined, highlighter));
+                    ax.chat_input = EditorState::new("");
+                    rehighlight_input(&mut ax.chat_input, highlighter);
+                    ax.chat_completion.visible = false;
+                } else if ax.queue_editor.is_some() {
+                    // Streaming + empty input + queue present → interrupt.
+                    // The queue will auto-flush when TurnComplete arrives.
+                    if let Some(handle) = &ax.agent_handle {
+                        handle.cancel();
+                    }
+                }
+                // Streaming + empty input + no queue → no-op.
+            } else {
+                let typed_opt = if typed.is_empty() {
                     ax.obvious_command.as_ref().map(|c| format!("/{c}"))
                 } else {
                     Some(typed)
                 };
+                let queued = ax.queue_editor.take().map(|q| q.text());
+                let text = match (queued, typed_opt) {
+                    (Some(q), Some(t)) => Some(format!("{q}\n\n{t}")),
+                    (Some(q), None) => Some(q),
+                    (None, Some(t)) => Some(t),
+                    (None, None) => None,
+                };
                 if let Some(text) = text {
-                    // Fallback: if we have prior messages but no Claude session
-                    // to `--resume`, prepend the history as context so the agent
-                    // isn't starting blind. Happens for legacy sessions saved
-                    // before session-id persistence, or if the server-side
-                    // session has been pruned.
-                    let prompt = if ax.session.claude_session_id.is_none()
-                        && !ax.session.messages.is_empty()
-                    {
-                        build_history_preamble(&ax.session.messages) + &text
-                    } else {
-                        text.clone()
-                    };
-                    ax.session.messages.push(crate::chat_store::ChatMessage {
-                        role: crate::chat_store::Role::User,
-                        content: vec![crate::chat_store::ContentBlock::Text(text)],
-                        timestamp: String::new(),
-                    });
-                    ax.session.is_streaming = true;
-                    ax.session.pending_text.clear();
-                    handle.send_prompt(prompt, None);
-                    ax.chat_input = EditorState::new("");
-                    rehighlight_input(&mut ax.chat_input, highlighter);
-                    ax.chat_completion.visible = false;
-                    rebuild_chat_editor(ax, highlighter);
+                    send_prompt_text(ax, text, highlighter);
                 }
             }
         }
@@ -304,7 +322,62 @@ fn handle_agent_chat(
                 handle.cancel();
             }
         }
+        agent_chat::Msg::QueueAction(action) => {
+            if let text_edit::EditorAction::OpenUrl(url) = &action {
+                if let Err(err) = opener::open(url) {
+                    tracing::warn!(%url, %err, "failed to open chat URL");
+                }
+                return;
+            }
+            if !action.is_mutating()
+                && let Some(ed) = ax.queue_editor.as_mut()
+            {
+                ed.apply_action(action);
+            }
+        }
+        agent_chat::Msg::DiscardQueue => {
+            ax.queue_editor = None;
+        }
     }
+}
+
+/// Build a read-only queue editor with markdown highlighting applied so the
+/// queue pill reads like a regular chat message.
+fn make_queue_editor(text: &str, highlighter: &SyntaxHighlighter) -> EditorState {
+    let mut editor = EditorState::new(text);
+    let syntax = highlighter.find_syntax("md");
+    editor.highlight_spans = Some(highlighter.highlight_lines(&editor.lines, syntax));
+    editor
+}
+
+/// Send `text` as a new user turn on the active agent handle. Pushes the user
+/// message into the session, marks streaming, clears the input, and rebuilds
+/// the chat editor blocks. No-op if no agent handle is attached.
+pub fn send_prompt_text(ax: &mut AgentSession, text: String, highlighter: &SyntaxHighlighter) {
+    let Some(handle) = &ax.agent_handle else {
+        return;
+    };
+    // Fallback: if we have prior messages but no Claude session to `--resume`,
+    // prepend the history as context so the agent isn't starting blind.
+    // Happens for legacy sessions saved before session-id persistence, or if
+    // the server-side session has been pruned.
+    let prompt = if ax.session.claude_session_id.is_none() && !ax.session.messages.is_empty() {
+        build_history_preamble(&ax.session.messages) + &text
+    } else {
+        text.clone()
+    };
+    ax.session.messages.push(crate::chat_store::ChatMessage {
+        role: crate::chat_store::Role::User,
+        content: vec![crate::chat_store::ContentBlock::Text(text)],
+        timestamp: String::new(),
+    });
+    ax.session.is_streaming = true;
+    ax.session.pending_text.clear();
+    handle.send_prompt(prompt, None);
+    ax.chat_input = EditorState::new("");
+    rehighlight_input(&mut ax.chat_input, highlighter);
+    ax.chat_completion.visible = false;
+    rebuild_chat_editor(ax, highlighter);
 }
 
 /// Re-run markdown syntax highlighting on the chat input.
@@ -728,6 +801,7 @@ pub fn view_column<'a, M: 'a + Clone>(
                     &ax.chat_editors,
                     &ax.chat_collapsed,
                     &ax.chat_input,
+                    ax.queue_editor.as_ref(),
                     &ax.chat_commands,
                     &ax.chat_completion,
                     status,
