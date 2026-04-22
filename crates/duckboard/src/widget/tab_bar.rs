@@ -17,6 +17,7 @@ const ICON_SPEC: &[u8] = include_bytes!("../../assets/icon_spec.svg");
 const ICON_DOC: &[u8] = include_bytes!("../../assets/icon_doc.svg");
 const ICON_SPEC_DELTA: &[u8] = include_bytes!("../../assets/icon_spec_delta.svg");
 const ICON_DOC_DELTA: &[u8] = include_bytes!("../../assets/icon_doc_delta.svg");
+const ICON_DOT: &[u8] = include_bytes!("../../assets/icon_dot.svg");
 
 fn icon_for_title(title: &str) -> &'static [u8] {
     match title {
@@ -35,8 +36,12 @@ const MAX_FILE_TABS: usize = 5;
 /// What a tab is currently showing.
 #[derive(Debug, Clone)]
 pub enum TabView {
-    /// Editable text file.
-    Editor { editor: EditorState },
+    /// Editable text file. `path` is the absolute on-disk path used for
+    /// saving; `None` for tabs that have no underlying file.
+    Editor {
+        editor: EditorState,
+        path: Option<std::path::PathBuf>,
+    },
     /// VCS diff view (read-only editor with per-line backgrounds).
     Diff {
         editor: EditorState,
@@ -111,12 +116,19 @@ impl TabState {
     // ── Public API ──────────────────────────────────────────────────────
 
     /// Open an artifact in the preview tab (replaces existing preview).
-    pub fn open_preview(&mut self, id: String, title: String, content: String) {
+    pub fn open_preview(
+        &mut self,
+        id: String,
+        title: String,
+        content: String,
+        path: Option<std::path::PathBuf>,
+    ) {
         self.preview = Some(Tab {
             id,
             title,
             view: TabView::Editor {
                 editor: EditorState::new(&content),
+                path,
             },
         });
         self.active = ActiveTab::Preview;
@@ -145,10 +157,17 @@ impl TabState {
 
     /// Open a file tab (from file finder). Reuses existing tab with same id,
     /// or creates a new one (evicting oldest if over limit).
-    pub fn open_file(&mut self, id: String, title: String, content: String) {
+    pub fn open_file(
+        &mut self,
+        id: String,
+        title: String,
+        content: String,
+        path: Option<std::path::PathBuf>,
+    ) {
         if let Some(idx) = self.file_tabs.iter().position(|t| t.id == id) {
             self.file_tabs[idx].view = TabView::Editor {
                 editor: EditorState::new(&content),
+                path,
             };
             self.active = ActiveTab::File(idx);
             return;
@@ -170,6 +189,7 @@ impl TabState {
             title,
             view: TabView::Editor {
                 editor: EditorState::new(&content),
+                path,
             },
         });
         self.active = ActiveTab::File(self.file_tabs.len() - 1);
@@ -326,9 +346,18 @@ pub fn view_bar<'a, M: Clone + 'a>(
             theme::tab_inactive
         };
 
-        let mut tab_row = row![text(&tab.title).size(theme::font_sm()),]
-            .spacing(theme::SPACING_XS)
-            .align_y(Center);
+        let is_dirty = matches!(&tab.view, TabView::Editor { editor, .. } if editor.dirty);
+        let mut tab_row = row![].spacing(theme::SPACING_XS).align_y(Center);
+        if is_dirty {
+            let dot_size = theme::font_sm() * 0.5;
+            let dot: Element<'_, M> = svg(svg::Handle::from_memory(ICON_DOT))
+                .width(dot_size)
+                .height(dot_size)
+                .style(theme::svg_tint(theme::accent()))
+                .into();
+            tab_row = tab_row.push(dot);
+        }
+        tab_row = tab_row.push(text(&tab.title).size(theme::font_sm()));
 
         // File tabs get a close button; the preview tab doesn't.
         if !is_preview {

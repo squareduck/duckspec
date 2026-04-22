@@ -990,6 +990,7 @@ mod breadcrumb_tests {
             title: id.rsplit('/').next().unwrap_or(id).into(),
             view: crate::widget::tab_bar::TabView::Editor {
                 editor: crate::widget::text_edit::EditorState::new(""),
+                path: None,
             },
         }
     }
@@ -1616,12 +1617,14 @@ fn open_artifact(
 ) {
     if let Some(content) = project.read_artifact(id) {
         let title = id.rsplit('/').next().unwrap_or(id).to_string();
+        let path = project.duckspec_root.as_ref().map(|r| r.join(id));
         crate::open_artifact_tab(
             &mut state.tabs,
             id.to_string(),
             title,
             content,
             id,
+            path,
             highlighter,
         );
     }

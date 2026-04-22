@@ -238,7 +238,7 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                                         &mut state.change.tabs
                                     }
                                 };
-                                tabs.open_file(id.clone(), title, content);
+                                tabs.open_file(id.clone(), title, content, Some(abs.clone()));
                                 if let Some(tab) = tabs.file_tabs.iter_mut().find(|t| t.id == id)
                                     && let tab_bar::TabView::Editor { editor, .. } = &mut tab.view
                                 {
@@ -923,6 +923,25 @@ pub fn handle_editor_action(
         Some(t) => t,
         None => return,
     };
+
+    if matches!(action, widget::text_edit::EditorAction::SaveRequested) {
+        if let tab_bar::TabView::Editor { editor, path } = &mut tab.view
+            && let Some(path) = path.as_ref()
+        {
+            let text = editor.text();
+            match std::fs::write(path, &text) {
+                Ok(()) => {
+                    editor.dirty = false;
+                    tracing::info!(path = %path.display(), "saved file");
+                }
+                Err(err) => {
+                    tracing::error!(path = %path.display(), %err, "failed to save file");
+                }
+            }
+        }
+        return;
+    }
+
     let (editor, tab_id) = match &mut tab.view {
         tab_bar::TabView::Editor { editor, .. } => (editor, tab.id.as_str()),
         tab_bar::TabView::Diff { editor, .. } => (editor, tab.id.as_str()),
@@ -1060,9 +1079,10 @@ pub fn open_artifact_tab(
     title: String,
     source: String,
     _artifact_id: &str,
+    path: Option<std::path::PathBuf>,
     highlighter: &highlight::SyntaxHighlighter,
 ) {
-    tabs.open_preview(id.clone(), title, source);
+    tabs.open_preview(id.clone(), title, source, path);
     if let Some(tab) = tabs.preview.as_mut()
         && tab.id == id
         && let tab_bar::TabView::Editor { editor, .. } = &mut tab.view

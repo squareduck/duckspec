@@ -152,12 +152,14 @@ fn open_artifact(
             .unwrap_or(id)
             .trim_end_matches(".md")
             .to_string();
+        let path = project.duckspec_root.as_ref().map(|r| r.join(id));
         crate::open_artifact_tab(
             &mut state.tabs,
             id.to_string(),
             title,
             content,
             id,
+            path,
             highlighter,
         );
     }

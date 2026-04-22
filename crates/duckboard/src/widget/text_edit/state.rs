@@ -289,7 +289,9 @@ impl EditorState {
                 self.scroll_x = (self.scroll_x + dx).clamp(0.0, max_x);
             }
             EditorAction::SaveRequested => {
-                tracing::info!("save requested (not yet implemented)");
+                // Handled upstream by `handle_editor_action`; no-op here so
+                // that editors without a file path (e.g. chat input) simply
+                // ignore Cmd+S.
             }
         }
 
