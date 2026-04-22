@@ -55,6 +55,9 @@ pub enum TabView {
 #[derive(Debug, Clone)]
 pub enum TabContentMsg {
     EditorAction(EditorAction),
+    /// Open the file currently shown in a diff tab as a new editable file tab.
+    /// The path is repo-relative (as stored in `TabView::Diff`).
+    OpenInNewTab(std::path::PathBuf),
 }
 
 // ── State ────────────────────────────────────────────────────────────────────
@@ -447,18 +450,28 @@ pub fn view_content(state: &TabState) -> Element<'_, TabContentMsg> {
                 .height(theme::font_sm())
                 .style(theme::svg_tint(icon_color))
                 .into();
-            let path_row = container(
-                row![
-                    leading,
-                    text(path_text)
-                        .size(theme::font_sm())
-                        .color(theme::text_secondary()),
-                ]
-                .spacing(theme::SPACING_XS)
-                .align_y(Center),
-            )
-            .padding([theme::SPACING_XS, theme::SPACING_SM])
+            let mut path_items = row![
+                leading,
+                text(path_text)
+                    .size(theme::font_sm())
+                    .color(theme::text_secondary()),
+            ]
+            .spacing(theme::SPACING_XS)
+            .align_y(Center)
             .width(Length::Fill);
+            if let TabView::Diff { path, .. } = &tab.view {
+                path_items = path_items
+                    .push(Space::new().width(Length::Fill))
+                    .push(
+                        button(text("Open in tab").size(theme::font_sm()))
+                            .on_press(TabContentMsg::OpenInNewTab(path.clone()))
+                            .padding(0.0)
+                            .style(theme::icon_button),
+                    );
+            }
+            let path_row = container(path_items)
+                .padding([theme::SPACING_XS, theme::SPACING_SM])
+                .width(Length::Fill);
             let header: Element<'_, TabContentMsg> = column![
                 path_row,
                 container(Space::new().width(Length::Fill).height(1.0)).style(theme::divider),

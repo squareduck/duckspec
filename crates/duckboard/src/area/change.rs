@@ -382,6 +382,26 @@ pub fn update(
         Message::TabContent(tab_bar::TabContentMsg::EditorAction(action)) => {
             crate::handle_editor_action(&mut state.tabs, action, highlighter);
         }
+        Message::TabContent(tab_bar::TabContentMsg::OpenInNewTab(rel_path)) => {
+            if let Some(root) = &project.project_root {
+                let abs = root.join(&rel_path);
+                if let Ok(content) = std::fs::read_to_string(&abs) {
+                    let id = format!("file:{}", rel_path.display());
+                    let title = rel_path
+                        .file_name()
+                        .map(|n| n.to_string_lossy().to_string())
+                        .unwrap_or_else(|| rel_path.display().to_string());
+                    state
+                        .tabs
+                        .open_file(id.clone(), title, content, Some(abs.clone()));
+                    if let Some(tab) = state.tabs.file_tabs.iter_mut().find(|t| t.id == id)
+                        && let tab_bar::TabView::Editor { editor, .. } = &mut tab.view
+                    {
+                        crate::rehighlight(editor, &id, highlighter);
+                    }
+                }
+            }
+        }
         Message::AddExploration => {
             state.exploration_counter += 1;
             let name = format!("Exploration {}", state.exploration_counter);
