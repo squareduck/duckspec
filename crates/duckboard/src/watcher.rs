@@ -20,6 +20,8 @@ pub enum FileEvent {
     Modified(PathBuf),
     /// File or directory was removed.
     Removed(PathBuf),
+    /// Git metadata changed outside duckboard (commit, checkout, ref update).
+    VcsStateChanged(PathBuf),
 }
 
 // ── Subscription ────────────────────────────────────────────────────────────
@@ -97,8 +99,15 @@ fn watch_stream(
                     Ok(Ok(events)) => {
                         let file_events: Vec<FileEvent> = events
                             .into_iter()
-                            .filter(|ev| !is_ignored(&ev.path, &gitignore, duckspec_root.as_deref()))
-                            .filter_map(|ev| classify(&ev.path, ev.kind))
+                            .filter_map(|ev| {
+                                if let Some(vcs_ev) = classify_vcs_state(&ev.path, &project_root) {
+                                    return Some(vcs_ev);
+                                }
+                                if is_ignored(&ev.path, &gitignore, duckspec_root.as_deref()) {
+                                    return None;
+                                }
+                                classify(&ev.path, ev.kind)
+                            })
                             .collect();
 
                         if !file_events.is_empty()
@@ -165,6 +174,23 @@ fn is_ignored(
     gitignore
         .matched_path_or_any_parents(path, is_dir)
         .is_ignore()
+}
+
+/// Detect changes to git metadata that signal a commit, checkout, or ref
+/// update performed outside duckboard. These don't move the working tree, so
+/// the regular watcher wouldn't notice them — but the changed-files list
+/// depends on HEAD, so we trigger a refresh.
+fn classify_vcs_state(path: &Path, project_root: &Path) -> Option<FileEvent> {
+    let rel = path.strip_prefix(project_root).ok()?;
+    let mut comps = rel.components();
+    if comps.next()?.as_os_str() != ".git" {
+        return None;
+    }
+    let rest: PathBuf = comps.collect();
+    let is_state = rest.starts_with("HEAD")
+        || rest.starts_with("index")
+        || rest.starts_with("refs");
+    is_state.then(|| FileEvent::VcsStateChanged(path.to_path_buf()))
 }
 
 fn classify(path: &Path, kind: DebouncedEventKind) -> Option<FileEvent> {

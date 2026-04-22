@@ -283,6 +283,10 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                             }
                         }
                     }
+                    watcher::FileEvent::VcsStateChanged(path) => {
+                        tracing::debug!(path = %path.display(), "git state changed — refreshing");
+                        // refresh_changed_files at end of handler picks this up.
+                    }
                 }
             }
 
