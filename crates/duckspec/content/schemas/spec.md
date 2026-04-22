@@ -86,6 +86,14 @@ bullet — not just after `**THEN**`.
 - **Name scenarios by what's distinctive.** "Valid credentials" and "Invalid
   password" are good. "Test case 1" and "Happy path" are not.
 
+## Formatting
+
+After writing or updating this artifact, run `ds format <path>` to apply
+canonical formatting (line wrap, indentation, blank lines).
+
+Use fenced code blocks for tables and diagrams; add a `<language>` tag to
+fences that contain real code.
+
 ## Example
 
 ```markdown

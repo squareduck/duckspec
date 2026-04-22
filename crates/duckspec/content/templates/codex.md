@@ -39,6 +39,14 @@ learnings into codex entries — project knowledge that no single capability own
    title and a summary that works in an index listing.
 4. **Validate.** Run `ds check` on the new entry.
 
+## Formatting
+
+After writing or updating each artifact, run `ds format <path>` to apply
+canonical formatting (line wrap, indentation, blank lines).
+
+Use fenced code blocks for tables and diagrams; add a `<language>` tag to
+fences that contain real code.
+
 ## Write gate
 
 Before writing each codex entry, present its shape:

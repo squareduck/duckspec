@@ -1,12 +1,20 @@
 use crate::artifact::delta::*;
+use crate::config::FormatConfig;
+use crate::format::prose;
 use crate::render::render_body;
 
 impl Delta {
-    /// Render the delta to canonical markdown.
+    /// Render the delta to canonical markdown using default formatting.
+    pub fn render(&self) -> String {
+        self.render_with(&FormatConfig::default())
+    }
+
+    /// Render the delta to canonical markdown with the given formatting config.
     ///
     /// Entries are emitted in the order stored in the struct, which the parser
     /// guarantees is canonical (`=` → `-` → `~` → `@` → `+`).
-    pub fn render(&self) -> String {
+    pub fn render_with(&self, config: &FormatConfig) -> String {
+        let width = config.line_width;
         let mut out = String::new();
 
         // H1 with marker
@@ -14,19 +22,19 @@ impl Delta {
 
         // Optional summary
         if let Some(summary) = &self.summary {
-            out.push_str(&format!("\n\n{summary}"));
+            out.push_str(&format!("\n\n{}", prose::reflow(summary, width)));
         }
 
         // Description
         if !self.description.is_empty() {
             out.push_str("\n\n");
-            out.push_str(&render_body(&self.description));
+            out.push_str(&render_body(&self.description, width));
         }
 
         // H2 entries
         for entry in &self.entries {
             out.push_str("\n\n");
-            render_h2_entry(&mut out, entry);
+            render_h2_entry(&mut out, entry, width);
         }
 
         out.push('\n');
@@ -34,7 +42,7 @@ impl Delta {
     }
 }
 
-fn render_h2_entry(out: &mut String, entry: &DeltaEntry) {
+fn render_h2_entry(out: &mut String, entry: &DeltaEntry, width: usize) {
     out.push_str(&format!("## {} {}", entry.marker.char(), entry.heading));
 
     // Rename: new name as first line
@@ -45,7 +53,7 @@ fn render_h2_entry(out: &mut String, entry: &DeltaEntry) {
     // Body
     if !entry.body.is_empty() {
         out.push_str("\n\n");
-        out.push_str(&render_body(&entry.body));
+        out.push_str(&render_body(&entry.body, width));
     }
 
     // Children
@@ -53,20 +61,20 @@ fn render_h2_entry(out: &mut String, entry: &DeltaEntry) {
         DeltaChildren::Operations(ops) => {
             for child in ops {
                 out.push_str("\n\n");
-                render_operation_child(out, child);
+                render_operation_child(out, child, width);
             }
         }
         DeltaChildren::Content(sections) => {
             for section in sections {
                 out.push_str("\n\n");
-                render_content_child(out, section);
+                render_content_child(out, section, width);
             }
         }
     }
 }
 
 /// Render an operation child (under `@`): heading carries a marker.
-fn render_operation_child(out: &mut String, entry: &DeltaChildEntry) {
+fn render_operation_child(out: &mut String, entry: &DeltaChildEntry, width: usize) {
     out.push_str(&format!("### {} {}", entry.marker.char(), entry.heading));
 
     if let Some(new_name) = &entry.rename_to {
@@ -75,17 +83,17 @@ fn render_operation_child(out: &mut String, entry: &DeltaChildEntry) {
 
     if !entry.body.is_empty() {
         out.push_str("\n\n");
-        out.push_str(&render_body(&entry.body));
+        out.push_str(&render_body(&entry.body, width));
     }
 }
 
 /// Render a content child (under `~` or `+`): heading has no marker.
-fn render_content_child(out: &mut String, section: &crate::artifact::doc::Section) {
+fn render_content_child(out: &mut String, section: &crate::artifact::doc::Section, width: usize) {
     let hashes = "#".repeat(section.level as usize);
     out.push_str(&format!("{hashes} {}", section.heading));
 
     if !section.body.is_empty() {
         out.push_str("\n\n");
-        out.push_str(&render_body(&section.body));
+        out.push_str(&render_body(&section.body, width));
     }
 }

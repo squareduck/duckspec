@@ -37,6 +37,8 @@ fn render_with_backlinks() {
 
 #[test]
 fn render_preserves_wrapped_gwt_continuations() {
+    // GWT clauses long enough to wrap at the default 90-char width even after
+    // accounting for the `- **GIVEN** ` prefix.
     let source = "\
 # Session expiration
 
@@ -48,11 +50,14 @@ The system SHALL expire sessions.
 
 ### Scenario: Idle user
 
-- **GIVEN** an authenticated user with a long description
-  that wraps onto a continuation line
-- **WHEN** the user makes no requests for 30 minutes and
-  the clock advances past the threshold
-- **THEN** the next request returns 401
+- **GIVEN** an authenticated user whose session description carries quite a lot of
+  contextual information about their identity and how they originally signed in
+
+- **WHEN** the user makes absolutely no requests for thirty minutes and the wall clock
+  advances well past the configured idle threshold
+
+- **THEN** the next request returns a 401 response with a body explaining that the session
+  has expired and a fresh login is required
 
 > test: code
 ";

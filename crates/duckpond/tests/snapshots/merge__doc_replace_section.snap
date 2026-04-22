@@ -1,5 +1,6 @@
 ---
 source: crates/duckpond/tests/merge.rs
+assertion_line: 91
 expression: output
 ---
 # Authentication
@@ -8,8 +9,8 @@ Allows users to sign in with email and password.
 
 ## Background
 
-Email-password was chosen over username-password to align with how
-users think about identity.
+Email-password was chosen over username-password to align with how users think about
+identity.
 
 ## Design decisions
 

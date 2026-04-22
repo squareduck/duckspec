@@ -30,6 +30,17 @@ pub enum BlockKind {
     CodeBlock,
 }
 
+/// Which marker a list item uses in the source.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ListMarker {
+    /// `- text` — unordered bullet.
+    Bullet,
+    /// `1. text`, `2. text`, ... — ordered/numbered. The original number is
+    /// dropped at parse time; the renderer re-numbers from 1 within each
+    /// run.
+    Numbered,
+}
+
 #[derive(Clone, PartialEq, Eq)]
 pub enum Element {
     Heading {
@@ -45,6 +56,7 @@ pub enum Element {
     ListItem {
         content: String,
         indent: usize,
+        marker: ListMarker,
         span: Span,
     },
     BlockQuoteItem {
@@ -71,10 +83,17 @@ impl std::fmt::Debug for Element {
                 ..
             } => write!(f, "{content}"),
             Element::ListItem {
-                content, indent, ..
+                content,
+                indent,
+                marker,
+                ..
             } => {
                 let pad = " ".repeat(*indent);
-                write!(f, "{pad}- {content}")
+                let marker_text = match marker {
+                    ListMarker::Bullet => "-",
+                    ListMarker::Numbered => "1.",
+                };
+                write!(f, "{pad}{marker_text} {content}")
             }
             Element::BlockQuoteItem { content, .. } => {
                 if content.is_empty() {
@@ -146,6 +165,7 @@ enum L1State {
         end: usize,
         indent: usize,
         content_start: usize,
+        marker: ListMarker,
     },
 }
 
@@ -185,6 +205,7 @@ fn advance(
             end,
             indent,
             content_start,
+            marker,
         } => {
             // A new list item (at any indent) terminates the current one.
             // Check this before continuation to avoid swallowing nested items.
@@ -194,7 +215,7 @@ fn advance(
                 || is_block_quote(line)
                 || is_code_fence(line)
             {
-                flush_list_item(source, elements, start, end, indent, content_start);
+                flush_list_item(source, elements, start, end, indent, content_start, marker);
                 advance(
                     source,
                     elements,
@@ -210,10 +231,11 @@ fn advance(
                     end: line_end,
                     indent,
                     content_start,
+                    marker,
                 }
             } else {
                 // Flush the current list item and reprocess.
-                flush_list_item(source, elements, start, end, indent, content_start);
+                flush_list_item(source, elements, start, end, indent, content_start, marker);
                 advance(
                     source,
                     elements,
@@ -296,12 +318,13 @@ fn advance(
                     },
                 });
                 L1State::Normal
-            } else if let Some((indent, content_offset)) = parse_list_item_start(line) {
+            } else if let Some((indent, content_offset, marker)) = parse_list_item_start(line) {
                 L1State::InListItem {
                     start: line_start,
                     end: line_end,
                     indent,
                     content_start: content_offset,
+                    marker,
                 }
             } else {
                 // Start a paragraph.
@@ -348,8 +371,9 @@ fn flush(source: &str, elements: &mut Vec<Element>, state: L1State) {
             end,
             indent,
             content_start,
+            marker,
         } => {
-            flush_list_item(source, elements, start, end, indent, content_start);
+            flush_list_item(source, elements, start, end, indent, content_start, marker);
         }
     }
 }
@@ -361,6 +385,7 @@ fn flush_list_item(
     end: usize,
     indent: usize,
     content_start: usize,
+    marker: ListMarker,
 ) {
     let raw = &source[start..end];
     let raw = raw.trim_end_matches('\n');
@@ -391,6 +416,7 @@ fn flush_list_item(
     elements.push(Element::ListItem {
         content,
         indent,
+        marker,
         span: Span {
             offset: start,
             length: end - start,
@@ -433,19 +459,33 @@ fn is_list_item(line: &str) -> bool {
     parse_list_item_start(line).is_some()
 }
 
-/// Returns `(indent_level, content_start_column)` for a line starting a list item.
+/// Returns `(indent_level, content_start_column, marker)` for a line starting
+/// a list item. Recognizes both bullet (`- text`) and numbered (`N. text`)
+/// markers.
 ///
-/// `indent_level` is the number of leading spaces before `- `.
-/// `content_start_column` is the byte offset within the line where content begins
-/// (after `- `), used for aligning continuation lines.
-fn parse_list_item_start(line: &str) -> Option<(usize, usize)> {
+/// `indent_level` is the number of leading spaces before the marker.
+/// `content_start_column` is the byte offset within the line where content
+/// begins (after the marker), used for aligning continuation lines.
+fn parse_list_item_start(line: &str) -> Option<(usize, usize, ListMarker)> {
     let indent = line.bytes().take_while(|&b| b == b' ').count();
     let rest = &line[indent..];
+
     if rest.starts_with("- ") {
-        Some((indent, indent + 2))
-    } else {
-        None
+        return Some((indent, indent + 2, ListMarker::Bullet));
     }
+
+    // Numbered marker: one or more digits, then ".", then a space.
+    let bytes = rest.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() && bytes[i].is_ascii_digit() {
+        i += 1;
+    }
+    if i > 0 && i + 1 < bytes.len() && bytes[i] == b'.' && bytes[i + 1] == b' ' {
+        // i = number of digits; marker length = digits + ". " = i + 2
+        return Some((indent, indent + i + 2, ListMarker::Numbered));
+    }
+
+    None
 }
 
 /// Check if a line is a continuation of a list item whose content starts at
@@ -703,6 +743,119 @@ Some prose";
             &elems[1],
             Element::Block {
                 kind: BlockKind::Paragraph,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn loose_list_with_blank_line_separators() {
+        // Items separated by blank lines parse as the same number of
+        // ListItem elements as the tight equivalent — blank lines
+        // simply flush each item.
+        let src = "- one\n\n- two\n\n- three";
+        let elems = elements(src);
+        let list_items: Vec<_> = elems
+            .iter()
+            .filter(|e| matches!(e, Element::ListItem { .. }))
+            .collect();
+        assert_eq!(list_items.len(), 3);
+    }
+
+    #[test]
+    fn loose_gwt_list_parses_as_three_clauses() {
+        let src = "- **GIVEN** a user\n\n- **WHEN** they log in\n\n- **THEN** they get a token";
+        let elems = elements(src);
+        let list_items: Vec<_> = elems
+            .iter()
+            .filter(|e| matches!(e, Element::ListItem { .. }))
+            .collect();
+        assert_eq!(list_items.len(), 3);
+    }
+
+    #[test]
+    fn numbered_list_items() {
+        let src = "1. First\n2. Second\n3. Third";
+        let elems = elements(src);
+        assert_eq!(elems.len(), 3);
+        for e in &elems {
+            assert!(matches!(
+                e,
+                Element::ListItem {
+                    marker: ListMarker::Numbered,
+                    ..
+                }
+            ));
+        }
+    }
+
+    #[test]
+    fn numbered_list_with_continuation() {
+        let src = "1. First line\n   continuation\n2. Second";
+        let elems = elements(src);
+        assert_eq!(elems.len(), 2);
+        assert!(matches!(
+            &elems[0],
+            Element::ListItem {
+                marker: ListMarker::Numbered,
+                content,
+                ..
+            } if content == "First line\ncontinuation"
+        ));
+    }
+
+    #[test]
+    fn double_digit_numbered_marker_works() {
+        let src = "10. Tenth\n11. Eleventh";
+        let elems = elements(src);
+        assert_eq!(elems.len(), 2);
+        assert!(matches!(
+            &elems[0],
+            Element::ListItem {
+                marker: ListMarker::Numbered,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn bare_digit_dot_no_space_is_not_a_list() {
+        // "1.no space" is just a paragraph.
+        let src = "1.no space";
+        let elems = elements(src);
+        assert_eq!(elems.len(), 1);
+        assert!(matches!(
+            &elems[0],
+            Element::Block {
+                kind: BlockKind::Paragraph,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn version_number_in_paragraph_is_not_a_list() {
+        // "1.0 version" — the "." has no following space-after-digits pattern.
+        let src = "1.0 version";
+        let elems = elements(src);
+        assert_eq!(elems.len(), 1);
+        assert!(matches!(
+            &elems[0],
+            Element::Block {
+                kind: BlockKind::Paragraph,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn bullet_marker_recorded() {
+        let src = "- one";
+        let elems = elements(src);
+        assert!(matches!(
+            &elems[0],
+            Element::ListItem {
+                marker: ListMarker::Bullet,
                 ..
             }
         ));

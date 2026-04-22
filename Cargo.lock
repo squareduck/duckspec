@@ -1227,6 +1227,7 @@ dependencies = [
  "ignore",
  "miette",
  "owo-colors",
+ "tempfile",
  "time",
  "tracing",
  "tracing-subscriber",

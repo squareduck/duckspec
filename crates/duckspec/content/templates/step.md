@@ -48,6 +48,14 @@ concrete, ordered, and independently completable.
      the design leaves gaps the applying agent needs (specific file paths,
      gotchas, project-specific details).
 
+## Formatting
+
+After writing or updating each artifact, run `ds format <path>` to apply
+canonical formatting (line wrap, indentation, blank lines).
+
+Use fenced code blocks for tables and diagrams; add a `<language>` tag to
+fences that contain real code.
+
 ## Write gate
 
 Before writing steps, present the full breakdown:

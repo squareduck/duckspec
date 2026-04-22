@@ -1,13 +1,14 @@
 ---
 source: crates/duckpond/tests/merge.rs
+assertion_line: 57
 expression: output
 ---
 # Authentication
 
 Allows users to sign in with email and password.
 
-Allows users to sign in with email and password. Supports
-multi-factor authentication for high-security accounts.
+Allows users to sign in with email and password. Supports multi-factor authentication for
+high-security accounts.
 
 ## Requirement: Email-password login
 

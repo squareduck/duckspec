@@ -1,11 +1,11 @@
 ---
 source: crates/duckpond/tests/render_step.rs
+assertion_line: 20
 expression: "roundtrip(\"with_prerequisites.md\")"
 ---
 # Integrate Google OAuth callback
 
-Wire the OAuth callback handler into the authentication middleware
-and session management.
+Wire the OAuth callback handler into the authentication middleware and session management.
 
 ## Prerequisites
 
@@ -17,6 +17,9 @@ and session management.
 ## Tasks
 
 - [ ] 1. Implement `/auth/google/callback` handler
+
 - [ ] 2. Exchange authorization code for tokens
+
 - [ ] 3. @spec auth/google OAuth callback: Valid callback
+
 - [ ] 4. @spec auth/google OAuth callback: User denies authorization

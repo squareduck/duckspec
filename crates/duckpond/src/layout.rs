@@ -51,6 +51,8 @@ pub fn classify(relative_path: &Path) -> Option<ArtifactKind> {
         "caps" => classify_caps(&components[1..]),
         "codex" => classify_codex(&components[1..]),
         "changes" => classify_change(&components[1..]),
+        // Archived changes mirror the same internal structure as live ones.
+        "archive" => classify_change(&components[1..]),
         _ => None,
     }
 }
@@ -266,11 +268,34 @@ mod tests {
     }
 
     #[test]
-    fn archive_returns_none() {
-        // Archive files are not classified — they are frozen.
+    fn archived_proposal() {
         assert_eq!(
             classify(&p("archive/2026-03-15-01-add-oauth/proposal.md")),
-            None
+            Some(ArtifactKind::Proposal)
+        );
+    }
+
+    #[test]
+    fn archived_step() {
+        assert_eq!(
+            classify(&p("archive/2026-03-15-01-add-oauth/steps/01-scaffold.md")),
+            Some(ArtifactKind::Step)
+        );
+    }
+
+    #[test]
+    fn archived_spec_delta() {
+        assert_eq!(
+            classify(&p("archive/2026-03-15-01-add-oauth/caps/auth/spec.delta.md")),
+            Some(ArtifactKind::SpecDelta)
+        );
+    }
+
+    #[test]
+    fn archived_change_cap_spec() {
+        assert_eq!(
+            classify(&p("archive/2026-03-15-01-add-oauth/caps/auth/oauth/spec.md")),
+            Some(ArtifactKind::ChangeCapSpec)
         );
     }
 

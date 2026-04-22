@@ -195,6 +195,7 @@ fn parse_tasks(
                 content,
                 indent,
                 span,
+                ..
             } if *indent == 0 => {
                 let (checked, text) = parse_checkbox(content);
                 let text = strip_numeric_prefix(&text);
@@ -214,6 +215,7 @@ fn parse_tasks(
                             content,
                             indent,
                             span,
+                            ..
                         } if *indent > 0 => {
                             if *indent > 4 {
                                 errors.push(ParseError::SubtaskTooDeep { span: *span });

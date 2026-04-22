@@ -1166,8 +1166,8 @@ children follow the same five-group order at their own level.
 
 Canonical order is both the apply order and the required file
 order. Entries out of canonical order are a validation error: `ds
-check` reports them, and `ds check --format` rewrites the file to
-canonical order.
+check` reports them, and `ds format` rewrites the file to canonical
+order.
 
 Example of a correctly ordered delta:
 
@@ -2129,7 +2129,7 @@ files or paths inside `duckspec/`), use `ds check`.
 
 Read-only.
 
-### `ds check [<path>] [--format]`
+### `ds check [<path>]`
 
 Validates duckspec artifacts against their schemas and structural
 rules. The `<path>` argument selects what to check:
@@ -2142,6 +2142,12 @@ rules. The `<path>` argument selects what to check:
   within that directory.
 - Omitted: validates every file under `duckspec/`.
 
+Files inside `archive/<YYYY-MM-DD-NN-name>/` are recognized using
+the same rules as their live counterparts under
+`changes/<name>/`. Files that do not match any artifact pattern
+(e.g. `README.md`) are skipped silently when walking a directory;
+when passed explicitly as a single file, `ds check` errors instead.
+
 `ds check` focuses on **artifact-level** validation: is this file
 structurally valid, does it match its schema, are its headers in
 canonical order, are its markers correct, does a delta file's
@@ -2149,27 +2155,79 @@ target capability exist. It does not check the project's source
 code or the integrity of `@spec` backlinks — those are the
 responsibility of `ds audit`.
 
-**`--format`** rewrites the file (or every file under the
-directory) to canonical order, fixing ordering violations in place.
-Formatting is limited to ordering: other schema violations are
-reported but not auto-fixed. After formatting, the file is
-validated again and any remaining violations are reported normally.
+When canonical-order violations are detected (delta entries out of
+the `=, -, ~, @, +` sequence), `ds check` reports them and prints a
+hint to run `ds format` to fix them in place.
 
 Examples:
 
 ```
 ds check duckspec/caps/auth/spec.md
 ds check duckspec/changes/add-google-auth/
-ds check duckspec/changes/add-google-auth/caps/auth/spec.delta.md --format
+ds check duckspec/changes/add-google-auth/caps/auth/spec.delta.md
 ds check duckspec/codex/architecture.md
 ds check
 ```
 
-Exits with a non-zero code if any validation errors remain after
-any requested formatting.
+Exits with a non-zero code if any validation errors are found.
 
-Read-only unless `--format` is passed. When `--format` is passed,
-mutating.
+Read-only.
+
+### `ds format [<path>] [--dry]`
+
+Formats duckspec artifacts to their canonical markdown. The `<path>`
+argument selects what to format, with the same resolution rules as
+`ds check`:
+
+- A single file: formats just that file.
+- A directory under `duckspec/`: recursively formats every recognized
+  artifact within that directory.
+- Omitted: formats every artifact under `duckspec/`.
+
+`ds format` rewrites each file in place. The transformations are:
+
+- Word-wrap prose at the configured width (`format.line_width` in
+  `config.toml`, default 90), preserving inline-atomic constructs
+  (code spans, links, autolinks, `@spec`/`@step` references) as
+  indivisible units.
+- Re-indent multi-line list items so continuation lines align with
+  the column after the bullet marker.
+- When any item in a list spans multiple lines, separate every item
+  in that list with a blank line; otherwise keep the list tight.
+- Insert a blank line between top-level step tasks unconditionally.
+- Sort delta entries into canonical order (`=, -, ~, @, +`).
+- Wrap GFM tables in plain code fences so the reflower never mangles
+  them. (Diagrams should be authored inside fenced code blocks; the
+  formatter passes any fenced content through verbatim.)
+
+Files inside `archive/<YYYY-MM-DD-NN-name>/` are formatted using the
+same rules as their live counterparts under `changes/<name>/`.
+Files that do not match any artifact pattern are skipped silently
+when walking a directory; when passed explicitly as a single file,
+`ds format` errors with `not a recognized duckspec artifact: <path>`
+instead.
+
+If a file does not parse as its declared artifact type, `ds format`
+reports the parse errors and leaves the file untouched. Duplicate
+delta headings or step slug mismatches are also surfaced as parse
+errors — they are structural problems that formatting cannot
+resolve.
+
+`--dry` prints the formatted output to stdout instead of writing
+files.
+
+Examples:
+
+```
+ds format duckspec/caps/auth/spec.md
+ds format duckspec/changes/add-google-auth/
+ds format
+ds format duckspec/caps/auth/spec.md --dry
+```
+
+Exits with a non-zero code if any file failed to parse.
+
+Mutating (unless `--dry` is passed).
 
 ### `ds sync [--dry]`
 

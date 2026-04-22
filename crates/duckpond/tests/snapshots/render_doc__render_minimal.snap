@@ -1,8 +1,9 @@
 ---
 source: crates/duckpond/tests/render_doc.rs
+assertion_line: 15
 expression: "roundtrip(\"minimal.md\")"
 ---
 # Authentication
 
-Allows users to sign in with email and password. Primary auth
-mechanism for consumer accounts.
+Allows users to sign in with email and password. Primary auth mechanism for consumer
+accounts.

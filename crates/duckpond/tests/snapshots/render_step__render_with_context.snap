@@ -1,21 +1,23 @@
 ---
 source: crates/duckpond/tests/render_step.rs
+assertion_line: 25
 expression: "roundtrip(\"with_context.md\")"
 ---
 # Implement session expiration
 
-Add server-side session timeout logic and cover the scenarios with
-tests.
+Add server-side session timeout logic and cover the scenarios with tests.
 
 ## Context
 
-The session middleware currently does not track last-access time.
-This step adds that tracking and the expiration check.
+The session middleware currently does not track last-access time. This step adds that
+tracking and the expiration check.
 
 ## Tasks
 
 - [ ] 1. Add `last_accessed_at` column to the `sessions` table
-- [ ] 2. Update session middleware to refresh `last_accessed_at` on
-    each request
+
+- [ ] 2. Update session middleware to refresh `last_accessed_at` on each request
+
 - [ ] 3. @spec auth Session expiration: Idle timeout
+
 - [ ] 4. @spec auth Session expiration: Force logout on password change

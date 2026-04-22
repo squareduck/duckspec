@@ -43,6 +43,14 @@ Same markers as spec deltas:
   "previously", "used to", or "now also", rewrite in the present tense to
   describe what is.
 
+## Formatting
+
+After writing or updating this artifact, run `ds format <path>` to apply
+canonical formatting (line wrap, indentation, blank lines).
+
+Use fenced code blocks for tables and diagrams; add a `<language>` tag to
+fences that contain real code.
+
 ## Example
 
 ```markdown

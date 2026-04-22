@@ -62,6 +62,14 @@ dictation.
 5. **Draft the proposal.** Load the schema with `ds schema proposal` and draft
    the content following its structure.
 
+## Formatting
+
+After writing or updating each artifact, run `ds format <path>` to apply
+canonical formatting (line wrap, indentation, blank lines).
+
+Use fenced code blocks for tables and diagrams; add a `<language>` tag to
+fences that contain real code.
+
 ## Write gate
 
 Before writing the proposal, present its outline:

@@ -25,9 +25,6 @@ pub struct CheckContext {
 pub struct CheckResult {
     /// Parse errors found in the artifact.
     pub errors: Vec<ParseError>,
-    /// When formatting was requested and the initial parse succeeded,
-    /// contains the canonical markdown output.
-    pub formatted: Option<String>,
 }
 
 /// Validate a single artifact's content against its schema.
@@ -75,117 +72,7 @@ pub fn check_artifact(source: &str, kind: &ArtifactKind, ctx: &CheckContext) -> 
     // Stable sort so ordering errors come before duplicate errors, etc.
     errors.sort_by_key(|e| e.span().offset);
 
-    CheckResult {
-        errors,
-        formatted: None,
-    }
-}
-
-/// Parse, render to canonical form, and re-validate.
-///
-/// If the initial parse fails, returns the errors with `formatted: None`
-/// (cannot format a file that does not parse). If the parse succeeds,
-/// renders the artifact and re-parses to verify the output is valid.
-pub fn format_artifact(source: &str, kind: &ArtifactKind, ctx: &CheckContext) -> CheckResult {
-    let elements = parse::parse_elements(source);
-
-    let rendered = match kind {
-        ArtifactKind::CapSpec | ArtifactKind::ChangeCapSpec => {
-            match parse::spec::parse_spec(&elements) {
-                Ok(spec) => spec.render(),
-                Err(errors) => {
-                    return CheckResult {
-                        errors,
-                        formatted: None,
-                    };
-                }
-            }
-        }
-        ArtifactKind::CapDoc
-        | ArtifactKind::ChangeCapDoc
-        | ArtifactKind::Proposal
-        | ArtifactKind::Design
-        | ArtifactKind::Codex
-        | ArtifactKind::Project => match parse::doc::parse_document(&elements) {
-            Ok(doc) => doc.render(),
-            Err(errors) => {
-                return CheckResult {
-                    errors,
-                    formatted: None,
-                };
-            }
-        },
-        ArtifactKind::SpecDelta | ArtifactKind::DocDelta => {
-            match parse::delta::parse_delta(&elements) {
-                Ok(ref delta) => {
-                    // Check duplicates even when formatting (format fixes
-                    // ordering, but can't fix duplicates).
-                    let dup_errs = validate_delta_duplicates(delta);
-                    if !dup_errs.is_empty() {
-                        return CheckResult {
-                            errors: dup_errs,
-                            formatted: None,
-                        };
-                    }
-                    delta.render()
-                }
-                Err(errors) => {
-                    return CheckResult {
-                        errors,
-                        formatted: None,
-                    };
-                }
-            }
-        }
-        ArtifactKind::Step => match parse::step::parse_step(&elements) {
-            Ok(ref step) => {
-                let mut errs = Vec::new();
-                validate_step_slug(step, ctx, &mut errs);
-                if !errs.is_empty() {
-                    return CheckResult {
-                        errors: errs,
-                        formatted: None,
-                    };
-                }
-                step.render()
-            }
-            Err(errors) => {
-                return CheckResult {
-                    errors,
-                    formatted: None,
-                };
-            }
-        },
-    };
-
-    // Re-parse the rendered output to verify it is valid.
-    let re_elements = parse::parse_elements(&rendered);
-    let re_errors = match kind {
-        ArtifactKind::CapSpec | ArtifactKind::ChangeCapSpec => {
-            parse::spec::parse_spec(&re_elements)
-                .err()
-                .unwrap_or_default()
-        }
-        ArtifactKind::CapDoc
-        | ArtifactKind::ChangeCapDoc
-        | ArtifactKind::Proposal
-        | ArtifactKind::Design
-        | ArtifactKind::Codex
-        | ArtifactKind::Project => parse::doc::parse_document(&re_elements)
-            .err()
-            .unwrap_or_default(),
-        ArtifactKind::SpecDelta | ArtifactKind::DocDelta => parse::delta::parse_delta(&re_elements)
-            .err()
-            .unwrap_or_default(),
-        ArtifactKind::Step => parse::step::parse_step(&re_elements)
-            .err()
-            .unwrap_or_default(),
-    };
-
-    CheckResult {
-        errors: re_errors,
-        formatted: Some(rendered),
-    }
+    CheckResult { errors }
 }
 
 // ---------------------------------------------------------------------------
@@ -193,7 +80,7 @@ pub fn format_artifact(source: &str, kind: &ArtifactKind, ctx: &CheckContext) ->
 // ---------------------------------------------------------------------------
 
 /// Compare the step's slug (derived from H1) against the filename slug.
-fn validate_step_slug(
+pub(crate) fn validate_step_slug(
     step: &crate::artifact::step::Step,
     ctx: &CheckContext,
     errors: &mut Vec<ParseError>,
@@ -283,7 +170,7 @@ fn check_order(items: &[(u8, parse::Span)], errors: &mut Vec<ParseError>) {
 }
 
 /// Check for duplicate heading names among delta entries and their children.
-fn validate_delta_duplicates(delta: &Delta) -> Vec<ParseError> {
+pub(crate) fn validate_delta_duplicates(delta: &Delta) -> Vec<ParseError> {
     let mut errors = Vec::new();
 
     // Check H2-level duplicates.

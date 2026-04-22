@@ -1,5 +1,6 @@
 ---
 source: crates/duckpond/tests/merge.rs
+assertion_line: 15
 expression: output
 ---
 # Authentication
@@ -8,8 +9,8 @@ Allows users to sign in with email and password.
 
 ## Requirement: Email-password login
 
-The system SHALL allow a registered user to authenticate using their
-email address and password.
+The system SHALL allow a registered user to authenticate using their email address and
+password.
 
 > test: code
 

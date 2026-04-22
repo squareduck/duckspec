@@ -51,6 +51,14 @@ header carries a marker declaring what operation to perform on the source spec.
 - When renaming and modifying, use `=` for the rename and a separate `@` entry
   with the new name for the modification.
 
+## Formatting
+
+After writing or updating this artifact, run `ds format <path>` to apply
+canonical formatting (line wrap, indentation, blank lines).
+
+Use fenced code blocks for tables and diagrams; add a `<language>` tag to
+fences that contain real code.
+
 ## Example
 
 ```markdown

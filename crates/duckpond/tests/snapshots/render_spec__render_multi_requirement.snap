@@ -1,16 +1,17 @@
 ---
 source: crates/duckpond/tests/render_spec.rs
+assertion_line: 20
 expression: "roundtrip(\"multi_requirement.md\")"
 ---
 # Authentication
 
-Allows users to sign in with email and password, manages their
-sessions, and provides logout.
+Allows users to sign in with email and password, manages their sessions, and provides
+logout.
 
 ## Requirement: Email-password login
 
-The system SHALL allow a registered user to authenticate using their
-email address and password.
+The system SHALL allow a registered user to authenticate using their email address and
+password.
 
 > test: code
 

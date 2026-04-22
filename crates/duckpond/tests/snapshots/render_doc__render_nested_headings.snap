@@ -1,16 +1,15 @@
 ---
 source: crates/duckpond/tests/render_doc.rs
+assertion_line: 25
 expression: "roundtrip(\"nested_headings.md\")"
 ---
 # Data flow architecture
 
-How data moves between the web client, API gateway, workers, and
-persistent stores.
+How data moves between the web client, API gateway, workers, and persistent stores.
 
 ## Overview
 
-The system uses request-response for sync operations and message
-queues for async work.
+The system uses request-response for sync operations and message queues for async work.
 
 ## Synchronous path
 

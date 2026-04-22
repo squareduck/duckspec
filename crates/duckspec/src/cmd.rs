@@ -3,6 +3,7 @@ pub mod audit;
 pub mod check;
 pub mod common;
 pub mod create;
+pub mod format;
 pub mod index;
 pub mod init;
 pub mod schema;

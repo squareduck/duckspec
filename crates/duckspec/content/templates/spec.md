@@ -62,6 +62,14 @@ Work through the proposal's scope, one capability at a time:
 
 4. **Validate.** After writing each file, run `ds check` on it.
 
+## Formatting
+
+After writing or updating each artifact, run `ds format <path>` to apply
+canonical formatting (line wrap, indentation, blank lines).
+
+Use fenced code blocks for tables and diagrams; add a `<language>` tag to
+fences that contain real code.
+
 ## Write gate
 
 Before writing each capability's spec, present the behavioral contract:

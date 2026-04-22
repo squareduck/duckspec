@@ -50,6 +50,14 @@ plan. Keep it short and persuasive.
 - The entire proposal should fit on one screen. If it doesn't, the change is
   probably too big — split it.
 
+## Formatting
+
+After writing or updating this artifact, run `ds format <path>` to apply
+canonical formatting (line wrap, indentation, blank lines).
+
+Use fenced code blocks for tables and diagrams; add a `<language>` tag to
+fences that contain real code.
+
 ## Example
 
 ```markdown

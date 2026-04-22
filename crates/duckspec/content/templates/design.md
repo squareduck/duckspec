@@ -52,6 +52,14 @@ evaluate the approach before committing to specs and implementation.
 6. **Draft the design.** Load the schema with `ds schema design` and draft the
    content following its structure.
 
+## Formatting
+
+After writing or updating each artifact, run `ds format <path>` to apply
+canonical formatting (line wrap, indentation, blank lines).
+
+Use fenced code blocks for tables and diagrams; add a `<language>` tag to
+fences that contain real code.
+
 ## Write gate
 
 Before writing the design, present its skeleton:

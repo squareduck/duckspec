@@ -33,6 +33,14 @@ Optional. Projects that don't need one can omit it.
 - Keep it concise. If project.md grows past two screens, some of its content
   probably belongs in codex entries.
 
+## Formatting
+
+After writing or updating this artifact, run `ds format <path>` to apply
+canonical formatting (line wrap, indentation, blank lines).
+
+Use fenced code blocks for tables and diagrams; add a `<language>` tag to
+fences that contain real code.
+
 ## Example
 
 ```markdown

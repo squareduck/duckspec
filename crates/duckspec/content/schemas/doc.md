@@ -38,6 +38,14 @@ why, for whom, and with what trade-offs.
   "before the fix", or "now also supports" — those belong in PR descriptions and
   commit messages, not live documentation.
 
+## Formatting
+
+After writing or updating this artifact, run `ds format <path>` to apply
+canonical formatting (line wrap, indentation, blank lines).
+
+Use fenced code blocks for tables and diagrams; add a `<language>` tag to
+fences that contain real code.
+
 ## Example
 
 ```markdown

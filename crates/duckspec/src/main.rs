@@ -35,9 +35,14 @@ enum Command {
     Check {
         /// File or directory to validate (default: duckspec/).
         path: Option<String>,
-        /// Rewrite to canonical order before validating.
+    },
+    /// Format artifacts to canonical markdown (in place).
+    Format {
+        /// File or directory to format (default: duckspec/).
+        path: Option<String>,
+        /// Print formatted output instead of writing files.
         #[arg(long)]
-        format: bool,
+        dry: bool,
     },
     /// Resolve @spec backlinks, update test markers.
     Sync {
@@ -91,7 +96,8 @@ fn main() -> anyhow::Result<()> {
         Command::Init { harness } => cmd::init::run(harness),
         Command::Status { path } => cmd::status::run(path),
         Command::Audit { change } => cmd::audit::run(change),
-        Command::Check { path, format } => cmd::check::run(path, format),
+        Command::Check { path } => cmd::check::run(path),
+        Command::Format { path, dry } => cmd::format::run(path, dry),
         Command::Sync { dry } => cmd::sync::run(dry),
         Command::Archive { name, dry } => cmd::archive::run(name, dry),
         Command::Index {

@@ -1,11 +1,11 @@
 ---
 source: crates/duckpond/tests/render_step.rs
+assertion_line: 15
 expression: "roundtrip(\"minimal.md\")"
 ---
 # Add login form UI
 
-Build the React login form component with email and password
-fields and a submit handler.
+Build the React login form component with email and password fields and a submit handler.
 
 ## Tasks
 
@@ -13,5 +13,7 @@ fields and a submit handler.
   - [ ] 1.1 Email input with validation
   - [ ] 1.2 Password input with visibility toggle
   - [ ] 1.3 Submit button with loading state
+
 - [ ] 2. Wire up the form to the existing `/auth/login` API
+
 - [ ] 3. Handle error responses and display messages

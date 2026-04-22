@@ -9,7 +9,7 @@ use owo_colors::OwoColorize;
 
 use super::common::{collect_files, find_duckspec_root, resolve_path};
 
-pub fn run(path: Option<String>, format: bool) -> anyhow::Result<()> {
+pub fn run(path: Option<String>) -> anyhow::Result<()> {
     let duckspec_root = find_duckspec_root()?;
     let canonical_root = duckspec_root.canonicalize()?;
 
@@ -19,7 +19,7 @@ pub fn run(path: Option<String>, format: bool) -> anyhow::Result<()> {
     match resolved {
         Target::ChangeDir { change_name } => run_change_check(&duckspec_root, &change_name),
         Target::FileOrDir { path: scan_path } => {
-            run_file_check(&duckspec_root, &canonical_root, &scan_path, format)
+            run_file_check(&duckspec_root, &canonical_root, &scan_path)
         }
     }
 }
@@ -67,10 +67,10 @@ fn run_file_check(
     _duckspec_root: &Path,
     canonical_root: &Path,
     scan_path: &Path,
-    format: bool,
 ) -> anyhow::Result<()> {
     let files = collect_files(scan_path)?;
     let mut error_count: usize = 0;
+    let mut has_order_violation = false;
 
     for file_path in &files {
         let canonical_file = file_path
@@ -89,22 +89,16 @@ fn run_file_check(
             .map_err(|e| anyhow::anyhow!("failed to read {}: {e}", file_path.display()))?;
 
         let ctx = build_context(&kind, relative);
-
-        let result = if format {
-            let r = check::format_artifact(&source, &kind, &ctx);
-            if let Some(ref formatted) = r.formatted
-                && *formatted != source
-            {
-                std::fs::write(file_path, formatted)
-                    .map_err(|e| anyhow::anyhow!("failed to write {}: {e}", file_path.display()))?;
-                eprintln!("formatted {}", relative.display());
-            }
-            r
-        } else {
-            check::check_artifact(&source, &kind, &ctx)
-        };
+        let result = check::check_artifact(&source, &kind, &ctx);
 
         if !result.errors.is_empty() {
+            if result
+                .errors
+                .iter()
+                .any(|e| matches!(e, ParseError::DeltaOrderViolation { .. }))
+            {
+                has_order_violation = true;
+            }
             let named = NamedSource::new(relative.display().to_string(), source.clone());
             report_parse_errors(&result.errors, named);
             error_count += result.errors.len();
@@ -113,6 +107,12 @@ fn run_file_check(
 
     if error_count > 0 {
         report_summary(error_count);
+        if has_order_violation {
+            eprintln!(
+                "  {} run `ds format` to fix delta ordering",
+                "hint:".yellow()
+            );
+        }
         std::process::exit(1);
     }
 

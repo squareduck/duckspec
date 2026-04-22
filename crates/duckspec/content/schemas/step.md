@@ -84,6 +84,14 @@ single agent session. Steps are ordered, and each is processed in its own
   step's implementation details. If the design already describes what this step
   implements, omit Context; don't duplicate.
 
+## Formatting
+
+After writing or updating this artifact, run `ds format <path>` to apply
+canonical formatting (line wrap, indentation, blank lines).
+
+Use fenced code blocks for tables and diagrams; add a `<language>` tag to
+fences that contain real code.
+
 ## Example
 
 ```markdown

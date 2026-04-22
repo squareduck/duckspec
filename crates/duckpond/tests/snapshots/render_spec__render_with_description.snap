@@ -1,17 +1,17 @@
 ---
 source: crates/duckpond/tests/render_spec.rs
+assertion_line: 30
 expression: "roundtrip(\"with_description.md\")"
 ---
 # Authentication
 
-Allows users to sign in with email and password. Primary auth
-mechanism for consumer accounts.
+Allows users to sign in with email and password. Primary auth mechanism for consumer
+accounts.
 
-This capability is the foundation for all user-facing access
-control. It covers the happy path (credentials accepted) and the
-most common failure modes (credentials rejected, account locked).
-Delegated auth via third-party providers is a separate capability
-under `auth/oauth/`.
+This capability is the foundation for all user-facing access control. It covers the happy
+path (credentials accepted) and the most common failure modes (credentials rejected,
+account locked). Delegated auth via third-party providers is a separate capability under
+`auth/oauth/`.
 
 ## Requirement: Email-password login
 

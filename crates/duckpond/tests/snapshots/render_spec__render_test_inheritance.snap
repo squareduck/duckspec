@@ -1,5 +1,6 @@
 ---
 source: crates/duckpond/tests/render_spec.rs
+assertion_line: 25
 expression: "roundtrip(\"test_inheritance.md\")"
 ---
 # Email-password authentication
@@ -8,8 +9,8 @@ Users authenticate by submitting their email and password.
 
 ## Requirement: Email-password login
 
-The system SHALL allow a registered user to authenticate using their
-email address and password.
+The system SHALL allow a registered user to authenticate using their email address and
+password.
 
 > test: code
 

@@ -10,8 +10,8 @@ pub struct Config {
     pub format: FormatConfig,
 }
 
-/// Formatting knobs rendered into schema output.
-#[derive(Debug)]
+/// Formatting knobs applied when rendering artifacts.
+#[derive(Debug, Clone)]
 pub struct FormatConfig {
     /// Target line width for wrapping prose in artifacts.
     pub line_width: usize,
@@ -19,7 +19,7 @@ pub struct FormatConfig {
 
 impl Default for FormatConfig {
     fn default() -> Self {
-        Self { line_width: 80 }
+        Self { line_width: 90 }
     }
 }
 
@@ -112,10 +112,10 @@ mod tests {
     }
 
     #[test]
-    fn default_line_width_is_80() {
+    fn default_line_width_is_90() {
         let dir = tempfile::tempdir().unwrap();
         let config = Config::load(dir.path()).unwrap();
-        assert_eq!(config.format.line_width, 80);
+        assert_eq!(config.format.line_width, 90);
     }
 
     #[test]
@@ -135,7 +135,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         fs::write(dir.path().join("config.toml"), "[format]\n").unwrap();
         let config = Config::load(dir.path()).unwrap();
-        assert_eq!(config.format.line_width, 80);
+        assert_eq!(config.format.line_width, 90);
     }
 
     #[test]
