@@ -147,6 +147,8 @@ pub enum Msg {
     SwitchMode(InteractionMode),
     AgentChat(agent_chat::Msg),
     TerminalScroll,
+    /// User cmd-clicked a hyperlink in the terminal output. Handled by main.
+    TerminalOpenUrl(String),
     /// Create a new agent session for the current scope. Handled by area.
     NewSession,
     /// Switch the active agent session by id. Handled by area.
@@ -187,6 +189,11 @@ pub fn update(state: &mut InteractionState, msg: Msg, highlighter: &SyntaxHighli
         Msg::NewSession | Msg::SelectSession(_) | Msg::ClearSession => {
             // Area-handled.
         }
+        Msg::TerminalOpenUrl(url) => {
+            if let Err(err) = opener::open(&url) {
+                tracing::warn!(%url, %err, "failed to open terminal URL");
+            }
+        }
         Msg::ToggleChatSection => {
             state.chat_section_expanded = !state.chat_section_expanded;
         }
@@ -202,6 +209,12 @@ fn handle_agent_chat(
     let Some(ax) = state.active_mut() else { return };
     match msg {
         agent_chat::Msg::InputAction(action) => {
+            if let text_edit::EditorAction::OpenUrl(url) = &action {
+                if let Err(err) = opener::open(url) {
+                    tracing::warn!(%url, %err, "failed to open chat URL");
+                }
+                return;
+            }
             if ax.chat_completion.visible {
                 match &action {
                     text_edit::EditorAction::MoveUp(_) => {
@@ -376,6 +389,12 @@ pub fn rebuild_chat_editor(ax: &mut AgentSession, highlighter: &SyntaxHighlighte
 }
 
 fn handle_chat_action_on(editor: &mut EditorState, action: crate::widget::text_edit::EditorAction) {
+    if let crate::widget::text_edit::EditorAction::OpenUrl(url) = &action {
+        if let Err(err) = opener::open(url) {
+            tracing::warn!(%url, %err, "failed to open chat URL");
+        }
+        return;
+    }
     // Chat editors are read-only — skip mutating actions.
     if !action.is_mutating() {
         editor.apply_action(action);
@@ -679,7 +698,12 @@ pub fn view_column<'a, M: 'a + Clone>(
         InteractionMode::Terminal => {
             if let Some(ts) = &state.terminal {
                 let w = wrap.clone();
-                crate::widget::terminal::view_terminal(ts).map(move |_: ()| w(Msg::TerminalScroll))
+                crate::widget::terminal::view_terminal(ts).map(move |ev| match ev {
+                    crate::widget::terminal::TerminalEvent::Redraw => w(Msg::TerminalScroll),
+                    crate::widget::terminal::TerminalEvent::OpenUrl(url) => {
+                        w(Msg::TerminalOpenUrl(url))
+                    }
+                })
             } else {
                 view_placeholder(wrap.clone())
             }

@@ -942,6 +942,13 @@ pub fn handle_editor_action(
         return;
     }
 
+    if let widget::text_edit::EditorAction::OpenUrl(url) = &action {
+        if let Err(err) = opener::open(url) {
+            tracing::warn!(%url, %err, "failed to open editor URL");
+        }
+        return;
+    }
+
     let (editor, tab_id) = match &mut tab.view {
         tab_bar::TabView::Editor { editor, .. } => (editor, tab.id.as_str()),
         tab_bar::TabView::Diff { editor, .. } => (editor, tab.id.as_str()),
@@ -1306,28 +1313,35 @@ fn handle_key_event(
     status: event::Status,
     _window: iced::window::Id,
 ) -> Option<Message> {
-    if let Event::Keyboard(keyboard::Event::KeyPressed {
-        key,
-        modifiers,
-        text,
-        ..
-    }) = event
-    {
-        // Skip events already consumed by a focused widget (e.g. Enter typed
-        // into the content editor). Otherwise the chat column would also
-        // react to them. Escape is exempt: iced's `text_input` captures it to
-        // clear focus, so without the exemption the file finder would need
-        // two Escape presses to close.
-        let is_escape = matches!(&key, keyboard::Key::Named(keyboard::key::Named::Escape));
-        if !is_escape && matches!(status, event::Status::Captured) {
-            return None;
+    match event {
+        Event::Keyboard(keyboard::Event::ModifiersChanged(mods)) => {
+            // Mirror modifier state into a process-wide cell so canvas widgets
+            // (terminal, etc.) can react to cmd-held mouse moves and clicks.
+            widget::terminal::set_current_modifiers(mods);
+            None
         }
-        Some(Message::KeyPress(
+        Event::Keyboard(keyboard::Event::KeyPressed {
             key,
             modifiers,
-            text.map(|s| s.to_string()),
-        ))
-    } else {
-        None
+            text,
+            ..
+        }) => {
+            widget::terminal::set_current_modifiers(modifiers);
+            // Skip events already consumed by a focused widget (e.g. Enter typed
+            // into the content editor). Otherwise the chat column would also
+            // react to them. Escape is exempt: iced's `text_input` captures it to
+            // clear focus, so without the exemption the file finder would need
+            // two Escape presses to close.
+            let is_escape = matches!(&key, keyboard::Key::Named(keyboard::key::Named::Escape));
+            if !is_escape && matches!(status, event::Status::Captured) {
+                return None;
+            }
+            Some(Message::KeyPress(
+                key,
+                modifiers,
+                text.map(|s| s.to_string()),
+            ))
+        }
+        _ => None,
     }
 }

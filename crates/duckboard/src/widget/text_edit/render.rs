@@ -13,11 +13,14 @@ use iced::{
     keyboard,
 };
 
+use linkify::LinkFinder;
+
 use super::state::{
     CONTENT_PAD_Y, EditorAction, EditorState, LINE_HEIGHT, Pos, block_header_color, block_kind_bg,
     line_bg_color,
 };
 use crate::theme;
+use crate::widget::terminal::current_modifiers;
 
 // ── Layout constants ───────────────────────────────────────────────────────
 
@@ -43,6 +46,22 @@ struct InternalState {
     dragging: bool,
     cell_width: f32,
     gutter_width: f32,
+    /// URL currently under the mouse while a modifier is held. Drives the
+    /// underline overlay and the pointer cursor; cleared when modifiers
+    /// release or the mouse moves off the link.
+    link_hover: Option<LinkHover>,
+}
+
+/// A URL found at a click/hover position in the editor's text.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct LinkHover {
+    /// Logical line index in `EditorState::lines`.
+    line: usize,
+    /// Char offset of the link's first character within the line.
+    char_start: usize,
+    /// Char offset one past the link's last character.
+    char_end: usize,
+    url: String,
 }
 
 impl operation::Focusable for InternalState {
@@ -327,8 +346,27 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for TextEdit<'a, M> {
         match event {
             Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => {
                 if cursor.is_over(bounds) {
-                    internal.focused = true;
                     let pos = cursor.position().unwrap();
+                    // Cmd-click on a hovered link opens it instead of moving
+                    // the caret. Don't focus or start a drag.
+                    if current_modifiers().command()
+                        && let Some(hover) = internal.link_hover.clone()
+                        && pos_in_hover(
+                            pos,
+                            bounds,
+                            internal,
+                            self.state,
+                            wrap.as_ref(),
+                            content_height,
+                            &hover,
+                        )
+                    {
+                        shell.publish((self.on_action)(EditorAction::OpenUrl(hover.url)));
+                        shell.capture_event();
+                        return;
+                    }
+
+                    internal.focused = true;
                     let click_pos = pixel_to_pos_wrapped(
                         pos,
                         bounds,
@@ -359,6 +397,28 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for TextEdit<'a, M> {
                         content_height,
                     );
                     shell.publish((self.on_action)(EditorAction::Drag(drag_pos)));
+                } else {
+                    // Hover detection while cmd is held.
+                    let new_hover = if current_modifiers().command()
+                        && let Some(pos) = cursor.position()
+                        && bounds.contains(pos)
+                    {
+                        let click_pos = pixel_to_pos_wrapped(
+                            pos,
+                            bounds,
+                            internal,
+                            self.state,
+                            wrap.as_ref(),
+                            content_height,
+                        );
+                        detect_link_at(self.state, click_pos)
+                    } else {
+                        None
+                    };
+                    if internal.link_hover != new_hover {
+                        internal.link_hover = new_hover;
+                        shell.request_redraw();
+                    }
                 }
             }
             Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) => {
@@ -510,17 +570,21 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for TextEdit<'a, M> {
 
     fn mouse_interaction(
         &self,
-        _tree: &Tree,
+        tree: &Tree,
         layout: Layout<'_>,
         cursor: adv_mouse::Cursor,
         _viewport: &Rectangle,
         _renderer: &iced::Renderer,
     ) -> mouse::Interaction {
-        if cursor.is_over(layout.bounds()) {
-            mouse::Interaction::Text
-        } else {
-            mouse::Interaction::default()
+        let bounds = layout.bounds();
+        if !cursor.is_over(bounds) {
+            return mouse::Interaction::default();
         }
+        let internal = tree.state.downcast_ref::<InternalState>();
+        if internal.link_hover.is_some() {
+            return mouse::Interaction::Pointer;
+        }
+        mouse::Interaction::Text
     }
 
     fn draw(
@@ -535,6 +599,7 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for TextEdit<'a, M> {
     ) {
         let bounds = layout.bounds();
         let internal = tree.state.downcast_ref::<InternalState>();
+        let link_hover = internal.link_hover.as_ref();
         let cell_w = if internal.cell_width > 0.0 {
             internal.cell_width
         } else {
@@ -865,6 +930,33 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for TextEdit<'a, M> {
                         }
                     }
                 }
+
+                // Link hover underline — drawn per visual row so a wrapped URL
+                // gets a segmented underline that follows the wrap.
+                if let Some(hover) = link_hover
+                    && hover.line == line_idx
+                    && hover.char_start < char_end
+                    && hover.char_end > char_start
+                {
+                    let vis_start = hover.char_start.max(char_start) - char_start;
+                    let vis_end = hover.char_end.min(char_end) - char_start;
+                    let ux = content_x + CONTENT_PAD + vis_start as f32 * cell_w - scroll_x;
+                    let uw = (vis_end - vis_start) as f32 * cell_w;
+                    renderer::Renderer::fill_quad(
+                        renderer,
+                        renderer::Quad {
+                            bounds: Rectangle {
+                                x: ux,
+                                y: y + LINE_HEIGHT - 2.0,
+                                width: uw,
+                                height: 1.0,
+                            },
+                            border: Border::default(),
+                            ..renderer::Quad::default()
+                        },
+                        theme::accent(),
+                    );
+                }
             }
 
             // Cursor.
@@ -1118,6 +1210,40 @@ fn pixel_to_pos_wrapped(
         let col = col_in_row.min(state.lines[line].len());
         Pos::new(line, col)
     }
+}
+
+/// Find a URL on `pos`'s logical line that contains `pos.col`. Used to arm
+/// hover state and decide whether cmd-click opens a link or moves the caret.
+fn detect_link_at(state: &EditorState, pos: Pos) -> Option<LinkHover> {
+    let line = state.lines.get(pos.line)?;
+    let finder = LinkFinder::new();
+    for link in finder.links(line) {
+        let start_col = line[..link.start()].chars().count();
+        let end_col = line[..link.end()].chars().count();
+        if pos.col >= start_col && pos.col < end_col {
+            return Some(LinkHover {
+                line: pos.line,
+                char_start: start_col,
+                char_end: end_col,
+                url: link.as_str().to_string(),
+            });
+        }
+    }
+    None
+}
+
+/// True when canvas-local `point` falls within the cells underlined for `hover`.
+fn pos_in_hover(
+    point: Point,
+    bounds: Rectangle,
+    internal: &InternalState,
+    state: &EditorState,
+    wrap: Option<&WrapLayout>,
+    content_height: f32,
+    hover: &LinkHover,
+) -> bool {
+    let pos = pixel_to_pos_wrapped(point, bounds, internal, state, wrap, content_height);
+    pos.line == hover.line && pos.col >= hover.char_start && pos.col < hover.char_end
 }
 
 /// Convenience: create the widget.

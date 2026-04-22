@@ -293,6 +293,10 @@ impl EditorState {
                 // that editors without a file path (e.g. chat input) simply
                 // ignore Cmd+S.
             }
+            EditorAction::OpenUrl(_) => {
+                // Handled upstream — see `handle_editor_action` and chat input
+                // handlers, which dispatch to the system opener.
+            }
         }
 
         mutates
@@ -745,6 +749,9 @@ pub enum EditorAction {
         content_width: f32,
     },
     SaveRequested,
+    /// User cmd-clicked a hyperlink in the editor. Handled by the caller;
+    /// `apply_action` is a no-op for this variant.
+    OpenUrl(String),
 }
 
 impl EditorAction {

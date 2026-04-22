@@ -1189,8 +1189,10 @@ dependencies = [
  "gix",
  "iced",
  "ignore",
+ "linkify",
  "notify-debouncer-mini",
  "nucleo",
+ "opener",
  "portable-pty",
  "serde",
  "serde_json",
@@ -3442,6 +3444,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d4a5ff6bcca6c4867b1c4fd4ef63e4db7436ef363e0ad7531d1558856bae64f4"
 
 [[package]]
+name = "linkify"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "92f9ae2f3d31697697311f016320fe984127e636b45cf5eb5c175b7eb103dadb"
+dependencies = [
+ "memchr",
+]
+
+[[package]]
 name = "linux-raw-sys"
 version = "0.4.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3752,6 +3763,15 @@ dependencies = [
  "cfg-if",
  "cfg_aliases 0.1.1",
  "libc",
+]
+
+[[package]]
+name = "normpath"
+version = "1.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bf23ab2b905654b4cb177e30b629937b3868311d4e1cba859f899c041046e69b"
+dependencies = [
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -4250,6 +4270,17 @@ name = "once_cell_polyfill"
 version = "1.70.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
+
+[[package]]
+name = "opener"
+version = "0.8.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a2fa337e0cf13357c13ef1dc108df1333eb192f75fc170bea03fcf1fd404c2ee"
+dependencies = [
+ "bstr",
+ "normpath",
+ "windows-sys 0.61.2",
+]
 
 [[package]]
 name = "option-ext"

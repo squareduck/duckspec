@@ -4,9 +4,11 @@
 //! (VT parsing, grid state) is handled by alacritty_terminal; we only do
 //! cell-by-cell rendering and keyboard/mouse plumbing.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::io::{Read as _, Write};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicU32, Ordering};
 
 use alacritty_terminal::event::{Event as TermEvent, EventListener};
 use alacritty_terminal::grid::{Dimensions, Scroll};
@@ -19,8 +21,9 @@ use alacritty_terminal::vte::ansi::{self, Color as AnsiColor, NamedColor, Rgb};
 use iced::keyboard;
 use iced::mouse;
 use iced::widget::canvas;
-use iced::widget::canvas::Cache;
+use iced::widget::canvas::{Cache, Frame};
 use iced::{Color, Element, Length, Point as IcedPoint, Rectangle, Size, Subscription, Theme};
+use linkify::LinkFinder;
 
 use crate::theme;
 
@@ -775,7 +778,76 @@ fn resolve_color(
     }
 }
 
+// ── Modifier tracking ────────────────────────────────────────────────────────
+
+/// Process-wide live modifier state, set by the global key event handler in
+/// `main.rs`. Mouse events in Iced canvases don't carry modifiers, so we mirror
+/// the latest known state here for canvas widgets to query.
+static CURRENT_MODIFIERS: AtomicU32 = AtomicU32::new(0);
+
+const MOD_SHIFT: u32 = 1 << 0;
+const MOD_CTRL: u32 = 1 << 1;
+const MOD_ALT: u32 = 1 << 2;
+const MOD_LOGO: u32 = 1 << 3;
+
+/// Update the live modifier state. Call from a global keyboard event handler.
+pub fn set_current_modifiers(mods: keyboard::Modifiers) {
+    let mut bits = 0u32;
+    if mods.shift() {
+        bits |= MOD_SHIFT;
+    }
+    if mods.control() {
+        bits |= MOD_CTRL;
+    }
+    if mods.alt() {
+        bits |= MOD_ALT;
+    }
+    if mods.logo() {
+        bits |= MOD_LOGO;
+    }
+    CURRENT_MODIFIERS.store(bits, Ordering::Relaxed);
+}
+
+/// Read the live modifier state. Returns the current state of the keyboard
+/// modifiers as last seen by the global key event handler. Available to other
+/// widgets (text_edit) that need modifier-aware mouse behaviors.
+pub fn current_modifiers() -> keyboard::Modifiers {
+    let bits = CURRENT_MODIFIERS.load(Ordering::Relaxed);
+    let mut m = keyboard::Modifiers::empty();
+    if bits & MOD_SHIFT != 0 {
+        m |= keyboard::Modifiers::SHIFT;
+    }
+    if bits & MOD_CTRL != 0 {
+        m |= keyboard::Modifiers::CTRL;
+    }
+    if bits & MOD_ALT != 0 {
+        m |= keyboard::Modifiers::ALT;
+    }
+    if bits & MOD_LOGO != 0 {
+        m |= keyboard::Modifiers::LOGO;
+    }
+    m
+}
+
 // ── Canvas rendering ─────────────────────────────────────────────────────────
+
+/// Events the terminal canvas publishes to its parent.
+#[derive(Debug, Clone)]
+pub enum TerminalEvent {
+    /// Triggers a re-render (mouse scroll/click/drag, hover changes).
+    Redraw,
+    /// User cmd-clicked a hyperlink in the terminal output.
+    OpenUrl(String),
+}
+
+/// A URL detected in the visible buffer that the cursor is currently over.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct LinkHover {
+    row: usize,
+    start_col: usize,
+    end_col: usize,
+    url: String,
+}
 
 /// The Canvas Program that reads the pre-computed cell buffer and draws it.
 pub struct TerminalCanvas<'a> {
@@ -791,6 +863,9 @@ pub struct CanvasState {
     /// a full line. Carried across events so small per-frame deltas eventually
     /// trigger a scroll instead of being silently dropped.
     scroll_accum: Cell<f32>,
+    /// URL currently under the mouse while a modifier is held. Drives the
+    /// underline overlay and the pointer cursor.
+    hover: RefCell<Option<LinkHover>>,
 }
 
 impl Default for CanvasState {
@@ -800,11 +875,12 @@ impl Default for CanvasState {
             last_generation: Cell::new(0),
             dragging: Cell::new(false),
             scroll_accum: Cell::new(0.0),
+            hover: RefCell::new(None),
         }
     }
 }
 
-impl<'a> canvas::Program<()> for TerminalCanvas<'a> {
+impl<'a> canvas::Program<TerminalEvent> for TerminalCanvas<'a> {
     type State = CanvasState;
 
     fn update(
@@ -813,7 +889,7 @@ impl<'a> canvas::Program<()> for TerminalCanvas<'a> {
         event: &canvas::Event,
         bounds: Rectangle,
         cursor: mouse::Cursor,
-    ) -> Option<canvas::Action<()>> {
+    ) -> Option<canvas::Action<TerminalEvent>> {
         match event {
             canvas::Event::Mouse(mouse::Event::WheelScrolled { delta }) => {
                 if !cursor.is_over(bounds) {
@@ -838,7 +914,7 @@ impl<'a> canvas::Program<()> for TerminalCanvas<'a> {
                 };
                 if lines != 0 {
                     self.state.request_scroll(lines);
-                    Some(canvas::Action::publish(()).and_capture())
+                    Some(canvas::Action::publish(TerminalEvent::Redraw).and_capture())
                 } else {
                     // Still capture so the wheel event doesn't bubble to a
                     // parent scrollable while we're busy accumulating.
@@ -847,9 +923,19 @@ impl<'a> canvas::Program<()> for TerminalCanvas<'a> {
             }
             canvas::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => {
                 let pos = cursor.position_in(bounds)?;
+                // Cmd-click on a hovered link opens it instead of starting a
+                // selection.
+                if current_modifiers().command()
+                    && let Some(hover) = state.hover.borrow().clone()
+                    && self.point_over_hover(pos, &hover)
+                {
+                    return Some(
+                        canvas::Action::publish(TerminalEvent::OpenUrl(hover.url)).and_capture(),
+                    );
+                }
                 self.state.queue_selection_start(pos.x, pos.y);
                 state.dragging.set(true);
-                Some(canvas::Action::publish(()).and_capture())
+                Some(canvas::Action::publish(TerminalEvent::Redraw).and_capture())
             }
             canvas::Event::Mouse(mouse::Event::CursorMoved { .. }) => {
                 if state.dragging.get()
@@ -867,18 +953,47 @@ impl<'a> canvas::Program<()> for TerminalCanvas<'a> {
                         self.state.request_scroll(-overshoot);
                     }
                     self.state.queue_selection_update(pos.x, pos.y);
-                    return Some(canvas::Action::publish(()).and_capture());
+                    return Some(canvas::Action::publish(TerminalEvent::Redraw).and_capture());
+                }
+                // Hover detection while cmd is held.
+                let cursor_pos = cursor.position_in(bounds);
+                let want_hover = current_modifiers().command() && cursor_pos.is_some();
+                let new_hover = if want_hover {
+                    self.detect_link_at(cursor_pos.unwrap())
+                } else {
+                    None
+                };
+                let mut hover_slot = state.hover.borrow_mut();
+                if *hover_slot != new_hover {
+                    *hover_slot = new_hover;
+                    return Some(canvas::Action::publish(TerminalEvent::Redraw));
                 }
                 None
             }
             canvas::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) => {
                 if state.dragging.get() {
                     state.dragging.set(false);
-                    return Some(canvas::Action::publish(()).and_capture());
+                    return Some(canvas::Action::publish(TerminalEvent::Redraw).and_capture());
                 }
                 None
             }
             _ => None,
+        }
+    }
+
+    fn mouse_interaction(
+        &self,
+        state: &Self::State,
+        bounds: Rectangle,
+        cursor: mouse::Cursor,
+    ) -> mouse::Interaction {
+        if let Some(hover) = state.hover.borrow().as_ref()
+            && let Some(pos) = cursor.position_in(bounds)
+            && self.point_over_hover(pos, hover)
+        {
+            mouse::Interaction::Pointer
+        } else {
+            mouse::Interaction::default()
         }
     }
 
@@ -987,12 +1102,80 @@ impl<'a> canvas::Program<()> for TerminalCanvas<'a> {
             }
         });
 
-        vec![geometry]
+        // Hover underline (drawn outside the cache so it tracks mouse moves).
+        let mut overlays = vec![geometry];
+        if let Some(hover) = state.hover.borrow().as_ref() {
+            let mut overlay = Frame::new(renderer, bounds.size());
+            let x = PAD_X + hover.start_col as f32 * cw;
+            let y = PAD_Y + hover.row as f32 * ch + ch - 1.0;
+            let width = (hover.end_col - hover.start_col) as f32 * cw;
+            overlay.fill_rectangle(
+                IcedPoint::new(x, y),
+                Size::new(width, 1.0),
+                theme::accent(),
+            );
+            overlays.push(overlay.into_geometry());
+        }
+        overlays
+    }
+}
+
+impl<'a> TerminalCanvas<'a> {
+    /// True when `pos` (canvas-local pixels) lies within the underlined cells
+    /// of `hover`. Used both to gate cmd-click and to decide cursor shape.
+    fn point_over_hover(&self, pos: IcedPoint, hover: &LinkHover) -> bool {
+        let cw = cell_width();
+        let ch = cell_height();
+        let col_f = (pos.x - PAD_X) / cw;
+        let row_f = (pos.y - PAD_Y) / ch;
+        if col_f < 0.0 || row_f < 0.0 {
+            return false;
+        }
+        let col = col_f as usize;
+        let row = row_f as usize;
+        row == hover.row && col >= hover.start_col && col < hover.end_col
+    }
+
+    /// Detect a URL under canvas-local pixel position `pos`. Scans only the
+    /// hovered visible row (no wrap-aware joining yet — wrapped URLs won't be
+    /// detected).
+    fn detect_link_at(&self, pos: IcedPoint) -> Option<LinkHover> {
+        let cw = cell_width();
+        let ch = cell_height();
+        let col_f = (pos.x - PAD_X) / cw;
+        let row_f = (pos.y - PAD_Y) / ch;
+        if col_f < 0.0 || row_f < 0.0 {
+            return None;
+        }
+        let col = col_f as usize;
+        let row = row_f as usize;
+        let buffer = &self.state.buffer;
+        if row >= buffer.rows || col >= buffer.cols {
+            return None;
+        }
+
+        let cols = buffer.cols;
+        let line: String = (0..cols).map(|c| buffer.cell(row, c).grapheme).collect();
+
+        let finder = LinkFinder::new();
+        for link in finder.links(&line) {
+            let start_col = line[..link.start()].chars().count();
+            let end_col = line[..link.end()].chars().count();
+            if col >= start_col && col < end_col {
+                return Some(LinkHover {
+                    row,
+                    start_col,
+                    end_col,
+                    url: link.as_str().to_string(),
+                });
+            }
+        }
+        None
     }
 }
 
 /// Build a terminal view element from the current terminal state.
-pub fn view_terminal(state: &TerminalState) -> Element<'_, ()> {
+pub fn view_terminal(state: &TerminalState) -> Element<'_, TerminalEvent> {
     canvas::Canvas::new(TerminalCanvas { state })
         .width(Length::Fill)
         .height(Length::Fill)
