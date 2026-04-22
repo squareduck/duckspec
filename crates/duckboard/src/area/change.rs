@@ -1041,7 +1041,7 @@ fn view_list<'a>(state: &'a State, project: &'a ProjectData) -> Element<'a, Mess
         rows.push(
             ListRow::new(name.as_str())
                 .icon(ICON_EXPLORE)
-                .trailing(close_btn)
+                .sticky_trailing(close_btn)
                 .selected(is_selected)
                 .on_press(Message::SelectChange(name.clone())),
         );

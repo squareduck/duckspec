@@ -33,6 +33,7 @@ pub struct ListRow<'a, Msg> {
     icon_tint: Option<Color>,
     leading: Option<Element<'a, Msg>>,
     trailing: Option<Element<'a, Msg>>,
+    sticky_trailing: Option<Element<'a, Msg>>,
     badge: Option<Badge>,
     indent_level: usize,
     selected: bool,
@@ -49,6 +50,7 @@ impl<'a, Msg: Clone + 'a> ListRow<'a, Msg> {
             icon_tint: None,
             leading: None,
             trailing: None,
+            sticky_trailing: None,
             badge: None,
             indent_level: 0,
             selected: false,
@@ -94,6 +96,16 @@ impl<'a, Msg: Clone + 'a> ListRow<'a, Msg> {
         self
     }
 
+    /// Trailing element pinned to the right edge of the visible viewport
+    /// rather than the row's natural width — stays in place as the column
+    /// pans horizontally. Only takes effect in the `view()` path
+    /// (`fill_width = false`); in fill-width mode it renders identically
+    /// to a regular `trailing` element.
+    pub fn sticky_trailing(mut self, el: Element<'a, Msg>) -> Self {
+        self.sticky_trailing = Some(el);
+        self
+    }
+
     pub fn badge(mut self, badge: Badge) -> Self {
         self.badge = Some(badge);
         self
@@ -132,10 +144,15 @@ impl<'a, Msg: Clone + 'a> ListRow<'a, Msg> {
                 .wrapping(Wrapping::None),
         );
 
-        let trailing = self
-            .trailing
-            .or_else(|| self.badge.map(render_badge));
-        if let Some(t) = trailing {
+        // In shrink-width mode, sticky_trailing is overlaid by PanRow at the
+        // viewport's right edge. In fill-width mode there's no panning to
+        // anchor against, so it falls back to a regular inline trailing.
+        let mut sticky_trailing = self.sticky_trailing;
+        let mut inline_trailing = self.trailing.or_else(|| self.badge.map(render_badge));
+        if self.fill_width && inline_trailing.is_none() {
+            inline_trailing = sticky_trailing.take();
+        }
+        if let Some(t) = inline_trailing {
             inner = inner.push(Space::new().width(Length::Fill));
             inner = inner.push(t);
         }
@@ -173,6 +190,9 @@ impl<'a, Msg: Clone + 'a> ListRow<'a, Msg> {
                 .style(style);
             if let Some(msg) = self.on_press {
                 row = row.on_press(msg);
+            }
+            if let Some(st) = sticky_trailing {
+                row = row.sticky_trailing(st);
             }
             row.into()
         }

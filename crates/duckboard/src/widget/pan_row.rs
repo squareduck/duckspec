@@ -17,10 +17,16 @@ use iced::advanced::{Clipboard, Layout, Shell};
 use iced::widget::button;
 use iced::{
     mouse, touch, Background, Color, Element, Event, Length, Padding,
-    Rectangle, Size, Theme,
+    Rectangle, Size, Theme, Vector,
 };
 
+use crate::theme;
+
 type StyleFn = fn(&Theme, button::Status) -> button::Style;
+
+/// Gap between a sticky-trailing element and the right edge of the visible
+/// viewport. Also used as horizontal inset for the sticky's backdrop quad.
+const STICKY_GAP: f32 = theme::SPACING_SM;
 
 #[derive(Debug, Default)]
 struct InternalState {
@@ -29,6 +35,7 @@ struct InternalState {
 
 pub struct PanRow<'a, M> {
     content: Element<'a, M>,
+    sticky_trailing: Option<Element<'a, M>>,
     on_press: Option<M>,
     style: StyleFn,
     padding: Padding,
@@ -38,6 +45,7 @@ impl<'a, M: Clone> PanRow<'a, M> {
     pub fn new(content: impl Into<Element<'a, M>>) -> Self {
         Self {
             content: content.into(),
+            sticky_trailing: None,
             on_press: None,
             style: button::primary,
             padding: Padding::ZERO,
@@ -58,6 +66,15 @@ impl<'a, M: Clone> PanRow<'a, M> {
         self.style = style;
         self
     }
+
+    /// An element pinned to the right edge of the visible viewport rather
+    /// than the row's natural width. Stays in place as the user pans
+    /// horizontally — used for affordances like a tab close button that
+    /// must remain reachable regardless of pan offset.
+    pub fn sticky_trailing(mut self, el: impl Into<Element<'a, M>>) -> Self {
+        self.sticky_trailing = Some(el.into());
+        self
+    }
 }
 
 /// The hit/highlight rectangle: full visible viewport width × row height,
@@ -71,6 +88,20 @@ fn extended(row: Rectangle, viewport: &Rectangle) -> Rectangle {
     }
 }
 
+/// Translation that moves the sticky child from its laid-out position
+/// (inside the row at x=0, vertically centered) to its drawn position at
+/// the right edge of the visible viewport.
+fn sticky_translation(
+    sticky_layout: Layout<'_>,
+    row: Rectangle,
+    viewport: &Rectangle,
+) -> Vector {
+    let st = sticky_layout.bounds();
+    let target_x = viewport.x + viewport.width - st.width - STICKY_GAP;
+    let target_y = row.y + (row.height - st.height) / 2.0;
+    Vector::new(target_x - st.x, target_y - st.y)
+}
+
 impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for PanRow<'a, M> {
     fn tag(&self) -> tree::Tag {
         tree::Tag::of::<InternalState>()
@@ -81,11 +112,17 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for PanRow<'a, M> {
     }
 
     fn children(&self) -> Vec<Tree> {
-        vec![Tree::new(&self.content)]
+        match &self.sticky_trailing {
+            Some(st) => vec![Tree::new(&self.content), Tree::new(st)],
+            None => vec![Tree::new(&self.content)],
+        }
     }
 
     fn diff(&self, tree: &mut Tree) {
-        tree.diff_children(std::slice::from_ref(&self.content));
+        match &self.sticky_trailing {
+            Some(st) => tree.diff_children(&[&self.content, st]),
+            None => tree.diff_children(std::slice::from_ref(&self.content)),
+        }
     }
 
     fn size(&self) -> Size<Length> {
@@ -98,19 +135,29 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for PanRow<'a, M> {
         renderer: &iced::Renderer,
         limits: &layout::Limits,
     ) -> layout::Node {
-        layout::padded(
-            limits,
-            Length::Shrink,
-            Length::Shrink,
-            self.padding,
-            |limits| {
-                self.content.as_widget_mut().layout(
-                    &mut tree.children[0],
-                    renderer,
-                    limits,
-                )
-            },
-        )
+        let pad = self.padding;
+        let content_node = self.content.as_widget_mut().layout(
+            &mut tree.children[0],
+            renderer,
+            &limits.shrink(pad),
+        );
+        let content_size = content_node.size();
+        let content_node = content_node.move_to((pad.left, pad.top));
+        let row_size = content_size.expand(pad);
+
+        let mut children = vec![content_node];
+        if let Some(sticky) = &mut self.sticky_trailing {
+            let sticky_node = sticky.as_widget_mut().layout(
+                &mut tree.children[1],
+                renderer,
+                &layout::Limits::new(Size::ZERO, Size::INFINITE),
+            );
+            let st_h = sticky_node.size().height;
+            let y = ((row_size.height - st_h) / 2.0).max(0.0);
+            children.push(sticky_node.move_to((0.0, y)));
+        }
+
+        layout::Node::with_children(row_size, children)
     }
 
     fn operate(
@@ -120,12 +167,23 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for PanRow<'a, M> {
         renderer: &iced::Renderer,
         operation: &mut dyn iced::advanced::widget::Operation,
     ) {
+        let mut children = layout.children();
+        let content_layout = children.next().unwrap();
         self.content.as_widget_mut().operate(
             &mut tree.children[0],
-            layout.children().next().unwrap(),
+            content_layout,
             renderer,
             operation,
         );
+        if let Some(sticky) = &mut self.sticky_trailing {
+            let sticky_layout = children.next().unwrap();
+            sticky.as_widget_mut().operate(
+                &mut tree.children[1],
+                sticky_layout,
+                renderer,
+                operation,
+            );
+        }
     }
 
     fn update(
@@ -139,10 +197,34 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for PanRow<'a, M> {
         shell: &mut Shell<'_, M>,
         viewport: &Rectangle,
     ) {
+        let bounds = layout.bounds();
+        let mut layout_children = layout.children();
+        let content_layout = layout_children.next().unwrap();
+
+        // Sticky goes first so it can capture clicks before the row's
+        // viewport-wide hit area swallows them.
+        if let Some(sticky) = &mut self.sticky_trailing {
+            let sticky_layout = layout_children.next().unwrap();
+            let translation = sticky_translation(sticky_layout, bounds, viewport);
+            sticky.as_widget_mut().update(
+                &mut tree.children[1],
+                event,
+                sticky_layout,
+                cursor - translation,
+                renderer,
+                clipboard,
+                shell,
+                viewport,
+            );
+            if shell.is_event_captured() {
+                return;
+            }
+        }
+
         self.content.as_widget_mut().update(
             &mut tree.children[0],
             event,
-            layout.children().next().unwrap(),
+            content_layout,
             cursor,
             renderer,
             clipboard,
@@ -154,7 +236,6 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for PanRow<'a, M> {
             return;
         }
 
-        let bounds = layout.bounds();
         let hit = extended(bounds, viewport);
         let internal = tree.state.downcast_mut::<InternalState>();
 
@@ -194,13 +275,43 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for PanRow<'a, M> {
 
     fn mouse_interaction(
         &self,
-        _tree: &Tree,
+        tree: &Tree,
         layout: Layout<'_>,
         cursor: adv_mouse::Cursor,
         viewport: &Rectangle,
-        _renderer: &iced::Renderer,
+        renderer: &iced::Renderer,
     ) -> mouse::Interaction {
-        let hit = extended(layout.bounds(), viewport);
+        let bounds = layout.bounds();
+        let mut layout_children = layout.children();
+        let content_layout = layout_children.next().unwrap();
+
+        if let Some(sticky) = &self.sticky_trailing {
+            let sticky_layout = layout_children.next().unwrap();
+            let translation = sticky_translation(sticky_layout, bounds, viewport);
+            let drawn = sticky_layout.bounds() + translation;
+            if cursor.is_over(drawn) {
+                return sticky.as_widget().mouse_interaction(
+                    &tree.children[1],
+                    sticky_layout,
+                    cursor - translation,
+                    viewport,
+                    renderer,
+                );
+            }
+        }
+
+        let content_interaction = self.content.as_widget().mouse_interaction(
+            &tree.children[0],
+            content_layout,
+            cursor,
+            viewport,
+            renderer,
+        );
+        if content_interaction != mouse::Interaction::default() {
+            return content_interaction;
+        }
+
+        let hit = extended(bounds, viewport);
         if self.on_press.is_some() && cursor.is_over(hit) {
             mouse::Interaction::Pointer
         } else {
@@ -212,13 +323,15 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for PanRow<'a, M> {
         &self,
         tree: &Tree,
         renderer: &mut iced::Renderer,
-        theme: &Theme,
+        theme_: &Theme,
         _defaults: &adv_renderer::Style,
         layout: Layout<'_>,
         cursor: adv_mouse::Cursor,
         viewport: &Rectangle,
     ) {
         let bounds = layout.bounds();
+        let mut layout_children = layout.children();
+        let content_layout = layout_children.next().unwrap();
         let hit = extended(bounds, viewport);
         let internal = tree.state.downcast_ref::<InternalState>();
 
@@ -234,10 +347,10 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for PanRow<'a, M> {
             button::Status::Active
         };
 
-        let style = (self.style)(theme, status);
+        let style = (self.style)(theme_, status);
 
+        use iced::advanced::renderer::Renderer as _;
         if style.background.is_some() || style.border.width > 0.0 {
-            use iced::advanced::renderer::Renderer as _;
             renderer.fill_quad(
                 adv_renderer::Quad {
                     bounds: hit,
@@ -253,14 +366,56 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for PanRow<'a, M> {
         self.content.as_widget().draw(
             &tree.children[0],
             renderer,
-            theme,
+            theme_,
             &adv_renderer::Style {
                 text_color: style.text_color,
             },
-            layout.children().next().unwrap(),
+            content_layout,
             cursor,
             viewport,
         );
+
+        if let Some(sticky) = &self.sticky_trailing {
+            let sticky_layout = layout_children.next().unwrap();
+            let translation = sticky_translation(sticky_layout, bounds, viewport);
+            let drawn = sticky_layout.bounds() + translation;
+
+            // Backdrop spans from a small inset before the sticky to the
+            // viewport's right edge, so panned text doesn't bleed under
+            // the sticky element. Match the row's effective background;
+            // fall back to the panel surface tone for transparent rows.
+            let backdrop_bg = match style.background {
+                Some(bg) => bg,
+                None => Background::Color(theme::bg_surface()),
+            };
+            let backdrop = Rectangle {
+                x: drawn.x - STICKY_GAP,
+                y: bounds.y,
+                width: drawn.width + 2.0 * STICKY_GAP,
+                height: bounds.height,
+            };
+            renderer.fill_quad(
+                adv_renderer::Quad {
+                    bounds: backdrop,
+                    ..adv_renderer::Quad::default()
+                },
+                backdrop_bg,
+            );
+
+            renderer.with_translation(translation, |renderer| {
+                sticky.as_widget().draw(
+                    &tree.children[1],
+                    renderer,
+                    theme_,
+                    &adv_renderer::Style {
+                        text_color: style.text_color,
+                    },
+                    sticky_layout,
+                    cursor - translation,
+                    viewport,
+                );
+            });
+        }
     }
 }
 
