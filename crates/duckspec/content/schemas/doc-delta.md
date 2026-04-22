@@ -42,6 +42,11 @@ Same markers as spec deltas:
   applied — not narrate what changed. If you catch yourself writing
   "previously", "used to", or "now also", rewrite in the present tense to
   describe what is.
+- **Keep the doc's tables, diagrams, and prose in step with spec changes.** A
+  spec delta that adds a new failure mode usually implies a doc delta that
+  adds a row to an error table or a paragraph explaining the mode. A spec
+  delta that renames a state usually implies touching the lifecycle diagram.
+  Don't let the doc drift from the capability it documents.
 
 ## Formatting
 
@@ -53,17 +58,29 @@ fences that contain real code.
 
 ## Example
 
-```markdown
+````markdown
 # @ Authentication
 
-## + Security rationale
+## ~ Error handling
 
-Email-password is preferred over social-only login because consumer users often
-distrust third-party identity providers.
+Invalid credentials return a generic error regardless of which field was
+wrong, to prevent user enumeration. Repeated failures from one IP are
+throttled, and sustained failures across multiple IPs trigger a temporary
+account lock.
 
-## ~ Design decisions
-
-- **30-minute timeout** — balances session security against user experience.
-- **Server-side invalidation** — the session token is invalidated on the server,
-  not just expired by TTL, ensuring immediate revocation.
 ```
+| Condition        | User-facing response     | Log tag           |
+|------------------|--------------------------|-------------------|
+| Unknown email    | "Invalid credentials"    | `auth.miss`       |
+| Wrong password   | "Invalid credentials"    | `auth.miss`       |
+| Unverified email | "Verify your email"      | `auth.unverified` |
+| Throttled        | "Try again in N minutes" | `auth.throttle`   |
+| Account locked   | "Contact support"        | `auth.locked`     |
+```
+
+## + Remember me
+
+Trusted devices may opt into a 30-day session via a "remember me" checkbox at
+sign-in. The extended session binds to the device fingerprint and is revoked
+if the fingerprint changes.
+````

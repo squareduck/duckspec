@@ -27,15 +27,31 @@ must be tested and maintained.
    section lists the capabilities to spec.
 2. If a design exists at `duckspec/changes/<name>/design.md`, read it — it
    informs the technical shape of requirements.
-3. Run `ds index --caps` and read existing specs for capabilities being modified
-   — you need to know what's already specified before writing deltas.
+3. Run `ds index --caps` to see all existing capabilities and their structure.
+   Read the full spec for any capability the proposal touches, and skim anything
+   that looks adjacent — overlap and natural parents are easier to spot before
+   you start drafting than after.
 4. Load `duckspec/project.md` if it exists.
 
 ## Instructions
 
 Work through the proposal's scope, one capability at a time:
 
-1. **For each new capability** (listed under "New capabilities" in the
+1. **Confirm capability placement.** Before drafting anything, reconcile the
+   proposal's scope against what `ds index --caps` shows:
+   - Is a proposed "new" capability actually an extension of an existing one?
+     Prefer a spec delta over a new capability when the behaviors genuinely
+     belong together.
+   - Does a new capability belong under an existing parent (e.g., `auth/google`
+     instead of top-level `google-auth`)? Nest when it's one of a family the
+     system will grow more of.
+   - Does any existing capability already cover what's proposed? If so, stop
+     and surface it — the proposal's scope may need revising.
+
+   Don't silently "fix" the proposal. Raise mismatches with the user and let
+   them decide.
+
+2. **For each new capability** (listed under "New capabilities" in the
    proposal):
    - Draft requirements with normative prose.
    - Draft scenarios under each requirement.
@@ -44,23 +60,34 @@ Work through the proposal's scope, one capability at a time:
      scenarios.
    - Load the schema with `ds schema spec` for reference.
 
-2. **For each modified capability** (listed under "Modified capabilities"):
+3. **For each modified capability** (listed under "Modified capabilities"):
    - Read the existing spec at `caps/<path>/spec.md`.
    - Draft a spec delta with the changes. Load `ds schema spec-delta` for the
      delta format.
    - Use the lightest touch possible: `@` anchor to add scenarios, `~` to
      replace, `-` to remove. Don't rewrite what doesn't need to change.
 
-3. **For each capability's doc:**
-   - New capabilities need a `doc.md`. It can be minimal — H1 and summary are
-     enough if the spec is clear.
-   - Modified capabilities may need a `doc.delta.md` if narrative context has
-     changed. Load `ds schema doc` or `ds schema doc-delta` for reference.
-   - Write docs as live documentation of the capability's current behavior — not
-     a changelog. Don't reference "previously" or "before the fix"; the schema
-     has detailed guidance.
+4. **For each capability's doc:**
+   - New capabilities need a `doc.md`. Write it as the human-readable
+     counterpart to the spec — covering the capability's behavior, lifecycle,
+     states, modes, error handling, interactions, and whatever else a reader
+     needs to understand what the capability is. Don't stop at H1 + summary
+     unless the capability is a pure scaffold.
+   - Name H2s after what the capability actually has (`Session lifecycle`,
+     `Token format`, `Retry behavior`), not after generic doc-template
+     sections. Rationale and open questions belong in the proposal, not the
+     doc.
+   - Use tables for parallel items (states, modes, error conditions) and ASCII
+     diagrams for flows or state machines when they genuinely aid readability
+     — both inside plain fenced code blocks. When prose handles it, use prose.
+   - Modified capabilities may need a `doc.delta.md` when the change touches
+     something a reader would need to relearn. Load `ds schema doc` or
+     `ds schema doc-delta` for reference.
+   - Write docs as live documentation of the capability's current behavior —
+     not a changelog. Don't reference "previously" or "before the fix"; the
+     schema has detailed guidance.
 
-4. **Validate.** After writing each file, run `ds check` on it.
+5. **Validate.** After writing each file, run `ds check` on it.
 
 ## Formatting
 
