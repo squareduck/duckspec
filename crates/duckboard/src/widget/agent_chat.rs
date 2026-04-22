@@ -1,6 +1,6 @@
 //! Agent chat widget — per-message text editors in a scrollable column.
 
-use iced::widget::{button, column, container, row, rule, scrollable, stack, text, Space};
+use iced::widget::{Space, button, column, container, row, rule, scrollable, stack, text};
 
 pub const CHAT_SCROLLABLE_ID: &str = "agent-chat-scroll";
 pub const CHAT_INPUT_ID: &str = "agent-chat-input";
@@ -94,8 +94,12 @@ pub fn build_chat_blocks(session: &ChatSession) -> Vec<Block> {
                 let summary = format_tool_summary(name, input);
 
                 // Look ahead for a matching ToolResult and merge.
-                let result_lines = if let Some((_, ContentBlock::ToolResult { id: rid, output, .. })) =
-                    items.get(i + 1)
+                let result_lines = if let Some((
+                    _,
+                    ContentBlock::ToolResult {
+                        id: rid, output, ..
+                    },
+                )) = items.get(i + 1)
                 {
                     if rid == id {
                         i += 1; // consume the result
@@ -215,13 +219,7 @@ fn strip_tool_wrapper_tags(input: &str) -> String {
 /// space to avoid rendering rectangles in the monospace font.
 fn sanitize_line(line: &str) -> String {
     line.chars()
-        .map(|c| {
-            if c == '\t' || c.is_control() {
-                ' '
-            } else {
-                c
-            }
-        })
+        .map(|c| if c == '\t' || c.is_control() { ' ' } else { c })
         .collect()
 }
 
@@ -297,10 +295,7 @@ pub fn view<'a>(
     if status.is_streaming {
         chat_col = chat_col.push(
             container(streaming_indicator::view(status.esc_count))
-                .padding([
-                    theme::SPACING_SM,
-                    theme::SPACING_MD + theme::SPACING_SM,
-                ])
+                .padding([theme::SPACING_SM, theme::SPACING_MD + theme::SPACING_SM])
                 .width(Length::Fill),
         );
     }
@@ -334,7 +329,11 @@ pub fn view<'a>(
         let filtered = filter_commands(commands, query);
         let mut col = column![].spacing(0.0);
         col = col.push(completion_divider());
-        col = col.push(view_completion_col(commands, &filtered, completion.selected));
+        col = col.push(view_completion_col(
+            commands,
+            &filtered,
+            completion.selected,
+        ));
         col
     } else {
         column![].spacing(0.0)
@@ -394,7 +393,9 @@ pub fn view<'a>(
     let meta_row = container(
         row![
             Space::new().width(Length::Fill),
-            text(status.model).size(theme::font_sm()).color(theme::text_muted()),
+            text(status.model)
+                .size(theme::font_sm())
+                .color(theme::text_muted()),
             text(format!(
                 "{} / {} ({}%)",
                 format_number(status.context_tokens),
@@ -413,12 +414,10 @@ pub fn view<'a>(
     // Horizontal padding here sums with TextEdit's internal CONTENT_PAD (8px)
     // to land the input's text at the same 12px the chat headers and the
     // completion rows use.
-    let input_row = container(
-        column![input, meta_row].spacing(theme::SPACING_XS),
-    )
-    .padding([theme::SPACING_SM, theme::SPACING_XS])
-    .width(Length::Fill)
-    .style(theme::chat_input);
+    let input_row = container(column![input, meta_row].spacing(theme::SPACING_XS))
+        .padding([theme::SPACING_SM, theme::SPACING_XS])
+        .width(Length::Fill)
+        .style(theme::chat_input);
 
     column![chat_area, completion_el, input_divider, input_row]
         .height(Length::Fill)
@@ -523,9 +522,7 @@ fn view_tool_block<'a>(
 
     let mut card_col = column![header].width(Length::Fill);
 
-    if body_shown
-        && let Some(ed) = editor
-    {
+    if body_shown && let Some(ed) = editor {
         let body = container(
             text_edit::TextEdit::new(ed, move |action| Msg::ChatAction(idx, action))
                 .show_gutter(false)
@@ -574,7 +571,7 @@ fn format_number(n: usize) -> String {
     let s = n.to_string();
     let mut result = String::with_capacity(s.len() + s.len() / 3);
     for (i, ch) in s.chars().enumerate() {
-        if i > 0 && (s.len() - i) % 3 == 0 {
+        if i > 0 && (s.len() - i).is_multiple_of(3) {
             result.push(',');
         }
         result.push(ch);
@@ -694,7 +691,10 @@ mod tests {
     #[test]
     fn strips_csi_color_codes() {
         let input = "\x1B[32mcreated \x1B[39m changes/foo/proposal.md";
-        assert_eq!(strip_ansi_escapes(input), "created  changes/foo/proposal.md");
+        assert_eq!(
+            strip_ansi_escapes(input),
+            "created  changes/foo/proposal.md"
+        );
     }
 
     #[test]

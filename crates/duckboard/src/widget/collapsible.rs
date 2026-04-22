@@ -1,6 +1,6 @@
 //! Collapsible section with toggle header.
 
-use iced::widget::{button, column, container, row, svg, text, Space};
+use iced::widget::{Space, button, column, container, row, svg, text};
 use iced::{Element, Length};
 
 use crate::theme;
@@ -69,7 +69,11 @@ pub fn top_divider<'a, M: 'a>() -> Element<'a, M> {
 
 /// Collapse/expand chevron matching the icon set used in list rows.
 pub fn chevron<'a, M: 'a>(expanded: bool) -> Element<'a, M> {
-    let bytes = if expanded { ICON_CHEVRON_DOWN } else { ICON_CHEVRON_RIGHT };
+    let bytes = if expanded {
+        ICON_CHEVRON_DOWN
+    } else {
+        ICON_CHEVRON_RIGHT
+    };
     let size = theme::font_sm();
     svg(svg::Handle::from_memory(bytes))
         .width(size)

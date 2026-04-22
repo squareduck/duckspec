@@ -26,11 +26,17 @@ use crate::theme;
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
-fn font_size() -> f32 { theme::content_size() }
+fn font_size() -> f32 {
+    theme::content_size()
+}
 // Cell dimensions are measured from the configured content font via cosmic-text
 // so glyphs sit flush regardless of which monospace the user picked.
-fn cell_width() -> f32 { theme::content_cell_width() }
-fn cell_height() -> f32 { theme::content_cell_height() }
+fn cell_width() -> f32 {
+    theme::content_cell_width()
+}
+fn cell_height() -> f32 {
+    theme::content_cell_height()
+}
 const PAD_X: f32 = 6.0;
 const PAD_Y: f32 = 4.0;
 const DEFAULT_COLS: usize = 80;
@@ -149,56 +155,232 @@ fn default_ansi_colors() -> alacritty_terminal::term::color::Colors {
 
     // Standard 16 ANSI colors.
     let palette: [(NamedColor, Rgb); 16] = [
-        (NamedColor::Black, Rgb { r: 0x1e, g: 0x1e, b: 0x2e }),
-        (NamedColor::Red, Rgb { r: 0xf3, g: 0x8b, b: 0xa8 }),
-        (NamedColor::Green, Rgb { r: 0xa6, g: 0xe3, b: 0xa1 }),
-        (NamedColor::Yellow, Rgb { r: 0xf9, g: 0xe2, b: 0xaf }),
-        (NamedColor::Blue, Rgb { r: 0x89, g: 0xb4, b: 0xfa }),
-        (NamedColor::Magenta, Rgb { r: 0xf5, g: 0xc2, b: 0xe7 }),
-        (NamedColor::Cyan, Rgb { r: 0x94, g: 0xe2, b: 0xd5 }),
-        (NamedColor::White, Rgb { r: 0xba, g: 0xc2, b: 0xde }),
-        (NamedColor::BrightBlack, Rgb { r: 0x58, g: 0x5b, b: 0x70 }),
-        (NamedColor::BrightRed, Rgb { r: 0xf3, g: 0x8b, b: 0xa8 }),
-        (NamedColor::BrightGreen, Rgb { r: 0xa6, g: 0xe3, b: 0xa1 }),
-        (NamedColor::BrightYellow, Rgb { r: 0xf9, g: 0xe2, b: 0xaf }),
-        (NamedColor::BrightBlue, Rgb { r: 0x89, g: 0xb4, b: 0xfa }),
-        (NamedColor::BrightMagenta, Rgb { r: 0xf5, g: 0xc2, b: 0xe7 }),
-        (NamedColor::BrightCyan, Rgb { r: 0x94, g: 0xe2, b: 0xd5 }),
-        (NamedColor::BrightWhite, Rgb { r: 0xa6, g: 0xad, b: 0xc8 }),
+        (
+            NamedColor::Black,
+            Rgb {
+                r: 0x1e,
+                g: 0x1e,
+                b: 0x2e,
+            },
+        ),
+        (
+            NamedColor::Red,
+            Rgb {
+                r: 0xf3,
+                g: 0x8b,
+                b: 0xa8,
+            },
+        ),
+        (
+            NamedColor::Green,
+            Rgb {
+                r: 0xa6,
+                g: 0xe3,
+                b: 0xa1,
+            },
+        ),
+        (
+            NamedColor::Yellow,
+            Rgb {
+                r: 0xf9,
+                g: 0xe2,
+                b: 0xaf,
+            },
+        ),
+        (
+            NamedColor::Blue,
+            Rgb {
+                r: 0x89,
+                g: 0xb4,
+                b: 0xfa,
+            },
+        ),
+        (
+            NamedColor::Magenta,
+            Rgb {
+                r: 0xf5,
+                g: 0xc2,
+                b: 0xe7,
+            },
+        ),
+        (
+            NamedColor::Cyan,
+            Rgb {
+                r: 0x94,
+                g: 0xe2,
+                b: 0xd5,
+            },
+        ),
+        (
+            NamedColor::White,
+            Rgb {
+                r: 0xba,
+                g: 0xc2,
+                b: 0xde,
+            },
+        ),
+        (
+            NamedColor::BrightBlack,
+            Rgb {
+                r: 0x58,
+                g: 0x5b,
+                b: 0x70,
+            },
+        ),
+        (
+            NamedColor::BrightRed,
+            Rgb {
+                r: 0xf3,
+                g: 0x8b,
+                b: 0xa8,
+            },
+        ),
+        (
+            NamedColor::BrightGreen,
+            Rgb {
+                r: 0xa6,
+                g: 0xe3,
+                b: 0xa1,
+            },
+        ),
+        (
+            NamedColor::BrightYellow,
+            Rgb {
+                r: 0xf9,
+                g: 0xe2,
+                b: 0xaf,
+            },
+        ),
+        (
+            NamedColor::BrightBlue,
+            Rgb {
+                r: 0x89,
+                g: 0xb4,
+                b: 0xfa,
+            },
+        ),
+        (
+            NamedColor::BrightMagenta,
+            Rgb {
+                r: 0xf5,
+                g: 0xc2,
+                b: 0xe7,
+            },
+        ),
+        (
+            NamedColor::BrightCyan,
+            Rgb {
+                r: 0x94,
+                g: 0xe2,
+                b: 0xd5,
+            },
+        ),
+        (
+            NamedColor::BrightWhite,
+            Rgb {
+                r: 0xa6,
+                g: 0xad,
+                b: 0xc8,
+            },
+        ),
     ];
     for (name, rgb) in &palette {
         colors[*name] = Some(*rgb);
     }
 
     // Foreground / background / cursor.
-    colors[NamedColor::Foreground] = Some(Rgb { r: 0xcd, g: 0xd6, b: 0xf4 });
-    colors[NamedColor::Background] = Some(Rgb { r: 0x1e, g: 0x1e, b: 0x2e });
-    colors[NamedColor::Cursor] = Some(Rgb { r: 0xf5, g: 0xe0, b: 0xdc });
+    colors[NamedColor::Foreground] = Some(Rgb {
+        r: 0xcd,
+        g: 0xd6,
+        b: 0xf4,
+    });
+    colors[NamedColor::Background] = Some(Rgb {
+        r: 0x1e,
+        g: 0x1e,
+        b: 0x2e,
+    });
+    colors[NamedColor::Cursor] = Some(Rgb {
+        r: 0xf5,
+        g: 0xe0,
+        b: 0xdc,
+    });
 
     // Dim variants.
-    colors[NamedColor::DimBlack] = Some(Rgb { r: 0x14, g: 0x14, b: 0x21 });
-    colors[NamedColor::DimRed] = Some(Rgb { r: 0xa8, g: 0x61, b: 0x75 });
-    colors[NamedColor::DimGreen] = Some(Rgb { r: 0x74, g: 0x9e, b: 0x71 });
-    colors[NamedColor::DimYellow] = Some(Rgb { r: 0xae, g: 0x9e, b: 0x7a });
-    colors[NamedColor::DimBlue] = Some(Rgb { r: 0x60, g: 0x7e, b: 0xaf });
-    colors[NamedColor::DimMagenta] = Some(Rgb { r: 0xab, g: 0x88, b: 0xa2 });
-    colors[NamedColor::DimCyan] = Some(Rgb { r: 0x68, g: 0x9e, b: 0x95 });
-    colors[NamedColor::DimWhite] = Some(Rgb { r: 0x82, g: 0x88, b: 0x9b });
-    colors[NamedColor::DimForeground] = Some(Rgb { r: 0x90, g: 0x96, b: 0xab });
-    colors[NamedColor::BrightForeground] = Some(Rgb { r: 0xcd, g: 0xd6, b: 0xf4 });
+    colors[NamedColor::DimBlack] = Some(Rgb {
+        r: 0x14,
+        g: 0x14,
+        b: 0x21,
+    });
+    colors[NamedColor::DimRed] = Some(Rgb {
+        r: 0xa8,
+        g: 0x61,
+        b: 0x75,
+    });
+    colors[NamedColor::DimGreen] = Some(Rgb {
+        r: 0x74,
+        g: 0x9e,
+        b: 0x71,
+    });
+    colors[NamedColor::DimYellow] = Some(Rgb {
+        r: 0xae,
+        g: 0x9e,
+        b: 0x7a,
+    });
+    colors[NamedColor::DimBlue] = Some(Rgb {
+        r: 0x60,
+        g: 0x7e,
+        b: 0xaf,
+    });
+    colors[NamedColor::DimMagenta] = Some(Rgb {
+        r: 0xab,
+        g: 0x88,
+        b: 0xa2,
+    });
+    colors[NamedColor::DimCyan] = Some(Rgb {
+        r: 0x68,
+        g: 0x9e,
+        b: 0x95,
+    });
+    colors[NamedColor::DimWhite] = Some(Rgb {
+        r: 0x82,
+        g: 0x88,
+        b: 0x9b,
+    });
+    colors[NamedColor::DimForeground] = Some(Rgb {
+        r: 0x90,
+        g: 0x96,
+        b: 0xab,
+    });
+    colors[NamedColor::BrightForeground] = Some(Rgb {
+        r: 0xcd,
+        g: 0xd6,
+        b: 0xf4,
+    });
 
     // 216-color cube (indices 16..232).
     for i in 0..216 {
         let r = if i / 36 > 0 { (i / 36) * 40 + 55 } else { 0 };
-        let g = if (i / 6) % 6 > 0 { ((i / 6) % 6) * 40 + 55 } else { 0 };
+        let g = if (i / 6) % 6 > 0 {
+            ((i / 6) % 6) * 40 + 55
+        } else {
+            0
+        };
         let b = if i % 6 > 0 { (i % 6) * 40 + 55 } else { 0 };
-        colors[16 + i] = Some(Rgb { r: r as u8, g: g as u8, b: b as u8 });
+        colors[16 + i] = Some(Rgb {
+            r: r as u8,
+            g: g as u8,
+            b: b as u8,
+        });
     }
 
     // Grayscale ramp (indices 232..256).
     for i in 0..24 {
         let value = (i * 10 + 8) as u8;
-        colors[232 + i] = Some(Rgb { r: value, g: value, b: value });
+        colors[232 + i] = Some(Rgb {
+            r: value,
+            g: value,
+            b: value,
+        });
     }
 
     colors
@@ -312,11 +494,12 @@ impl TerminalState {
     }
 
     fn apply_pending_selection(&mut self) -> bool {
-        let Some(ev) = self.pending_selection.take() else { return false };
+        let Some(ev) = self.pending_selection.take() else {
+            return false;
+        };
         match ev {
             PendingSelection::Start(pt, side) => {
-                self.term.selection =
-                    Some(Selection::new(SelectionType::Simple, pt, side));
+                self.term.selection = Some(Selection::new(SelectionType::Simple, pt, side));
             }
             PendingSelection::Update(pt, side) => {
                 if let Some(ref mut sel) = self.term.selection {
@@ -353,13 +536,15 @@ impl TerminalState {
     /// Begin a new selection at the given canvas-local pixel coordinates.
     pub fn queue_selection_start(&self, px: f32, py: f32) {
         let (pt, side) = self.point_from_canvas(px, py);
-        self.pending_selection.set(Some(PendingSelection::Start(pt, side)));
+        self.pending_selection
+            .set(Some(PendingSelection::Start(pt, side)));
     }
 
     /// Extend the active selection to the given canvas-local pixel coordinates.
     pub fn queue_selection_update(&self, px: f32, py: f32) {
         let (pt, side) = self.point_from_canvas(px, py);
-        self.pending_selection.set(Some(PendingSelection::Update(pt, side)));
+        self.pending_selection
+            .set(Some(PendingSelection::Update(pt, side)));
     }
 
     /// Return the currently selected text, if any.
@@ -369,7 +554,9 @@ impl TerminalState {
 
     /// Write text to the PTY, honoring bracketed paste mode.
     pub fn paste_text(&mut self, text: &str) {
-        let Some(ref mut writer) = self.pty_writer else { return };
+        let Some(ref mut writer) = self.pty_writer else {
+            return;
+        };
         let bracketed = self.term.mode().contains(TermMode::BRACKETED_PASTE);
         if bracketed {
             let _ = writer.write_all(b"\x1b[200~");
@@ -387,7 +574,11 @@ impl TerminalState {
         let rows = self.rows.max(1);
         let col_float = ((px - PAD_X) / cell_width()).max(0.0);
         let col = (col_float as usize).min(cols - 1);
-        let side = if col_float - col as f32 <= 0.5 { Side::Left } else { Side::Right };
+        let side = if col_float - col as f32 <= 0.5 {
+            Side::Left
+        } else {
+            Side::Right
+        };
         let row_float = ((py - PAD_Y) / cell_height()).max(0.0);
         let row = (row_float as usize).min(rows - 1);
         let display_offset = self.term.grid().display_offset() as i32;
@@ -396,12 +587,7 @@ impl TerminalState {
     }
 
     /// Encode a keyboard event and write it to the PTY.
-    pub fn write_key(
-        &mut self,
-        key: keyboard::Key,
-        mods: keyboard::Modifiers,
-        text: Option<&str>,
-    ) {
+    pub fn write_key(&mut self, key: keyboard::Key, mods: keyboard::Modifiers, text: Option<&str>) {
         let Some(ref mut writer) = self.pty_writer else {
             return;
         };
@@ -444,7 +630,9 @@ impl TerminalState {
             };
             wb.drain(..).collect()
         };
-        if !bytes.is_empty() && let Some(ref mut writer) = self.pty_writer {
+        if !bytes.is_empty()
+            && let Some(ref mut writer) = self.pty_writer
+        {
             let _ = writer.write_all(&bytes);
             let _ = writer.flush();
         }
@@ -461,8 +649,16 @@ impl TerminalState {
         let fallback = &self.default_colors;
 
         // Resolve default fg/bg.
-        let default_fg = resolve_color(AnsiColor::Named(NamedColor::Foreground), term_colors, fallback);
-        let default_bg = resolve_color(AnsiColor::Named(NamedColor::Background), term_colors, fallback);
+        let default_fg = resolve_color(
+            AnsiColor::Named(NamedColor::Foreground),
+            term_colors,
+            fallback,
+        );
+        let default_bg = resolve_color(
+            AnsiColor::Named(NamedColor::Background),
+            term_colors,
+            fallback,
+        );
         self.buffer.default_fg = default_fg;
         self.buffer.default_bg = default_bg;
 
@@ -650,7 +846,7 @@ impl<'a> canvas::Program<()> for TerminalCanvas<'a> {
                 }
             }
             canvas::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => {
-                let Some(pos) = cursor.position_in(bounds) else { return None };
+                let pos = cursor.position_in(bounds)?;
                 self.state.queue_selection_start(pos.x, pos.y);
                 state.dragging.set(true);
                 Some(canvas::Action::publish(()).and_capture())
@@ -667,8 +863,7 @@ impl<'a> canvas::Program<()> for TerminalCanvas<'a> {
                         let overshoot = ((-pos.y) / ch).ceil().max(1.0) as isize;
                         self.state.request_scroll(overshoot);
                     } else if pos.y > bounds.height {
-                        let overshoot =
-                            ((pos.y - bounds.height) / ch).ceil().max(1.0) as isize;
+                        let overshoot = ((pos.y - bounds.height) / ch).ceil().max(1.0) as isize;
                         self.state.request_scroll(-overshoot);
                     }
                     self.state.queue_selection_update(pos.x, pos.y);
@@ -727,11 +922,7 @@ impl<'a> canvas::Program<()> for TerminalCanvas<'a> {
 
                     // Draw cell background if it differs from the terminal default.
                     if cell.bg != buffer.default_bg {
-                        frame.fill_rectangle(
-                            IcedPoint::new(x, y),
-                            Size::new(cw, ch),
-                            cell.bg,
-                        );
+                        frame.fill_rectangle(IcedPoint::new(x, y), Size::new(cw, ch), cell.bg);
                     }
 
                     // Overlay selection tint.

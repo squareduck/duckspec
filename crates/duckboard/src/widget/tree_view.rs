@@ -2,8 +2,8 @@
 
 use std::collections::HashSet;
 
-use iced::widget::{row, Space};
 use iced::Element;
+use iced::widget::{Space, row};
 
 use crate::data::TreeNode;
 use crate::theme;
@@ -53,9 +53,12 @@ pub fn view<'a, M: Clone + 'a>(
                 let leading = collapsible::chevron(node.is_expanded);
                 (leading, ICON_FOLDER, on_toggle(node.id.clone()))
             } else {
-                let leading: Element<'a, M> =
-                    row![Space::new().width(theme::font_sm())].into();
-                (leading, icon_for_leaf(&node.label), on_select(node.id.clone()))
+                let leading: Element<'a, M> = row![Space::new().width(theme::font_sm())].into();
+                (
+                    leading,
+                    icon_for_leaf(&node.label),
+                    on_select(node.id.clone()),
+                )
             };
 
             let mut r = ListRow::new(node.label)

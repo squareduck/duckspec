@@ -34,6 +34,12 @@ use crate::layout::{self, ArtifactKind};
 use crate::merge;
 use crate::parse;
 
+/// Per-file parse-error entry: (relative path, source, errors).
+type FileErrors = Vec<(PathBuf, String, Vec<ParseError>)>;
+
+/// Change-name keyed map of per-file parse errors.
+type ChangeFileErrors = HashMap<String, FileErrors>;
+
 // ---------------------------------------------------------------------------
 // Report types
 // ---------------------------------------------------------------------------
@@ -58,17 +64,12 @@ pub struct AuditReport {
 
 impl AuditReport {
     pub fn total_errors(&self) -> usize {
-        let artifact_err_count: usize = self
-            .artifact_errors
-            .iter()
-            .map(|g| g.errors.len())
-            .sum();
+        let artifact_err_count: usize = self.artifact_errors.iter().map(|g| g.errors.len()).sum();
         let change_err_count: usize = self
             .change_errors
             .iter()
             .map(|g| {
-                g.file_errors.iter().map(|(_, _, e)| e.len()).sum::<usize>()
-                    + g.change_errors.len()
+                g.file_errors.iter().map(|(_, _, e)| e.len()).sum::<usize>() + g.change_errors.len()
             })
             .sum();
         let missing_step_count: usize = self
@@ -105,7 +106,7 @@ pub struct ArtifactErrorGroup {
 pub struct ChangeErrorGroup {
     pub change_name: String,
     /// Per-file errors: (relative path, source, errors).
-    pub file_errors: Vec<(PathBuf, String, Vec<ParseError>)>,
+    pub file_errors: FileErrors,
     pub change_errors: Vec<ChangeError>,
 }
 
@@ -204,7 +205,13 @@ pub fn run_audit(
 
     match &scope {
         AuditScope::Full => {
-            audit_full(duckspec_root, &canonical_root, project_root, config, &mut report)?;
+            audit_full(
+                duckspec_root,
+                &canonical_root,
+                project_root,
+                config,
+                &mut report,
+            )?;
         }
         AuditScope::Change(change_name) => {
             audit_change(
@@ -234,7 +241,7 @@ fn audit_full(
 ) -> Result<(), AuditError> {
     // 1. Validate every artifact individually and split results between
     //    per-change groups and project-level groups.
-    let mut change_file_errors: HashMap<String, Vec<(PathBuf, String, Vec<ParseError>)>> =
+    let mut change_file_errors: ChangeFileErrors =
         HashMap::new();
     check_all_artifacts(
         duckspec_root,
@@ -321,14 +328,13 @@ fn audit_full(
     }
     report
         .missing_backlink_scenarios
-        .sort_by(|a, b| a.display().cmp(&b.display()));
+        .sort_by_key(|a| a.display());
 
     // 7. For each active change: test:code scenarios covered by step tasks
     //    and step refs resolve.
     for change_name in &change_names {
         let change_dir = changes_dir.join(change_name);
-        let change_scenarios =
-            build_change_scenarios(duckspec_root, canonical_root, &change_dir)?;
+        let change_scenarios = build_change_scenarios(duckspec_root, canonical_root, &change_dir)?;
         let test_code: Vec<ScenarioKey> = change_scenarios
             .iter()
             .filter(|s| s.test_code)
@@ -386,7 +392,7 @@ fn audit_change(
     let change_dir = duckspec_root.join("changes").join(change_name);
 
     // 1. Per-file artifact validation for files inside the change only.
-    let mut scratch: HashMap<String, Vec<(PathBuf, String, Vec<ParseError>)>> = HashMap::new();
+    let mut scratch: ChangeFileErrors = HashMap::new();
     check_artifacts_in_dir(
         &change_dir,
         canonical_root,
@@ -471,7 +477,7 @@ fn check_all_artifacts(
     duckspec_root: &Path,
     canonical_root: &Path,
     project_groups: &mut Vec<ArtifactErrorGroup>,
-    change_groups: &mut HashMap<String, Vec<(PathBuf, String, Vec<ParseError>)>>,
+    change_groups: &mut ChangeFileErrors,
 ) -> Result<(), AuditError> {
     check_artifacts_in_dir(duckspec_root, canonical_root, project_groups, change_groups)
 }
@@ -480,7 +486,7 @@ fn check_artifacts_in_dir(
     dir: &Path,
     canonical_root: &Path,
     project_groups: &mut Vec<ArtifactErrorGroup>,
-    change_groups: &mut HashMap<String, Vec<(PathBuf, String, Vec<ParseError>)>>,
+    change_groups: &mut ChangeFileErrors,
 ) -> Result<(), AuditError> {
     let files = collect_md_files(dir)?;
 
@@ -495,8 +501,8 @@ fn check_artifacts_in_dir(
             continue;
         };
 
-        let source = std::fs::read_to_string(file_path)
-            .map_err(|e| AuditError::io(file_path, e))?;
+        let source =
+            std::fs::read_to_string(file_path).map_err(|e| AuditError::io(file_path, e))?;
         let ctx = build_context(&kind, relative);
         let result = check::check_artifact(&source, &kind, &ctx);
         if result.errors.is_empty() {
@@ -504,10 +510,11 @@ fn check_artifacts_in_dir(
         }
 
         if let Some(change_name) = change_name_from_relative(relative) {
-            change_groups
-                .entry(change_name)
-                .or_default()
-                .push((relative.to_path_buf(), source, result.errors));
+            change_groups.entry(change_name).or_default().push((
+                relative.to_path_buf(),
+                source,
+                result.errors,
+            ));
         } else {
             project_groups.push(ArtifactErrorGroup {
                 relative_path: relative.to_path_buf(),
@@ -551,7 +558,12 @@ fn build_duckspec_state(duckspec_root: &Path) -> Result<DuckspecState, AuditErro
     let mut cap_doc_paths = HashSet::new();
 
     if caps_dir.is_dir() {
-        scan_caps(&caps_dir, &caps_dir, &mut cap_spec_paths, &mut cap_doc_paths)?;
+        scan_caps(
+            &caps_dir,
+            &caps_dir,
+            &mut cap_spec_paths,
+            &mut cap_doc_paths,
+        )?;
     }
 
     Ok(DuckspecState {
@@ -615,8 +627,8 @@ fn load_change_files(
         let Some(kind) = layout::classify(relative) else {
             continue;
         };
-        let content = std::fs::read_to_string(file_path)
-            .map_err(|e| AuditError::io(file_path, e))?;
+        let content =
+            std::fs::read_to_string(file_path).map_err(|e| AuditError::io(file_path, e))?;
         loaded.push(LoadedFile {
             relative_path: relative.to_path_buf(),
             kind,
@@ -655,8 +667,8 @@ fn build_scenario_index(
             continue;
         }
 
-        let source = std::fs::read_to_string(file_path)
-            .map_err(|e| AuditError::io(file_path, e))?;
+        let source =
+            std::fs::read_to_string(file_path).map_err(|e| AuditError::io(file_path, e))?;
         let cap_path = extract_cap_path(relative);
         index_spec_scenarios(&source, &cap_path, &mut index);
     }
@@ -688,11 +700,7 @@ fn extract_change_cap_path(relative: &Path) -> String {
     }
 }
 
-fn index_spec_scenarios(
-    source: &str,
-    cap_path: &str,
-    index: &mut HashMap<ScenarioKey, bool>,
-) {
+fn index_spec_scenarios(source: &str, cap_path: &str, index: &mut HashMap<ScenarioKey, bool>) {
     let elements = parse::parse_elements(source);
     let Ok(spec) = parse::spec::parse_spec(&elements) else {
         return;
@@ -700,11 +708,7 @@ fn index_spec_scenarios(
     add_spec_to_index(&spec, cap_path, index);
 }
 
-fn add_spec_to_index(
-    spec: &Spec,
-    cap_path: &str,
-    index: &mut HashMap<ScenarioKey, bool>,
-) {
+fn add_spec_to_index(spec: &Spec, cap_path: &str, index: &mut HashMap<ScenarioKey, bool>) {
     for req in &spec.requirements {
         for scn in &req.scenarios {
             let is_test_code = scenario_is_test_code(req, scn);
@@ -763,8 +767,8 @@ fn build_change_scenarios(
 
         match kind {
             ArtifactKind::ChangeCapSpec => {
-                let source = std::fs::read_to_string(file_path)
-                    .map_err(|e| AuditError::io(file_path, e))?;
+                let source =
+                    std::fs::read_to_string(file_path).map_err(|e| AuditError::io(file_path, e))?;
                 let cap_path = extract_change_cap_path(relative);
                 let elements = parse::parse_elements(&source);
                 if let Ok(spec) = parse::spec::parse_spec(&elements) {
@@ -784,8 +788,8 @@ fn build_change_scenarios(
                 }
             }
             ArtifactKind::SpecDelta => {
-                let delta_source = std::fs::read_to_string(file_path)
-                    .map_err(|e| AuditError::io(file_path, e))?;
+                let delta_source =
+                    std::fs::read_to_string(file_path).map_err(|e| AuditError::io(file_path, e))?;
                 let cap_path = extract_change_cap_path(relative);
                 let target_path = caps_dir.join(&cap_path).join("spec.md");
 
@@ -921,8 +925,8 @@ fn collect_step_refs(
             continue;
         }
 
-        let source = std::fs::read_to_string(file_path)
-            .map_err(|e| AuditError::io(file_path, e))?;
+        let source =
+            std::fs::read_to_string(file_path).map_err(|e| AuditError::io(file_path, e))?;
         let elements = parse::parse_elements(&source);
         let Ok(step) = parse::step::parse_step(&elements) else {
             continue;

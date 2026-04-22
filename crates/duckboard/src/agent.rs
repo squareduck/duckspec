@@ -5,8 +5,8 @@
 //! with `--resume <session_id>`.
 
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use iced::Subscription;
 use tokio::sync::mpsc;
@@ -99,28 +99,29 @@ pub fn discover_commands(project_root: &Path) -> Vec<SlashCommand> {
         let settings_path = claude_dir.join("settings.json");
         if let Ok(settings_str) = std::fs::read_to_string(&settings_path)
             && let Ok(settings) = serde_json::from_str::<serde_json::Value>(&settings_str)
-                && let Some(plugins) = settings["enabledPlugins"].as_object() {
-                    for (key, enabled) in plugins {
-                        if enabled.as_bool() != Some(true) {
-                            continue;
-                        }
-                        if let Some((plugin_name, marketplace)) = key.rsplit_once('@') {
-                            let plugin_dir = claude_dir
-                                .join("plugins/marketplaces")
-                                .join(marketplace)
-                                .join("plugins")
-                                .join(plugin_name);
-                            let cmd_dir = plugin_dir.join("commands");
-                            if cmd_dir.is_dir() {
-                                scan_command_dir(&cmd_dir, &mut commands);
-                            }
-                            let skills_dir = plugin_dir.join("skills");
-                            if skills_dir.is_dir() {
-                                scan_skills_dir(&skills_dir, &mut commands);
-                            }
-                        }
+            && let Some(plugins) = settings["enabledPlugins"].as_object()
+        {
+            for (key, enabled) in plugins {
+                if enabled.as_bool() != Some(true) {
+                    continue;
+                }
+                if let Some((plugin_name, marketplace)) = key.rsplit_once('@') {
+                    let plugin_dir = claude_dir
+                        .join("plugins/marketplaces")
+                        .join(marketplace)
+                        .join("plugins")
+                        .join(plugin_name);
+                    let cmd_dir = plugin_dir.join("commands");
+                    if cmd_dir.is_dir() {
+                        scan_command_dir(&cmd_dir, &mut commands);
+                    }
+                    let skills_dir = plugin_dir.join("skills");
+                    if skills_dir.is_dir() {
+                        scan_skills_dir(&skills_dir, &mut commands);
                     }
                 }
+            }
+        }
     }
 
     // Built-in Claude Code commands (not discoverable from filesystem).
@@ -195,7 +196,9 @@ fn scan_skills_dir(dir: &Path, commands: &mut Vec<SlashCommand>) {
 
 fn parse_frontmatter_description(path: &Path) -> Option<String> {
     let content = std::fs::read_to_string(path).ok()?;
-    let body = content.strip_prefix("---\n").or_else(|| content.strip_prefix("---\r\n"))?;
+    let body = content
+        .strip_prefix("---\n")
+        .or_else(|| content.strip_prefix("---\r\n"))?;
     let end = body.find("\n---")?;
     let frontmatter = &body[..end];
     for line in frontmatter.lines() {
@@ -279,14 +282,12 @@ fn parse_protocol_line(msg: &ProtocolMsg) -> Vec<AgentEvent> {
 
     match msg.type_.as_str() {
         "stream_event" => {
-            if let Some(event) = &msg.event {
-                if event.type_ == "content_block_delta" {
-                    if let Some(delta) = &event.delta {
-                        if let Some(text) = &delta.text {
-                            events.push(AgentEvent::ContentDelta { text: text.clone() });
-                        }
-                    }
-                }
+            if let Some(event) = &msg.event
+                && event.type_ == "content_block_delta"
+                && let Some(delta) = &event.delta
+                && let Some(text) = &delta.text
+            {
+                events.push(AgentEvent::ContentDelta { text: text.clone() });
             }
         }
         "assistant" => {
@@ -300,7 +301,8 @@ fn parse_protocol_line(msg: &ProtocolMsg) -> Vec<AgentEvent> {
                     // when the agent loops through tool use.)
                     let input_t = (usage.input_tokens
                         + usage.cache_read_input_tokens
-                        + usage.cache_creation_input_tokens) as usize;
+                        + usage.cache_creation_input_tokens)
+                        as usize;
                     let output_t = usage.output_tokens as usize;
                     if input_t > 0 || output_t > 0 {
                         events.push(AgentEvent::UsageUpdate {
@@ -317,7 +319,10 @@ fn parse_protocol_line(msg: &ProtocolMsg) -> Vec<AgentEvent> {
                             events.push(AgentEvent::ToolUse {
                                 id: block.id.clone().unwrap_or_default(),
                                 name: block.name.clone().unwrap_or_default(),
-                                input: block.input.as_ref().map_or(String::new(), |v| v.to_string()),
+                                input: block
+                                    .input
+                                    .as_ref()
+                                    .map_or(String::new(), |v| v.to_string()),
                             });
                         }
                     }
@@ -325,19 +330,19 @@ fn parse_protocol_line(msg: &ProtocolMsg) -> Vec<AgentEvent> {
             }
         }
         "tool_result" | "user" => {
-            if let Some(body) = &msg.message {
-                if let Some(content) = &body.content {
-                    for block in content {
-                        if block.type_ == "tool_result" {
-                            let output = block.content.as_ref().map_or(String::new(), |v| {
-                                v.as_str().map_or_else(|| v.to_string(), |s| s.to_string())
-                            });
-                            events.push(AgentEvent::ToolResult {
-                                id: block.tool_use_id.clone().unwrap_or_default(),
-                                name: String::new(),
-                                output,
-                            });
-                        }
+            if let Some(body) = &msg.message
+                && let Some(content) = &body.content
+            {
+                for block in content {
+                    if block.type_ == "tool_result" {
+                        let output = block.content.as_ref().map_or(String::new(), |v| {
+                            v.as_str().map_or_else(|| v.to_string(), |s| s.to_string())
+                        });
+                        events.push(AgentEvent::ToolResult {
+                            id: block.tool_use_id.clone().unwrap_or_default(),
+                            name: String::new(),
+                            output,
+                        });
                     }
                 }
             }
@@ -357,7 +362,8 @@ fn parse_protocol_line(msg: &ProtocolMsg) -> Vec<AgentEvent> {
             // result messages is cumulative across every internal model call
             // in the turn (with prompt caching that multiplies `cache_read`
             // several-fold), so it's unusable as a current-prompt-size signal.
-            let context_window = msg.model_usage
+            let context_window = msg
+                .model_usage
                 .as_ref()
                 .and_then(|mu| mu.as_object())
                 .and_then(|mu| mu.values().next())
@@ -416,7 +422,10 @@ impl std::fmt::Debug for AgentHandle {
 /// Create a subscription that manages a Claude Code agent chat session.
 /// The `key` parameter makes each subscription unique so multiple agents can coexist.
 /// Returns `(key, event)` tuples so the caller can route events without capturing in `.map()`.
-pub fn agent_subscription(key: String, project_root: PathBuf) -> Subscription<(String, AgentEvent)> {
+pub fn agent_subscription(
+    key: String,
+    project_root: PathBuf,
+) -> Subscription<(String, AgentEvent)> {
     Subscription::run_with((key, project_root.clone()), |(key, root)| {
         use iced::futures::StreamExt;
         let key = key.clone();
@@ -436,7 +445,10 @@ fn agent_worker(project_root: PathBuf) -> impl iced::futures::Stream<Item = Agen
             let cancel_flag = Arc::new(AtomicBool::new(false));
 
             // Send handle to Iced immediately.
-            let handle = AgentHandle { cancel_flag: cancel_flag.clone(), tx: cmd_tx };
+            let handle = AgentHandle {
+                cancel_flag: cancel_flag.clone(),
+                tx: cmd_tx,
+            };
             if sender.send(AgentEvent::Ready(handle)).await.is_err() {
                 return;
             }
@@ -466,11 +478,14 @@ fn agent_worker(project_root: PathBuf) -> impl iced::futures::Stream<Item = Agen
                         .await
                         {
                             Ok(new_session_id) => {
-                                let changed = session_id.as_deref() != Some(new_session_id.as_str());
+                                let changed =
+                                    session_id.as_deref() != Some(new_session_id.as_str());
                                 session_id = Some(new_session_id.clone());
                                 if changed
                                     && sender
-                                        .send(AgentEvent::SessionIdUpdated { session_id: new_session_id })
+                                        .send(AgentEvent::SessionIdUpdated {
+                                            session_id: new_session_id,
+                                        })
                                         .await
                                         .is_err()
                                 {
@@ -600,7 +615,8 @@ async fn run_prompt_turn(
                 result_session_id = sid.clone();
             }
             if msg.is_error == Some(true) {
-                let error_msg = msg.result
+                let error_msg = msg
+                    .result
                     .as_ref()
                     .and_then(|v| v.as_str())
                     .unwrap_or("unknown error")
@@ -615,7 +631,9 @@ async fn run_prompt_turn(
     }
 
     // Wait for process to finish.
-    std::thread::spawn(move || { child.wait().ok(); });
+    std::thread::spawn(move || {
+        child.wait().ok();
+    });
 
     if result_session_id.is_empty() {
         Err(anyhow::anyhow!("no session_id in result"))

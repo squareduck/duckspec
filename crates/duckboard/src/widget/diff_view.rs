@@ -65,7 +65,7 @@ pub fn build_editor(diff: &DiffData, highlight: Option<&DiffHighlight>) -> Edito
     for hunk in &diff.hunks {
         // Hunk header line.
         lines.push(hunk.header.trim_end().to_string());
-        backgrounds.push(Some(LineBgKind::DiffHunk));
+        backgrounds.push(Some(LineBgKind::Hunk));
         spans_per_line.push(vec![HighlightSpan {
             text: hunk.header.trim_end().to_string(),
             color: theme::text_muted(),
@@ -73,8 +73,8 @@ pub fn build_editor(diff: &DiffData, highlight: Option<&DiffHighlight>) -> Edito
 
         for dl in &hunk.lines {
             let (prefix, prefix_color, bg) = match dl.kind {
-                LineKind::Added => ("+ ", theme::success(), Some(LineBgKind::DiffAdded)),
-                LineKind::Removed => ("- ", theme::error(), Some(LineBgKind::DiffRemoved)),
+                LineKind::Added => ("+ ", theme::success(), Some(LineBgKind::Added)),
+                LineKind::Removed => ("- ", theme::error(), Some(LineBgKind::Removed)),
                 LineKind::Context => ("  ", theme::text_muted(), None),
             };
 

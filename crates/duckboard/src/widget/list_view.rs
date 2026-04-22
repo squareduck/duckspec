@@ -11,7 +11,7 @@
 use std::borrow::Cow;
 
 use iced::widget::text::Wrapping;
-use iced::widget::{button, column, container, row, svg, text, Space};
+use iced::widget::{Space, button, column, container, row, svg, text};
 use iced::{Color, Element, Length};
 
 use crate::theme;
@@ -127,9 +127,7 @@ impl<'a, Msg: Clone + 'a> ListRow<'a, Msg> {
     }
 
     pub fn into_element(self) -> Element<'a, Msg> {
-        let mut inner = row![]
-            .spacing(self.spacing)
-            .align_y(iced::Center);
+        let mut inner = row![].spacing(self.spacing).align_y(iced::Center);
 
         if let Some(leading) = self.leading {
             inner = inner.push(leading);

@@ -147,7 +147,9 @@ fn minute_prefix_from_nanos(nanos: i128) -> String {
                 .ok()
                 .map(|off| utc.to_offset(off))
         })
-        .unwrap_or_else(|| OffsetDateTime::from_unix_timestamp_nanos(nanos).unwrap_or(OffsetDateTime::UNIX_EPOCH));
+        .unwrap_or_else(|| {
+            OffsetDateTime::from_unix_timestamp_nanos(nanos).unwrap_or(OffsetDateTime::UNIX_EPOCH)
+        });
     minute_prefix(dt)
 }
 
@@ -180,8 +182,12 @@ pub fn load_sessions_for(scope: &str, project_root: Option<&Path>) -> Vec<ChatSe
         if path.extension().is_none_or(|e| e != "json") {
             continue;
         }
-        let Ok(data) = std::fs::read_to_string(&path) else { continue };
-        let Ok(persisted) = serde_json::from_str::<PersistedSession>(&data) else { continue };
+        let Ok(data) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        let Ok(persisted) = serde_json::from_str::<PersistedSession>(&data) else {
+            continue;
+        };
         sessions.push(ChatSession {
             id: persisted.id,
             scope: scope.to_string(),
@@ -216,19 +222,19 @@ pub fn save_session(session: &ChatSession, project_root: Option<&Path>) -> anyho
 
 /// Delete a single session file.
 pub fn delete_session(scope: &str, session_id: &str, project_root: Option<&Path>) {
-    if let Err(e) = std::fs::remove_file(session_path(scope, session_id, project_root)) {
-        if e.kind() != std::io::ErrorKind::NotFound {
-            tracing::warn!(scope, session_id, "failed to delete session file: {e}");
-        }
+    if let Err(e) = std::fs::remove_file(session_path(scope, session_id, project_root))
+        && e.kind() != std::io::ErrorKind::NotFound
+    {
+        tracing::warn!(scope, session_id, "failed to delete session file: {e}");
     }
 }
 
 /// Delete all sessions for a scope (directory removal).
 pub fn delete_scope(scope: &str, project_root: Option<&Path>) {
-    if let Err(e) = std::fs::remove_dir_all(scope_dir(scope, project_root)) {
-        if e.kind() != std::io::ErrorKind::NotFound {
-            tracing::warn!(scope, "failed to delete scope directory: {e}");
-        }
+    if let Err(e) = std::fs::remove_dir_all(scope_dir(scope, project_root))
+        && e.kind() != std::io::ErrorKind::NotFound
+    {
+        tracing::warn!(scope, "failed to delete scope directory: {e}");
     }
 }
 
@@ -236,10 +242,14 @@ pub fn delete_scope(scope: &str, project_root: Option<&Path>) {
 pub fn rename_scope(old: &str, new: &str, project_root: Option<&Path>) {
     let old_dir = scope_dir(old, project_root);
     let new_dir = scope_dir(new, project_root);
-    if old_dir.exists() {
-        if let Err(e) = std::fs::rename(&old_dir, &new_dir) {
-            tracing::warn!(from = old, to = new, "failed to rename scope directory: {e}");
-        }
+    if old_dir.exists()
+        && let Err(e) = std::fs::rename(&old_dir, &new_dir)
+    {
+        tracing::warn!(
+            from = old,
+            to = new,
+            "failed to rename scope directory: {e}"
+        );
     }
 }
 

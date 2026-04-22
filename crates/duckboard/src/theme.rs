@@ -51,14 +51,18 @@ const fn hex(r: u8, g: u8, b: u8) -> Color {
 }
 
 fn pick(dark: Color, light: Color) -> Color {
-    if IS_DARK.load(Ordering::Relaxed) { dark } else { light }
+    if IS_DARK.load(Ordering::Relaxed) {
+        dark
+    } else {
+        light
+    }
 }
 
 // ── Catppuccin Macchiato (dark) ────────────────────────────────────────────
 
 #[allow(dead_code)]
 mod macchiato {
-    use super::{hex, Color};
+    use super::{Color, hex};
     pub const BASE: Color = hex(0x24, 0x27, 0x3a);
     pub const MANTLE: Color = hex(0x1e, 0x20, 0x30);
     pub const SURFACE0: Color = hex(0x36, 0x3a, 0x4f);
@@ -86,7 +90,7 @@ mod macchiato {
 
 #[allow(dead_code)]
 mod latte {
-    use super::{hex, Color};
+    use super::{Color, hex};
     pub const BASE: Color = hex(0xef, 0xf1, 0xf5);
     pub const MANTLE: Color = hex(0xe6, 0xe9, 0xef);
     pub const SURFACE0: Color = hex(0xcc, 0xd0, 0xda);
@@ -113,10 +117,18 @@ mod latte {
 // ── Public colour accessors ────────────────────────────────────────────────
 // Each is a single atomic load + branch – negligible cost.
 
-pub fn bg_base() -> Color { pick(macchiato::BASE, latte::BASE) }
-pub fn bg_surface() -> Color { pick(macchiato::MANTLE, latte::MANTLE) }
-pub fn bg_elevated() -> Color { pick(macchiato::SURFACE0, latte::SURFACE0) }
-pub fn bg_hover() -> Color { pick(macchiato::SURFACE1, latte::SURFACE1) }
+pub fn bg_base() -> Color {
+    pick(macchiato::BASE, latte::BASE)
+}
+pub fn bg_surface() -> Color {
+    pick(macchiato::MANTLE, latte::MANTLE)
+}
+pub fn bg_elevated() -> Color {
+    pick(macchiato::SURFACE0, latte::SURFACE0)
+}
+pub fn bg_hover() -> Color {
+    pick(macchiato::SURFACE1, latte::SURFACE1)
+}
 
 /// Hover tint for list rows — halfway between the sidebar's surface and the
 /// elevated header bg, so hover reads as a subtle step toward "lifted" without
@@ -201,33 +213,67 @@ pub fn chat_bg_system() -> Color {
     pick(hex(0x2a, 0x2d, 0x40), hex(0xe6, 0xe8, 0xef))
 }
 
-pub fn accent() -> Color { pick(macchiato::BLUE, latte::BLUE) }
-pub fn accent_dim() -> Color { pick(macchiato::SAPPHIRE, latte::SAPPHIRE) }
+pub fn accent() -> Color {
+    pick(macchiato::BLUE, latte::BLUE)
+}
+pub fn accent_dim() -> Color {
+    pick(macchiato::SAPPHIRE, latte::SAPPHIRE)
+}
 
-pub fn text_primary() -> Color { pick(macchiato::TEXT, latte::TEXT) }
-pub fn text_secondary() -> Color { pick(macchiato::SUBTEXT0, latte::SUBTEXT0) }
-pub fn text_muted() -> Color { pick(macchiato::OVERLAY0, latte::OVERLAY0) }
+pub fn text_primary() -> Color {
+    pick(macchiato::TEXT, latte::TEXT)
+}
+pub fn text_secondary() -> Color {
+    pick(macchiato::SUBTEXT0, latte::SUBTEXT0)
+}
+pub fn text_muted() -> Color {
+    pick(macchiato::OVERLAY0, latte::OVERLAY0)
+}
 
-pub fn border_color() -> Color { pick(macchiato::SURFACE2, latte::SURFACE2) }
+pub fn border_color() -> Color {
+    pick(macchiato::SURFACE2, latte::SURFACE2)
+}
 
-pub fn diff_added_bg() -> Color { pick(macchiato::DIFF_ADDED_BG, latte::DIFF_ADDED_BG) }
-pub fn diff_removed_bg() -> Color { pick(macchiato::DIFF_REMOVED_BG, latte::DIFF_REMOVED_BG) }
-pub fn diff_hunk_bg() -> Color { pick(macchiato::DIFF_HUNK_BG, latte::DIFF_HUNK_BG) }
+pub fn diff_added_bg() -> Color {
+    pick(macchiato::DIFF_ADDED_BG, latte::DIFF_ADDED_BG)
+}
+pub fn diff_removed_bg() -> Color {
+    pick(macchiato::DIFF_REMOVED_BG, latte::DIFF_REMOVED_BG)
+}
+pub fn diff_hunk_bg() -> Color {
+    pick(macchiato::DIFF_HUNK_BG, latte::DIFF_HUNK_BG)
+}
 
-pub fn success() -> Color { pick(macchiato::GREEN, latte::GREEN) }
-pub fn warning() -> Color { pick(macchiato::YELLOW, latte::YELLOW) }
-pub fn error() -> Color { pick(macchiato::RED, latte::RED) }
+pub fn success() -> Color {
+    pick(macchiato::GREEN, latte::GREEN)
+}
+pub fn warning() -> Color {
+    pick(macchiato::YELLOW, latte::YELLOW)
+}
+pub fn error() -> Color {
+    pick(macchiato::RED, latte::RED)
+}
 
 #[allow(dead_code)]
-pub fn mauve() -> Color { pick(macchiato::MAUVE, latte::MAUVE) }
+pub fn mauve() -> Color {
+    pick(macchiato::MAUVE, latte::MAUVE)
+}
 #[allow(dead_code)]
-pub fn peach() -> Color { pick(macchiato::PEACH, latte::PEACH) }
+pub fn peach() -> Color {
+    pick(macchiato::PEACH, latte::PEACH)
+}
 #[allow(dead_code)]
-pub fn teal() -> Color { pick(macchiato::TEAL, latte::TEAL) }
+pub fn teal() -> Color {
+    pick(macchiato::TEAL, latte::TEAL)
+}
 #[allow(dead_code)]
-pub fn pink() -> Color { pick(macchiato::PINK, latte::PINK) }
+pub fn pink() -> Color {
+    pick(macchiato::PINK, latte::PINK)
+}
 #[allow(dead_code)]
-pub fn lavender() -> Color { pick(macchiato::LAVENDER, latte::LAVENDER) }
+pub fn lavender() -> Color {
+    pick(macchiato::LAVENDER, latte::LAVENDER)
+}
 
 // ── Font state ────────────────────────────────────────────────────────────
 
@@ -343,19 +389,6 @@ pub fn font_md() -> f32 {
     ui_size()
 }
 
-pub fn font_lg() -> f32 {
-    ui_size() + 2.0
-}
-
-pub fn content_sm() -> f32 {
-    (content_size() - 2.0).max(6.0)
-}
-
-pub fn content_lg() -> f32 {
-    content_size() + 2.0
-}
-
-
 // ── Spacing ────────────────────────────────────────────────────────────────
 
 pub const SPACING_XS: f32 = 4.0;
@@ -374,22 +407,23 @@ pub const BORDER_RADIUS: f32 = 4.0;
 // ── Custom theme ───────────────────────────────────────────────────────────
 
 pub fn app_theme() -> Theme {
-    Theme::custom("duckboard".to_string(), iced::theme::Palette {
-        background: bg_base(),
-        text: text_primary(),
-        primary: accent(),
-        success: success(),
-        danger: error(),
-        warning: warning(),
-    })
+    Theme::custom(
+        "duckboard".to_string(),
+        iced::theme::Palette {
+            background: bg_base(),
+            text: text_primary(),
+            primary: accent(),
+            success: success(),
+            danger: error(),
+            warning: warning(),
+        },
+    )
 }
 
 // ── SVG styles ────────────────────────────────────────────────────────────
 
 pub fn svg_tint(color: Color) -> impl Fn(&iced::Theme, svg::Status) -> svg::Style {
-    move |_theme, _status| svg::Style {
-        color: Some(color),
-    }
+    move |_theme, _status| svg::Style { color: Some(color) }
 }
 
 // ── Scrollable styles ─────────────────────────────────────────────────────
@@ -426,11 +460,7 @@ pub fn thin_scrollbar(_theme: &iced::Theme, _status: scrollable::Status) -> scro
 /// right edge, creating a visible mismatched strip wherever the scroller
 /// isn't sitting.
 pub fn thin_scrollbar_direction() -> scrollable::Direction {
-    scrollable::Direction::Vertical(
-        scrollable::Scrollbar::new()
-            .width(4)
-            .scroller_width(4),
-    )
+    scrollable::Direction::Vertical(scrollable::Scrollbar::new().width(4).scroller_width(4))
 }
 
 /// Scrollbar direction: thin horizontal-only with reserved gutter space.

@@ -9,11 +9,11 @@
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use iced::advanced::Layout;
 use iced::advanced::layout;
 use iced::advanced::mouse;
 use iced::advanced::renderer;
 use iced::advanced::widget::{Tree, Widget};
-use iced::advanced::Layout;
 use iced::widget::{row, text};
 use iced::{Border, Color, Element, Length, Rectangle, Size, Theme};
 
@@ -49,7 +49,10 @@ pub fn view<'a, M: 'a>(esc_count: u8) -> Element<'a, M> {
         let phase = (tick.wrapping_add(offset) % CYCLE) as f32 / CYCLE as f32;
         let pulse = (phase * std::f32::consts::TAU).sin() * 0.5 + 0.5;
         let alpha = 0.25 + 0.55 * pulse;
-        Color { a: alpha, ..theme::text_muted() }
+        Color {
+            a: alpha,
+            ..theme::text_muted()
+        }
     };
 
     let dots = row![

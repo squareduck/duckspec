@@ -13,15 +13,14 @@ pub fn run(name: String, dry: bool) -> anyhow::Result<()> {
 
     // Resolve the change directory: try as a path first, fall back to
     // treating input as a bare change name under changes/.
-    let change_dir = resolve_path(&name, &duckspec_root)
-        .or_else(|_| {
-            let under_changes = duckspec_root.join("changes").join(&name);
-            if under_changes.is_dir() {
-                Ok(under_changes)
-            } else {
-                anyhow::bail!("change not found: {name}")
-            }
-        })?;
+    let change_dir = resolve_path(&name, &duckspec_root).or_else(|_| {
+        let under_changes = duckspec_root.join("changes").join(&name);
+        if under_changes.is_dir() {
+            Ok(under_changes)
+        } else {
+            anyhow::bail!("change not found: {name}")
+        }
+    })?;
 
     if !change_dir.is_dir() {
         anyhow::bail!("not a directory: {}", change_dir.display());
@@ -32,12 +31,7 @@ pub fn run(name: String, dry: bool) -> anyhow::Result<()> {
     let changes_dir = duckspec_root.join("changes").canonicalize()?;
     let change_relative = change_canonical
         .strip_prefix(&changes_dir)
-        .map_err(|_| {
-            anyhow::anyhow!(
-                "{} is not under changes/",
-                change_dir.display()
-            )
-        })?;
+        .map_err(|_| anyhow::anyhow!("{} is not under changes/", change_dir.display()))?;
     let name = change_relative
         .components()
         .next()
@@ -72,7 +66,10 @@ pub fn run(name: String, dry: bool) -> anyhow::Result<()> {
     eprintln!("  {} re-validating caps…", "·".dimmed());
     if let Err(err) = validate_caps(&duckspec_root, &canonical_root) {
         // Rollback: move archive back, restore original files.
-        eprintln!("  {} validation failed after archive, rolling back", "×".red());
+        eprintln!(
+            "  {} validation failed after archive, rolling back",
+            "×".red()
+        );
         std::fs::rename(&archive_dir, &change_dir).ok();
         rollback_results(&duckspec_root, &results);
         return Err(err);
@@ -82,10 +79,7 @@ pub fn run(name: String, dry: bool) -> anyhow::Result<()> {
         .file_name()
         .and_then(|n| n.to_str())
         .unwrap_or("?");
-    eprintln!(
-        "  {} archived {name} → archive/{archive_name}",
-        "✓".green()
-    );
+    eprintln!("  {} archived {name} → archive/{archive_name}", "✓".green());
 
     Ok(())
 }
@@ -343,14 +337,16 @@ fn pick_archive_dir(duckspec_root: &Path, name: &str) -> anyhow::Result<PathBuf>
         for entry in std::fs::read_dir(&archive_root)? {
             let entry = entry?;
             if let Some(dir_name) = entry.file_name().to_str()
-                && dir_name.starts_with(&prefix) {
-                    // Try to extract NN from YYYY-MM-DD-NN-<name>.
-                    let rest = &dir_name[prefix.len()..];
-                    if let Some(dash_pos) = rest.find('-')
-                        && let Ok(n) = rest[..dash_pos].parse::<u32>() {
-                            nn = nn.max(n + 1);
-                        }
+                && dir_name.starts_with(&prefix)
+            {
+                // Try to extract NN from YYYY-MM-DD-NN-<name>.
+                let rest = &dir_name[prefix.len()..];
+                if let Some(dash_pos) = rest.find('-')
+                    && let Ok(n) = rest[..dash_pos].parse::<u32>()
+                {
+                    nn = nn.max(n + 1);
                 }
+            }
         }
     }
 
@@ -403,9 +399,7 @@ fn validate_change(duckspec_root: &Path, name: &str) -> anyhow::Result<()> {
     }
 
     if error_count > 0 {
-        anyhow::bail!(
-            "change {name} has {error_count} validation error(s) — fix before archiving"
-        );
+        anyhow::bail!("change {name} has {error_count} validation error(s) — fix before archiving");
     }
 
     Ok(())
@@ -450,10 +444,7 @@ fn validate_caps(duckspec_root: &Path, canonical_root: &Path) -> anyhow::Result<
 
 fn build_context(kind: &ArtifactKind, relative: &Path) -> CheckContext {
     if *kind == ArtifactKind::Step {
-        let filename = relative
-            .file_name()
-            .and_then(|f| f.to_str())
-            .unwrap_or("");
+        let filename = relative.file_name().and_then(|f| f.to_str()).unwrap_or("");
         CheckContext {
             filename_slug: layout::extract_step_slug(filename),
         }
@@ -469,7 +460,12 @@ fn build_duckspec_state(duckspec_root: &Path) -> anyhow::Result<DuckspecState> {
     let mut cap_doc_paths = HashSet::new();
 
     if caps_dir.is_dir() {
-        scan_caps(&caps_dir, &caps_dir, &mut cap_spec_paths, &mut cap_doc_paths)?;
+        scan_caps(
+            &caps_dir,
+            &caps_dir,
+            &mut cap_spec_paths,
+            &mut cap_doc_paths,
+        )?;
     }
 
     Ok(DuckspecState {
@@ -496,8 +492,12 @@ fn scan_caps(
                 .map(|p| p.to_path_buf());
             if let Some(cap_path) = cap_path {
                 match filename {
-                    "spec.md" => { spec_paths.insert(cap_path); }
-                    "doc.md" => { doc_paths.insert(cap_path); }
+                    "spec.md" => {
+                        spec_paths.insert(cap_path);
+                    }
+                    "doc.md" => {
+                        doc_paths.insert(cap_path);
+                    }
                     _ => {}
                 }
             }

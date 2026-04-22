@@ -34,7 +34,10 @@ pub struct ChangeValidation {
 
 impl ChangeValidation {
     pub fn total_count(&self) -> usize {
-        self.file_errors.iter().map(|(_, errs)| errs.len()).sum::<usize>()
+        self.file_errors
+            .iter()
+            .map(|(_, errs)| errs.len())
+            .sum::<usize>()
             + self.change_errors.len()
     }
 
@@ -61,7 +64,11 @@ pub struct ProjectAudit {
 impl ProjectAudit {
     pub fn total_count(&self) -> usize {
         let artifact: usize = self.artifact_errors.iter().map(|(_, e)| e.len()).sum();
-        let coverage: usize = self.missing_step_coverage.iter().map(|(_, s)| s.len()).sum();
+        let coverage: usize = self
+            .missing_step_coverage
+            .iter()
+            .map(|(_, s)| s.len())
+            .sum();
         artifact
             + self.unresolved_backlinks.len()
             + self.missing_backlink_scenarios.len()
@@ -208,41 +215,24 @@ pub fn strip_archive_prefix(name: &str) -> Option<&str> {
     }
     let is_digit = |i: usize| bytes[i].is_ascii_digit();
     let is_dash = |i: usize| bytes[i] == b'-';
-    let ok = is_digit(0) && is_digit(1) && is_digit(2) && is_digit(3)
+    let ok = is_digit(0)
+        && is_digit(1)
+        && is_digit(2)
+        && is_digit(3)
         && is_dash(4)
-        && is_digit(5) && is_digit(6)
+        && is_digit(5)
+        && is_digit(6)
         && is_dash(7)
-        && is_digit(8) && is_digit(9)
+        && is_digit(8)
+        && is_digit(9)
         && is_dash(10)
-        && is_digit(11) && is_digit(12)
+        && is_digit(11)
+        && is_digit(12)
         && is_dash(13);
     if !ok {
         return None;
     }
     Some(&name[14..])
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn strips_valid_archive_prefix() {
-        assert_eq!(strip_archive_prefix("2026-04-20-01-foo"), Some("foo"));
-        assert_eq!(
-            strip_archive_prefix("2026-12-31-99-my-change"),
-            Some("my-change")
-        );
-    }
-
-    #[test]
-    fn rejects_invalid_prefix() {
-        assert_eq!(strip_archive_prefix("foo"), None);
-        assert_eq!(strip_archive_prefix("2026-04-20-foo"), None);
-        assert_eq!(strip_archive_prefix("26-04-20-01-foo"), None);
-        assert_eq!(strip_archive_prefix("2026-4-20-01-foo"), None);
-        assert_eq!(strip_archive_prefix("2026-04-20-01-"), None);
-    }
 }
 
 // ── Filesystem helpers ───────────────────────────────────────────────────────
@@ -393,14 +383,15 @@ fn build_steps(dir: &Path, change_prefix: &str) -> Vec<StepInfo> {
         }
         let stem = name.trim_end_matches(".md");
         if let Some((num_str, _)) = stem.split_once('-')
-            && num_str.parse::<u32>().is_ok() {
-                let completion = compute_step_completion(&entry.path());
-                steps.push(StepInfo {
-                    id: format!("{}/steps/{}", change_prefix, name),
-                    label: name.clone(),
-                    completion,
-                });
-            }
+            && num_str.parse::<u32>().is_ok()
+        {
+            let completion = compute_step_completion(&entry.path());
+            steps.push(StepInfo {
+                id: format!("{}/steps/{}", change_prefix, name),
+                label: name.clone(),
+                completion,
+            });
+        }
     }
     steps
 }
@@ -416,13 +407,17 @@ fn compute_step_completion(path: &Path) -> StepCompletion {
         Err(_) => return StepCompletion::NoTasks,
     };
 
-    let total = step.tasks.len()
-        + step.tasks.iter().map(|t| t.subtasks.len()).sum::<usize>();
+    let total = step.tasks.len() + step.tasks.iter().map(|t| t.subtasks.len()).sum::<usize>();
     if total == 0 {
         return StepCompletion::NoTasks;
     }
     let done = step.tasks.iter().filter(|t| t.checked).count()
-        + step.tasks.iter().flat_map(|t| &t.subtasks).filter(|s| s.checked).count();
+        + step
+            .tasks
+            .iter()
+            .flat_map(|t| &t.subtasks)
+            .filter(|s| s.checked)
+            .count();
     if done == total {
         StepCompletion::Done
     } else {
@@ -550,4 +545,27 @@ fn run_audit(
     };
 
     (validations, project_audit)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn strips_valid_archive_prefix() {
+        assert_eq!(strip_archive_prefix("2026-04-20-01-foo"), Some("foo"));
+        assert_eq!(
+            strip_archive_prefix("2026-12-31-99-my-change"),
+            Some("my-change")
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_prefix() {
+        assert_eq!(strip_archive_prefix("foo"), None);
+        assert_eq!(strip_archive_prefix("2026-04-20-foo"), None);
+        assert_eq!(strip_archive_prefix("26-04-20-01-foo"), None);
+        assert_eq!(strip_archive_prefix("2026-4-20-01-foo"), None);
+        assert_eq!(strip_archive_prefix("2026-04-20-01-"), None);
+    }
 }

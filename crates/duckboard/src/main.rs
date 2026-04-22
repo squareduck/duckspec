@@ -1,9 +1,8 @@
 //! duckboard — GUI for the duckspec framework, built with Iced 0.14.
 
-
 use iced::event;
 use iced::keyboard;
-use iced::widget::{column, container, row, stack, Space};
+use iced::widget::{Space, column, container, row, stack};
 use iced::{Element, Event, Length, Subscription, Task};
 
 mod agent;
@@ -60,7 +59,10 @@ impl State {
         // Expand all tree nodes by default.
         let mut caps_expanded = std::collections::HashSet::new();
         data::TreeNode::collect_parent_ids(&project.cap_tree, &mut caps_expanded);
-        let caps_state = area::caps::State { expanded_nodes: caps_expanded, ..Default::default() };
+        let caps_state = area::caps::State {
+            expanded_nodes: caps_expanded,
+            ..Default::default()
+        };
 
         let config = config::load();
         theme::set_fonts(&config);
@@ -238,9 +240,10 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                                 };
                                 tabs.open_file(id.clone(), title, content);
                                 if let Some(tab) = tabs.file_tabs.iter_mut().find(|t| t.id == id)
-                                    && let tab_bar::TabView::Editor { editor, .. } = &mut tab.view {
-                                        rehighlight(editor, &id, &state.highlighter);
-                                    }
+                                    && let tab_bar::TabView::Editor { editor, .. } = &mut tab.view
+                                {
+                                    rehighlight(editor, &id, &state.highlighter);
+                                }
                             }
                         }
                         state.file_finder.close();
@@ -262,9 +265,21 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                             if let Ok(rel) = path.strip_prefix(root) {
                                 let id = rel.to_string_lossy().to_string();
                                 if let Some(content) = state.project.read_artifact(&id) {
-                                    state.change.tabs.refresh_content(&id, content.clone(), &state.highlighter);
-                                    state.caps.tabs.refresh_content(&id, content.clone(), &state.highlighter);
-                                    state.codex.tabs.refresh_content(&id, content, &state.highlighter);
+                                    state.change.tabs.refresh_content(
+                                        &id,
+                                        content.clone(),
+                                        &state.highlighter,
+                                    );
+                                    state.caps.tabs.refresh_content(
+                                        &id,
+                                        content.clone(),
+                                        &state.highlighter,
+                                    );
+                                    state.codex.tabs.refresh_content(
+                                        &id,
+                                        content,
+                                        &state.highlighter,
+                                    );
                                 }
                             }
                             if path.starts_with(root) {
@@ -289,12 +304,13 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                             }
                         }
                         if let Some(root) = project_root.as_deref()
-                            && let Ok(rel) = path.strip_prefix(root) {
-                                let diff_id = format!("vcs:{}", rel.display());
-                                state.change.tabs.close_by_id(&diff_id);
-                                state.caps.tabs.close_by_id(&diff_id);
-                                state.codex.tabs.close_by_id(&diff_id);
-                            }
+                            && let Ok(rel) = path.strip_prefix(root)
+                        {
+                            let diff_id = format!("vcs:{}", rel.display());
+                            state.change.tabs.close_by_id(&diff_id);
+                            state.caps.tabs.close_by_id(&diff_id);
+                            state.codex.tabs.close_by_id(&diff_id);
+                        }
                     }
                     watcher::FileEvent::VcsStateChanged(path) => {
                         tracing::debug!(path = %path.display(), "git state changed — refreshing");
@@ -309,10 +325,9 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                 refresh_open_tabs(state);
             }
 
-            if vcs_state_changed
-                && let Some(root) = project_root.as_deref() {
-                    refresh_all_diff_tabs(state, root);
-                }
+            if vcs_state_changed && let Some(root) = project_root.as_deref() {
+                refresh_all_diff_tabs(state, root);
+            }
 
             refresh_changed_files(state);
         }
@@ -342,7 +357,10 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                 area::dashboard::Message::RefreshAudit => {
                     state.project.revalidate();
                 }
-                area::dashboard::Message::SelectAuditError { change, artifact_id } => {
+                area::dashboard::Message::SelectAuditError {
+                    change,
+                    artifact_id,
+                } => {
                     state.active_area = Area::Change;
                     area::change::update(
                         &mut state.change,
@@ -394,7 +412,9 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
         // Per-instance PTY events
         Message::PtyEvent(ix_id, evt) => {
             use widget::terminal::PtyEvent;
-            let Some(ix) = state.interaction_mut_by_ix_id(ix_id) else { return Task::none() };
+            let Some(ix) = state.interaction_mut_by_ix_id(ix_id) else {
+                return Task::none();
+            };
             match evt {
                 PtyEvent::Ready(writer, master) => {
                     if let Some(ref mut ts) = ix.terminal {
@@ -420,7 +440,9 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
             use agent::AgentEvent;
             let proj_root = state.project.project_root.clone();
             {
-                let Some(ax) = state.agent_session_mut(&key) else { return Task::none() };
+                let Some(ax) = state.agent_session_mut(&key) else {
+                    return Task::none();
+                };
                 match evt {
                     AgentEvent::Ready(handle) => {
                         // Seed the worker with a previously-persisted Claude session
@@ -449,14 +471,19 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                     AgentEvent::ToolResult { id, name, output } => {
                         ax.session.messages.push(chat_store::ChatMessage {
                             role: chat_store::Role::Assistant,
-                            content: vec![chat_store::ContentBlock::ToolResult { id, name, output }],
+                            content: vec![chat_store::ContentBlock::ToolResult {
+                                id,
+                                name,
+                                output,
+                            }],
                             timestamp: String::new(),
                         });
                     }
                     AgentEvent::TurnComplete => {
                         flush_pending_text(&mut ax.session);
                         ax.session.is_streaming = false;
-                        if let Err(e) = chat_store::save_session(&ax.session, proj_root.as_deref()) {
+                        if let Err(e) = chat_store::save_session(&ax.session, proj_root.as_deref())
+                        {
                             tracing::error!("failed to save chat session: {e}");
                         }
                     }
@@ -472,7 +499,12 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                     AgentEvent::SessionIdUpdated { session_id } => {
                         ax.session.claude_session_id = Some(session_id);
                     }
-                    AgentEvent::UsageUpdate { model, input_tokens, output_tokens, context_window } => {
+                    AgentEvent::UsageUpdate {
+                        model,
+                        input_tokens,
+                        output_tokens,
+                        context_window,
+                    } => {
                         if let Some(m) = model {
                             ax.agent_model = m;
                         }
@@ -493,7 +525,13 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                     }
                 }
             }
-            let State { change, caps, codex, highlighter, .. } = state;
+            let State {
+                change,
+                caps,
+                codex,
+                highlighter,
+                ..
+            } = state;
             let ax = resolve_session_mut(change, caps, codex, &key);
             if let Some(ax) = ax {
                 let is_streaming = ax.session.is_streaming;
@@ -524,19 +562,34 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                         let _ = update(state, Message::FileFinder(widget::file_finder::Msg::Close));
                     }
                     keyboard::Key::Named(Named::Enter) => {
-                        let _ = update(state, Message::FileFinder(widget::file_finder::Msg::Confirm));
+                        let _ = update(
+                            state,
+                            Message::FileFinder(widget::file_finder::Msg::Confirm),
+                        );
                     }
                     keyboard::Key::Named(Named::ArrowDown) => {
-                        let _ = update(state, Message::FileFinder(widget::file_finder::Msg::SelectNext));
+                        let _ = update(
+                            state,
+                            Message::FileFinder(widget::file_finder::Msg::SelectNext),
+                        );
                     }
                     keyboard::Key::Named(Named::ArrowUp) => {
-                        let _ = update(state, Message::FileFinder(widget::file_finder::Msg::SelectPrev));
+                        let _ = update(
+                            state,
+                            Message::FileFinder(widget::file_finder::Msg::SelectPrev),
+                        );
                     }
                     _ if mods.control() && key == keyboard::Key::Character("n".into()) => {
-                        let _ = update(state, Message::FileFinder(widget::file_finder::Msg::SelectNext));
+                        let _ = update(
+                            state,
+                            Message::FileFinder(widget::file_finder::Msg::SelectNext),
+                        );
                     }
                     _ if mods.control() && key == keyboard::Key::Character("p".into()) => {
-                        let _ = update(state, Message::FileFinder(widget::file_finder::Msg::SelectPrev));
+                        let _ = update(
+                            state,
+                            Message::FileFinder(widget::file_finder::Msg::SelectPrev),
+                        );
                     }
                     _ => {}
                 }
@@ -545,16 +598,17 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
 
             // Get the active area's interaction state for keyboard routing.
             let active_info = state.active_interaction().map(|(i, _key)| {
-                let agent_chat_active = i.visible
-                    && i.mode == InteractionMode::AgentChat
-                    && i.active().is_some();
+                let agent_chat_active =
+                    i.visible && i.mode == InteractionMode::AgentChat && i.active().is_some();
                 let terminal_focused = i.terminal_focused;
                 (agent_chat_active, terminal_focused)
             });
             // We need the key separately (can't hold borrow across mutable calls).
             let active_key = state.active_interaction_key();
 
-            if let (Some((agent_chat_active, terminal_focused, ..)), Some(routing_key)) = (active_info, &active_key) {
+            if let (Some((agent_chat_active, terminal_focused, ..)), Some(routing_key)) =
+                (active_info, &active_key)
+            {
                 // Agent chat keyboard shortcuts (completion, esc-cancel, enter-send).
                 if agent_chat_active {
                     if let Some(ix) = state.interaction_mut(routing_key) {
@@ -562,7 +616,9 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                             interaction::AgentChatKeyResult::Handled => return Task::none(),
                             interaction::AgentChatKeyResult::Dispatch(msg) => {
                                 return dispatch_interaction_msg(
-                                    state, routing_key, interaction::Msg::AgentChat(msg),
+                                    state,
+                                    routing_key,
+                                    interaction::Msg::AgentChat(msg),
                                 );
                             }
                             interaction::AgentChatKeyResult::NotHandled => {}
@@ -592,9 +648,7 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                     } else {
                         mods.control() && mods.shift() && !mods.alt() && !mods.logo()
                     };
-                    if clipboard_combo
-                        && let keyboard::Key::Character(c) = &key
-                    {
+                    if clipboard_combo && let keyboard::Key::Character(c) = &key {
                         match c.as_str().to_ascii_lowercase().as_str() {
                             "c" => {
                                 let selection = state
@@ -608,9 +662,8 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                             }
                             "v" => {
                                 let route = routing_key.clone();
-                                return iced::clipboard::read().map(move |opt| {
-                                    Message::TerminalPaste(route.clone(), opt)
-                                });
+                                return iced::clipboard::read()
+                                    .map(move |opt| Message::TerminalPaste(route.clone(), opt));
                             }
                             _ => {}
                         }
@@ -656,8 +709,14 @@ fn resolve_session_mut<'a>(
 fn dispatch_interaction_msg(state: &mut State, key: &str, msg: interaction::Msg) -> Task<Message> {
     match key {
         KEY_CAPS => update(state, Message::Caps(area::caps::Message::Interaction(msg))),
-        KEY_CODEX => update(state, Message::Codex(area::codex::Message::Interaction(msg))),
-        _ => update(state, Message::Change(area::change::Message::Interaction(msg))),
+        KEY_CODEX => update(
+            state,
+            Message::Codex(area::codex::Message::Interaction(msg)),
+        ),
+        _ => update(
+            state,
+            Message::Change(area::change::Message::Interaction(msg)),
+        ),
     }
 }
 
@@ -705,15 +764,15 @@ fn extract_codex_interaction_msg(msg: &area::codex::Message) -> Option<&interact
 /// `EditorState::highlight_spans` bake in concrete RGB colors at highlight
 /// time, so a theme switch is invisible until every editor is re-highlighted.
 fn rehighlight_all(state: &mut State) {
-    for tabs in [&mut state.change.tabs, &mut state.caps.tabs, &mut state.codex.tabs] {
-        let all_tabs = tabs
-            .preview
-            .iter_mut()
-            .chain(tabs.file_tabs.iter_mut());
+    for tabs in [
+        &mut state.change.tabs,
+        &mut state.caps.tabs,
+        &mut state.codex.tabs,
+    ] {
+        let all_tabs = tabs.preview.iter_mut().chain(tabs.file_tabs.iter_mut());
         for tab in all_tabs {
             match &mut tab.view {
-                tab_bar::TabView::Editor { editor, .. }
-                | tab_bar::TabView::Diff { editor, .. } => {
+                tab_bar::TabView::Editor { editor, .. } | tab_bar::TabView::Diff { editor, .. } => {
                     rehighlight(editor, &tab.id, &state.highlighter);
                 }
             }
@@ -721,15 +780,15 @@ fn rehighlight_all(state: &mut State) {
     }
 
     let md_syntax = state.highlighter.find_syntax("md");
-    let rehighlight_session = |ax: &mut interaction::AgentSession,
-                               highlighter: &highlight::SyntaxHighlighter| {
-        ax.chat_input.highlight_spans =
-            Some(highlighter.highlight_lines(&ax.chat_input.lines, md_syntax));
-        for editor in ax.chat_editors.iter_mut() {
-            editor.highlight_spans =
-                Some(highlighter.highlight_lines(&editor.lines, md_syntax));
-        }
-    };
+    let rehighlight_session =
+        |ax: &mut interaction::AgentSession, highlighter: &highlight::SyntaxHighlighter| {
+            ax.chat_input.highlight_spans =
+                Some(highlighter.highlight_lines(&ax.chat_input.lines, md_syntax));
+            for editor in ax.chat_editors.iter_mut() {
+                editor.highlight_spans =
+                    Some(highlighter.highlight_lines(&editor.lines, md_syntax));
+            }
+        };
     for ix in state.change.interactions.values_mut() {
         for ax in ix.sessions.iter_mut() {
             rehighlight_session(ax, &state.highlighter);
@@ -827,16 +886,18 @@ fn reload_and_reconcile(state: &mut State) -> bool {
 
 /// Re-read content for all open text tabs from disk.
 fn refresh_open_tabs(state: &mut State) {
-    for tabs in [&mut state.change.tabs, &mut state.caps.tabs, &mut state.codex.tabs] {
-        let all_tabs = tabs
-            .preview
-            .iter_mut()
-            .chain(tabs.file_tabs.iter_mut());
+    for tabs in [
+        &mut state.change.tabs,
+        &mut state.caps.tabs,
+        &mut state.codex.tabs,
+    ] {
+        let all_tabs = tabs.preview.iter_mut().chain(tabs.file_tabs.iter_mut());
         for tab in all_tabs {
             if let tab_bar::TabView::Editor { .. } = &tab.view
-                && let Some(content) = state.project.read_artifact(&tab.id) {
-                    tabs_refresh_single(tab, content, &state.highlighter);
-                }
+                && let Some(content) = state.project.read_artifact(&tab.id)
+            {
+                tabs_refresh_single(tab, content, &state.highlighter);
+            }
         }
     }
 }
@@ -901,10 +962,18 @@ fn refresh_file_tabs_for_path(
     project_root: &std::path::Path,
     changed_path: &std::path::Path,
 ) {
-    let Ok(rel) = changed_path.strip_prefix(project_root) else { return };
+    let Ok(rel) = changed_path.strip_prefix(project_root) else {
+        return;
+    };
     let id = format!("file:{}", rel.display());
-    let Ok(content) = std::fs::read_to_string(changed_path) else { return };
-    for tabs in [&mut state.change.tabs, &mut state.caps.tabs, &mut state.codex.tabs] {
+    let Ok(content) = std::fs::read_to_string(changed_path) else {
+        return;
+    };
+    for tabs in [
+        &mut state.change.tabs,
+        &mut state.caps.tabs,
+        &mut state.codex.tabs,
+    ] {
         tabs.refresh_content(&id, content.clone(), &state.highlighter);
     }
 }
@@ -916,7 +985,9 @@ fn refresh_diff_tabs_for_path(
     project_root: &std::path::Path,
     changed_path: &std::path::Path,
 ) {
-    let Ok(rel) = changed_path.strip_prefix(project_root) else { return };
+    let Ok(rel) = changed_path.strip_prefix(project_root) else {
+        return;
+    };
     let id = format!("vcs:{}", rel.display());
     rebuild_diff_tab(state, project_root, &id, rel);
 }
@@ -936,8 +1007,12 @@ fn refresh_all_diff_tabs(state: &mut State, project_root: &std::path::Path) {
         .collect();
     let mut seen = std::collections::HashSet::new();
     for id in ids {
-        if !seen.insert(id.clone()) { continue; }
-        let Some(rel_str) = id.strip_prefix("vcs:") else { continue };
+        if !seen.insert(id.clone()) {
+            continue;
+        }
+        let Some(rel_str) = id.strip_prefix("vcs:") else {
+            continue;
+        };
         let rel = std::path::PathBuf::from(rel_str);
         rebuild_diff_tab(state, project_root, &id, &rel);
     }
@@ -951,12 +1026,25 @@ fn rebuild_diff_tab(
 ) {
     match widget::diff_view::build_diff_tab(project_root, rel, &state.highlighter) {
         Some(content) => {
-            for tabs in [&mut state.change.tabs, &mut state.caps.tabs, &mut state.codex.tabs] {
-                tabs.refresh_diff(id, content.editor.clone(), content.path.clone(), content.status);
+            for tabs in [
+                &mut state.change.tabs,
+                &mut state.caps.tabs,
+                &mut state.codex.tabs,
+            ] {
+                tabs.refresh_diff(
+                    id,
+                    content.editor.clone(),
+                    content.path.clone(),
+                    content.status,
+                );
             }
         }
         None => {
-            for tabs in [&mut state.change.tabs, &mut state.caps.tabs, &mut state.codex.tabs] {
+            for tabs in [
+                &mut state.change.tabs,
+                &mut state.caps.tabs,
+                &mut state.codex.tabs,
+            ] {
                 tabs.close_by_id(id);
             }
         }
@@ -977,9 +1065,10 @@ pub fn open_artifact_tab(
     tabs.open_preview(id.clone(), title, source);
     if let Some(tab) = tabs.preview.as_mut()
         && tab.id == id
-            && let tab_bar::TabView::Editor { editor, .. } = &mut tab.view {
-                rehighlight(editor, &id, highlighter);
-            }
+        && let tab_bar::TabView::Editor { editor, .. } = &mut tab.view
+    {
+        rehighlight(editor, &id, highlighter);
+    }
 }
 
 // ── Agent helpers ───────────────────────────────────────────────────────────
@@ -1014,15 +1103,9 @@ fn view(state: &State) -> Element<'_, Message> {
             area::dashboard::view(&state.dashboard, &state.project, &state.change.explorations)
                 .map(Message::Dashboard)
         }
-        Area::Change => {
-            area::change::view(&state.change, &state.project).map(Message::Change)
-        }
-        Area::Caps => {
-            area::caps::view(&state.caps, &state.project).map(Message::Caps)
-        }
-        Area::Codex => {
-            area::codex::view(&state.codex, &state.project).map(Message::Codex)
-        }
+        Area::Change => area::change::view(&state.change, &state.project).map(Message::Change),
+        Area::Caps => area::caps::view(&state.caps, &state.project).map(Message::Caps),
+        Area::Codex => area::codex::view(&state.codex, &state.project).map(Message::Codex),
         Area::Settings => {
             area::settings::view(&state.settings, &state.config).map(Message::Settings)
         }
@@ -1074,11 +1157,8 @@ fn subscription(state: &State) -> Subscription<Message> {
     // File watcher: active when project root is known.
     if let Some(root) = state.project.project_root.as_ref() {
         subs.push(
-            watcher::watch_subscription(
-                root.clone(),
-                state.project.duckspec_root.clone(),
-            )
-            .map(Message::FileChanged),
+            watcher::watch_subscription(root.clone(), state.project.duckspec_root.clone())
+                .map(Message::FileChanged),
         );
     }
 
@@ -1101,7 +1181,8 @@ fn subscription(state: &State) -> Subscription<Message> {
     // Per-session agent subscriptions. Key format: `agent:ix:<instance_id>/<session_id>`.
     // Like PTYs, keyed by `instance_id` so in-flight agent streams survive renames.
     if let Some(root) = state.project.project_root.as_ref() {
-        let push_scope = |ix: &interaction::InteractionState, subs: &mut Vec<Subscription<Message>>| {
+        let push_scope = |ix: &interaction::InteractionState,
+                          subs: &mut Vec<Subscription<Message>>| {
             for session in &ix.sessions {
                 let key = format!("agent:ix:{}/{}", ix.instance_id, session.session.id);
                 subs.push(agent::agent_subscription(key, root.clone()).map(tagged_agent));
@@ -1139,9 +1220,8 @@ fn subscription(state: &State) -> Subscription<Message> {
 
 /// True if any session across all interaction panels is actively streaming.
 fn any_session_streaming(state: &State) -> bool {
-    let check = |ix: &interaction::InteractionState| {
-        ix.sessions.iter().any(|s| s.session.is_streaming)
-    };
+    let check =
+        |ix: &interaction::InteractionState| ix.sessions.iter().any(|s| s.session.is_streaming);
     check(&state.caps.interaction)
         || check(&state.codex.interaction)
         || state.change.interactions.values().any(check)
@@ -1201,9 +1281,16 @@ fn theme_fn(_state: &State) -> iced::Theme {
     theme::app_theme()
 }
 
-fn handle_key_event(event: Event, status: event::Status, _window: iced::window::Id) -> Option<Message> {
+fn handle_key_event(
+    event: Event,
+    status: event::Status,
+    _window: iced::window::Id,
+) -> Option<Message> {
     if let Event::Keyboard(keyboard::Event::KeyPressed {
-        key, modifiers, text, ..
+        key,
+        modifiers,
+        text,
+        ..
     }) = event
     {
         // Skip events already consumed by a focused widget (e.g. Enter typed
@@ -1211,14 +1298,15 @@ fn handle_key_event(event: Event, status: event::Status, _window: iced::window::
         // react to them. Escape is exempt: iced's `text_input` captures it to
         // clear focus, so without the exemption the file finder would need
         // two Escape presses to close.
-        let is_escape = matches!(
-            &key,
-            keyboard::Key::Named(keyboard::key::Named::Escape)
-        );
+        let is_escape = matches!(&key, keyboard::Key::Named(keyboard::key::Named::Escape));
         if !is_escape && matches!(status, event::Status::Captured) {
             return None;
         }
-        Some(Message::KeyPress(key, modifiers, text.map(|s| s.to_string())))
+        Some(Message::KeyPress(
+            key,
+            modifiers,
+            text.map(|s| s.to_string()),
+        ))
     } else {
         None
     }

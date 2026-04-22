@@ -11,13 +11,13 @@
 //! Interaction model mirrors `iced::widget::button`: `Status::Active` /
 //! `Hovered` / `Pressed` / `Disabled`, click on press-then-release.
 
-use iced::advanced::widget::{tree, Tree, Widget};
-use iced::advanced::{layout, mouse as adv_mouse, renderer as adv_renderer};
+use iced::advanced::widget::{Tree, Widget, tree};
 use iced::advanced::{Clipboard, Layout, Shell};
+use iced::advanced::{layout, mouse as adv_mouse, renderer as adv_renderer};
 use iced::widget::button;
 use iced::{
-    mouse, touch, Background, Color, Element, Event, Length, Padding,
-    Rectangle, Size, Theme, Vector,
+    Background, Color, Element, Event, Length, Padding, Rectangle, Size, Theme, Vector, mouse,
+    touch,
 };
 
 use crate::theme;
@@ -91,11 +91,7 @@ fn extended(row: Rectangle, viewport: &Rectangle) -> Rectangle {
 /// Translation that moves the sticky child from its laid-out position
 /// (inside the row at x=0, vertically centered) to its drawn position at
 /// the right edge of the visible viewport.
-fn sticky_translation(
-    sticky_layout: Layout<'_>,
-    row: Rectangle,
-    viewport: &Rectangle,
-) -> Vector {
+fn sticky_translation(sticky_layout: Layout<'_>, row: Rectangle, viewport: &Rectangle) -> Vector {
     let st = sticky_layout.bounds();
     let target_x = viewport.x + viewport.width - st.width - STICKY_GAP;
     let target_y = row.y + (row.height - st.height) / 2.0;

@@ -23,8 +23,7 @@ const CHEVRON_INSET_X: f32 = (HANDLE_WIDTH - CHEVRON_SIZE) / 2.0;
 const CHEVRON_INSET_Y: f32 = 6.0;
 const DRAG_THRESHOLD: f32 = 4.0;
 
-const ICON_CHEVRON_RIGHT: &[u8] =
-    include_bytes!("../../assets/icon_chevron_right.svg");
+const ICON_CHEVRON_RIGHT: &[u8] = include_bytes!("../../assets/icon_chevron_right.svg");
 const ICON_CHEVRON_LEFT: &[u8] = include_bytes!("../../assets/icon_chevron_left.svg");
 
 /// Messages produced by the divider handle.
@@ -58,11 +57,7 @@ pub struct InteractionHandle<'a, M> {
 }
 
 impl<'a, M> InteractionHandle<'a, M> {
-    pub fn new(
-        expanded: bool,
-        current_width: f32,
-        on_event: impl Fn(HandleMsg) -> M + 'a,
-    ) -> Self {
+    pub fn new(expanded: bool, current_width: f32, on_event: impl Fn(HandleMsg) -> M + 'a) -> Self {
         Self {
             expanded,
             current_width,
@@ -112,10 +107,7 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for InteractionHandle<'a, M>
         // the cursor leaves. Relying on `cursor.is_over(bounds)` in `draw`
         // alone caused stuck-hover when iced skipped a redraw between the
         // last over-the-widget CursorMoved and the next one off-widget.
-        if let Event::Mouse(
-            mouse::Event::CursorMoved { .. } | mouse::Event::CursorLeft,
-        ) = event
-        {
+        if let Event::Mouse(mouse::Event::CursorMoved { .. } | mouse::Event::CursorLeft) = event {
             let now_hovered = cursor.is_over(bounds);
             if widget_state.hovered != now_hovered {
                 widget_state.hovered = now_hovered;
@@ -142,8 +134,8 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for InteractionHandle<'a, M>
                     }
                     if state.dragging {
                         // Negative dx (drag left) = grow panel.
-                        let new_width = (state.base_width - dx)
-                            .clamp(MIN_PANEL_WIDTH, MAX_PANEL_WIDTH);
+                        let new_width =
+                            (state.base_width - dx).clamp(MIN_PANEL_WIDTH, MAX_PANEL_WIDTH);
                         shell.publish((self.on_event)(HandleMsg::SetWidth(new_width)));
                     }
                 }
@@ -193,7 +185,11 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for InteractionHandle<'a, M>
 
         // Background — lighter than the surrounding surface so the strip
         // reads as a lifted divider. Hover bumps it one step.
-        let bg = if hovered { theme::bg_surface() } else { theme::bg_base() };
+        let bg = if hovered {
+            theme::bg_surface()
+        } else {
+            theme::bg_base()
+        };
         renderer::Renderer::fill_quad(
             renderer,
             renderer::Quad {
@@ -251,8 +247,7 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for InteractionHandle<'a, M>
         };
         <iced::Renderer as svg::Renderer>::draw_svg(
             renderer,
-            svg::Svg::new(svg::Handle::from_memory(chevron_bytes))
-                .color(theme::text_muted()),
+            svg::Svg::new(svg::Handle::from_memory(chevron_bytes)).color(theme::text_muted()),
             chevron_bounds,
             bounds,
         );

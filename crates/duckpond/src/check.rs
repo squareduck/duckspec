@@ -93,7 +93,12 @@ pub fn format_artifact(source: &str, kind: &ArtifactKind, ctx: &CheckContext) ->
         ArtifactKind::CapSpec | ArtifactKind::ChangeCapSpec => {
             match parse::spec::parse_spec(&elements) {
                 Ok(spec) => spec.render(),
-                Err(errors) => return CheckResult { errors, formatted: None },
+                Err(errors) => {
+                    return CheckResult {
+                        errors,
+                        formatted: None,
+                    };
+                }
             }
         }
         ArtifactKind::CapDoc
@@ -103,7 +108,12 @@ pub fn format_artifact(source: &str, kind: &ArtifactKind, ctx: &CheckContext) ->
         | ArtifactKind::Codex
         | ArtifactKind::Project => match parse::doc::parse_document(&elements) {
             Ok(doc) => doc.render(),
-            Err(errors) => return CheckResult { errors, formatted: None },
+            Err(errors) => {
+                return CheckResult {
+                    errors,
+                    formatted: None,
+                };
+            }
         },
         ArtifactKind::SpecDelta | ArtifactKind::DocDelta => {
             match parse::delta::parse_delta(&elements) {
@@ -119,7 +129,12 @@ pub fn format_artifact(source: &str, kind: &ArtifactKind, ctx: &CheckContext) ->
                     }
                     delta.render()
                 }
-                Err(errors) => return CheckResult { errors, formatted: None },
+                Err(errors) => {
+                    return CheckResult {
+                        errors,
+                        formatted: None,
+                    };
+                }
             }
         }
         ArtifactKind::Step => match parse::step::parse_step(&elements) {
@@ -134,7 +149,12 @@ pub fn format_artifact(source: &str, kind: &ArtifactKind, ctx: &CheckContext) ->
                 }
                 step.render()
             }
-            Err(errors) => return CheckResult { errors, formatted: None },
+            Err(errors) => {
+                return CheckResult {
+                    errors,
+                    formatted: None,
+                };
+            }
         },
     };
 
@@ -154,11 +174,9 @@ pub fn format_artifact(source: &str, kind: &ArtifactKind, ctx: &CheckContext) ->
         | ArtifactKind::Project => parse::doc::parse_document(&re_elements)
             .err()
             .unwrap_or_default(),
-        ArtifactKind::SpecDelta | ArtifactKind::DocDelta => {
-            parse::delta::parse_delta(&re_elements)
-                .err()
-                .unwrap_or_default()
-        }
+        ArtifactKind::SpecDelta | ArtifactKind::DocDelta => parse::delta::parse_delta(&re_elements)
+            .err()
+            .unwrap_or_default(),
         ArtifactKind::Step => parse::step::parse_step(&re_elements)
             .err()
             .unwrap_or_default(),
@@ -181,13 +199,14 @@ fn validate_step_slug(
     errors: &mut Vec<ParseError>,
 ) {
     if let Some(ref expected) = ctx.filename_slug
-        && step.slug != *expected {
-            errors.push(ParseError::SlugMismatch {
-                expected: expected.clone(),
-                actual: step.slug.clone(),
-                span: step.title_span,
-            });
-        }
+        && step.slug != *expected
+    {
+        errors.push(ParseError::SlugMismatch {
+            expected: expected.clone(),
+            actual: step.slug.clone(),
+            span: step.title_span,
+        });
+    }
 }
 
 /// Scan raw elements for H2 delta markers and check canonical ordering.
@@ -217,32 +236,31 @@ fn validate_delta_ordering(elements: &[Element]) -> Vec<ParseError> {
     let mut i = 0;
     while i < elements.len() {
         if let Element::Heading {
-            level: 2,
-            content,
-            ..
+            level: 2, content, ..
         } = &elements[i]
-            && content.trim().starts_with('@') {
-                // Collect H3 children of this @ entry.
-                let mut h3_markers = Vec::new();
-                let mut j = i + 1;
-                while j < elements.len() {
-                    match &elements[j] {
-                        Element::Heading { level: 2, .. } => break,
-                        Element::Heading {
-                            level: 3,
-                            content,
-                            span,
-                        } => {
-                            if let Some(order) = extract_marker_order(content) {
-                                h3_markers.push((order, *span));
-                            }
+            && content.trim().starts_with('@')
+        {
+            // Collect H3 children of this @ entry.
+            let mut h3_markers = Vec::new();
+            let mut j = i + 1;
+            while j < elements.len() {
+                match &elements[j] {
+                    Element::Heading { level: 2, .. } => break,
+                    Element::Heading {
+                        level: 3,
+                        content,
+                        span,
+                    } => {
+                        if let Some(order) = extract_marker_order(content) {
+                            h3_markers.push((order, *span));
                         }
-                        _ => {}
                     }
-                    j += 1;
+                    _ => {}
                 }
-                check_order(&h3_markers, &mut errors);
+                j += 1;
             }
+            check_order(&h3_markers, &mut errors);
+        }
         i += 1;
     }
 
@@ -561,4 +579,3 @@ fn extract_cap_path(within_change: &std::path::Path) -> Option<PathBuf> {
     let cap_segments = &components[1..components.len() - 1];
     Some(PathBuf::from(cap_segments.join("/")))
 }
-

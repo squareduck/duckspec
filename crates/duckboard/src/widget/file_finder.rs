@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use iced::widget::text::Span;
-use iced::widget::{column, container, rich_text, scrollable, span, text, text_input, Space};
+use iced::widget::{Space, column, container, rich_text, scrollable, span, text, text_input};
 use iced::{Center, Color, Element, Font, Length};
 use nucleo::pattern::{CaseMatching, Normalization};
 use nucleo::{Config, Matcher, Nucleo};
@@ -68,12 +68,7 @@ impl FileFinderState {
         self.query.clear();
         self.selected = 0;
 
-        let mut matcher = Nucleo::new(
-            Config::DEFAULT,
-            Arc::new(|| {}),
-            None,
-            1,
-        );
+        let mut matcher = Nucleo::new(Config::DEFAULT, Arc::new(|| {}), None, 1);
 
         let injector = matcher.injector();
         walk_project_files(project_root, |rel_path| {
@@ -195,8 +190,8 @@ pub fn view<'a>(state: &'a FileFinderState) -> Element<'a, Msg> {
 
     // 1px horizontal rule between the input and the list, matching the panel
     // border color so the input reads as part of the chrome.
-    let input_divider = container(Space::new().height(1.0).width(Length::Fill))
-        .style(divider_style);
+    let input_divider =
+        container(Space::new().height(1.0).width(Length::Fill)).style(divider_style);
 
     let mut list = column![].spacing(0.0);
     for (path, match_indices, is_selected) in state.matched_items() {
@@ -254,25 +249,25 @@ pub fn view<'a>(state: &'a FileFinderState) -> Element<'a, Msg> {
     .max_width(600.0);
 
     // Center the panel horizontally, place near top.
-    container(
-        column![
-            Space::new().height(80.0),
-            panel,
-        ]
-        .align_x(Center),
-    )
-    .width(Length::Fill)
-    .height(Length::Fill)
-    .align_x(Center)
-    .style(overlay_backdrop_style)
-    .into()
+    container(column![Space::new().height(80.0), panel,].align_x(Center))
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .align_x(Center)
+        .style(overlay_backdrop_style)
+        .into()
 }
 
 // ── Styles ──────────────────────────────────────────────────────────────────
 
 fn overlay_backdrop_style(_theme: &iced::Theme) -> container::Style {
     container::Style {
-        background: Some(iced::Color { a: 0.5, ..theme::bg_base() }.into()),
+        background: Some(
+            iced::Color {
+                a: 0.5,
+                ..theme::bg_base()
+            }
+            .into(),
+        ),
         ..Default::default()
     }
 }
@@ -322,9 +317,7 @@ fn finder_input_style(
     let border = iced::Border {
         color: iced::Color::TRANSPARENT,
         width: 0.0,
-        radius: iced::border::Radius::default()
-            .top_left(7.0)
-            .top_right(7.0),
+        radius: iced::border::Radius::default().top_left(7.0).top_right(7.0),
     };
     let base = text_input::Style {
         background,
@@ -371,8 +364,7 @@ fn highlight_spans<'a>(
     };
 
     for (char_idx, ch) in path.chars().enumerate() {
-        let is_match = cursor < match_indices.len()
-            && match_indices[cursor] as usize == char_idx;
+        let is_match = cursor < match_indices.len() && match_indices[cursor] as usize == char_idx;
         if is_match {
             cursor += 1;
         }

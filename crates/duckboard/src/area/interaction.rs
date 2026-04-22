@@ -194,7 +194,11 @@ pub fn update(state: &mut InteractionState, msg: Msg, highlighter: &SyntaxHighli
     just_opened
 }
 
-fn handle_agent_chat(state: &mut InteractionState, msg: agent_chat::Msg, highlighter: &SyntaxHighlighter) {
+fn handle_agent_chat(
+    state: &mut InteractionState,
+    msg: agent_chat::Msg,
+    highlighter: &SyntaxHighlighter,
+) {
     let Some(ax) = state.active_mut() else { return };
     match msg {
         agent_chat::Msg::InputAction(action) => {
@@ -345,19 +349,18 @@ pub fn rebuild_chat_editor(ax: &mut AgentSession, highlighter: &SyntaxHighlighte
         // later, and we don't want them flashing expanded then snapping shut.
         ax.chat_collapsed[i] = matches!(
             block.kind,
-            crate::widget::text_edit::BlockKind::ToolUse | crate::widget::text_edit::BlockKind::ToolResult
+            crate::widget::text_edit::BlockKind::ToolUse
+                | crate::widget::text_edit::BlockKind::ToolResult
         );
     }
 
     let mut new_editors = Vec::with_capacity(new_blocks.len());
     for (i, block) in new_blocks.iter().enumerate() {
-        if i < ax.chat_editors.len() && i < ax.chat_blocks.len()
+        if i < ax.chat_editors.len()
+            && i < ax.chat_blocks.len()
             && ax.chat_blocks[i].lines == block.lines
         {
-            let existing = std::mem::replace(
-                &mut ax.chat_editors[i],
-                EditorState::new(""),
-            );
+            let existing = std::mem::replace(&mut ax.chat_editors[i], EditorState::new(""));
             new_editors.push(existing);
         } else {
             let content = block.lines.join("\n");
@@ -372,10 +375,7 @@ pub fn rebuild_chat_editor(ax: &mut AgentSession, highlighter: &SyntaxHighlighte
     ax.chat_blocks = new_blocks;
 }
 
-fn handle_chat_action_on(
-    editor: &mut EditorState,
-    action: crate::widget::text_edit::EditorAction,
-) {
+fn handle_chat_action_on(editor: &mut EditorState, action: crate::widget::text_edit::EditorAction) {
     // Chat editors are read-only — skip mutating actions.
     if !action.is_mutating() {
         editor.apply_action(action);
@@ -476,7 +476,10 @@ fn completion_accept(ax: &mut AgentSession, highlighter: &SyntaxHighlighter) {
     let input_text = ax.chat_input.text();
     let query = input_text.trim_end().trim_start_matches('/');
     let filtered = agent_chat::filter_commands(&ax.chat_commands, query);
-    let selected = ax.chat_completion.selected.min(filtered.len().saturating_sub(1));
+    let selected = ax
+        .chat_completion
+        .selected
+        .min(filtered.len().saturating_sub(1));
     if let Some(&(cmd_idx, _)) = filtered.get(selected) {
         let cmd_name = &ax.chat_commands[cmd_idx].name;
         let new_text = format!("/{} ", cmd_name);
@@ -600,11 +603,13 @@ pub fn reconcile_display_names(sessions: &mut [AgentSession]) {
         indices.sort_by_key(|&i| sessions[i].session.created_at_nanos);
         if indices.len() == 1 {
             let i = indices[0];
-            let minute = crate::chat_store::minute_prefix_public(sessions[i].session.created_at_nanos);
+            let minute =
+                crate::chat_store::minute_prefix_public(sessions[i].session.created_at_nanos);
             sessions[i].session.display_name = format!("{} {}", minute, sessions[i].session.scope);
         } else {
             for (n, i) in indices.iter().enumerate() {
-                let minute = crate::chat_store::minute_prefix_public(sessions[*i].session.created_at_nanos);
+                let minute =
+                    crate::chat_store::minute_prefix_public(sessions[*i].session.created_at_nanos);
                 sessions[*i].session.display_name =
                     format!("{} #{} {}", minute, n + 1, sessions[*i].session.scope);
             }
@@ -623,21 +628,17 @@ pub fn area_layout<'a, M: 'a + Clone>(
     controls: SessionControls,
     wrap: impl Fn(Msg) -> M + 'a + Clone,
 ) -> Element<'a, M> {
-    use iced::widget::{container, row, Space};
     use iced::Length;
+    use iced::widget::{Space, container, row};
 
     let divider = container(Space::new().height(Length::Fill))
         .width(1.0)
         .style(crate::theme::divider);
 
-    let toggle = crate::widget::interaction_toggle::view(
-        interaction.visible,
-        interaction.width,
-        {
-            let w = wrap.clone();
-            move |m| w(Msg::Handle(m))
-        },
-    );
+    let toggle = crate::widget::interaction_toggle::view(interaction.visible, interaction.width, {
+        let w = wrap.clone();
+        move |m| w(Msg::Handle(m))
+    });
 
     let mut main_row = row![
         container(list)
@@ -678,8 +679,7 @@ pub fn view_column<'a, M: 'a + Clone>(
         InteractionMode::Terminal => {
             if let Some(ts) = &state.terminal {
                 let w = wrap.clone();
-                crate::widget::terminal::view_terminal(ts)
-                    .map(move |_: ()| w(Msg::TerminalScroll))
+                crate::widget::terminal::view_terminal(ts).map(move |_: ()| w(Msg::TerminalScroll))
             } else {
                 view_placeholder(wrap.clone())
             }
@@ -712,14 +712,18 @@ pub fn view_column<'a, M: 'a + Clone>(
                 .map(move |m| w(Msg::AgentChat(m)));
 
                 let session_bar = view_session_bar(state, controls, wrap.clone());
-                column![session_bar, chat_view].height(iced::Length::Fill).into()
+                column![session_bar, chat_view]
+                    .height(iced::Length::Fill)
+                    .into()
             } else {
                 view_placeholder(wrap.clone())
             }
         }
     };
 
-    column![mode_tabs, content].height(iced::Length::Fill).into()
+    column![mode_tabs, content]
+        .height(iced::Length::Fill)
+        .into()
 }
 
 fn view_session_bar<'a, M: 'a + Clone>(
@@ -727,8 +731,8 @@ fn view_session_bar<'a, M: 'a + Clone>(
     controls: SessionControls,
     wrap: impl Fn(Msg) -> M + 'a + Clone,
 ) -> Element<'a, M> {
-    use iced::widget::{button, column, container, row, text, Space};
     use iced::Length;
+    use iced::widget::{Space, button, column, container, row, text};
 
     let bar_border = container(Space::new().width(Length::Fill).height(1.0))
         .width(Length::Fill)
@@ -765,8 +769,7 @@ fn view_session_bar<'a, M: 'a + Clone>(
             // last glyph doesn't kiss the plus button's edge.
             let chevron_w = theme::font_sm();
             let plus_w = theme::font_sm() + theme::SPACING_SM * 2.0;
-            let overhead =
-                theme::SPACING_SM * 2.0 + chevron_w + theme::SPACING_XS + plus_w + 4.0;
+            let overhead = theme::SPACING_SM * 2.0 + chevron_w + theme::SPACING_XS + plus_w + 4.0;
             let available = (state.width - overhead).max(0.0);
             let label_text = match active_name {
                 Some(name) => truncate_to_width(name, available, theme::font_sm()),
@@ -794,10 +797,7 @@ fn view_session_bar<'a, M: 'a + Clone>(
             let w_new = wrap.clone();
             let plus_btn = collapsible::add_button(w_new(Msg::NewSession));
 
-            let header_row = row![
-                container(header_btn).width(Length::Fill),
-                plus_btn,
-            ];
+            let header_row = row![container(header_btn).width(Length::Fill), plus_btn,];
 
             let mut section = column![header_row].spacing(0.0);
 
@@ -856,7 +856,7 @@ fn truncate_to_width(name: &str, available_px: f32, font_size: f32) -> String {
     // Binary search for the longest prefix whose `prefix + …` still fits.
     let (mut lo, mut hi) = (0usize, chars.len());
     while lo < hi {
-        let mid = lo + (hi - lo + 1) / 2;
+        let mid = lo + (hi - lo).div_ceil(2);
         let candidate: String = chars[..mid].iter().collect::<String>() + ELLIPSIS;
         if measure_text(&candidate, font_size) <= available_px {
             lo = mid;
@@ -871,8 +871,8 @@ fn view_mode_tabs<'a, M: 'a + Clone>(
     active: InteractionMode,
     wrap: impl Fn(Msg) -> M + 'a + Clone,
 ) -> Element<'a, M> {
-    use iced::widget::{button, column, container, row, text, Space};
     use iced::Length;
+    use iced::widget::{Space, button, column, container, row, text};
 
     let modes = [
         ("Agent", InteractionMode::AgentChat),
@@ -891,7 +891,8 @@ fn view_mode_tabs<'a, M: 'a + Clone>(
     for (i, (label, mode)) in modes.iter().enumerate() {
         let is_active = active == *mode;
         let tab_style = if is_active {
-            theme::tab_active as fn(&iced::Theme, iced::widget::button::Status) -> iced::widget::button::Style
+            theme::tab_active
+                as fn(&iced::Theme, iced::widget::button::Status) -> iced::widget::button::Style
         } else {
             theme::tab_inactive
         };
@@ -914,14 +915,16 @@ fn view_mode_tabs<'a, M: 'a + Clone>(
         .style(theme::divider);
 
     column![
-        container(tabs_row).width(Length::Fill).style(theme::tab_bar),
+        container(tabs_row)
+            .width(Length::Fill)
+            .style(theme::tab_bar),
         bar_border,
     ]
     .into()
 }
 
 fn view_placeholder<'a, M: 'a>(_wrap: impl Fn(Msg) -> M + 'a) -> Element<'a, M> {
-    use iced::widget::{column, container, text, Space};
+    use iced::widget::{Space, column, container, text};
 
     container(
         column![

@@ -34,7 +34,11 @@ fn run_project_status(duckspec_root: &Path, canonical_root: &Path) -> anyhow::Re
     parts.push(format!(
         "{} {}",
         cap_count,
-        if cap_count == 1 { "capability" } else { "capabilities" }
+        if cap_count == 1 {
+            "capability"
+        } else {
+            "capabilities"
+        }
     ));
     parts.push(format!(
         "{} codex {}",
@@ -71,9 +75,15 @@ fn summarize_change(change_dir: &Path, canonical_root: &Path) -> anyhow::Result<
     let mut has_design = false;
 
     for file_path in &files {
-        let canonical = file_path.canonicalize().unwrap_or_else(|_| file_path.clone());
-        let Some(relative) = canonical.strip_prefix(canonical_root).ok() else { continue };
-        let Some(kind) = layout::classify(relative) else { continue };
+        let canonical = file_path
+            .canonicalize()
+            .unwrap_or_else(|_| file_path.clone());
+        let Some(relative) = canonical.strip_prefix(canonical_root).ok() else {
+            continue;
+        };
+        let Some(kind) = layout::classify(relative) else {
+            continue;
+        };
         match kind {
             ArtifactKind::SpecDelta | ArtifactKind::DocDelta => deltas += 1,
             ArtifactKind::ChangeCapSpec | ArtifactKind::ChangeCapDoc => new_caps += 1,
@@ -85,30 +95,51 @@ fn summarize_change(change_dir: &Path, canonical_root: &Path) -> anyhow::Result<
     }
 
     let mut parts = Vec::new();
-    if has_proposal { parts.push("proposal".to_string()); }
-    if has_design { parts.push("design".to_string()); }
-    if deltas > 0 { parts.push(format!("{deltas} {}", if deltas == 1 { "delta" } else { "deltas" })); }
-    if new_caps > 0 { parts.push(format!("{new_caps} new {}", if new_caps == 1 { "cap" } else { "caps" })); }
-    if steps > 0 { parts.push(format!("{steps} {}", if steps == 1 { "step" } else { "steps" })); }
+    if has_proposal {
+        parts.push("proposal".to_string());
+    }
+    if has_design {
+        parts.push("design".to_string());
+    }
+    if deltas > 0 {
+        parts.push(format!(
+            "{deltas} {}",
+            if deltas == 1 { "delta" } else { "deltas" }
+        ));
+    }
+    if new_caps > 0 {
+        parts.push(format!(
+            "{new_caps} new {}",
+            if new_caps == 1 { "cap" } else { "caps" }
+        ));
+    }
+    if steps > 0 {
+        parts.push(format!(
+            "{steps} {}",
+            if steps == 1 { "step" } else { "steps" }
+        ));
+    }
 
-    if parts.is_empty() { Ok("empty".to_string()) } else { Ok(parts.join(", ")) }
+    if parts.is_empty() {
+        Ok("empty".to_string())
+    } else {
+        Ok(parts.join(", "))
+    }
 }
 
 // ===========================================================================
 // Path-specific status
 // ===========================================================================
 
-fn run_path_status(
-    duckspec_root: &Path,
-    canonical_root: &Path,
-    input: &str,
-) -> anyhow::Result<()> {
-    let resolved = resolve_path(input, duckspec_root)
-        .or_else(|_| {
-            let under_changes = duckspec_root.join("changes").join(input);
-            if under_changes.is_dir() { Ok(under_changes) }
-            else { anyhow::bail!("not found: {input}") }
-        })?;
+fn run_path_status(duckspec_root: &Path, canonical_root: &Path, input: &str) -> anyhow::Result<()> {
+    let resolved = resolve_path(input, duckspec_root).or_else(|_| {
+        let under_changes = duckspec_root.join("changes").join(input);
+        if under_changes.is_dir() {
+            Ok(under_changes)
+        } else {
+            anyhow::bail!("not found: {input}")
+        }
+    })?;
 
     let canonical = resolved.canonicalize()?;
     let Some(relative) = canonical.strip_prefix(canonical_root).ok() else {
@@ -180,9 +211,15 @@ fn status_change(
     let mut spec_files = Vec::new();
 
     for file_path in &files {
-        let canonical = file_path.canonicalize().unwrap_or_else(|_| file_path.clone());
-        let Some(relative) = canonical.strip_prefix(canonical_root).ok() else { continue };
-        let Some(kind) = layout::classify(relative) else { continue };
+        let canonical = file_path
+            .canonicalize()
+            .unwrap_or_else(|_| file_path.clone());
+        let Some(relative) = canonical.strip_prefix(canonical_root).ok() else {
+            continue;
+        };
+        let Some(kind) = layout::classify(relative) else {
+            continue;
+        };
         match kind {
             ArtifactKind::SpecDelta | ArtifactKind::DocDelta => deltas += 1,
             ArtifactKind::ChangeCapSpec => {
@@ -200,15 +237,29 @@ fn status_change(
     // Header
     eprintln!("  {}", format!("change: {change_name}").bold());
     let mut parts = Vec::new();
-    if has_proposal { parts.push("proposal"); }
-    if has_design { parts.push("design"); }
+    if has_proposal {
+        parts.push("proposal");
+    }
+    if has_design {
+        parts.push("design");
+    }
     if !parts.is_empty() {
         eprintln!("    {}", parts.join(", ").dimmed());
     }
     if deltas > 0 || new_caps > 0 {
         let mut cap_parts = Vec::new();
-        if deltas > 0 { cap_parts.push(format!("{deltas} {}", if deltas == 1 { "delta" } else { "deltas" })); }
-        if new_caps > 0 { cap_parts.push(format!("{new_caps} new {}", if new_caps == 1 { "cap" } else { "caps" })); }
+        if deltas > 0 {
+            cap_parts.push(format!(
+                "{deltas} {}",
+                if deltas == 1 { "delta" } else { "deltas" }
+            ));
+        }
+        if new_caps > 0 {
+            cap_parts.push(format!(
+                "{new_caps} new {}",
+                if new_caps == 1 { "cap" } else { "caps" }
+            ));
+        }
         eprintln!("    {}", cap_parts.join(", ").dimmed());
     }
 
@@ -220,20 +271,34 @@ fn status_change(
     for (file_path, relative) in &spec_files {
         let source = std::fs::read_to_string(file_path)?;
         let cap_path = extract_change_cap_path(relative);
-        collect_spec_coverage(&source, &cap_path, &mut needs_backlink, &mut covered, &mut total_scenarios);
+        collect_spec_coverage(
+            &source,
+            &cap_path,
+            &mut needs_backlink,
+            &mut covered,
+            &mut total_scenarios,
+        );
     }
 
     // Also check deltas — merge and find new scenarios.
     let caps_dir = duckspec_root.join("caps");
     for file_path in &collect_files(change_dir)? {
-        let canonical = file_path.canonicalize().unwrap_or_else(|_| file_path.clone());
-        let Some(relative) = canonical.strip_prefix(canonical_root).ok() else { continue };
-        if layout::classify(relative) != Some(ArtifactKind::SpecDelta) { continue; }
+        let canonical = file_path
+            .canonicalize()
+            .unwrap_or_else(|_| file_path.clone());
+        let Some(relative) = canonical.strip_prefix(canonical_root).ok() else {
+            continue;
+        };
+        if layout::classify(relative) != Some(ArtifactKind::SpecDelta) {
+            continue;
+        }
 
         let delta_source = std::fs::read_to_string(file_path)?;
         let cap_path = extract_change_cap_path(relative);
         let target = caps_dir.join(&cap_path).join("spec.md");
-        if !target.is_file() { continue; }
+        if !target.is_file() {
+            continue;
+        }
 
         let source = std::fs::read_to_string(&target)?;
         let (new_needs, new_covered, _new_total) =
@@ -282,13 +347,25 @@ fn status_change(
 fn status_spec(file_path: &Path, relative: &Path) -> anyhow::Result<()> {
     let source = std::fs::read_to_string(file_path)?;
     let elements = parse::parse_elements(&source);
-    let spec = parse::spec::parse_spec(&elements)
-        .map_err(|e| anyhow::anyhow!("parse error: {}", e.first().map(|e| e.to_string()).unwrap_or_default()))?;
+    let spec = parse::spec::parse_spec(&elements).map_err(|e| {
+        anyhow::anyhow!(
+            "parse error: {}",
+            e.first().map(|e| e.to_string()).unwrap_or_default()
+        )
+    })?;
 
-    eprintln!("  {} {}", relative.display().to_string().bold(), format!("— {}", spec.title).dimmed());
-    eprintln!("    {} requirements, {} scenarios",
+    eprintln!(
+        "  {} {}",
+        relative.display().to_string().bold(),
+        format!("— {}", spec.title).dimmed()
+    );
+    eprintln!(
+        "    {} requirements, {} scenarios",
         spec.requirements.len(),
-        spec.requirements.iter().map(|r| r.scenarios.len()).sum::<usize>()
+        spec.requirements
+            .iter()
+            .map(|r| r.scenarios.len())
+            .sum::<usize>()
     );
 
     // Determine cap_path for display
@@ -297,7 +374,13 @@ fn status_spec(file_path: &Path, relative: &Path) -> anyhow::Result<()> {
     let mut needs_backlink = Vec::new();
     let mut covered = 0usize;
     let mut total = 0usize;
-    collect_spec_coverage(&source, &cap_path, &mut needs_backlink, &mut covered, &mut total);
+    collect_spec_coverage(
+        &source,
+        &cap_path,
+        &mut needs_backlink,
+        &mut covered,
+        &mut total,
+    );
 
     if total > 0 {
         eprintln!(
@@ -329,10 +412,18 @@ fn status_spec_delta(
     let cap_path = extract_cap_path_from_relative(relative);
     let target = duckspec_root.join("caps").join(&cap_path).join("spec.md");
 
-    eprintln!("  {} {}", relative.display().to_string().bold(), format!("— delta for {cap_path}").dimmed());
+    eprintln!(
+        "  {} {}",
+        relative.display().to_string().bold(),
+        format!("— delta for {cap_path}").dimmed()
+    );
 
     if !target.is_file() {
-        eprintln!("    {} target spec not found: caps/{}/spec.md", "!".yellow(), cap_path);
+        eprintln!(
+            "    {} target spec not found: caps/{}/spec.md",
+            "!".yellow(),
+            cap_path
+        );
         return Ok(());
     }
 
@@ -379,16 +470,29 @@ fn delta_new_coverage(
     let mut all_needs = Vec::new();
     let mut all_covered = 0usize;
     let mut all_total = 0usize;
-    collect_spec_coverage(&merged, cap_path, &mut all_needs, &mut all_covered, &mut all_total);
+    collect_spec_coverage(
+        &merged,
+        cap_path,
+        &mut all_needs,
+        &mut all_covered,
+        &mut all_total,
+    );
 
     // Also collect coverage for scenarios that ARE in the original to subtract them.
     let mut orig_needs = Vec::new();
     let mut orig_covered = 0usize;
     let mut orig_total = 0usize;
-    collect_spec_coverage(source, cap_path, &mut orig_needs, &mut orig_covered, &mut orig_total);
+    collect_spec_coverage(
+        source,
+        cap_path,
+        &mut orig_needs,
+        &mut orig_covered,
+        &mut orig_total,
+    );
 
     // Filter to only new scenarios by diffing.
-    let orig_tags: std::collections::HashSet<&str> = orig_needs.iter().map(|s| s.as_str()).collect();
+    let orig_tags: std::collections::HashSet<&str> =
+        orig_needs.iter().map(|s| s.as_str()).collect();
 
     let new_needs: Vec<String> = all_needs
         .into_iter()
@@ -452,17 +556,23 @@ fn print_step_summary(file_path: &Path, relative: &Path, indent: &str) -> anyhow
         return Ok(());
     };
 
-    let total_tasks = step.tasks.len()
-        + step.tasks.iter().map(|t| t.subtasks.len()).sum::<usize>();
+    let total_tasks = step.tasks.len() + step.tasks.iter().map(|t| t.subtasks.len()).sum::<usize>();
     let done_tasks = step.tasks.iter().filter(|t| t.checked).count()
-        + step.tasks.iter().flat_map(|t| &t.subtasks).filter(|s| s.checked).count();
+        + step
+            .tasks
+            .iter()
+            .flat_map(|t| &t.subtasks)
+            .filter(|s| s.checked)
+            .count();
 
     let filename = relative.file_name().and_then(|f| f.to_str()).unwrap_or("?");
 
     let progress = if total_tasks == 0 {
         "no tasks".dimmed().to_string()
     } else if done_tasks == total_tasks {
-        format!("{done_tasks}/{total_tasks} tasks").green().to_string()
+        format!("{done_tasks}/{total_tasks} tasks")
+            .green()
+            .to_string()
     } else {
         format!("{done_tasks}/{total_tasks} tasks").to_string()
     };
@@ -489,7 +599,9 @@ fn collect_spec_coverage(
     total: &mut usize,
 ) {
     let elements = parse::parse_elements(source);
-    let Ok(spec) = parse::spec::parse_spec(&elements) else { return };
+    let Ok(spec) = parse::spec::parse_spec(&elements) else {
+        return;
+    };
 
     for req in &spec.requirements {
         for scn in &req.scenarios {
@@ -502,13 +614,15 @@ fn collect_spec_coverage(
                     .as_ref()
                     .is_some_and(|m| matches!(m.kind, TestMarkerKind::Code { .. }));
 
-            if !is_test_code { continue; }
+            if !is_test_code {
+                continue;
+            }
 
             *total += 1;
 
-            let has_links = scn.test_marker.as_ref().is_some_and(|m| {
-                matches!(&m.kind, TestMarkerKind::Code { backlinks } if !backlinks.is_empty())
-            });
+            let has_links = scn.test_marker.as_ref().is_some_and(
+                |m| matches!(&m.kind, TestMarkerKind::Code { backlinks } if !backlinks.is_empty()),
+            );
 
             if has_links {
                 *covered += 1;
@@ -521,7 +635,9 @@ fn collect_spec_coverage(
 
 fn collect_scenario_names(source: &str, names: &mut std::collections::HashSet<String>) {
     let elements = parse::parse_elements(source);
-    let Ok(spec) = parse::spec::parse_spec(&elements) else { return };
+    let Ok(spec) = parse::spec::parse_spec(&elements) else {
+        return;
+    };
     for req in &spec.requirements {
         for scn in &req.scenarios {
             names.insert(scn.name.clone());
@@ -538,9 +654,10 @@ fn extract_cap_path_from_relative(relative: &Path) -> String {
         .collect();
     // Handle both "caps/auth/spec.md" and "changes/x/caps/auth/spec.md"
     if let Some(caps_idx) = components.iter().position(|c| *c == "caps")
-        && caps_idx + 2 <= components.len() {
-            return components[caps_idx + 1..components.len() - 1].join("/");
-        }
+        && caps_idx + 2 <= components.len()
+    {
+        return components[caps_idx + 1..components.len() - 1].join("/");
+    }
     String::new()
 }
 
@@ -551,7 +668,9 @@ fn extract_change_cap_path(relative: &Path) -> String {
 
 fn count_caps(duckspec_root: &Path) -> anyhow::Result<usize> {
     let caps_dir = duckspec_root.join("caps");
-    if !caps_dir.is_dir() { return Ok(0); }
+    if !caps_dir.is_dir() {
+        return Ok(0);
+    }
     let mut count = 0;
     count_caps_recursive(&caps_dir, &mut count)?;
     Ok(count)
@@ -572,12 +691,18 @@ fn count_caps_recursive(dir: &Path, count: &mut usize) -> anyhow::Result<()> {
 
 fn count_codex(duckspec_root: &Path, canonical_root: &Path) -> anyhow::Result<usize> {
     let codex_dir = duckspec_root.join("codex");
-    if !codex_dir.is_dir() { return Ok(0); }
+    if !codex_dir.is_dir() {
+        return Ok(0);
+    }
     let files = collect_files(&codex_dir)?;
-    Ok(files.iter().filter(|f| {
-        f.canonicalize().ok()
-            .and_then(|c| c.strip_prefix(canonical_root).ok().map(|r| r.to_path_buf()))
-            .and_then(|r| layout::classify(&r))
-            .is_some_and(|k| k == ArtifactKind::Codex)
-    }).count())
+    Ok(files
+        .iter()
+        .filter(|f| {
+            f.canonicalize()
+                .ok()
+                .and_then(|c| c.strip_prefix(canonical_root).ok().map(|r| r.to_path_buf()))
+                .and_then(|r| layout::classify(&r))
+                .is_some_and(|k| k == ArtifactKind::Codex)
+        })
+        .count())
 }

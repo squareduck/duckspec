@@ -72,15 +72,22 @@ pub fn update(
         Message::Interaction(msg) => {
             match msg {
                 interaction::Msg::ClearSession => {
-                    interaction::clear_single_session(&mut state.interaction, "caps", project.project_root.as_deref());
+                    interaction::clear_single_session(
+                        &mut state.interaction,
+                        "caps",
+                        project.project_root.as_deref(),
+                    );
                 }
                 interaction::Msg::NewSession | interaction::Msg::SelectSession(_) => {
                     // Caps is single-session; ignore.
                 }
                 other => {
                     interaction::update_with_side_effects(
-                        &mut state.interaction, other, "caps",
-                        project.project_root.as_deref(), highlighter,
+                        &mut state.interaction,
+                        other,
+                        "caps",
+                        project.project_root.as_deref(),
+                        highlighter,
                     );
                 }
             }
@@ -96,10 +103,7 @@ pub fn update(
 
 // ── View ─────────────────────────────────────────────────────────────────────
 
-pub fn view<'a>(
-    state: &'a State,
-    project: &'a ProjectData,
-) -> Element<'a, Message> {
+pub fn view<'a>(state: &'a State, project: &'a ProjectData) -> Element<'a, Message> {
     interaction::area_layout(
         view_list(state, project),
         view_content(state),
@@ -136,15 +140,15 @@ fn view_list<'a>(state: &'a State, project: &'a ProjectData) -> Element<'a, Mess
         tree,
     );
 
-    vertical_scroll::view(state.list_scroll, Message::ScrollList, column![section].spacing(0.0))
+    vertical_scroll::view(
+        state.list_scroll,
+        Message::ScrollList,
+        column![section].spacing(0.0),
+    )
 }
 
 fn view_content<'a>(state: &'a State) -> Element<'a, Message> {
-    let bar = tab_bar::view_bar(
-        &state.tabs,
-        Message::SelectTab,
-        Message::CloseTab,
-    );
+    let bar = tab_bar::view_bar(&state.tabs, Message::SelectTab, Message::CloseTab);
     let body = tab_bar::view_content(&state.tabs).map(Message::TabContent);
 
     column![bar, body].height(Length::Fill).into()
@@ -160,7 +164,14 @@ fn open_artifact(
 ) {
     if let Some(content) = project.read_artifact(id) {
         let title = id.rsplit('/').next().unwrap_or(id).to_string();
-        crate::open_artifact_tab(&mut state.tabs, id.to_string(), title, content, id, highlighter);
+        crate::open_artifact_tab(
+            &mut state.tabs,
+            id.to_string(),
+            title,
+            content,
+            id,
+            highlighter,
+        );
     }
 }
 

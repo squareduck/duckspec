@@ -1,6 +1,6 @@
 //! Narrow icon sidebar for area navigation.
 
-use iced::widget::{button, column, container, svg, Space};
+use iced::widget::{Space, button, column, container, svg};
 use iced::{Center, Element, Length};
 
 use crate::area::Area;
@@ -40,8 +40,15 @@ pub fn view<'a, M: Clone + 'a>(
         } else {
             theme::nav_button
         };
-        let tint = if is_active { theme::accent() } else { theme::text_secondary() };
-        let icon = svg(area_icon(area)).width(20).height(20).style(theme::svg_tint(tint));
+        let tint = if is_active {
+            theme::accent()
+        } else {
+            theme::text_secondary()
+        };
+        let icon = svg(area_icon(area))
+            .width(20)
+            .height(20)
+            .style(theme::svg_tint(tint));
         let btn = button(
             container(icon)
                 .width(Length::Fill)
@@ -94,7 +101,11 @@ pub fn view<'a, M: Clone + 'a>(
     } else {
         theme::nav_button
     };
-    let settings_tint = if is_settings { theme::accent() } else { theme::text_secondary() };
+    let settings_tint = if is_settings {
+        theme::accent()
+    } else {
+        theme::text_secondary()
+    };
     let settings_icon = svg(svg::Handle::from_memory(ICON_SETTINGS))
         .width(18)
         .height(18)
@@ -112,10 +123,16 @@ pub fn view<'a, M: Clone + 'a>(
     .style(settings_style);
 
     container(
-        column![nav, Space::new().height(Length::Fill), refresh, theme_toggle, settings]
-            .align_x(Center)
-            .spacing(theme::SPACING_XS)
-            .height(Length::Fill),
+        column![
+            nav,
+            Space::new().height(Length::Fill),
+            refresh,
+            theme_toggle,
+            settings
+        ]
+        .align_x(Center)
+        .spacing(theme::SPACING_XS)
+        .height(Length::Fill),
     )
     .width(theme::SIDEBAR_WIDTH)
     .height(Length::Fill)
@@ -123,4 +140,3 @@ pub fn view<'a, M: Clone + 'a>(
     .style(theme::sidebar)
     .into()
 }
-

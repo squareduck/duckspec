@@ -111,8 +111,8 @@ pub fn content_font(config: &Config) -> iced::Font {
 }
 
 fn string_to_static(s: &str) -> &'static str {
-    use std::sync::OnceLock;
     use std::collections::HashSet;
+    use std::sync::OnceLock;
     static INTERNED: OnceLock<std::sync::Mutex<HashSet<&'static str>>> = OnceLock::new();
     let set = INTERNED.get_or_init(|| std::sync::Mutex::new(HashSet::new()));
     let mut guard = set.lock().unwrap();
@@ -127,9 +127,7 @@ fn string_to_static(s: &str) -> &'static str {
 
 pub fn list_system_fonts() -> Vec<String> {
     let source = font_kit::source::SystemSource::new();
-    let mut families: Vec<String> = source
-        .all_families()
-        .unwrap_or_default();
+    let mut families: Vec<String> = source.all_families().unwrap_or_default();
     families.sort_unstable();
     families.dedup();
     families

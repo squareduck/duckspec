@@ -53,16 +53,16 @@ pub fn block_kind_bg(kind: BlockKind) -> Color {
 /// so theme toggles are reflected without rebuilding the editor.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LineBgKind {
-    DiffHunk,
-    DiffAdded,
-    DiffRemoved,
+    Hunk,
+    Added,
+    Removed,
 }
 
 pub(crate) fn line_bg_color(kind: LineBgKind) -> Color {
     match kind {
-        LineBgKind::DiffHunk => theme::diff_hunk_bg(),
-        LineBgKind::DiffAdded => theme::diff_added_bg(),
-        LineBgKind::DiffRemoved => theme::diff_removed_bg(),
+        LineBgKind::Hunk => theme::diff_hunk_bg(),
+        LineBgKind::Added => theme::diff_added_bg(),
+        LineBgKind::Removed => theme::diff_removed_bg(),
     }
 }
 
@@ -95,15 +95,8 @@ impl Pos {
 
 #[derive(Debug, Clone)]
 enum UndoOp {
-    Insert {
-        pos: Pos,
-        text: String,
-    },
-    Delete {
-        start: Pos,
-        end: Pos,
-        text: String,
-    },
+    Insert { pos: Pos, text: String },
+    Delete { start: Pos, end: Pos, text: String },
 }
 
 // ── Editor state ───────────────────────────────────────────────────────────
@@ -282,7 +275,14 @@ impl EditorState {
                 }
                 self.cursor = pos;
             }
-            EditorAction::Scroll { dy, dx, viewport_height, content_height, viewport_width, content_width } => {
+            EditorAction::Scroll {
+                dy,
+                dx,
+                viewport_height,
+                content_height,
+                viewport_width,
+                content_width,
+            } => {
                 let max_y = (content_height - viewport_height).max(0.0);
                 self.scroll_y = (self.scroll_y + dy).clamp(0.0, max_y);
                 let max_x = (content_width - viewport_width).max(0.0);
@@ -428,8 +428,7 @@ impl EditorState {
             return;
         }
         if self.cursor.col > 0 {
-            let ch = self.lines[self.cursor.line]
-                .remove(self.cursor.col - 1);
+            let ch = self.lines[self.cursor.line].remove(self.cursor.col - 1);
             self.cursor.col -= ch.len_utf8();
             self.push_undo(UndoOp::Delete {
                 start: self.cursor,

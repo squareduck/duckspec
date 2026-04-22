@@ -10,7 +10,7 @@ use std::sync::mpsc;
 use std::time::Duration;
 
 use ignore::gitignore::GitignoreBuilder;
-use notify_debouncer_mini::{new_debouncer, DebouncedEventKind};
+use notify_debouncer_mini::{DebouncedEventKind, new_debouncer};
 
 // ── Event types ─────────────────────────────────────────────────────────────
 
@@ -52,7 +52,10 @@ pub fn watch_subscription(
     duckspec_root: Option<PathBuf>,
 ) -> iced::Subscription<Vec<FileEvent>> {
     iced::Subscription::run_with(
-        WatchId { project_root, duckspec_root },
+        WatchId {
+            project_root,
+            duckspec_root,
+        },
         |id| watch_stream(id.project_root.clone(), id.duckspec_root.clone()),
     )
 }
@@ -61,83 +64,89 @@ fn watch_stream(
     project_root: PathBuf,
     duckspec_root: Option<PathBuf>,
 ) -> impl iced::futures::Stream<Item = Vec<FileEvent>> {
-    iced::stream::channel(32, |mut sender: iced::futures::channel::mpsc::Sender<Vec<FileEvent>>| async move {
-        use iced::futures::SinkExt;
+    iced::stream::channel(
+        32,
+        |mut sender: iced::futures::channel::mpsc::Sender<Vec<FileEvent>>| async move {
+            use iced::futures::SinkExt;
 
-        // notify's debouncer sends to a std::sync::mpsc channel (blocking).
-        // We bridge it to the async world via a tokio mpsc channel and a
-        // dedicated background thread that does the blocking recv.
-        let (notify_tx, notify_rx) = mpsc::channel();
-        let (async_tx, mut async_rx) = tokio::sync::mpsc::channel::<Vec<FileEvent>>(32);
+            // notify's debouncer sends to a std::sync::mpsc channel (blocking).
+            // We bridge it to the async world via a tokio mpsc channel and a
+            // dedicated background thread that does the blocking recv.
+            let (notify_tx, notify_rx) = mpsc::channel();
+            let (async_tx, mut async_rx) = tokio::sync::mpsc::channel::<Vec<FileEvent>>(32);
 
-        let mut debouncer = match new_debouncer(Duration::from_millis(250), notify_tx) {
-            Ok(d) => d,
-            Err(e) => {
-                tracing::error!("failed to create file watcher: {e}");
+            let mut debouncer = match new_debouncer(Duration::from_millis(250), notify_tx) {
+                Ok(d) => d,
+                Err(e) => {
+                    tracing::error!("failed to create file watcher: {e}");
+                    std::future::pending::<()>().await;
+                    return;
+                }
+            };
+
+            if let Err(e) = debouncer.watcher().watch(
+                &project_root,
+                notify_debouncer_mini::notify::RecursiveMode::Recursive,
+            ) {
+                tracing::error!("failed to watch {}: {e}", project_root.display());
                 std::future::pending::<()>().await;
                 return;
             }
-        };
 
-        if let Err(e) = debouncer.watcher().watch(
-            &project_root,
-            notify_debouncer_mini::notify::RecursiveMode::Recursive,
-        ) {
-            tracing::error!("failed to watch {}: {e}", project_root.display());
-            std::future::pending::<()>().await;
-            return;
-        }
+            tracing::info!("file watcher active on {}", project_root.display());
 
-        tracing::info!("file watcher active on {}", project_root.display());
+            let gitignore = build_gitignore(&project_root);
 
-        let gitignore = build_gitignore(&project_root);
+            // Background thread: blocking recv from notify → async send.
+            std::thread::spawn(move || {
+                loop {
+                    match notify_rx.recv() {
+                        Ok(Ok(events)) => {
+                            let file_events: Vec<FileEvent> = events
+                                .into_iter()
+                                .filter_map(|ev| {
+                                    if let Some(vcs_ev) =
+                                        classify_vcs_state(&ev.path, &project_root)
+                                    {
+                                        return Some(vcs_ev);
+                                    }
+                                    if is_ignored(&ev.path, &gitignore, duckspec_root.as_deref()) {
+                                        return None;
+                                    }
+                                    classify(&ev.path, ev.kind)
+                                })
+                                .collect();
 
-        // Background thread: blocking recv from notify → async send.
-        std::thread::spawn(move || {
-            loop {
-                match notify_rx.recv() {
-                    Ok(Ok(events)) => {
-                        let file_events: Vec<FileEvent> = events
-                            .into_iter()
-                            .filter_map(|ev| {
-                                if let Some(vcs_ev) = classify_vcs_state(&ev.path, &project_root) {
-                                    return Some(vcs_ev);
-                                }
-                                if is_ignored(&ev.path, &gitignore, duckspec_root.as_deref()) {
-                                    return None;
-                                }
-                                classify(&ev.path, ev.kind)
-                            })
-                            .collect();
-
-                        if !file_events.is_empty()
-                            && async_tx.blocking_send(file_events).is_err() {
+                            if !file_events.is_empty()
+                                && async_tx.blocking_send(file_events).is_err()
+                            {
                                 break;
                             }
-                    }
-                    Ok(Err(err)) => {
-                        tracing::warn!("file watcher error: {err}");
-                    }
-                    Err(_) => {
-                        tracing::debug!("file watcher notify channel closed");
-                        break;
+                        }
+                        Ok(Err(err)) => {
+                            tracing::warn!("file watcher error: {err}");
+                        }
+                        Err(_) => {
+                            tracing::debug!("file watcher notify channel closed");
+                            break;
+                        }
                     }
                 }
-            }
-        });
+            });
 
-        // Async loop: forward from tokio channel to iced stream.
-        while let Some(file_events) = async_rx.recv().await {
-            tracing::debug!(count = file_events.len(), "forwarding file events to UI");
-            if sender.send(file_events).await.is_err() {
-                tracing::debug!("file watcher iced receiver dropped");
-                break;
+            // Async loop: forward from tokio channel to iced stream.
+            while let Some(file_events) = async_rx.recv().await {
+                tracing::debug!(count = file_events.len(), "forwarding file events to UI");
+                if sender.send(file_events).await.is_err() {
+                    tracing::debug!("file watcher iced receiver dropped");
+                    break;
+                }
             }
-        }
 
-        // Keep debouncer alive so the watcher doesn't get dropped.
-        drop(debouncer);
-    })
+            // Keep debouncer alive so the watcher doesn't get dropped.
+            drop(debouncer);
+        },
+    )
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
@@ -187,9 +196,8 @@ fn classify_vcs_state(path: &Path, project_root: &Path) -> Option<FileEvent> {
         return None;
     }
     let rest: PathBuf = comps.collect();
-    let is_state = rest.starts_with("HEAD")
-        || rest.starts_with("index")
-        || rest.starts_with("refs");
+    let is_state =
+        rest.starts_with("HEAD") || rest.starts_with("index") || rest.starts_with("refs");
     is_state.then(|| FileEvent::VcsStateChanged(path.to_path_buf()))
 }
 

@@ -206,12 +206,12 @@ fn rewrite_tab_ids_for_archive(tabs: &mut tab_bar::TabState, old_name: &str, arc
         if let Some(rest) = id.strip_prefix(&artifact_old) {
             return Some(format!("{artifact_new}{rest}"));
         }
-        if let Some(rest) = id.strip_prefix("vcs:") {
-            if let Some(idx) = rest.find(&vcs_old) {
-                let (lead, tail) = rest.split_at(idx);
-                let tail = &tail[vcs_old.len()..];
-                return Some(format!("vcs:{lead}{vcs_new}{tail}"));
-            }
+        if let Some(rest) = id.strip_prefix("vcs:")
+            && let Some(idx) = rest.find(&vcs_old)
+        {
+            let (lead, tail) = rest.split_at(idx);
+            let tail = &tail[vcs_old.len()..];
+            return Some(format!("vcs:{lead}{vcs_new}{tail}"));
         }
         None
     };

@@ -136,11 +136,7 @@ fn apply_entries(
     }
 }
 
-fn apply_rename_entry(
-    sections: &mut [Section],
-    entry: &DeltaEntry,
-    errors: &mut Vec<MergeError>,
-) {
+fn apply_rename_entry(sections: &mut [Section], entry: &DeltaEntry, errors: &mut Vec<MergeError>) {
     let new_name = match &entry.rename_to {
         Some(name) => name.clone(),
         None => return,
@@ -187,11 +183,7 @@ fn apply_remove_entry(
     }
 }
 
-fn apply_replace_entry(
-    sections: &mut [Section],
-    entry: &DeltaEntry,
-    errors: &mut Vec<MergeError>,
-) {
+fn apply_replace_entry(sections: &mut [Section], entry: &DeltaEntry, errors: &mut Vec<MergeError>) {
     match find_section_mut(sections, &entry.heading) {
         Some(section) => {
             section.body = entry.body.clone();
@@ -210,11 +202,7 @@ fn apply_replace_entry(
     }
 }
 
-fn apply_anchor_entry(
-    sections: &mut [Section],
-    entry: &DeltaEntry,
-    errors: &mut Vec<MergeError>,
-) {
+fn apply_anchor_entry(sections: &mut [Section], entry: &DeltaEntry, errors: &mut Vec<MergeError>) {
     match find_section_mut(sections, &entry.heading) {
         Some(section) => {
             if !entry.body.is_empty() {

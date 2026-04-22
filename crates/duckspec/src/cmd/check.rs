@@ -35,7 +35,11 @@ enum Target {
 fn resolve_target(duckspec_root: &Path, target: Option<&str>) -> anyhow::Result<Target> {
     let scan_path = match target {
         Some(t) => resolve_path(t, duckspec_root)?,
-        None => return Ok(Target::FileOrDir { path: duckspec_root.to_path_buf() }),
+        None => {
+            return Ok(Target::FileOrDir {
+                path: duckspec_root.to_path_buf(),
+            });
+        }
     };
 
     // Check if this is a change directory.
@@ -89,12 +93,12 @@ fn run_file_check(
         let result = if format {
             let r = check::format_artifact(&source, &kind, &ctx);
             if let Some(ref formatted) = r.formatted
-                && *formatted != source {
-                    std::fs::write(file_path, formatted).map_err(|e| {
-                        anyhow::anyhow!("failed to write {}: {e}", file_path.display())
-                    })?;
-                    eprintln!("formatted {}", relative.display());
-                }
+                && *formatted != source
+            {
+                std::fs::write(file_path, formatted)
+                    .map_err(|e| anyhow::anyhow!("failed to write {}: {e}", file_path.display()))?;
+                eprintln!("formatted {}", relative.display());
+            }
             r
         } else {
             check::check_artifact(&source, &kind, &ctx)
@@ -191,10 +195,7 @@ fn run_change_check(duckspec_root: &Path, change_name: &str) -> anyhow::Result<(
 /// Build `CheckContext` for a file based on its kind and path.
 fn build_context(kind: &ArtifactKind, relative: &Path) -> CheckContext {
     if *kind == ArtifactKind::Step {
-        let filename = relative
-            .file_name()
-            .and_then(|f| f.to_str())
-            .unwrap_or("");
+        let filename = relative.file_name().and_then(|f| f.to_str()).unwrap_or("");
         CheckContext {
             filename_slug: layout::extract_step_slug(filename),
         }
@@ -210,7 +211,12 @@ fn build_duckspec_state(duckspec_root: &Path) -> anyhow::Result<DuckspecState> {
     let mut cap_doc_paths = HashSet::new();
 
     if caps_dir.is_dir() {
-        scan_caps(&caps_dir, &caps_dir, &mut cap_spec_paths, &mut cap_doc_paths)?;
+        scan_caps(
+            &caps_dir,
+            &caps_dir,
+            &mut cap_spec_paths,
+            &mut cap_doc_paths,
+        )?;
     }
 
     Ok(DuckspecState {
@@ -241,8 +247,12 @@ fn scan_caps(
                 .map(|p| p.to_path_buf());
             if let Some(cap_path) = cap_path {
                 match filename {
-                    "spec.md" => { spec_paths.insert(cap_path); }
-                    "doc.md" => { doc_paths.insert(cap_path); }
+                    "spec.md" => {
+                        spec_paths.insert(cap_path);
+                    }
+                    "doc.md" => {
+                        doc_paths.insert(cap_path);
+                    }
                     _ => {}
                 }
             }
@@ -250,7 +260,6 @@ fn scan_caps(
     }
     Ok(())
 }
-
 
 /// Print parse errors with miette source-annotated output.
 fn report_parse_errors(errors: &[ParseError], source: NamedSource<String>) {
@@ -268,4 +277,3 @@ fn report_summary(error_count: usize) {
 fn report_ok() {
     eprintln!("  {} ok", "✓".green());
 }
-

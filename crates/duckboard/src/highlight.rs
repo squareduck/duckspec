@@ -12,10 +12,8 @@ use syntect::parsing::{SyntaxReference, SyntaxSet};
 
 use crate::theme;
 
-const CATPPUCCIN_MACCHIATO: &[u8] =
-    include_bytes!("../assets/catppuccin-macchiato.tmTheme");
-const CATPPUCCIN_LATTE: &[u8] =
-    include_bytes!("../assets/catppuccin-latte.tmTheme");
+const CATPPUCCIN_MACCHIATO: &[u8] = include_bytes!("../assets/catppuccin-macchiato.tmTheme");
+const CATPPUCCIN_LATTE: &[u8] = include_bytes!("../assets/catppuccin-latte.tmTheme");
 
 /// App-level highlighter holding the (expensive) syntax set and both themes.
 pub struct SyntaxHighlighter {
@@ -263,7 +261,13 @@ mod tests {
         assert_eq!(concat(code_spans), "fn main() { let x = 42; }");
         let distinct_colors: std::collections::HashSet<_> = code_spans
             .iter()
-            .map(|s| (s.color.r.to_bits(), s.color.g.to_bits(), s.color.b.to_bits()))
+            .map(|s| {
+                (
+                    s.color.r.to_bits(),
+                    s.color.g.to_bits(),
+                    s.color.b.to_bits(),
+                )
+            })
             .collect();
         assert!(
             distinct_colors.len() >= 3,
@@ -277,12 +281,7 @@ mod tests {
     fn tilde_fence_and_unknown_language() {
         let hl = SyntaxHighlighter::new();
         let md = hl.find_syntax("md");
-        let src = lines(concat!(
-            "~~~nosuchlang\n",
-            "raw body\n",
-            "~~~\n",
-            "prose\n",
-        ));
+        let src = lines(concat!("~~~nosuchlang\n", "raw body\n", "~~~\n", "prose\n",));
         let out = hl.highlight_lines(&src, md);
         assert_eq!(out.len(), src.len());
         // Unknown language: body falls back to markdown styling — we just

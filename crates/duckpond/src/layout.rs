@@ -175,10 +175,7 @@ mod tests {
 
     #[test]
     fn cap_doc() {
-        assert_eq!(
-            classify(&p("caps/auth/doc.md")),
-            Some(ArtifactKind::CapDoc)
-        );
+        assert_eq!(classify(&p("caps/auth/doc.md")), Some(ArtifactKind::CapDoc));
     }
 
     #[test]
@@ -291,18 +288,12 @@ mod tests {
     #[test]
     fn nested_step_returns_none() {
         // Steps don't nest into subdirectories.
-        assert_eq!(
-            classify(&p("changes/add-oauth/steps/sub/01-foo.md")),
-            None
-        );
+        assert_eq!(classify(&p("changes/add-oauth/steps/sub/01-foo.md")), None);
     }
 
     #[test]
     fn extract_slug_basic() {
-        assert_eq!(
-            extract_step_slug("01-scaffold.md"),
-            Some("scaffold".into())
-        );
+        assert_eq!(extract_step_slug("01-scaffold.md"), Some("scaffold".into()));
     }
 
     #[test]

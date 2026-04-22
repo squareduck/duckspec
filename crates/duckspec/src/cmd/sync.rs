@@ -17,8 +17,7 @@ pub fn run(dry: bool) -> anyhow::Result<()> {
     let project_root = duckspec_root
         .parent()
         .ok_or_else(|| anyhow::anyhow!("duckspec/ has no parent directory"))?;
-    let config = Config::load(&duckspec_root)
-        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    let config = Config::load(&duckspec_root).map_err(|e| anyhow::anyhow!("{e}"))?;
 
     // 1. Scan source files for @spec backlinks.
     eprintln!("  {} scanning for backlinks…", "·".dimmed());
@@ -87,27 +86,31 @@ pub fn run(dry: bool) -> anyhow::Result<()> {
                             .into_iter()
                             .map(|p| Backlink {
                                 path: p.clone(),
-                                span: Span { offset: 0, length: 0 },
+                                span: Span {
+                                    offset: 0,
+                                    length: 0,
+                                },
                             })
                             .collect()
                     })
                     .unwrap_or_default();
 
                 // Ensure the scenario has its own test marker (not just inherited).
-                let marker = scn.test_marker.get_or_insert_with(|| {
-                    duckpond::artifact::spec::TestMarker {
-                        kind: TestMarkerKind::Code {
-                            backlinks: Vec::new(),
-                        },
-                        span: Span { offset: 0, length: 0 },
-                    }
-                });
+                let marker =
+                    scn.test_marker
+                        .get_or_insert_with(|| duckpond::artifact::spec::TestMarker {
+                            kind: TestMarkerKind::Code {
+                                backlinks: Vec::new(),
+                            },
+                            span: Span {
+                                offset: 0,
+                                length: 0,
+                            },
+                        });
 
                 if let TestMarkerKind::Code { backlinks } = &mut marker.kind {
-                    let old_paths: Vec<&str> =
-                        backlinks.iter().map(|b| b.path.as_str()).collect();
-                    let new_paths: Vec<&str> =
-                        new_links.iter().map(|b| b.path.as_str()).collect();
+                    let old_paths: Vec<&str> = backlinks.iter().map(|b| b.path.as_str()).collect();
+                    let new_paths: Vec<&str> = new_links.iter().map(|b| b.path.as_str()).collect();
 
                     if old_paths != new_paths {
                         *backlinks = new_links;
@@ -173,10 +176,7 @@ fn group_backlinks(
             requirement: bl.requirement.clone(),
             scenario: bl.scenario.clone(),
         };
-        let rel_path = bl
-            .file
-            .strip_prefix(project_root)
-            .unwrap_or(&bl.file);
+        let rel_path = bl.file.strip_prefix(project_root).unwrap_or(&bl.file);
         let link_str = format!("{}:{}", rel_path.display(), bl.line);
         map.entry(key).or_default().insert(link_str);
     }
@@ -235,9 +235,10 @@ fn scan_source_files(
             }
 
             if let Ok(canonical) = path.canonicalize()
-                && canonical.starts_with(&duckspec_canonical) {
-                    continue;
-                }
+                && canonical.starts_with(&duckspec_canonical)
+            {
+                continue;
+            }
 
             let content = match std::fs::read_to_string(path) {
                 Ok(c) => c,

@@ -60,11 +60,7 @@ fn install_commands(source_dir: &Path, target_dir: &Path) -> anyhow::Result<()> 
             let filename = entry.file_name();
             let dest = target_dir.join(&filename);
             fs::copy(&path, &dest)?;
-            println!(
-                "  {} {}",
-                "installed".green(),
-                dest.display()
-            );
+            println!("  {} {}", "installed".green(), dest.display());
         }
     }
     Ok(())

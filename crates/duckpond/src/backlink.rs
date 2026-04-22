@@ -19,11 +19,11 @@ pub struct SourceBacklink {
 ///
 /// Ordered longest-first so `///` matches before `//`.
 const COMMENT_MARKERS: &[&str] = &[
-    "///", "//",   // Rust, JS, TS, Go, C, C++, Java, etc.
-    "#",           // Python, Ruby, Shell, TOML, YAML
-    ";;",          // Lisp, Clojure, Scheme
-    "--",          // Lua, SQL, Haskell
-    "%",           // Erlang, LaTeX
+    "///", "//", // Rust, JS, TS, Go, C, C++, Java, etc.
+    "#",  // Python, Ruby, Shell, TOML, YAML
+    ";;", // Lisp, Clojure, Scheme
+    "--", // Lua, SQL, Haskell
+    "%",  // Erlang, LaTeX
 ];
 
 /// Try to parse a `@spec` backlink from a single source line.
@@ -41,7 +41,8 @@ pub fn parse_backlink_line(line: &str) -> Option<BacklinkRef> {
         .find_map(|marker| trimmed.strip_prefix(marker))?;
 
     // Must have whitespace then @spec.
-    let after_ws = after_marker.strip_prefix(' ')
+    let after_ws = after_marker
+        .strip_prefix(' ')
         .or_else(|| after_marker.strip_prefix('\t'))?;
     let rest = after_ws.trim_start();
 
@@ -51,8 +52,7 @@ pub fn parse_backlink_line(line: &str) -> Option<BacklinkRef> {
     if rest.is_empty() {
         return None;
     }
-    let rest = rest.strip_prefix(' ')
-        .or_else(|| rest.strip_prefix('\t'))?;
+    let rest = rest.strip_prefix(' ').or_else(|| rest.strip_prefix('\t'))?;
     let rest = rest.trim();
 
     if rest.is_empty() {

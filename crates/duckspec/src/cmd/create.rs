@@ -69,10 +69,7 @@ pub fn run(cmd: CreateCommand) -> anyhow::Result<()> {
     let duckspec_root = find_duckspec_root()?;
 
     // Capture hook info before cmd is consumed.
-    let hook_content = if let CreateCommand::Hook {
-        ref stage, pre, ..
-    } = cmd
-    {
+    let hook_content = if let CreateCommand::Hook { ref stage, pre, .. } = cmd {
         let pos = if pre { "Pre" } else { "Post" };
         let title = capitalize(stage);
         Some(format!("# {title} - {pos}\n"))
@@ -136,18 +133,9 @@ pub fn run(cmd: CreateCommand) -> anyhow::Result<()> {
             after,
         } => {
             let active = list_subdirs(&duckspec_root.join("changes"))?;
-            let steps_dir = duckspec_root
-                .join("changes")
-                .join(&change)
-                .join("steps");
+            let steps_dir = duckspec_root.join("changes").join(&change).join("steps");
             let existing_steps = list_files(&steps_dir)?;
-            duckpond::plan::create_step(
-                &name,
-                &change,
-                &active,
-                &existing_steps,
-                after.as_deref(),
-            )?
+            duckpond::plan::create_step(&name, &change, &active, &existing_steps, after.as_deref())?
         }
         CreateCommand::Hook { stage, pre, post } => {
             let position = if pre {
@@ -177,10 +165,7 @@ pub fn run(cmd: CreateCommand) -> anyhow::Result<()> {
             // It's a file — write hook skeleton, or an H1 placeholder
             // for artifacts so editors that require a non-empty Read
             // before Write don't trip on a fresh create.
-            let filename = abs
-                .file_name()
-                .and_then(|f| f.to_str())
-                .unwrap_or_default();
+            let filename = abs.file_name().and_then(|f| f.to_str()).unwrap_or_default();
             let content = hook_content
                 .clone()
                 .unwrap_or_else(|| placeholder_for(filename));
@@ -255,9 +240,10 @@ fn list_files(dir: &Path) -> anyhow::Result<Vec<String>> {
     for entry in fs::read_dir(dir)? {
         let entry = entry?;
         if entry.path().is_file()
-            && let Some(name) = entry.file_name().to_str() {
-                names.push(name.to_string());
-            }
+            && let Some(name) = entry.file_name().to_str()
+        {
+            names.push(name.to_string());
+        }
     }
     names.sort();
     Ok(names)
@@ -281,9 +267,10 @@ fn scan_caps(dir: &Path, caps_root: &Path, out: &mut Vec<String>) -> anyhow::Res
             scan_caps(&path, caps_root, out)?;
         } else if path.file_name().and_then(|f| f.to_str()) == Some("spec.md")
             && let Some(parent) = path.parent()
-                && let Ok(rel) = parent.strip_prefix(caps_root) {
-                    out.push(rel.to_string_lossy().into_owned());
-                }
+            && let Ok(rel) = parent.strip_prefix(caps_root)
+        {
+            out.push(rel.to_string_lossy().into_owned());
+        }
     }
     Ok(())
 }

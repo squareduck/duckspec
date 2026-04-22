@@ -4,25 +4,26 @@ use iced::advanced::layout;
 use iced::advanced::mouse as adv_mouse;
 use iced::advanced::renderer::{self, Renderer as _};
 use iced::advanced::text::{self, Paragraph as _, Renderer as TextRenderer};
-use iced::advanced::widget::{self, operation, Id, Tree, Widget};
+use iced::advanced::widget::{self, Id, Tree, Widget, operation};
 use iced::advanced::{Clipboard, Layout, Shell};
 use iced::keyboard::key::Named;
 use iced::mouse;
 use iced::{
-    alignment, keyboard, Border, Color, Element, Event, Length,
-    Pixels, Point, Rectangle, Size, Theme,
+    Border, Color, Element, Event, Length, Pixels, Point, Rectangle, Size, Theme, alignment,
+    keyboard,
 };
 
-use crate::theme;
 use super::state::{
-    block_header_color, block_kind_bg, line_bg_color,
-    EditorAction, EditorState, Pos,
-    CONTENT_PAD_Y, LINE_HEIGHT,
+    CONTENT_PAD_Y, EditorAction, EditorState, LINE_HEIGHT, Pos, block_header_color, block_kind_bg,
+    line_bg_color,
 };
+use crate::theme;
 
 // ── Layout constants ───────────────────────────────────────────────────────
 
-fn font_size() -> f32 { theme::content_size() }
+fn font_size() -> f32 {
+    theme::content_size()
+}
 const GUTTER_PAD: f32 = 8.0;
 const CONTENT_PAD: f32 = 8.0;
 /// Width of the overlaid scrollbars drawn by this widget when content
@@ -108,10 +109,7 @@ impl WrapLayout {
         }
         let base = self.cum_rows[line];
         let starts = &self.row_starts[line];
-        let sub = starts
-            .iter()
-            .rposition(|&s| col >= s)
-            .unwrap_or(0);
+        let sub = starts.iter().rposition(|&s| col >= s).unwrap_or(0);
         base + sub
     }
 }
@@ -163,10 +161,7 @@ pub struct TextEdit<'a, M> {
 }
 
 impl<'a, M> TextEdit<'a, M> {
-    pub fn new(
-        state: &'a EditorState,
-        on_action: impl Fn(EditorAction) -> M + 'a,
-    ) -> Self {
+    pub fn new(state: &'a EditorState, on_action: impl Fn(EditorAction) -> M + 'a) -> Self {
         Self {
             state,
             on_action: Box::new(on_action),
@@ -257,11 +252,7 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for TextEdit<'a, M> {
             };
             let height = row_count.max(1) as f32 * LINE_HEIGHT + CONTENT_PAD_Y * 2.0;
             let limits = limits.width(Length::Fill);
-            layout::Node::new(limits.resolve(
-                Length::Fill,
-                Length::Fixed(height),
-                Size::ZERO,
-            ))
+            layout::Node::new(limits.resolve(Length::Fill, Length::Fixed(height), Size::ZERO))
         } else {
             let limits = limits.width(Length::Fill).height(Length::Fill);
             layout::Node::new(limits.resolve(Length::Fill, Length::Fill, Size::ZERO))
@@ -307,15 +298,18 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for TextEdit<'a, M> {
             internal.cell_width = measured;
             if self.show_gutter {
                 let digits = digit_count(self.state.line_count());
-                internal.gutter_width =
-                    (digits as f32) * measured + GUTTER_PAD * 2.0;
+                internal.gutter_width = (digits as f32) * measured + GUTTER_PAD * 2.0;
             } else {
                 internal.gutter_width = 0.0;
             }
         }
 
         // Compute wrap layout if enabled.
-        let cell_w = if internal.cell_width > 0.0 { internal.cell_width } else { 7.8 };
+        let cell_w = if internal.cell_width > 0.0 {
+            internal.cell_width
+        } else {
+            7.8
+        };
         let wrap = if self.word_wrap {
             let content_w = bounds.width - internal.gutter_width - CONTENT_PAD;
             let cpr = (content_w / cell_w).floor().max(1.0) as usize;
@@ -335,8 +329,14 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for TextEdit<'a, M> {
                 if cursor.is_over(bounds) {
                     internal.focused = true;
                     let pos = cursor.position().unwrap();
-                    let click_pos =
-                        pixel_to_pos_wrapped(pos, bounds, internal, self.state, wrap.as_ref(), content_height);
+                    let click_pos = pixel_to_pos_wrapped(
+                        pos,
+                        bounds,
+                        internal,
+                        self.state,
+                        wrap.as_ref(),
+                        content_height,
+                    );
 
                     internal.dragging = true;
                     shell.publish((self.on_action)(EditorAction::Click(click_pos)));
@@ -346,9 +346,18 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for TextEdit<'a, M> {
                 }
             }
             Event::Mouse(mouse::Event::CursorMoved { .. }) => {
-                if internal.dragging && internal.focused && let Some(pos) = cursor.position() {
-                    let drag_pos =
-                        pixel_to_pos_wrapped(pos, bounds, internal, self.state, wrap.as_ref(), content_height);
+                if internal.dragging
+                    && internal.focused
+                    && let Some(pos) = cursor.position()
+                {
+                    let drag_pos = pixel_to_pos_wrapped(
+                        pos,
+                        bounds,
+                        internal,
+                        self.state,
+                        wrap.as_ref(),
+                        content_height,
+                    );
                     shell.publish((self.on_action)(EditorAction::Drag(drag_pos)));
                 }
             }
@@ -358,16 +367,18 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for TextEdit<'a, M> {
             Event::Mouse(mouse::Event::WheelScrolled { delta }) => {
                 if cursor.is_over(bounds) {
                     let (dy, dx) = match delta {
-                        mouse::ScrollDelta::Lines { x, y } => (
-                            -*y * LINE_HEIGHT * 3.0,
-                            -*x * cell_w * 3.0,
-                        ),
+                        mouse::ScrollDelta::Lines { x, y } => {
+                            (-*y * LINE_HEIGHT * 3.0, -*x * cell_w * 3.0)
+                        }
                         mouse::ScrollDelta::Pixels { x, y } => (-*y, -*x),
                     };
                     let content_w_px = if self.word_wrap {
                         0.0
                     } else {
-                        let max_chars = self.state.lines.iter()
+                        let max_chars = self
+                            .state
+                            .lines
+                            .iter()
                             .map(|l| l.chars().count())
                             .max()
                             .unwrap_or(0);
@@ -470,14 +481,14 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for TextEdit<'a, M> {
                     _ if !self.read_only
                         && !cmd
                         && !modifiers.control()
-                        && key_text.as_ref().is_some_and(|t| t.chars().any(|c| !c.is_control())) =>
+                        && key_text
+                            .as_ref()
+                            .is_some_and(|t| t.chars().any(|c| !c.is_control())) =>
                     {
                         if let Some(txt) = key_text {
                             for ch in txt.chars() {
                                 if !ch.is_control() {
-                                    shell.publish(
-                                        (self.on_action)(EditorAction::Insert(ch)),
-                                    );
+                                    shell.publish((self.on_action)(EditorAction::Insert(ch)));
                                 }
                             }
                         }
@@ -545,7 +556,9 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for TextEdit<'a, M> {
         } else {
             None
         };
-        let total_visual_rows = wrap.as_ref().map_or(self.state.line_count(), |w| w.total_visual_rows);
+        let total_visual_rows = wrap
+            .as_ref()
+            .map_or(self.state.line_count(), |w| w.total_visual_rows);
         let content_height = total_visual_rows as f32 * LINE_HEIGHT + CONTENT_PAD_Y * 2.0;
 
         // Clamp scroll so we don't render past the content.
@@ -556,7 +569,10 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for TextEdit<'a, M> {
         let scroll_x = if self.word_wrap {
             0.0
         } else {
-            let max_chars = self.state.lines.iter()
+            let max_chars = self
+                .state
+                .lines
+                .iter()
                 .map(|l| l.chars().count())
                 .max()
                 .unwrap_or(0);
@@ -658,23 +674,24 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for TextEdit<'a, M> {
                 // Block background.
                 if has_blocks
                     && let Some(info) = self.state.block_line_map.get(line_idx)
-                        && let Some(block) = self.state.blocks.get(info.block_idx) {
-                            let bg = block_kind_bg(block.kind);
-                            renderer::Renderer::fill_quad(
-                                renderer,
-                                renderer::Quad {
-                                    bounds: Rectangle {
-                                        x: bounds.x,
-                                        y,
-                                        width: bounds.width,
-                                        height: LINE_HEIGHT,
-                                    },
-                                    border: Border::default(),
-                                    ..renderer::Quad::default()
-                                },
-                                bg,
-                            );
-                        }
+                    && let Some(block) = self.state.blocks.get(info.block_idx)
+                {
+                    let bg = block_kind_bg(block.kind);
+                    renderer::Renderer::fill_quad(
+                        renderer,
+                        renderer::Quad {
+                            bounds: Rectangle {
+                                x: bounds.x,
+                                y,
+                                width: bounds.width,
+                                height: LINE_HEIGHT,
+                            },
+                            border: Border::default(),
+                            ..renderer::Quad::default()
+                        },
+                        bg,
+                    );
+                }
 
                 // Per-line background (e.g. diff added/removed). Resolve the
                 // color here so theme toggles take effect without rebuild.
@@ -697,39 +714,56 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for TextEdit<'a, M> {
 
                 // Selection highlight.
                 if let Some((sel_start, sel_end)) = selection
-                    && line_idx >= sel_start.line && line_idx <= sel_end.line {
-                        let abs_col_start = char_start;
-                        let abs_col_end = char_end;
-                        let sel_col_start = if line_idx == sel_start.line {
-                            sel_start.col.max(abs_col_start)
-                        } else {
-                            abs_col_start
-                        };
-                        let sel_col_end = if line_idx == sel_end.line {
-                            sel_end.col.min(abs_col_end)
-                        } else {
-                            abs_col_end
-                        };
-                        if sel_col_start < sel_col_end && sel_col_start < abs_col_end && sel_col_end > abs_col_start {
-                            let vis_start = sel_col_start.saturating_sub(abs_col_start);
-                            let vis_end = sel_col_end.saturating_sub(abs_col_start);
-                            let sel_x = content_x + CONTENT_PAD + vis_start as f32 * cell_w - scroll_x;
-                            let sel_w = (vis_end - vis_start) as f32 * cell_w;
-                            renderer::Renderer::fill_quad(
-                                renderer,
-                                renderer::Quad {
-                                    bounds: Rectangle { x: sel_x, y, width: sel_w, height: LINE_HEIGHT },
-                                    border: Border::default(),
-                                    ..renderer::Quad::default()
+                    && line_idx >= sel_start.line
+                    && line_idx <= sel_end.line
+                {
+                    let abs_col_start = char_start;
+                    let abs_col_end = char_end;
+                    let sel_col_start = if line_idx == sel_start.line {
+                        sel_start.col.max(abs_col_start)
+                    } else {
+                        abs_col_start
+                    };
+                    let sel_col_end = if line_idx == sel_end.line {
+                        sel_end.col.min(abs_col_end)
+                    } else {
+                        abs_col_end
+                    };
+                    if sel_col_start < sel_col_end
+                        && sel_col_start < abs_col_end
+                        && sel_col_end > abs_col_start
+                    {
+                        let vis_start = sel_col_start.saturating_sub(abs_col_start);
+                        let vis_end = sel_col_end.saturating_sub(abs_col_start);
+                        let sel_x = content_x + CONTENT_PAD + vis_start as f32 * cell_w - scroll_x;
+                        let sel_w = (vis_end - vis_start) as f32 * cell_w;
+                        renderer::Renderer::fill_quad(
+                            renderer,
+                            renderer::Quad {
+                                bounds: Rectangle {
+                                    x: sel_x,
+                                    y,
+                                    width: sel_w,
+                                    height: LINE_HEIGHT,
                                 },
-                                Color { a: 0.3, ..theme::accent() },
-                            );
-                        }
+                                border: Border::default(),
+                                ..renderer::Quad::default()
+                            },
+                            Color {
+                                a: 0.3,
+                                ..theme::accent()
+                            },
+                        );
                     }
+                }
 
                 // Extract the sub-string for this visual row.
                 let line = &self.state.lines[line_idx];
-                let row_text: String = line.chars().skip(char_start).take(char_end - char_start).collect();
+                let row_text: String = line
+                    .chars()
+                    .skip(char_start)
+                    .take(char_end - char_start)
+                    .collect();
 
                 if !row_text.is_empty() {
                     // Block header/more lines get special coloring (only on first sub-row).
@@ -764,7 +798,11 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for TextEdit<'a, M> {
                         );
                     } else {
                         // Syntax highlighting spans — need to slice for this visual row.
-                        let spans = self.state.highlight_spans.as_ref().and_then(|cache| cache.get(line_idx));
+                        let spans = self
+                            .state
+                            .highlight_spans
+                            .as_ref()
+                            .and_then(|cache| cache.get(line_idx));
 
                         if let Some(spans) = spans {
                             let mut col = 0usize;
@@ -774,19 +812,25 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for TextEdit<'a, M> {
                                 if span_end > char_start && col < char_end {
                                     let vis_start = col.max(char_start) - char_start;
                                     let vis_end = span_end.min(char_end) - char_start;
-                                    let slice: String = span.text.chars()
+                                    let slice: String = span
+                                        .text
+                                        .chars()
                                         .skip(col.max(char_start) - col)
                                         .take(vis_end - vis_start)
                                         .collect();
                                     if !slice.is_empty() {
                                         let sw = slice.chars().count() as f32 * cell_w;
-                                        let sx = content_x + CONTENT_PAD + vis_start as f32 * cell_w - scroll_x;
+                                        let sx =
+                                            content_x + CONTENT_PAD + vis_start as f32 * cell_w
+                                                - scroll_x;
                                         renderer.fill_text(
                                             iced::advanced::Text {
                                                 content: slice,
                                                 bounds: Size::new(sw + cell_w, LINE_HEIGHT),
                                                 size: Pixels(font_size()),
-                                                line_height: text::LineHeight::Absolute(Pixels(LINE_HEIGHT)),
+                                                line_height: text::LineHeight::Absolute(Pixels(
+                                                    LINE_HEIGHT,
+                                                )),
                                                 font: theme::content_font(),
                                                 align_x: alignment::Horizontal::Left.into(),
                                                 align_y: alignment::Vertical::Top,
@@ -937,7 +981,10 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for TextEdit<'a, M> {
                                 width: SCROLLBAR_WIDTH,
                                 height: scroller_h,
                             },
-                            border: Border { radius: SCROLLBAR_RADIUS.into(), ..Border::default() },
+                            border: Border {
+                                radius: SCROLLBAR_RADIUS.into(),
+                                ..Border::default()
+                            },
                             ..renderer::Quad::default()
                         },
                         scroller_color,
@@ -945,7 +992,10 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for TextEdit<'a, M> {
                 }
 
                 if !self.word_wrap && content_w > 0.0 {
-                    let max_chars = self.state.lines.iter()
+                    let max_chars = self
+                        .state
+                        .lines
+                        .iter()
                         .map(|l| l.chars().count())
                         .max()
                         .unwrap_or(0);
@@ -970,7 +1020,10 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for TextEdit<'a, M> {
                                     width: scroller_w,
                                     height: SCROLLBAR_WIDTH,
                                 },
-                                border: Border { radius: SCROLLBAR_RADIUS.into(), ..Border::default() },
+                                border: Border {
+                                    radius: SCROLLBAR_RADIUS.into(),
+                                    ..Border::default()
+                                },
                                 ..renderer::Quad::default()
                             },
                             scroller_color,
@@ -1005,11 +1058,7 @@ fn measure_cell_width(_renderer: &iced::Renderer) -> f32 {
         wrapping: text::Wrapping::None,
     });
     let w = para.min_bounds().width;
-    if w > 0.0 {
-        w
-    } else {
-        7.8
-    }
+    if w > 0.0 { w } else { 7.8 }
 }
 
 fn digit_count(n: usize) -> usize {
@@ -1036,7 +1085,11 @@ fn pixel_to_pos_wrapped(
     let content_x = bounds.x + gutter_w + CONTENT_PAD;
     let max_scroll = (content_height - bounds.height).max(0.0);
     let scroll_y = state.scroll_y.clamp(0.0, max_scroll);
-    let scroll_x = if wrap.is_some() { 0.0 } else { state.scroll_x.max(0.0) };
+    let scroll_x = if wrap.is_some() {
+        0.0
+    } else {
+        state.scroll_x.max(0.0)
+    };
 
     let vrow = ((point.y - bounds.y - CONTENT_PAD_Y + scroll_y) / LINE_HEIGHT)
         .floor()

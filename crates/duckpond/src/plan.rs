@@ -20,10 +20,7 @@ pub enum PlanError {
     ChangeExists { name: String },
 
     #[error("archived change '{name}' already exists (in '{archive_entry}')")]
-    ChangeArchived {
-        name: String,
-        archive_entry: String,
-    },
+    ChangeArchived { name: String, archive_entry: String },
 
     #[error("change '{name}' not found")]
     ChangeNotFound { name: String },
@@ -87,12 +84,13 @@ pub fn create_change(
     // Strip the date+counter prefix to compare.
     for entry in archive_entries {
         if let Some(archived_name) = strip_archive_prefix(entry)
-            && archived_name == name {
-                return Err(PlanError::ChangeArchived {
-                    name: name.to_string(),
-                    archive_entry: entry.clone(),
-                });
-            }
+            && archived_name == name
+        {
+            return Err(PlanError::ChangeArchived {
+                name: name.to_string(),
+                archive_entry: entry.clone(),
+            });
+        }
     }
 
     Ok(Plan {
@@ -418,12 +416,7 @@ mod tests {
 
     #[test]
     fn change_archived() {
-        let err = create_change(
-            "add-oauth",
-            &[],
-            &[s("2026-03-15-01-add-oauth")],
-        )
-        .unwrap_err();
+        let err = create_change("add-oauth", &[], &[s("2026-03-15-01-add-oauth")]).unwrap_err();
         assert!(matches!(err, PlanError::ChangeArchived { .. }));
     }
 
@@ -446,12 +439,7 @@ mod tests {
 
     #[test]
     fn proposal_already_exists() {
-        let err = create_proposal(
-            "add-oauth",
-            &[s("add-oauth")],
-            &[s("proposal.md")],
-        )
-        .unwrap_err();
+        let err = create_proposal("add-oauth", &[s("add-oauth")], &[s("proposal.md")]).unwrap_err();
         assert!(matches!(err, PlanError::ArtifactExists { .. }));
     }
 
@@ -468,12 +456,7 @@ mod tests {
 
     #[test]
     fn design_already_exists() {
-        let err = create_design(
-            "add-oauth",
-            &[s("add-oauth")],
-            &[s("design.md")],
-        )
-        .unwrap_err();
+        let err = create_design("add-oauth", &[s("add-oauth")], &[s("design.md")]).unwrap_err();
         assert!(matches!(err, PlanError::ArtifactExists { .. }));
     }
 
@@ -497,19 +480,10 @@ mod tests {
 
     #[test]
     fn spec_existing_cap_creates_delta() {
-        let plan = create_spec(
-            "auth",
-            "add-oauth",
-            &[s("add-oauth")],
-            &[s("auth")],
-            &[],
-        )
-        .unwrap();
+        let plan = create_spec("auth", "add-oauth", &[s("add-oauth")], &[s("auth")], &[]).unwrap();
         assert_eq!(
             plan.creates,
-            vec![PathBuf::from(
-                "changes/add-oauth/caps/auth/spec.delta.md"
-            )]
+            vec![PathBuf::from("changes/add-oauth/caps/auth/spec.delta.md")]
         );
     }
 
@@ -528,14 +502,8 @@ mod tests {
 
     #[test]
     fn spec_empty_cap_segment() {
-        let err = create_spec(
-            "auth//google",
-            "add-oauth",
-            &[s("add-oauth")],
-            &[],
-            &[],
-        )
-        .unwrap_err();
+        let err =
+            create_spec("auth//google", "add-oauth", &[s("add-oauth")], &[], &[]).unwrap_err();
         assert!(matches!(err, PlanError::EmptyCapSegment));
     }
 
@@ -559,19 +527,10 @@ mod tests {
 
     #[test]
     fn doc_existing_cap_creates_delta() {
-        let plan = create_doc(
-            "auth",
-            "add-oauth",
-            &[s("add-oauth")],
-            &[s("auth")],
-            &[],
-        )
-        .unwrap();
+        let plan = create_doc("auth", "add-oauth", &[s("add-oauth")], &[s("auth")], &[]).unwrap();
         assert_eq!(
             plan.creates,
-            vec![PathBuf::from(
-                "changes/add-oauth/caps/auth/doc.delta.md"
-            )]
+            vec![PathBuf::from("changes/add-oauth/caps/auth/doc.delta.md")]
         );
     }
 
@@ -579,19 +538,10 @@ mod tests {
 
     #[test]
     fn step_append_to_empty() {
-        let plan = create_step(
-            "scaffold",
-            "add-oauth",
-            &[s("add-oauth")],
-            &[],
-            None,
-        )
-        .unwrap();
+        let plan = create_step("scaffold", "add-oauth", &[s("add-oauth")], &[], None).unwrap();
         assert_eq!(
             plan.creates,
-            vec![PathBuf::from(
-                "changes/add-oauth/steps/01-scaffold.md"
-            )]
+            vec![PathBuf::from("changes/add-oauth/steps/01-scaffold.md")]
         );
         assert!(plan.renames.is_empty());
     }
@@ -629,9 +579,7 @@ mod tests {
         // New step at 02.
         assert_eq!(
             plan.creates,
-            vec![PathBuf::from(
-                "changes/add-oauth/steps/02-middleware.md"
-            )]
+            vec![PathBuf::from("changes/add-oauth/steps/02-middleware.md")]
         );
 
         // Renames in reverse order: 03 -> 04 first, then 02 -> 03.
@@ -662,9 +610,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             plan.creates,
-            vec![PathBuf::from(
-                "changes/add-oauth/steps/03-deploy.md"
-            )]
+            vec![PathBuf::from("changes/add-oauth/steps/03-deploy.md")]
         );
         assert!(plan.renames.is_empty());
     }
@@ -732,12 +678,7 @@ mod tests {
 
     #[test]
     fn hook_already_exists() {
-        let err = create_hook(
-            "explore",
-            HookPosition::Pre,
-            &[s("explore-pre.md")],
-        )
-        .unwrap_err();
+        let err = create_hook("explore", HookPosition::Pre, &[s("explore-pre.md")]).unwrap_err();
         assert!(matches!(err, PlanError::HookExists { .. }));
     }
 

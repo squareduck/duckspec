@@ -97,9 +97,10 @@ pub fn list_subdirs(dir: &Path) -> anyhow::Result<Vec<String>> {
     for entry in entries {
         let entry = entry?;
         if entry.path().is_dir()
-            && let Some(name) = entry.file_name().to_str() {
-                names.push(name.to_string());
-            }
+            && let Some(name) = entry.file_name().to_str()
+        {
+            names.push(name.to_string());
+        }
     }
     names.sort();
     Ok(names)

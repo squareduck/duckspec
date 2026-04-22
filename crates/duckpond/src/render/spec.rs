@@ -60,17 +60,26 @@ fn render_scenario(out: &mut String, scenario: &Scenario) {
 
         for (i, clause) in scenario.givens.iter().enumerate() {
             let kw = if i == 0 { "GIVEN" } else { "AND" };
-            out.push_str(&format!("\n- **{kw}** {}", indent_continuations(&clause.text)));
+            out.push_str(&format!(
+                "\n- **{kw}** {}",
+                indent_continuations(&clause.text)
+            ));
         }
 
         for (i, clause) in scenario.whens.iter().enumerate() {
             let kw = if i == 0 { "WHEN" } else { "AND" };
-            out.push_str(&format!("\n- **{kw}** {}", indent_continuations(&clause.text)));
+            out.push_str(&format!(
+                "\n- **{kw}** {}",
+                indent_continuations(&clause.text)
+            ));
         }
 
         for (i, clause) in scenario.thens.iter().enumerate() {
             let kw = if i == 0 { "THEN" } else { "AND" };
-            out.push_str(&format!("\n- **{kw}** {}", indent_continuations(&clause.text)));
+            out.push_str(&format!(
+                "\n- **{kw}** {}",
+                indent_continuations(&clause.text)
+            ));
         }
     }
 

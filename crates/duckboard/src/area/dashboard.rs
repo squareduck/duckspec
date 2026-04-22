@@ -1,7 +1,7 @@
 //! Dashboard area — sleek start screen with changes and audit overview.
 
-use iced::widget::{button, column, container, row, scrollable, svg, text, Space};
 use iced::widget::text::Wrapping;
+use iced::widget::{Space, button, column, container, row, scrollable, svg, text};
 use iced::{Center, Element, Length};
 
 use crate::data::{ChangeValidation, ProjectAudit, ProjectData};
@@ -67,12 +67,8 @@ pub fn view<'a>(
     ]
     .height(Length::Fill);
 
-    let body = column![
-        header,
-        Space::new().height(theme::SPACING_LG),
-        panels,
-    ]
-    .height(Length::Fill);
+    let body =
+        column![header, Space::new().height(theme::SPACING_LG), panels,].height(Length::Fill);
 
     container(body)
         .padding([theme::SPACING_XL, theme::SPACING_LG])
@@ -84,7 +80,11 @@ pub fn view<'a>(
 // ── Header ──────────────────────────────────────────────────────────────────
 
 fn view_header<'a>() -> Element<'a, Message> {
-    let sep = || text(" \u{00b7} ").size(theme::font_sm()).color(theme::text_muted());
+    let sep = || {
+        text(" \u{00b7} ")
+            .size(theme::font_sm())
+            .color(theme::text_muted())
+    };
     let muted = |s| text(s).size(theme::font_sm()).color(theme::text_muted());
 
     let logo = column![
@@ -93,23 +93,28 @@ fn view_header<'a>() -> Element<'a, Message> {
             text("spec").size(22.0).color(theme::accent()),
         ],
         row![
-            muted("explore"), sep(),
-            muted("propose"), sep(),
-            muted("design"), sep(),
-            text("doc").size(theme::font_sm()).color(theme::text_primary()),
+            muted("explore"),
+            sep(),
+            muted("propose"),
+            sep(),
+            muted("design"),
+            sep(),
+            text("doc")
+                .size(theme::font_sm())
+                .color(theme::text_primary()),
             text(" ").size(theme::font_sm()),
             text("spec").size(theme::font_sm()).color(theme::accent()),
             sep(),
-            muted("step"), sep(),
-            muted("apply"), sep(),
+            muted("step"),
+            sep(),
+            muted("apply"),
+            sep(),
             muted("archive"),
         ],
     ]
     .spacing(1.0);
 
-    container(logo)
-        .padding([0.0, theme::SPACING_LG])
-        .into()
+    container(logo).padding([0.0, theme::SPACING_LG]).into()
 }
 
 // ── Items panel (left) ─────────────────────────────────────────────────────
@@ -126,7 +131,11 @@ fn view_items_panel<'a>(
         for change in &project.active_changes {
             let step_count = change.steps.len();
             let detail = if step_count > 0 {
-                format!("{} step{}", step_count, if step_count == 1 { "" } else { "s" })
+                format!(
+                    "{} step{}",
+                    step_count,
+                    if step_count == 1 { "" } else { "s" }
+                )
             } else {
                 String::new()
             };
@@ -150,10 +159,12 @@ fn view_items_panel<'a>(
     for name in explorations {
         exp_list = exp_list.push(exploration_row(name));
     }
-    let plus_icon = svg(svg::Handle::from_memory(crate::widget::collapsible::ICON_PLUS))
-        .width(theme::font_md())
-        .height(theme::font_md())
-        .style(theme::svg_tint(theme::accent()));
+    let plus_icon = svg(svg::Handle::from_memory(
+        crate::widget::collapsible::ICON_PLUS,
+    ))
+    .width(theme::font_md())
+    .height(theme::font_md())
+    .style(theme::svg_tint(theme::accent()));
     let new_btn = button(
         row![
             plus_icon,
@@ -197,8 +208,7 @@ fn view_items_panel<'a>(
 // ── Audit panel (right) ────────────────────────────────────────────────────
 
 fn view_audit_panel<'a>(project: &'a ProjectData) -> Element<'a, Message> {
-    let change_error_total: usize =
-        project.validations.values().map(|v| v.total_count()).sum();
+    let change_error_total: usize = project.validations.values().map(|v| v.total_count()).sum();
     let project_audit_total = project.project_audit.total_count();
     let total_errors = change_error_total + project_audit_total;
     let change_count_with_errors = project
@@ -228,7 +238,11 @@ fn view_audit_panel<'a>(project: &'a ProjectData) -> Element<'a, Message> {
             total_errors,
             if total_errors == 1 { "" } else { "s" },
             change_count_with_errors,
-            if change_count_with_errors == 1 { "" } else { "s" },
+            if change_count_with_errors == 1 {
+                ""
+            } else {
+                "s"
+            },
         ))
         .size(theme::font_sm())
         .color(theme::error())
@@ -316,9 +330,13 @@ fn view_project_audit_card<'a>(audit: &'a ProjectAudit) -> Element<'a, Message> 
             .color(theme::text_primary())
             .wrapping(Wrapping::None),
         Space::new().width(Length::Fill),
-        text(format!("{} error{}", total, if total == 1 { "" } else { "s" }))
-            .size(theme::font_sm())
-            .color(theme::text_muted()),
+        text(format!(
+            "{} error{}",
+            total,
+            if total == 1 { "" } else { "s" }
+        ))
+        .size(theme::font_sm())
+        .color(theme::text_muted()),
     ]
     .spacing(theme::SPACING_SM)
     .align_y(Center);
@@ -463,7 +481,11 @@ fn view_audit_card<'a>(
         text(format!(
             "{} error{}",
             validation.total_count(),
-            if validation.total_count() == 1 { "" } else { "s" }
+            if validation.total_count() == 1 {
+                ""
+            } else {
+                "s"
+            }
         ))
         .size(theme::font_sm())
         .color(theme::text_muted()),

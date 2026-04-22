@@ -5,7 +5,7 @@
 //! (up to `MAX_FILE_TABS`) hold files opened via the file finder (Ctrl+P),
 //! with oldest-first eviction.
 
-use iced::widget::{button, column, container, row, scrollable, svg, text, Space};
+use iced::widget::{Space, button, column, container, row, scrollable, svg, text};
 use iced::{Center, Element, Length};
 
 use crate::theme;
@@ -72,14 +72,12 @@ pub struct TabState {
     pub active: ActiveTab,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[derive(Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ActiveTab {
     #[default]
     Preview,
     File(usize),
 }
-
 
 impl TabState {
     // ── Total tab helpers ────────────────────────────────────────────────
@@ -125,11 +123,22 @@ impl TabState {
     }
 
     /// Open a diff in the preview tab.
-    pub fn open_diff(&mut self, id: String, title: String, editor: EditorState, path: std::path::PathBuf, status: FileStatus) {
+    pub fn open_diff(
+        &mut self,
+        id: String,
+        title: String,
+        editor: EditorState,
+        path: std::path::PathBuf,
+        status: FileStatus,
+    ) {
         self.preview = Some(Tab {
             id,
             title,
-            view: TabView::Diff { editor, path, status },
+            view: TabView::Diff {
+                editor,
+                path,
+                status,
+            },
         });
         self.active = ActiveTab::Preview;
     }
@@ -235,12 +244,13 @@ impl TabState {
             .chain(self.file_tabs.iter_mut())
             .find(|t| t.id == id);
         if let Some(tab) = tab
-            && let TabView::Editor { editor, .. } = &mut tab.view {
-                let mut next = EditorState::new(&new_source);
-                carry_view_state(editor, &mut next);
-                *editor = next;
-                crate::rehighlight(editor, id, highlighter);
-            }
+            && let TabView::Editor { editor, .. } = &mut tab.view
+        {
+            let mut next = EditorState::new(&new_source);
+            carry_view_state(editor, &mut next);
+            *editor = next;
+            crate::rehighlight(editor, id, highlighter);
+        }
     }
 
     /// Update a diff tab in place. Preserves scroll/cursor and refreshes
@@ -258,12 +268,17 @@ impl TabState {
             .chain(self.file_tabs.iter_mut())
             .find(|t| t.id == id);
         if let Some(tab) = tab
-            && let TabView::Diff { editor, path, status } = &mut tab.view {
-                carry_view_state(editor, &mut new_editor);
-                *editor = new_editor;
-                *path = new_path;
-                *status = new_status;
-            }
+            && let TabView::Diff {
+                editor,
+                path,
+                status,
+            } = &mut tab.view
+        {
+            carry_view_state(editor, &mut new_editor);
+            *editor = new_editor;
+            *path = new_path;
+            *status = new_status;
+        }
     }
 }
 
@@ -311,11 +326,9 @@ pub fn view_bar<'a, M: Clone + 'a>(
             theme::tab_inactive
         };
 
-        let mut tab_row = row![
-            text(&tab.title).size(theme::font_sm()),
-        ]
-        .spacing(theme::SPACING_XS)
-        .align_y(Center);
+        let mut tab_row = row![text(&tab.title).size(theme::font_sm()),]
+            .spacing(theme::SPACING_XS)
+            .align_y(Center);
 
         // File tabs get a close button; the preview tab doesn't.
         if !is_preview {
@@ -327,9 +340,19 @@ pub fn view_bar<'a, M: Clone + 'a>(
         // Asymmetric padding: tabs with a close × use less right padding so
         // the × hugs the tab's right edge.
         let pad = if is_preview {
-            iced::Padding { top: theme::SPACING_XS, right: theme::SPACING_MD, bottom: theme::SPACING_XS, left: theme::SPACING_MD }
+            iced::Padding {
+                top: theme::SPACING_XS,
+                right: theme::SPACING_MD,
+                bottom: theme::SPACING_XS,
+                left: theme::SPACING_MD,
+            }
         } else {
-            iced::Padding { top: theme::SPACING_XS, right: theme::SPACING_SM, bottom: theme::SPACING_XS, left: theme::SPACING_MD }
+            iced::Padding {
+                top: theme::SPACING_XS,
+                right: theme::SPACING_SM,
+                bottom: theme::SPACING_XS,
+                left: theme::SPACING_MD,
+            }
         };
         let tab_btn = button(tab_row)
             .on_press(on_select(*logical_idx))
@@ -354,7 +377,9 @@ pub fn view_bar<'a, M: Clone + 'a>(
         .style(theme::divider);
 
     column![
-        container(tabs_scroll).width(Length::Fill).style(theme::tab_bar),
+        container(tabs_scroll)
+            .width(Length::Fill)
+            .style(theme::tab_bar),
         bar_border,
     ]
     .into()
@@ -407,8 +432,7 @@ pub fn view_content(state: &TabState) -> Element<'_, TabContentMsg> {
             .width(Length::Fill);
             let header: Element<'_, TabContentMsg> = column![
                 path_row,
-                container(Space::new().width(Length::Fill).height(1.0))
-                    .style(theme::divider),
+                container(Space::new().width(Length::Fill).height(1.0)).style(theme::divider),
             ]
             .into();
 

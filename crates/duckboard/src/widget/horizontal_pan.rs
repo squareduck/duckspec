@@ -8,12 +8,10 @@
 //! Used to let long list rows (deeply nested file paths, capability ids)
 //! pan within the fixed-width list column without wrapping or truncating.
 
-use iced::advanced::widget::{tree, Tree, Widget};
-use iced::advanced::{layout, mouse as adv_mouse, renderer as adv_renderer};
+use iced::advanced::widget::{Tree, Widget, tree};
 use iced::advanced::{Clipboard, Layout, Shell};
-use iced::{
-    mouse, Element, Event, Length, Rectangle, Size, Theme, Vector,
-};
+use iced::advanced::{layout, mouse as adv_mouse, renderer as adv_renderer};
+use iced::{Element, Event, Length, Rectangle, Size, Theme, Vector, mouse};
 
 #[derive(Debug, Default)]
 struct InternalState {
@@ -75,11 +73,10 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for HorizontalPan<'a, M> {
             Size::new(f32::INFINITY, viewport_h),
             Size::new(true, false),
         );
-        let measure_node = self.content.as_widget_mut().layout(
-            &mut tree.children[0],
-            renderer,
-            &measure_limits,
-        );
+        let measure_node =
+            self.content
+                .as_widget_mut()
+                .layout(&mut tree.children[0], renderer, &measure_limits);
         let intrinsic_w = measure_node.size().width;
 
         // Pass 2 — re-lay out with a fixed width = max(intrinsic, viewport).
@@ -88,21 +85,15 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for HorizontalPan<'a, M> {
         // (and remain visible across the whole viewport even when the row
         // text is shorter than the viewport).
         let render_w = intrinsic_w.max(viewport_w);
-        let render_limits = layout::Limits::new(
-            Size::new(render_w, 0.0),
-            Size::new(render_w, viewport_h),
-        );
-        let content_node = self.content.as_widget_mut().layout(
-            &mut tree.children[0],
-            renderer,
-            &render_limits,
-        );
+        let render_limits =
+            layout::Limits::new(Size::new(render_w, 0.0), Size::new(render_w, viewport_h));
+        let content_node =
+            self.content
+                .as_widget_mut()
+                .layout(&mut tree.children[0], renderer, &render_limits);
         let content_h = content_node.size().height;
 
-        layout::Node::with_children(
-            Size::new(viewport_w, content_h),
-            vec![content_node],
-        )
+        layout::Node::with_children(Size::new(viewport_w, content_h), vec![content_node])
     }
 
     fn operate(

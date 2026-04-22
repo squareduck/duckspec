@@ -134,7 +134,11 @@ Do stuff.
 
 ## Hook - Post
 ";
-        let result = apply_hooks(template, Some("Pre content here."), Some("Post content here."));
+        let result = apply_hooks(
+            template,
+            Some("Pre content here."),
+            Some("Post content here."),
+        );
         assert_eq!(
             result,
             "\

@@ -91,7 +91,11 @@ fn print_project(duckspec_root: &Path, canonical_root: &Path) -> anyhow::Result<
     let kind = layout::classify(&relative).unwrap_or(ArtifactKind::Project);
 
     if let Some((title, summary)) = extract_title_summary(&source, &kind) {
-        eprintln!("  {} {}", "project.md".bold(), format!("— {title}").dimmed());
+        eprintln!(
+            "  {} {}",
+            "project.md".bold(),
+            format!("— {title}").dimmed()
+        );
         if !summary.is_empty() {
             print_summary(&summary, "    ");
         }
@@ -124,9 +128,7 @@ fn print_caps(duckspec_root: &Path, canonical_root: &Path) -> anyhow::Result<()>
 
 /// Recursively print capability tree.
 fn print_cap_tree(dir: &Path, canonical_root: &Path, depth: usize) -> anyhow::Result<()> {
-    let mut entries: Vec<_> = std::fs::read_dir(dir)?
-        .filter_map(|e| e.ok())
-        .collect();
+    let mut entries: Vec<_> = std::fs::read_dir(dir)?.filter_map(|e| e.ok()).collect();
     entries.sort_by_key(|e| e.file_name());
 
     // Collect info about this capability directory.
@@ -135,10 +137,7 @@ fn print_cap_tree(dir: &Path, canonical_root: &Path, depth: usize) -> anyhow::Re
     let indent = "  ".repeat(depth);
 
     // Find the capability name from the directory.
-    let cap_name = dir
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("");
+    let cap_name = dir.file_name().and_then(|n| n.to_str()).unwrap_or("");
 
     // Try to get title and summary from spec.
     let mut title = None;
@@ -154,12 +153,13 @@ fn print_cap_tree(dir: &Path, canonical_root: &Path, depth: usize) -> anyhow::Re
             .unwrap_or_default();
         let kind = layout::classify(&relative);
         if let Some(kind) = kind
-            && let Some((t, s)) = extract_title_summary(&source, &kind) {
-                title = Some(t);
-                if !s.is_empty() {
-                    summary = Some(s);
-                }
+            && let Some((t, s)) = extract_title_summary(&source, &kind)
+        {
+            title = Some(t);
+            if !s.is_empty() {
+                summary = Some(s);
             }
+        }
         if let Some((reqs, scenarios)) = extract_spec_stats(&source) {
             stats_str = format!("{reqs} req, {scenarios} scn");
         }
@@ -169,7 +169,11 @@ fn print_cap_tree(dir: &Path, canonical_root: &Path, depth: usize) -> anyhow::Re
 
     // Print capability line.
     let artifacts: Vec<&str> = [
-        if spec_path.is_file() { Some("spec") } else { None },
+        if spec_path.is_file() {
+            Some("spec")
+        } else {
+            None
+        },
         if has_doc { Some("doc") } else { None },
     ]
     .into_iter()
@@ -247,9 +251,7 @@ fn print_codex(duckspec_root: &Path, canonical_root: &Path) -> anyhow::Result<()
         };
 
         let source = std::fs::read_to_string(file_path)?;
-        let display_path = relative
-            .strip_prefix("codex")
-            .unwrap_or(relative);
+        let display_path = relative.strip_prefix("codex").unwrap_or(relative);
 
         if let Some((title, summary)) = extract_title_summary(&source, &kind) {
             eprintln!(

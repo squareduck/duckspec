@@ -1,8 +1,6 @@
 //! Settings area — font configuration UI.
 
-use iced::widget::{
-    button, column, container, pick_list, row, scrollable, slider, text, Space,
-};
+use iced::widget::{Space, button, column, container, pick_list, row, scrollable, slider, text};
 use iced::{Center, Element, Length};
 
 use crate::config::{self, Config};
@@ -10,17 +8,9 @@ use crate::theme;
 
 // ── State ────────────────────────────────────────────────────────────────────
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct State {
     pub system_fonts: Vec<String>,
-}
-
-impl Default for State {
-    fn default() -> Self {
-        Self {
-            system_fonts: Vec::new(),
-        }
-    }
 }
 
 // ── Messages ─────────────────────────────────────────────────────────────────
@@ -113,12 +103,9 @@ pub fn view<'a>(state: &'a State, config: &'a Config) -> Element<'a, Message> {
     .max_width(480);
 
     container(
-        scrollable(
-            container(body)
-                .padding([theme::SPACING_XL, theme::SPACING_XL]),
-        )
-        .direction(theme::thin_scrollbar_direction())
-        .style(theme::thin_scrollbar),
+        scrollable(container(body).padding([theme::SPACING_XL, theme::SPACING_XL]))
+            .direction(theme::thin_scrollbar_direction())
+            .style(theme::thin_scrollbar),
     )
     .width(Length::Fill)
     .height(Length::Fill)
@@ -148,13 +135,9 @@ fn font_section<'a>(
         Some(current_family.to_string())
     };
 
-    let font_picker = pick_list(
-        system_fonts.to_vec(),
-        selected,
-        on_font,
-    )
-    .placeholder("System default")
-    .width(280);
+    let font_picker = pick_list(system_fonts.to_vec(), selected, on_font)
+        .placeholder("System default")
+        .width(280);
 
     let size_label = text(format!("{:.0}px", current_size))
         .size(theme::font_sm())
@@ -162,10 +145,14 @@ fn font_section<'a>(
         .width(40)
         .align_x(Center);
 
-    let size_slider = slider(8.0..=32.0, current_size, on_size).step(1.0).width(200);
+    let size_slider = slider(8.0..=32.0, current_size, on_size)
+        .step(1.0)
+        .width(200);
 
     let size_row = row![
-        text("Size").size(theme::font_sm()).color(theme::text_secondary()),
+        text("Size")
+            .size(theme::font_sm())
+            .color(theme::text_secondary()),
         size_slider,
         size_label,
     ]

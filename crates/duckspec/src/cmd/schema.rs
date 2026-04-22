@@ -8,8 +8,8 @@ const SCHEMA_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/content/schemas")
 
 pub fn run(name: String) -> anyhow::Result<()> {
     let schema_path = format!("{SCHEMA_DIR}/{name}.md");
-    let content = fs::read_to_string(&schema_path)
-        .map_err(|_| anyhow::anyhow!("unknown schema: {name}"))?;
+    let content =
+        fs::read_to_string(&schema_path).map_err(|_| anyhow::anyhow!("unknown schema: {name}"))?;
 
     let line_width = find_duckspec_root()
         .ok()
@@ -55,8 +55,7 @@ mod tests {
 
     #[test]
     fn injects_before_example() {
-        let input =
-            "# Schema\n\nIntro.\n\n## Rules\n\nRule text.\n\n## Example\n\nExample text.\n";
+        let input = "# Schema\n\nIntro.\n\n## Rules\n\nRule text.\n\n## Example\n\nExample text.\n";
         let out = inject_formatting(input, 80);
         let rules = out.find("## Rules").unwrap();
         let fmt = out.find("## Formatting").unwrap();

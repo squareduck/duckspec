@@ -16,12 +16,10 @@
 //! refreshes and structural rebuilds (where iced's per-tree widget state
 //! would otherwise be discarded).
 
-use iced::advanced::widget::{tree, Tree, Widget};
-use iced::advanced::{layout, mouse as adv_mouse, renderer as adv_renderer};
+use iced::advanced::widget::{Tree, Widget, tree};
 use iced::advanced::{Clipboard, Layout, Shell};
-use iced::{
-    mouse, Border, Element, Event, Length, Rectangle, Size, Theme, Vector,
-};
+use iced::advanced::{layout, mouse as adv_mouse, renderer as adv_renderer};
+use iced::{Border, Element, Event, Length, Rectangle, Size, Theme, Vector, mouse};
 
 use crate::theme;
 
@@ -98,16 +96,12 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for VerticalScroll<'a, M> {
             Size::new(viewport_w, f32::INFINITY),
             Size::new(false, true),
         );
-        let content_node = self.content.as_widget_mut().layout(
-            &mut tree.children[0],
-            renderer,
-            &content_limits,
-        );
+        let content_node =
+            self.content
+                .as_widget_mut()
+                .layout(&mut tree.children[0], renderer, &content_limits);
 
-        layout::Node::with_children(
-            Size::new(viewport_w, viewport_h),
-            vec![content_node],
-        )
+        layout::Node::with_children(Size::new(viewport_w, viewport_h), vec![content_node])
     }
 
     fn operate(
@@ -257,8 +251,7 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for VerticalScroll<'a, M> {
         if content_bounds.height > bounds.height && bounds.height > 0.0 {
             let track_h = bounds.height;
             let ratio = (track_h / content_bounds.height).clamp(0.0, 1.0);
-            let scroller_h =
-                (track_h * ratio).max(SCROLLBAR_MIN_SCROLLER).min(track_h);
+            let scroller_h = (track_h * ratio).max(SCROLLBAR_MIN_SCROLLER).min(track_h);
             let max_scroll_y = content_bounds.height - track_h;
             let t = if max_scroll_y > 0.0 {
                 (effective / max_scroll_y).clamp(0.0, 1.0)

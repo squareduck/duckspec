@@ -72,10 +72,7 @@ impl Config {
             None => FormatConfig::default(),
         };
 
-        Ok(Self {
-            test_paths,
-            format,
-        })
+        Ok(Self { test_paths, format })
     }
 }
 
@@ -144,11 +141,7 @@ mod tests {
     #[test]
     fn zero_line_width_is_rejected() {
         let dir = tempfile::tempdir().unwrap();
-        fs::write(
-            dir.path().join("config.toml"),
-            "[format]\nline_width = 0\n",
-        )
-        .unwrap();
+        fs::write(dir.path().join("config.toml"), "[format]\nline_width = 0\n").unwrap();
         let err = Config::load(dir.path()).unwrap_err();
         assert!(matches!(err, ConfigError::BadLineWidth));
     }
