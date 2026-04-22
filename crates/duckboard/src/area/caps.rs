@@ -98,6 +98,12 @@ pub fn update(
         Message::TabContent(tab_bar::TabContentMsg::OpenInNewTab(_)) => {
             // Diff tabs only surface in the change area; ignore elsewhere.
         }
+        Message::TabContent(tab_bar::TabContentMsg::SearchSliceAction(idx, action)) => {
+            crate::handle_search_slice_action(&mut state.tabs, idx, action);
+        }
+        Message::TabContent(tab_bar::TabContentMsg::OpenSearchSlice(idx)) => {
+            crate::handle_open_search_slice(&mut state.tabs, idx, highlighter);
+        }
         Message::ScrollList(offset) => {
             state.list_scroll = offset;
         }

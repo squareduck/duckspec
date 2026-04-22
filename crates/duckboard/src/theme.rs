@@ -84,6 +84,7 @@ mod macchiato {
     pub const DIFF_ADDED_BG: Color = hex(0x1e, 0x30, 0x24);
     pub const DIFF_REMOVED_BG: Color = hex(0x30, 0x1e, 0x22);
     pub const DIFF_HUNK_BG: Color = hex(0x1e, 0x24, 0x30);
+    pub const SEARCH_MATCH_BG: Color = hex(0x44, 0x3b, 0x1e);
 }
 
 // ── Catppuccin Latte (light) ───────────────────────────────────────────────
@@ -112,6 +113,7 @@ mod latte {
     pub const DIFF_ADDED_BG: Color = hex(0xd9, 0xf0, 0xd9);
     pub const DIFF_REMOVED_BG: Color = hex(0xf0, 0xd9, 0xdb);
     pub const DIFF_HUNK_BG: Color = hex(0xd9, 0xe2, 0xf0);
+    pub const SEARCH_MATCH_BG: Color = hex(0xf7, 0xec, 0xb8);
 }
 
 // ── Public colour accessors ────────────────────────────────────────────────
@@ -242,6 +244,9 @@ pub fn diff_removed_bg() -> Color {
 }
 pub fn diff_hunk_bg() -> Color {
     pick(macchiato::DIFF_HUNK_BG, latte::DIFF_HUNK_BG)
+}
+pub fn search_match_bg() -> Color {
+    pick(macchiato::SEARCH_MATCH_BG, latte::SEARCH_MATCH_BG)
 }
 
 pub fn success() -> Color {

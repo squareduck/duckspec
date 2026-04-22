@@ -12,5 +12,6 @@ pub mod streaming_indicator;
 pub mod tab_bar;
 pub mod terminal;
 pub mod text_edit;
+pub mod text_search;
 pub mod tree_view;
 pub mod vertical_scroll;

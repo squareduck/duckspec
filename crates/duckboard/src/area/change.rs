@@ -399,6 +399,12 @@ pub fn update(
                 }
             }
         }
+        Message::TabContent(tab_bar::TabContentMsg::SearchSliceAction(idx, action)) => {
+            crate::handle_search_slice_action(&mut state.tabs, idx, action);
+        }
+        Message::TabContent(tab_bar::TabContentMsg::OpenSearchSlice(idx)) => {
+            crate::handle_open_search_slice(&mut state.tabs, idx, highlighter);
+        }
         Message::AddExploration => {
             state.exploration_counter += 1;
             let name = format!("Exploration {}", state.exploration_counter);

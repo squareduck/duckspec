@@ -38,6 +38,7 @@ struct State {
     codex: area::codex::State,
     settings: area::settings::State,
     file_finder: widget::file_finder::FileFinderState,
+    text_search: widget::text_search::TextSearchState,
     highlighter: highlight::SyntaxHighlighter,
 }
 
@@ -76,6 +77,7 @@ impl State {
             codex: area::codex::State::default(),
             settings: area::settings::State::default(),
             file_finder: widget::file_finder::FileFinderState::default(),
+            text_search: widget::text_search::TextSearchState::default(),
             highlighter: highlight::SyntaxHighlighter::new(),
         }
     }
@@ -153,6 +155,8 @@ enum Message {
     Codex(area::codex::Message),
     // File finder
     FileFinder(widget::file_finder::Msg),
+    // Project-wide text search
+    TextSearch(widget::text_search::Msg),
     // File watcher
     FileChanged(Vec<watcher::FileEvent>),
     // Keyboard
@@ -249,6 +253,78 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                         }
                         state.file_finder.close();
                     }
+                }
+            }
+        }
+        Message::TextSearch(msg) => {
+            use widget::text_search::Msg;
+            match msg {
+                Msg::Open => {
+                    state.text_search.open();
+                    for ix in state.change.interactions.values_mut() {
+                        ix.terminal_focused = false;
+                    }
+                    state.caps.interaction.terminal_focused = false;
+                    state.codex.interaction.terminal_focused = false;
+                    return iced::widget::operation::focus(
+                        widget::text_search::SEARCH_INPUT_ID,
+                    );
+                }
+                Msg::Close => {
+                    state.text_search.close();
+                }
+                Msg::QueryChanged(q) => {
+                    state.text_search.query = q.clone();
+                    state.text_search.selected = 0;
+                    if q.is_empty() {
+                        // Bump the id so any in-flight search's ResultsReady
+                        // is discarded instead of repopulating the list.
+                        state.text_search.latest_query_id += 1;
+                        state.text_search.results.clear();
+                        state.text_search.searching = false;
+                        return Task::none();
+                    }
+                    return spawn_text_search(state, q);
+                }
+                Msg::ScopeSelected(scope) => {
+                    state.text_search.scope = scope;
+                    let q = state.text_search.query.clone();
+                    let refocus = iced::widget::operation::focus(
+                        widget::text_search::SEARCH_INPUT_ID,
+                    );
+                    if !q.is_empty() {
+                        return Task::batch([spawn_text_search(state, q), refocus]);
+                    }
+                    return refocus;
+                }
+                Msg::SelectNext => {
+                    state.text_search.select_next();
+                }
+                Msg::SelectPrev => {
+                    state.text_search.select_prev();
+                }
+                Msg::ConfirmTop => {
+                    if let Some(hit) = state.text_search.selected_hit().cloned() {
+                        let all = state.text_search.results.clone();
+                        open_search_hit_as_file(state, &hit, &all);
+                    }
+                    state.text_search.close();
+                }
+                Msg::ConfirmStack => {
+                    let query = state.text_search.query.clone();
+                    let hits: Vec<_> = state.text_search.results.clone();
+                    if !hits.is_empty() {
+                        open_search_stack_tab(state, &query, hits);
+                    }
+                    state.text_search.close();
+                }
+                Msg::ResultsReady(query_id, results) => {
+                    if query_id == state.text_search.latest_query_id {
+                        state.text_search.results = results;
+                        state.text_search.searching = false;
+                        state.text_search.selected = 0;
+                    }
+                    // Stale results: discard silently.
                 }
             }
         }
@@ -572,6 +648,61 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                 return update(state, Message::FileFinder(widget::file_finder::Msg::Open));
             }
 
+            // Cmd+Shift+F: open project-wide text search.
+            if mods.command()
+                && mods.shift()
+                && matches!(&key, keyboard::Key::Character(c) if c.eq_ignore_ascii_case("f"))
+            {
+                return update(state, Message::TextSearch(widget::text_search::Msg::Open));
+            }
+
+            // When text search is visible, route navigation keys.
+            if state.text_search.visible {
+                use keyboard::key::Named;
+                match &key {
+                    keyboard::Key::Named(Named::Escape) => {
+                        let _ = update(
+                            state,
+                            Message::TextSearch(widget::text_search::Msg::Close),
+                        );
+                    }
+                    keyboard::Key::Named(Named::Enter) => {
+                        let msg = if mods.shift() {
+                            widget::text_search::Msg::ConfirmStack
+                        } else {
+                            widget::text_search::Msg::ConfirmTop
+                        };
+                        let _ = update(state, Message::TextSearch(msg));
+                    }
+                    keyboard::Key::Named(Named::ArrowDown) => {
+                        let _ = update(
+                            state,
+                            Message::TextSearch(widget::text_search::Msg::SelectNext),
+                        );
+                    }
+                    keyboard::Key::Named(Named::ArrowUp) => {
+                        let _ = update(
+                            state,
+                            Message::TextSearch(widget::text_search::Msg::SelectPrev),
+                        );
+                    }
+                    _ if mods.control() && key == keyboard::Key::Character("n".into()) => {
+                        let _ = update(
+                            state,
+                            Message::TextSearch(widget::text_search::Msg::SelectNext),
+                        );
+                    }
+                    _ if mods.control() && key == keyboard::Key::Character("p".into()) => {
+                        let _ = update(
+                            state,
+                            Message::TextSearch(widget::text_search::Msg::SelectPrev),
+                        );
+                    }
+                    _ => {}
+                }
+                return Task::none();
+            }
+
             // When file finder is visible, route navigation keys.
             if state.file_finder.visible {
                 use keyboard::key::Named;
@@ -793,6 +924,12 @@ fn rehighlight_all(state: &mut State) {
                 tab_bar::TabView::Editor { editor, .. } | tab_bar::TabView::Diff { editor, .. } => {
                     rehighlight(editor, &tab.id, &state.highlighter);
                 }
+                tab_bar::TabView::SearchStack { slices, .. } => {
+                    for slice in slices.iter_mut() {
+                        let id = format!("file:{}", slice.rel_path);
+                        rehighlight(&mut slice.editor, &id, &state.highlighter);
+                    }
+                }
             }
         }
     }
@@ -970,6 +1107,7 @@ pub fn handle_editor_action(
     let (editor, tab_id) = match &mut tab.view {
         tab_bar::TabView::Editor { editor, .. } => (editor, tab.id.as_str()),
         tab_bar::TabView::Diff { editor, .. } => (editor, tab.id.as_str()),
+        tab_bar::TabView::SearchStack { .. } => return,
     };
 
     if editor.apply_action(action) {
@@ -1095,6 +1233,240 @@ fn rebuild_diff_tab(
     }
 }
 
+// ── Text search helpers ─────────────────────────────────────────────────────
+
+/// Bump the query id and spawn a background search, returning a Task whose
+/// completion dispatches `ResultsReady` with that id. Stale results are
+/// discarded by the handler based on the id.
+fn spawn_text_search(state: &mut State, query: String) -> Task<Message> {
+    let Some(root) = state.project.project_root.clone() else {
+        return Task::none();
+    };
+    state.text_search.latest_query_id += 1;
+    let id = state.text_search.latest_query_id;
+    state.text_search.searching = true;
+    let scope = state.text_search.scope;
+    Task::perform(
+        async move {
+            tokio::task::spawn_blocking(move || {
+                widget::text_search::search_blocking(root, query, scope)
+            })
+            .await
+            .unwrap_or_default()
+        },
+        move |results| Message::TextSearch(widget::text_search::Msg::ResultsReady(id, results)),
+    )
+}
+
+/// Choose which tab stack receives a newly-opened file tab based on the
+/// current area. Inlined at each call site so borrow-splitting lets callers
+/// keep a parallel `&state.highlighter`.
+fn ensure_active_area(active_area: &mut Area) {
+    if matches!(*active_area, Area::Dashboard | Area::Settings) {
+        *active_area = Area::Change;
+    }
+}
+
+fn tabs_for_area<'a>(
+    area: Area,
+    change: &'a mut area::change::State,
+    caps: &'a mut area::caps::State,
+    codex: &'a mut area::codex::State,
+) -> &'a mut tab_bar::TabState {
+    match area {
+        Area::Change => &mut change.tabs,
+        Area::Caps => &mut caps.tabs,
+        Area::Codex => &mut codex.tabs,
+        Area::Dashboard | Area::Settings => &mut change.tabs,
+    }
+}
+
+/// Tag a set of line indices with `LineBgKind::Match` so they stand out
+/// against the syntax-highlighted body. Used when opening a file from any
+/// search flow (search overlay top-match, search-stack slice header) and,
+/// later, by the planned per-file search feature — the mechanism is agnostic
+/// to which search populated the list.
+pub fn set_match_line_highlights(editor: &mut widget::text_edit::EditorState, lines: &[usize]) {
+    if editor.line_backgrounds.len() != editor.lines.len() {
+        editor.line_backgrounds = vec![None; editor.lines.len()];
+    }
+    for &line in lines {
+        if let Some(slot) = editor.line_backgrounds.get_mut(line) {
+            *slot = Some(widget::text_edit::LineBgKind::Match);
+        }
+    }
+}
+
+/// Open a single search hit as a regular file tab, scrolled so the match line
+/// sits near the center of the editor viewport. Highlights every hit in
+/// `all_hits` whose path matches this file so the user sees the full picture
+/// rather than just the one they confirmed.
+fn open_search_hit_as_file(
+    state: &mut State,
+    hit: &widget::text_search::SearchHit,
+    all_hits: &[widget::text_search::SearchHit],
+) {
+    let Ok(content) = std::fs::read_to_string(&hit.abs_path) else {
+        return;
+    };
+    let id = format!("file:{}", hit.rel_path);
+    let title = std::path::Path::new(&hit.rel_path)
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| hit.rel_path.clone());
+    let line = hit.line;
+    let match_lines: Vec<usize> = all_hits
+        .iter()
+        .filter(|h| h.rel_path == hit.rel_path)
+        .map(|h| h.line)
+        .collect();
+    ensure_active_area(&mut state.active_area);
+    let State {
+        active_area,
+        change,
+        caps,
+        codex,
+        highlighter,
+        ..
+    } = state;
+    let tabs = tabs_for_area(*active_area, change, caps, codex);
+    tabs.open_file(id.clone(), title, content, Some(hit.abs_path.clone()));
+    if let Some(tab) = tabs.file_tabs.iter_mut().find(|t| t.id == id)
+        && let tab_bar::TabView::Editor { editor, .. } = &mut tab.view
+    {
+        rehighlight(editor, &id, highlighter);
+        set_match_line_highlights(editor, &match_lines);
+        // Approximate viewport = 600px. LINE_HEIGHT is 20px in text_edit.
+        let target_y = line as f32 * 20.0 - 300.0;
+        editor.scroll_y = target_y.max(0.0);
+        editor.cursor = widget::text_edit::Pos::new(line, 0);
+    }
+}
+
+/// Open every hit as a "search stack" tab — one read-only slice per match.
+/// Always creates a fresh tab so repeated searches can be compared. Capped
+/// at `text_search::MAX_STACK_SLICES` because each slice holds a full file
+/// buffer, and an unbounded stack would be both slow and unreadable.
+fn open_search_stack_tab(state: &mut State, query: &str, hits: Vec<widget::text_search::SearchHit>) {
+    let total = hits.len();
+    let hits: Vec<_> = hits
+        .into_iter()
+        .take(widget::text_search::MAX_STACK_SLICES)
+        .collect();
+    let mut slices: Vec<tab_bar::SearchSlice> = Vec::with_capacity(hits.len());
+    for hit in hits {
+        let Ok(content) = std::fs::read_to_string(&hit.abs_path) else {
+            continue;
+        };
+        let mut editor = widget::text_edit::EditorState::new(&content);
+        // Mark the match line so it stands out against syntax-highlighted body.
+        editor.line_backgrounds = vec![None; editor.lines.len()];
+        if let Some(slot) = editor.line_backgrounds.get_mut(hit.line) {
+            *slot = Some(widget::text_edit::LineBgKind::Match);
+        }
+        // Syntax highlight based on file extension.
+        rehighlight(
+            &mut editor,
+            &format!("file:{}", hit.rel_path),
+            &state.highlighter,
+        );
+        // Center the match line within the slice's viewport
+        // (per_slice_h = 10 lines * 20px = 200px).
+        let slice_height = 10.0 * 20.0;
+        let target_y = hit.line as f32 * 20.0 + 4.0 - (slice_height / 2.0) + 10.0;
+        editor.scroll_y = target_y.max(0.0);
+        editor.cursor = widget::text_edit::Pos::new(hit.line, 0);
+        slices.push(tab_bar::SearchSlice {
+            rel_path: hit.rel_path,
+            abs_path: hit.abs_path,
+            line: hit.line,
+            editor,
+        });
+    }
+    if slices.is_empty() {
+        return;
+    }
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    let id = format!("search:{now}");
+    let title = if total > slices.len() {
+        format!("search: {query} ({}/{total})", slices.len())
+    } else {
+        format!("search: {query}")
+    };
+    ensure_active_area(&mut state.active_area);
+    let State {
+        active_area,
+        change,
+        caps,
+        codex,
+        ..
+    } = state;
+    let tabs = tabs_for_area(*active_area, change, caps, codex);
+    tabs.open_search_stack(id, title, query.to_string(), slices);
+}
+
+/// Apply an editor action targeted at one slice of the active SearchStack tab.
+pub fn handle_search_slice_action(
+    tabs: &mut tab_bar::TabState,
+    idx: usize,
+    action: widget::text_edit::EditorAction,
+) {
+    if let Some(tab) = tabs.active_tab_mut()
+        && let tab_bar::TabView::SearchStack { slices, .. } = &mut tab.view
+        && let Some(slice) = slices.get_mut(idx)
+    {
+        let _ = slice.editor.apply_action(action);
+    }
+}
+
+/// Open the slice at `idx` of the active SearchStack as a new editable file
+/// tab. Scrolls to the clicked match and highlights every other match from
+/// the same file in the stack, so the full tab mirrors the stack view.
+pub fn handle_open_search_slice(
+    tabs: &mut tab_bar::TabState,
+    idx: usize,
+    highlighter: &highlight::SyntaxHighlighter,
+) {
+    let Some(tab) = tabs.active_tab() else {
+        return;
+    };
+    let tab_bar::TabView::SearchStack { slices, .. } = &tab.view else {
+        return;
+    };
+    let Some(slice) = slices.get(idx) else {
+        return;
+    };
+    let rel = slice.rel_path.clone();
+    let abs = slice.abs_path.clone();
+    let line = slice.line;
+    let match_lines: Vec<usize> = slices
+        .iter()
+        .filter(|s| s.rel_path == rel)
+        .map(|s| s.line)
+        .collect();
+    let Ok(content) = std::fs::read_to_string(&abs) else {
+        return;
+    };
+    let id = format!("file:{rel}");
+    let title = std::path::Path::new(&rel)
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| rel.clone());
+    tabs.open_file(id.clone(), title, content, Some(abs));
+    if let Some(tab) = tabs.file_tabs.iter_mut().find(|t| t.id == id)
+        && let tab_bar::TabView::Editor { editor, .. } = &mut tab.view
+    {
+        rehighlight(editor, &id, highlighter);
+        set_match_line_highlights(editor, &match_lines);
+        let target_y = line as f32 * 20.0 - 300.0;
+        editor.scroll_y = target_y.max(0.0);
+        editor.cursor = widget::text_edit::Pos::new(line, 0);
+    }
+}
+
 // ── Artifact tab helper ─────────────────────────────────────────────────────
 
 /// Open a file as a text editor tab. Called from area update functions.
@@ -1188,6 +1560,9 @@ fn view(state: &State) -> Element<'_, Message> {
 
     if state.file_finder.visible {
         let overlay = widget::file_finder::view(&state.file_finder).map(Message::FileFinder);
+        stack![main_view, overlay].into()
+    } else if state.text_search.visible {
+        let overlay = widget::text_search::view(&state.text_search).map(Message::TextSearch);
         stack![main_view, overlay].into()
     } else {
         main_view.into()

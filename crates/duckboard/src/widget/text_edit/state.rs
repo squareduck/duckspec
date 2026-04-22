@@ -56,6 +56,7 @@ pub enum LineBgKind {
     Hunk,
     Added,
     Removed,
+    Match,
 }
 
 pub(crate) fn line_bg_color(kind: LineBgKind) -> Color {
@@ -63,6 +64,7 @@ pub(crate) fn line_bg_color(kind: LineBgKind) -> Color {
         LineBgKind::Hunk => theme::diff_hunk_bg(),
         LineBgKind::Added => theme::diff_added_bg(),
         LineBgKind::Removed => theme::diff_removed_bg(),
+        LineBgKind::Match => theme::search_match_bg(),
     }
 }
 

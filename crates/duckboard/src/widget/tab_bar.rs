@@ -48,6 +48,24 @@ pub enum TabView {
         path: std::path::PathBuf,
         status: FileStatus,
     },
+    /// Project-wide search results rendered as a vertical stack of read-only
+    /// slice editors, one per match. Each slice is pre-scrolled to its match
+    /// line and highlighted with `LineBgKind::Match`.
+    SearchStack {
+        query: String,
+        slices: Vec<SearchSlice>,
+    },
+}
+
+/// One slice in a `SearchStack` tab — a read-only editor loaded with the
+/// matching file, pre-scrolled so `line` is centered in the visible area.
+#[derive(Debug, Clone)]
+pub struct SearchSlice {
+    pub rel_path: String,
+    pub abs_path: std::path::PathBuf,
+    /// 0-based line number of the match in the original file.
+    pub line: usize,
+    pub editor: EditorState,
 }
 
 // ── Messages emitted by tab content ─────────────────────────────────────────
@@ -58,6 +76,12 @@ pub enum TabContentMsg {
     /// Open the file currently shown in a diff tab as a new editable file tab.
     /// The path is repo-relative (as stored in `TabView::Diff`).
     OpenInNewTab(std::path::PathBuf),
+    /// Editor action targeted at a specific slice of the active `SearchStack`
+    /// tab. Routed to `slices[idx].editor` by the area update handler.
+    SearchSliceAction(usize, EditorAction),
+    /// Open the slice at `idx` in the active `SearchStack` tab as its own
+    /// file tab, scrolled to the matching line.
+    OpenSearchSlice(usize),
 }
 
 // ── State ────────────────────────────────────────────────────────────────────
@@ -156,6 +180,28 @@ impl TabState {
             },
         });
         self.active = ActiveTab::Preview;
+    }
+
+    /// Open a read-only "search stack" tab showing one slice per match.
+    /// Always appends a fresh tab (does not reuse by id) so repeated searches
+    /// produce distinct tabs the user can compare.
+    pub fn open_search_stack(&mut self, id: String, title: String, query: String, slices: Vec<SearchSlice>) {
+        if self.file_tabs.len() >= MAX_FILE_TABS {
+            self.file_tabs.remove(0);
+            if let ActiveTab::File(fi) = self.active {
+                if fi > 0 {
+                    self.active = ActiveTab::File(fi - 1);
+                } else {
+                    self.active = ActiveTab::Preview;
+                }
+            }
+        }
+        self.file_tabs.push(Tab {
+            id,
+            title,
+            view: TabView::SearchStack { query, slices },
+        });
+        self.active = ActiveTab::File(self.file_tabs.len() - 1);
     }
 
     /// Open a file tab (from file finder). Reuses existing tab with same id,
@@ -274,6 +320,11 @@ impl TabState {
             *editor = next;
             crate::rehighlight(editor, id, highlighter);
         }
+    }
+
+    /// True if the active tab is a SearchStack tab.
+    pub fn active_is_search_stack(&self) -> bool {
+        matches!(self.active_tab().map(|t| &t.view), Some(TabView::SearchStack { .. }))
     }
 
     /// Update a diff tab in place. Preserves scroll/cursor and refreshes
@@ -429,6 +480,9 @@ fn tab_separator<'a, M: 'a>() -> Element<'a, M> {
 
 pub fn view_content(state: &TabState) -> Element<'_, TabContentMsg> {
     match state.active_tab() {
+        Some(tab) if matches!(&tab.view, TabView::SearchStack { .. }) => {
+            view_search_stack(tab)
+        }
         Some(tab) => {
             // Both diff and non-diff path bars render the same shape: an SVG
             // file-type icon followed by the path. Diff tabs differ only by
@@ -488,11 +542,15 @@ pub fn view_content(state: &TabState) -> Element<'_, TabContentMsg> {
                         .show_gutter(false)
                         .into()
                 }
+                TabView::SearchStack { .. } => {
+                    // Handled in the outer arm; unreachable here.
+                    Space::new().into()
+                }
             };
 
             column![header, body].height(Length::Fill).into()
         }
-        None => container(
+        _ => container(
             text("Select an item to view its contents")
                 .size(theme::font_md())
                 .color(theme::text_muted()),
@@ -504,3 +562,101 @@ pub fn view_content(state: &TabState) -> Element<'_, TabContentMsg> {
         .into(),
     }
 }
+
+/// Fixed per-slice height for the search stack: 10 lines (per the spec's
+/// minimum) plus the small path header/divider chrome. Multiple slices stack
+/// vertically inside a scrollable.
+const SEARCH_SLICE_LINES: f32 = 10.0;
+const SEARCH_SLICE_CHROME: f32 = 28.0; // path header + 1px divider + padding
+
+fn view_search_stack(tab: &Tab) -> Element<'_, TabContentMsg> {
+    let TabView::SearchStack { query, slices } = &tab.view else {
+        return Space::new().into();
+    };
+
+    // Header strip: mirrors the shape of the Editor/Diff path bar so the
+    // content region doesn't jump when switching tab kinds.
+    let hdr_leading: Element<'_, TabContentMsg> =
+        svg(svg::Handle::from_memory(ICON_FILE))
+            .width(theme::font_sm())
+            .height(theme::font_sm())
+            .style(theme::svg_tint(theme::accent()))
+            .into();
+    let hdr_title = format!("search: \"{query}\" — {} matches", slices.len());
+    let path_row = container(
+        row![
+            hdr_leading,
+            text(hdr_title)
+                .size(theme::font_sm())
+                .color(theme::text_secondary()),
+        ]
+        .spacing(theme::SPACING_XS)
+        .align_y(Center)
+        .width(Length::Fill),
+    )
+    .padding([theme::SPACING_XS, theme::SPACING_SM])
+    .width(Length::Fill);
+    let header: Element<'_, TabContentMsg> = column![
+        path_row,
+        container(Space::new().width(Length::Fill).height(1.0)).style(theme::divider),
+    ]
+    .into();
+
+    // Slice viewport height: 10 text lines + chrome. Multiplied by the
+    // LINE_HEIGHT constant the text_edit widget assumes (20px).
+    let per_slice_h = SEARCH_SLICE_LINES * 20.0 + SEARCH_SLICE_CHROME;
+
+    let mut stack_col = column![].spacing(0.0);
+    for (idx, slice) in slices.iter().enumerate() {
+        let slice_el = view_search_slice(idx, slice, per_slice_h);
+        stack_col = stack_col.push(slice_el);
+    }
+
+    let body = scrollable(stack_col)
+        .direction(theme::thin_scrollbar_direction())
+        .style(theme::thin_scrollbar)
+        .height(Length::Fill);
+
+    column![header, body].height(Length::Fill).into()
+}
+
+fn view_search_slice(idx: usize, slice: &SearchSlice, per_slice_h: f32) -> Element<'_, TabContentMsg> {
+    let path_label = format!("{}:{}", slice.rel_path, slice.line + 1);
+    let slice_header = button(
+        row![
+            svg(svg::Handle::from_memory(ICON_FILE))
+                .width(theme::font_sm())
+                .height(theme::font_sm())
+                .style(theme::svg_tint(theme::text_muted())),
+            text(path_label)
+                .size(theme::font_sm())
+                .color(theme::text_secondary()),
+        ]
+        .spacing(theme::SPACING_XS)
+        .align_y(Center)
+        .width(Length::Fill),
+    )
+    .on_press(TabContentMsg::OpenSearchSlice(idx))
+    .padding([theme::SPACING_XS, theme::SPACING_SM])
+    .width(Length::Fill)
+    .style(theme::section_header);
+
+    let editor_widget =
+        text_edit::TextEdit::new(&slice.editor, move |a| TabContentMsg::SearchSliceAction(idx, a))
+            .read_only(true)
+            .show_gutter(true)
+            .static_viewport(true);
+
+    container(
+        column![
+            slice_header,
+            container(Space::new().width(Length::Fill).height(1.0)).style(theme::divider),
+            container(editor_widget).height(Length::Fill),
+        ]
+        .spacing(0.0),
+    )
+    .height(Length::Fixed(per_slice_h))
+    .width(Length::Fill)
+    .into()
+}
+

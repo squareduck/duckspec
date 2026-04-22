@@ -177,6 +177,10 @@ pub struct TextEdit<'a, M> {
     on_submit: Option<M>,
     transparent_bg: bool,
     id: Option<Id>,
+    /// When true the editor shows a fixed window into its content: no
+    /// scrollbars are drawn and wheel events are ignored so the parent
+    /// scrollable handles them. Used by the search-stack slices.
+    static_viewport: bool,
 }
 
 impl<'a, M> TextEdit<'a, M> {
@@ -192,6 +196,7 @@ impl<'a, M> TextEdit<'a, M> {
             on_submit: None,
             transparent_bg: false,
             id: None,
+            static_viewport: false,
         }
     }
 
@@ -238,6 +243,14 @@ impl<'a, M> TextEdit<'a, M> {
     /// Skip painting the editor background — the parent container provides it.
     pub fn transparent_bg(mut self, transparent: bool) -> Self {
         self.transparent_bg = transparent;
+        self
+    }
+
+    /// Render a fixed, non-scrollable view into the content: no scrollbars,
+    /// and wheel events pass through to the parent scrollable. The caller is
+    /// expected to pre-set `EditorState::scroll_y` to the desired window.
+    pub fn static_viewport(mut self, v: bool) -> Self {
+        self.static_viewport = v;
         self
     }
 }
@@ -425,7 +438,9 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for TextEdit<'a, M> {
                 internal.dragging = false;
             }
             Event::Mouse(mouse::Event::WheelScrolled { delta }) => {
-                if cursor.is_over(bounds) {
+                // Skip when static_viewport is set so the parent scrollable
+                // receives the event instead.
+                if !self.static_viewport && cursor.is_over(bounds) {
                     let (dy, dx) = match delta {
                         mouse::ScrollDelta::Lines { x, y } => {
                             (-*y * LINE_HEIGHT * 3.0, -*x * cell_w * 3.0)
@@ -1050,7 +1065,8 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for TextEdit<'a, M> {
             // Scrollbars — thin overlaid indicators matching the list-column
             // rail. Skipped in `fit_content` mode because such editors never
             // overflow internally; their parent scrollable handles scrolling.
-            if !self.fit_content {
+            // Also skipped in `static_viewport` mode (search-stack slices).
+            if !self.fit_content && !self.static_viewport {
                 let scroller_color = theme::text_muted();
 
                 if content_height > bounds.height && bounds.height > 0.0 {
