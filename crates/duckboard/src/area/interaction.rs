@@ -255,14 +255,26 @@ fn handle_agent_chat(state: &mut InteractionState, msg: agent_chat::Msg, highlig
                     Some(typed)
                 };
                 if let Some(text) = text {
+                    // Fallback: if we have prior messages but no Claude session
+                    // to `--resume`, prepend the history as context so the agent
+                    // isn't starting blind. Happens for legacy sessions saved
+                    // before session-id persistence, or if the server-side
+                    // session has been pruned.
+                    let prompt = if ax.session.claude_session_id.is_none()
+                        && !ax.session.messages.is_empty()
+                    {
+                        build_history_preamble(&ax.session.messages) + &text
+                    } else {
+                        text.clone()
+                    };
                     ax.session.messages.push(crate::chat_store::ChatMessage {
                         role: crate::chat_store::Role::User,
-                        content: vec![crate::chat_store::ContentBlock::Text(text.clone())],
+                        content: vec![crate::chat_store::ContentBlock::Text(text)],
                         timestamp: String::new(),
                     });
                     ax.session.is_streaming = true;
                     ax.session.pending_text.clear();
-                    handle.send_prompt(text, None);
+                    handle.send_prompt(prompt, None);
                     ax.chat_input = EditorState::new("");
                     rehighlight_input(&mut ax.chat_input, highlighter);
                     ax.chat_completion.visible = false;
@@ -282,6 +294,41 @@ fn handle_agent_chat(state: &mut InteractionState, msg: agent_chat::Msg, highlig
 fn rehighlight_input(input: &mut EditorState, highlighter: &SyntaxHighlighter) {
     let syntax = highlighter.find_syntax("md");
     input.highlight_spans = Some(highlighter.highlight_lines(&input.lines, syntax));
+}
+
+/// Render prior chat history as a text preamble for the agent. Used when we
+/// don't have a Claude `--resume` session id but need to hand the agent
+/// context from earlier turns. Returns a block ending with a separator; the
+/// caller appends the new user message after it.
+fn build_history_preamble(messages: &[crate::chat_store::ChatMessage]) -> String {
+    use crate::chat_store::{ContentBlock, Role};
+
+    let mut out = String::from("Previous conversation in this chat (for context):\n\n");
+    for msg in messages {
+        let who = match msg.role {
+            Role::User => "User",
+            Role::Assistant => "Assistant",
+            Role::System => "System",
+        };
+        for block in &msg.content {
+            match block {
+                ContentBlock::Text(t) => {
+                    out.push_str(who);
+                    out.push_str(": ");
+                    out.push_str(t);
+                    out.push_str("\n\n");
+                }
+                ContentBlock::ToolUse { name, .. } => {
+                    out.push_str(&format!("[{who} invoked tool: {name}]\n\n"));
+                }
+                ContentBlock::ToolResult { name, .. } => {
+                    out.push_str(&format!("[tool result: {name}]\n\n"));
+                }
+            }
+        }
+    }
+    out.push_str("---\n\nContinue the conversation. New user message:\n\n");
+    out
 }
 
 // ── Chat editor ─────────────────────────────────────────────────────────────

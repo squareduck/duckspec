@@ -405,6 +405,11 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                 let Some(ax) = state.agent_session_mut(&key) else { return Task::none() };
                 match evt {
                     AgentEvent::Ready(handle) => {
+                        // Seed the worker with a previously-persisted Claude session
+                        // id so the next prompt resumes that conversation.
+                        if let Some(sid) = ax.session.claude_session_id.clone() {
+                            handle.set_session_id(sid);
+                        }
                         ax.agent_handle = Some(handle);
                         tracing::info!(key, "agent handle ready");
                     }
@@ -445,6 +450,9 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                             content: vec![chat_store::ContentBlock::Text(format!("Error: {msg}"))],
                             timestamp: String::new(),
                         });
+                    }
+                    AgentEvent::SessionIdUpdated { session_id } => {
+                        ax.session.claude_session_id = Some(session_id);
                     }
                     AgentEvent::UsageUpdate { model, input_tokens, output_tokens, context_window } => {
                         if let Some(m) = model {

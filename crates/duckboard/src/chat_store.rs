@@ -49,6 +49,10 @@ pub struct ChatSession {
     pub messages: Vec<ChatMessage>,
     pub is_streaming: bool,
     pub pending_text: String,
+    /// Claude Code CLI session id, used with `--resume` for multi-turn continuity.
+    /// Set after the first successful turn; persisted so conversations can be
+    /// resumed across app restarts.
+    pub claude_session_id: Option<String>,
 }
 
 impl ChatSession {
@@ -69,6 +73,7 @@ impl ChatSession {
             messages: Vec::new(),
             is_streaming: false,
             pending_text: String::new(),
+            claude_session_id: None,
         }
     }
 }
@@ -80,6 +85,8 @@ struct PersistedSession {
     id: String,
     created_at_nanos: i128,
     messages: Vec<ChatMessage>,
+    #[serde(default)]
+    claude_session_id: Option<String>,
 }
 
 /// Recompute `display_name` on every session so that sessions sharing the
@@ -183,6 +190,7 @@ pub fn load_sessions_for(scope: &str, project_root: Option<&Path>) -> Vec<ChatSe
             messages: persisted.messages,
             is_streaming: false,
             pending_text: String::new(),
+            claude_session_id: persisted.claude_session_id,
         });
     }
     sessions.sort_by(|a, b| b.created_at_nanos.cmp(&a.created_at_nanos));
@@ -199,6 +207,7 @@ pub fn save_session(session: &ChatSession, project_root: Option<&Path>) -> anyho
         id: session.id.clone(),
         created_at_nanos: session.created_at_nanos,
         messages: session.messages.clone(),
+        claude_session_id: session.claude_session_id.clone(),
     };
     let data = serde_json::to_string_pretty(&persisted)?;
     std::fs::write(path, data)?;

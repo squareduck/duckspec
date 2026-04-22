@@ -41,6 +41,9 @@ pub enum AgentEvent {
         output_tokens: usize,
         context_window: Option<usize>,
     },
+    /// Claude Code session id for this chat — emitted after each successful
+    /// turn so the app can persist it and resume across restarts.
+    SessionIdUpdated { session_id: String },
     /// Agent finished its turn.
     TurnComplete,
     /// An error occurred.
@@ -56,6 +59,9 @@ pub enum AgentCommand {
         text: String,
         context: Option<AgentContext>,
     },
+    /// Seed the worker with a previously-persisted Claude Code session id so
+    /// the next prompt resumes that conversation via `--resume <sid>`.
+    SetSessionId(String),
     Shutdown,
 }
 
@@ -385,6 +391,10 @@ impl AgentHandle {
         let _ = self.tx.send(AgentCommand::SendPrompt { text, context });
     }
 
+    pub fn set_session_id(&self, session_id: String) {
+        let _ = self.tx.send(AgentCommand::SetSessionId(session_id));
+    }
+
     pub fn cancel(&self) {
         self.cancel_flag.store(true, Ordering::SeqCst);
     }
@@ -456,7 +466,16 @@ fn agent_worker(project_root: PathBuf) -> impl iced::futures::Stream<Item = Agen
                         .await
                         {
                             Ok(new_session_id) => {
-                                session_id = Some(new_session_id);
+                                let changed = session_id.as_deref() != Some(new_session_id.as_str());
+                                session_id = Some(new_session_id.clone());
+                                if changed
+                                    && sender
+                                        .send(AgentEvent::SessionIdUpdated { session_id: new_session_id })
+                                        .await
+                                        .is_err()
+                                {
+                                    break;
+                                }
                                 if sender.send(AgentEvent::TurnComplete).await.is_err() {
                                     break;
                                 }
@@ -470,6 +489,9 @@ fn agent_worker(project_root: PathBuf) -> impl iced::futures::Stream<Item = Agen
                                 }
                             }
                         }
+                    }
+                    AgentCommand::SetSessionId(sid) => {
+                        session_id = Some(sid);
                     }
                     AgentCommand::Shutdown => {
                         tracing::info!("agent chat shutdown");
