@@ -102,6 +102,7 @@ impl SyntaxHighlighter {
         use syntect::easy::HighlightLines;
 
         let theme = self.active_theme();
+        let inline_code_color = inline_code_color(theme);
         let mut md_h = HighlightLines::new(md_syntax, theme);
         let mut code: Option<CodeBlock> = None;
         let mut out = Vec::with_capacity(lines.len());
@@ -120,7 +121,7 @@ impl SyntaxHighlighter {
             {
                 self.line_spans(line, h)
             } else {
-                md_spans
+                apply_inline_code(md_spans, line, inline_code_color)
             };
 
             out.push(spans);
@@ -213,6 +214,115 @@ fn is_closing_fence(line: &str, fence_char: char, fence_len: usize) -> bool {
     }
     // Closing fence must have no info string (only whitespace after the run).
     trimmed[run..].trim().is_empty()
+}
+
+/// Look up the theme color for `markup.inline.raw.string.markdown`.
+fn inline_code_color(theme: &Theme) -> Color {
+    use std::str::FromStr;
+    use syntect::highlighting::Highlighter;
+    use syntect::parsing::ScopeStack;
+
+    let highlighter = Highlighter::new(theme);
+    let stack = ScopeStack::from_str("text.html.markdown markup.inline.raw.string.markdown")
+        .expect("valid scope path");
+    let style = highlighter.style_for_stack(stack.as_slice());
+    syntect_to_iced(style)
+}
+
+/// Find byte ranges of CommonMark inline code spans in `line`. Each range
+/// covers the opening backticks, content, and closing backticks. Backtick
+/// runs only match a closing run of the same length. Backslash-escaped
+/// backticks outside of a code span do not start a run.
+fn find_inline_code_runs(line: &str) -> Vec<(usize, usize)> {
+    let bytes = line.as_bytes();
+    let mut runs = Vec::new();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'\\' && i + 1 < bytes.len() && bytes[i + 1] == b'`' {
+            i += 2;
+            continue;
+        }
+        if bytes[i] != b'`' {
+            i += 1;
+            continue;
+        }
+        let start = i;
+        let open_len = bytes[i..].iter().take_while(|&&b| b == b'`').count();
+        let body_start = start + open_len;
+        let mut j = body_start;
+        let mut closed = false;
+        while j < bytes.len() {
+            if bytes[j] != b'`' {
+                j += 1;
+                continue;
+            }
+            let close_len = bytes[j..].iter().take_while(|&&b| b == b'`').count();
+            if close_len == open_len {
+                runs.push((start, j + close_len));
+                i = j + close_len;
+                closed = true;
+                break;
+            }
+            j += close_len;
+        }
+        if !closed {
+            i = body_start;
+        }
+    }
+    runs
+}
+
+/// Recolor the parts of `spans` that fall inside `line`'s inline code runs.
+/// The concatenation of `spans` text must equal `line`.
+fn apply_inline_code(
+    spans: Vec<HighlightSpan>,
+    line: &str,
+    color: Color,
+) -> Vec<HighlightSpan> {
+    let runs = find_inline_code_runs(line);
+    if runs.is_empty() {
+        return spans;
+    }
+    let mut out = Vec::with_capacity(spans.len());
+    let mut byte_pos = 0usize;
+    for span in spans {
+        let span_start = byte_pos;
+        let span_end = byte_pos + span.text.len();
+        let mut cursor = span_start;
+        while cursor < span_end {
+            let in_run = runs.iter().find(|(s, e)| cursor >= *s && cursor < *e);
+            let (next_boundary, use_color) = if let Some((_, end)) = in_run {
+                ((*end).min(span_end), color)
+            } else {
+                let next_run_start = runs
+                    .iter()
+                    .map(|(s, _)| *s)
+                    .find(|s| *s > cursor)
+                    .unwrap_or(span_end);
+                (next_run_start.min(span_end), span.color)
+            };
+            let text = &line[cursor..next_boundary];
+            if !text.is_empty() {
+                push_span(&mut out, text, use_color);
+            }
+            cursor = next_boundary;
+        }
+        byte_pos = span_end;
+    }
+    out
+}
+
+fn push_span(out: &mut Vec<HighlightSpan>, text: &str, color: Color) {
+    if let Some(last) = out.last_mut()
+        && last.color == color
+    {
+        last.text.push_str(text);
+    } else {
+        out.push(HighlightSpan {
+            text: text.to_string(),
+            color,
+        });
+    }
 }
 
 fn syntect_to_iced(style: Style) -> Color {
@@ -318,6 +428,77 @@ mod tests {
         assert_eq!(parse_opening_fence("``not a fence"), None);
         assert_eq!(parse_opening_fence("    ```rust"), None); // 4-space indent
         assert_eq!(parse_opening_fence("```rs`bad"), None); // backtick in info
+    }
+
+    #[test]
+    fn inline_code_spans_get_distinct_color() {
+        let hl = SyntaxHighlighter::new();
+        let md = hl.find_syntax("md");
+        let src = lines("Some prose with `inline code` in it.\n");
+        let out = hl.highlight_lines(&src, md);
+        assert_eq!(concat(&out[0]), "Some prose with `inline code` in it.");
+
+        let prose_color = out[0]
+            .iter()
+            .find(|s| s.text.contains("Some prose"))
+            .map(|s| s.color)
+            .unwrap();
+        let code_span = out[0]
+            .iter()
+            .find(|s| s.text == "`inline code`")
+            .expect("inline code region should be a single span");
+        assert_ne!(
+            (code_span.color.r, code_span.color.g, code_span.color.b),
+            (prose_color.r, prose_color.g, prose_color.b),
+            "inline code should be colored distinctly from prose"
+        );
+    }
+
+    #[test]
+    fn inline_code_with_double_backticks_and_embedded_single() {
+        let hl = SyntaxHighlighter::new();
+        let md = hl.find_syntax("md");
+        let src = lines("text ``a `b` c`` end\n");
+        let out = hl.highlight_lines(&src, md);
+        assert_eq!(concat(&out[0]), "text ``a `b` c`` end");
+        let code = out[0]
+            .iter()
+            .find(|s| s.text == "``a `b` c``")
+            .expect("double-backtick span should not be split by inner single backticks");
+        let prose = out[0].iter().find(|s| s.text.starts_with("text")).unwrap();
+        assert_ne!(code.color, prose.color);
+    }
+
+    #[test]
+    fn inline_code_skipped_inside_fenced_block() {
+        let hl = SyntaxHighlighter::new();
+        let md = hl.find_syntax("md");
+        let src = lines(concat!("```\n", "let s = `not inline`;\n", "```\n",));
+        let out = hl.highlight_lines(&src, md);
+        // Code-block body should be untouched by inline-code post-processing.
+        assert_eq!(concat(&out[1]), "let s = `not inline`;");
+    }
+
+    #[test]
+    fn unmatched_backtick_is_left_alone() {
+        let hl = SyntaxHighlighter::new();
+        let md = hl.find_syntax("md");
+        let src = lines("a ` lonely backtick here\n");
+        let out = hl.highlight_lines(&src, md);
+        assert_eq!(concat(&out[0]), "a ` lonely backtick here");
+    }
+
+    #[test]
+    fn find_inline_code_runs_basics() {
+        assert_eq!(find_inline_code_runs("a `b` c"), vec![(2, 5)]);
+        assert_eq!(find_inline_code_runs("``a `x` b``"), vec![(0, 11)]);
+        assert_eq!(find_inline_code_runs("no code here"), vec![]);
+        assert_eq!(find_inline_code_runs("a ` lonely"), vec![]);
+        assert_eq!(find_inline_code_runs("a \\`escaped\\` b"), vec![]);
+        assert_eq!(
+            find_inline_code_runs("`one` and `two`"),
+            vec![(0, 5), (10, 15)]
+        );
     }
 
     #[test]
