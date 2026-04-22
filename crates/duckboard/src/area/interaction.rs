@@ -18,12 +18,28 @@ use crate::widget::{
 /// interaction's scope name changes (e.g. exploration promoted to a real change).
 static NEXT_INSTANCE_ID: AtomicU64 = AtomicU64::new(1);
 
-// ── Interaction mode ────────────────────────────────────────────────────────
+// ── Active interaction tab ──────────────────────────────────────────────────
 
+/// Which tab is currently selected in the interaction column.
+/// Chat is implicit (always present); terminals are stored as a `Vec`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum InteractionMode {
-    Terminal,
-    AgentChat,
+pub enum ActiveTab {
+    Chat,
+    Terminal(usize),
+}
+
+impl Default for ActiveTab {
+    fn default() -> Self {
+        ActiveTab::Chat
+    }
+}
+
+/// One terminal tab — owns its TerminalState and a stable id used as the
+/// PTY subscription key. Display label is derived from position in
+/// `InteractionState::terminals` (`Term {idx + 1}`).
+pub struct TerminalTab {
+    pub id: u64,
+    pub state: crate::widget::terminal::TerminalState,
 }
 
 // ── Session controls (which buttons to show) ────────────────────────────────
@@ -99,9 +115,17 @@ pub struct InteractionState {
     pub instance_id: u64,
     pub visible: bool,
     pub width: f32,
-    pub mode: InteractionMode,
-    // Terminal
-    pub terminal: Option<crate::widget::terminal::TerminalState>,
+    /// Currently selected tab.
+    pub active_tab: ActiveTab,
+    /// Terminal tabs (chat is implicit at the start of the bar).
+    pub terminals: Vec<TerminalTab>,
+    /// Monotonic id for the next terminal tab in this scope. Used as the
+    /// stable PTY subscription key so output keeps routing to the right tab
+    /// even after reorders/removals.
+    pub next_terminal_id: u64,
+    /// True when the active tab is a terminal *and* it should capture
+    /// keyboard input. Cleared by overlays (file finder) to release focus
+    /// without closing the panel.
     pub terminal_focused: bool,
     // Agent sessions (sorted newest-first).
     pub sessions: Vec<AgentSession>,
@@ -116,8 +140,9 @@ impl Default for InteractionState {
             instance_id: NEXT_INSTANCE_ID.fetch_add(1, Ordering::Relaxed),
             visible: false,
             width: theme::INTERACTION_COLUMN_WIDTH,
-            mode: InteractionMode::AgentChat,
-            terminal: None,
+            active_tab: ActiveTab::Chat,
+            terminals: Vec::new(),
+            next_terminal_id: 1,
             terminal_focused: false,
             sessions: Vec::new(),
             active_session: 0,
@@ -142,6 +167,25 @@ impl InteractionState {
     pub fn find_session_index(&self, id: &str) -> Option<usize> {
         self.sessions.iter().position(|s| s.session.id == id)
     }
+
+    /// The terminal tab currently shown, if any.
+    pub fn active_terminal(&self) -> Option<&TerminalTab> {
+        match self.active_tab {
+            ActiveTab::Terminal(i) => self.terminals.get(i),
+            ActiveTab::Chat => None,
+        }
+    }
+
+    pub fn active_terminal_mut(&mut self) -> Option<&mut TerminalTab> {
+        match self.active_tab {
+            ActiveTab::Terminal(i) => self.terminals.get_mut(i),
+            ActiveTab::Chat => None,
+        }
+    }
+
+    pub fn find_terminal_index(&self, id: u64) -> Option<usize> {
+        self.terminals.iter().position(|t| t.id == id)
+    }
 }
 
 // ── Shared messages ─────────────────────────────────────────────────────────
@@ -149,7 +193,12 @@ impl InteractionState {
 #[derive(Debug, Clone)]
 pub enum Msg {
     Handle(interaction_toggle::HandleMsg),
-    SwitchMode(InteractionMode),
+    /// Switch which interaction tab (chat or a specific terminal) is shown.
+    SelectTab(ActiveTab),
+    /// Spawn a new terminal tab and select it.
+    AddTerminal,
+    /// Close the terminal tab at the given index.
+    CloseTerminal(usize),
     AgentChat(agent_chat::Msg),
     TerminalScroll,
     /// User cmd-clicked a hyperlink in the terminal output. Handled by main.
@@ -180,15 +229,31 @@ pub fn update(state: &mut InteractionState, msg: Msg, highlighter: &SyntaxHighli
                 state.width = w;
             }
         },
-        Msg::SwitchMode(mode) => {
-            state.mode = mode;
+        Msg::SelectTab(tab) => {
+            // Clamp Terminal(i) to a valid index; if invalid, fall back to Chat.
+            state.active_tab = match tab {
+                ActiveTab::Terminal(i) if i < state.terminals.len() => ActiveTab::Terminal(i),
+                ActiveTab::Terminal(_) => ActiveTab::Chat,
+                ActiveTab::Chat => ActiveTab::Chat,
+            };
+        }
+        Msg::AddTerminal => {
+            if let Some(idx) = spawn_new_terminal(state) {
+                state.active_tab = ActiveTab::Terminal(idx);
+            }
+        }
+        Msg::CloseTerminal(idx) => {
+            if idx < state.terminals.len() {
+                state.terminals.remove(idx);
+                state.active_tab = adjust_active_after_remove(state.active_tab, idx);
+            }
         }
         Msg::AgentChat(chat_msg) => {
             handle_agent_chat(state, chat_msg, highlighter);
         }
         Msg::TerminalScroll => {
-            if let Some(ref mut ts) = state.terminal {
-                ts.apply_scroll();
+            if let Some(tt) = state.active_terminal_mut() {
+                tt.state.apply_scroll();
             }
         }
         Msg::NewSession | Msg::SelectSession(_) | Msg::ClearSession => {
@@ -587,8 +652,9 @@ fn completion_accept(ax: &mut AgentSession, highlighter: &SyntaxHighlighter) {
 
 // ── High-level update with side effects ────────────────────────────────────
 
-/// Handle an interaction message with the standard side effects: spawn a
-/// terminal or ensure agent sessions when the panel opens or mode switches.
+/// Handle an interaction message with the standard side effects: ensure
+/// agent sessions exist while the chat tab is showing, and keep the
+/// `terminal_focused` latch in sync with the active tab + visibility.
 /// Suitable for the common `other =>` arm shared by Caps, Codex, and Change.
 pub fn update_with_side_effects(
     state: &mut InteractionState,
@@ -597,18 +663,14 @@ pub fn update_with_side_effects(
     project_root: Option<&std::path::Path>,
     highlighter: &SyntaxHighlighter,
 ) {
-    let is_mode_switch = matches!(msg, Msg::SwitchMode(_));
-    let just_opened = update(state, msg, highlighter);
+    update(state, msg, highlighter);
 
-    if (just_opened || is_mode_switch) && state.mode == InteractionMode::Terminal {
-        spawn_terminal(state);
-    }
-
-    if (just_opened || is_mode_switch) && state.mode == InteractionMode::AgentChat {
+    if state.visible && state.active_tab == ActiveTab::Chat {
         ensure_sessions(state, scope, project_root, highlighter);
     }
 
-    state.terminal_focused = state.visible && state.mode == InteractionMode::Terminal;
+    state.terminal_focused =
+        state.visible && matches!(state.active_tab, ActiveTab::Terminal(_));
 }
 
 // ── Session management ─────────────────────────────────────────────────────
@@ -638,16 +700,45 @@ pub fn clear_single_session(
 
 // ── Spawn helpers ───────────────────────────────────────────────────────────
 
-pub fn spawn_terminal(state: &mut InteractionState) {
-    if state.terminal.is_none() {
-        match crate::widget::terminal::TerminalState::new() {
-            Ok(ts) => {
-                state.terminal = Some(ts);
-                state.terminal_focused = true;
-                tracing::info!("terminal spawned");
-            }
-            Err(e) => tracing::error!("failed to create terminal: {e}"),
+/// Spawn a fresh terminal tab and append it to `state.terminals`. Returns the
+/// new tab's index, or `None` if the PTY/emulator failed to construct (the
+/// error is logged).
+pub fn spawn_new_terminal(state: &mut InteractionState) -> Option<usize> {
+    match crate::widget::terminal::TerminalState::new() {
+        Ok(ts) => {
+            let id = state.next_terminal_id;
+            state.next_terminal_id += 1;
+            let idx = state.terminals.len();
+            state.terminals.push(TerminalTab { id, state: ts });
+            tracing::info!(id, "terminal spawned");
+            Some(idx)
         }
+        Err(e) => {
+            tracing::error!("failed to create terminal: {e}");
+            None
+        }
+    }
+}
+
+/// Recompute `active_tab` after removing the terminal at `removed_idx`.
+///   - If the active tab was the one removed, fall back to the previous
+///     terminal (or Chat if it was the first).
+///   - If the active tab sat to the right of the removed one, shift its
+///     index down by one to keep pointing at the same logical tab.
+pub fn adjust_active_after_remove(active: ActiveTab, removed_idx: usize) -> ActiveTab {
+    match active {
+        ActiveTab::Chat => ActiveTab::Chat,
+        ActiveTab::Terminal(active_idx) if active_idx == removed_idx => {
+            if removed_idx == 0 {
+                ActiveTab::Chat
+            } else {
+                ActiveTab::Terminal(removed_idx - 1)
+            }
+        }
+        ActiveTab::Terminal(active_idx) if active_idx > removed_idx => {
+            ActiveTab::Terminal(active_idx - 1)
+        }
+        ActiveTab::Terminal(active_idx) => ActiveTab::Terminal(active_idx),
     }
 }
 
@@ -765,13 +856,13 @@ pub fn view_column<'a, M: 'a + Clone>(
 ) -> Element<'a, M> {
     use iced::widget::column;
 
-    let mode_tabs = view_mode_tabs(state.mode, wrap.clone());
+    let mode_tabs = view_interaction_tabs(state, wrap.clone());
 
-    let content: Element<'a, M> = match state.mode {
-        InteractionMode::Terminal => {
-            if let Some(ts) = &state.terminal {
+    let content: Element<'a, M> = match state.active_tab {
+        ActiveTab::Terminal(i) => {
+            if let Some(tt) = state.terminals.get(i) {
                 let w = wrap.clone();
-                crate::widget::terminal::view_terminal(ts).map(move |ev| match ev {
+                crate::widget::terminal::view_terminal(&tt.state).map(move |ev| match ev {
                     crate::widget::terminal::TerminalEvent::Redraw => w(Msg::TerminalScroll),
                     crate::widget::terminal::TerminalEvent::OpenUrl(url) => {
                         w(Msg::TerminalOpenUrl(url))
@@ -781,7 +872,7 @@ pub fn view_column<'a, M: 'a + Clone>(
                 view_placeholder(wrap.clone())
             }
         }
-        InteractionMode::AgentChat => {
+        ActiveTab::Chat => {
             if let Some(ax) = state.active() {
                 let status = agent_chat::StatusInfo {
                     is_streaming: ax.session.is_streaming,
@@ -965,19 +1056,18 @@ fn truncate_to_width(name: &str, available_px: f32, font_size: f32) -> String {
     chars[..lo].iter().collect::<String>() + ELLIPSIS
 }
 
-fn view_mode_tabs<'a, M: 'a + Clone>(
-    active: InteractionMode,
+/// Tab bar for the interaction column: pinned `Chat` tab, then a closable
+/// `Term {n}` tab per terminal, then a trailing `+ Terminal` button. The
+/// tab row scrolls horizontally if it overflows. Mirrors the styling used
+/// by the content column's tab bar (`widget::tab_bar::view_bar`).
+fn view_interaction_tabs<'a, M: 'a + Clone>(
+    state: &'a InteractionState,
     wrap: impl Fn(Msg) -> M + 'a + Clone,
 ) -> Element<'a, M> {
     use iced::Length;
-    use iced::widget::{Space, button, column, container, row, text};
+    use iced::widget::{Space, button, column, container, row, scrollable, svg, text};
 
-    let modes = [
-        ("Agent", InteractionMode::AgentChat),
-        ("Terminal", InteractionMode::Terminal),
-    ];
-
-    let mut tabs_row = row![].spacing(0.0);
+    type TabStyle = fn(&iced::Theme, iced::widget::button::Status) -> iced::widget::button::Style;
 
     let separator = || -> Element<'a, M> {
         let h = theme::font_sm() * 1.3 + 2.0 * theme::SPACING_XS;
@@ -986,34 +1076,94 @@ fn view_mode_tabs<'a, M: 'a + Clone>(
             .into()
     };
 
-    for (i, (label, mode)) in modes.iter().enumerate() {
-        let is_active = active == *mode;
-        let tab_style = if is_active {
-            theme::tab_active
-                as fn(&iced::Theme, iced::widget::button::Status) -> iced::widget::button::Style
+    let style_for = |is_active: bool| -> TabStyle {
+        if is_active {
+            theme::tab_active as TabStyle
         } else {
-            theme::tab_inactive
+            theme::tab_inactive as TabStyle
+        }
+    };
+
+    let mut tabs_row = row![].spacing(0.0);
+
+    // Pinned chat tab.
+    let chat_active = state.active_tab == ActiveTab::Chat;
+    let w_chat = wrap.clone();
+    let chat_btn = button(text("Chat").size(theme::font_sm()))
+        .on_press(w_chat(Msg::SelectTab(ActiveTab::Chat)))
+        .padding([theme::SPACING_XS, theme::SPACING_MD])
+        .style(style_for(chat_active));
+    tabs_row = tabs_row.push(chat_btn);
+
+    // One closable tab per terminal. Label is derived from index.
+    for (i, _tt) in state.terminals.iter().enumerate() {
+        tabs_row = tabs_row.push(separator());
+
+        let is_active = state.active_tab == ActiveTab::Terminal(i);
+        let label = format!("Term {}", i + 1);
+
+        let w_close = wrap.clone();
+        let close_btn = collapsible::close_button(w_close(Msg::CloseTerminal(i)));
+
+        let tab_row = row![
+            text(label).size(theme::font_sm()),
+            Space::new().width(theme::SPACING_SM),
+            close_btn,
+        ]
+        .spacing(theme::SPACING_XS)
+        .align_y(iced::Center);
+
+        // Asymmetric padding so the × hugs the right edge — matches the
+        // content column's closable tabs.
+        let pad = iced::Padding {
+            top: theme::SPACING_XS,
+            right: theme::SPACING_SM,
+            bottom: theme::SPACING_XS,
+            left: theme::SPACING_MD,
         };
 
-        let w = wrap.clone();
-        let tab_btn = button(text(*label).size(theme::font_sm()))
-            .on_press(w(Msg::SwitchMode(*mode)))
-            .padding([theme::SPACING_XS, theme::SPACING_MD])
-            .style(tab_style);
-
-        if i > 0 {
-            tabs_row = tabs_row.push(separator());
-        }
+        let w_sel = wrap.clone();
+        let tab_btn = button(tab_row)
+            .on_press(w_sel(Msg::SelectTab(ActiveTab::Terminal(i))))
+            .padding(pad)
+            .style(style_for(is_active));
         tabs_row = tabs_row.push(tab_btn);
     }
+
+    // Separator + "+ Terminal" add button + trailing cap separator.
     tabs_row = tabs_row.push(separator());
+
+    let plus_icon = svg(svg::Handle::from_memory(collapsible::ICON_PLUS))
+        .width(theme::font_sm())
+        .height(theme::font_sm())
+        .style(theme::svg_tint(theme::text_secondary()));
+    let add_label = row![
+        plus_icon,
+        text("Terminal")
+            .size(theme::font_sm())
+            .color(theme::text_secondary()),
+    ]
+    .spacing(theme::SPACING_XS)
+    .align_y(iced::Center);
+    let w_add = wrap.clone();
+    let add_btn = button(add_label)
+        .on_press(w_add(Msg::AddTerminal))
+        .padding([theme::SPACING_XS, theme::SPACING_MD])
+        .style(theme::tab_inactive as TabStyle);
+    tabs_row = tabs_row.push(add_btn);
+    tabs_row = tabs_row.push(separator());
+
+    let tabs_scroll = scrollable(tabs_row)
+        .direction(theme::thin_scrollbar_direction_horizontal())
+        .style(theme::thin_scrollbar)
+        .width(Length::Fill);
 
     let bar_border = container(Space::new().width(Length::Fill).height(1.0))
         .width(Length::Fill)
         .style(theme::divider);
 
     column![
-        container(tabs_row)
+        container(tabs_scroll)
             .width(Length::Fill)
             .style(theme::tab_bar),
         bar_border,

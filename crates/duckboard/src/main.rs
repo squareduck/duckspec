@@ -17,7 +17,7 @@ mod watcher;
 mod widget;
 
 use area::Area;
-use area::interaction::{self, InteractionMode};
+use area::interaction::{self, ActiveTab};
 use data::ProjectData;
 use widget::tab_bar;
 
@@ -157,8 +157,9 @@ enum Message {
     FileChanged(Vec<watcher::FileEvent>),
     // Keyboard
     KeyPress(keyboard::Key, keyboard::Modifiers, Option<String>),
-    // Per-instance PTY events. `ix_id` is the stable `InteractionState::instance_id`.
-    PtyEvent(u64, widget::terminal::PtyEvent),
+    // Per-terminal PTY events. `ix_id` is the stable `InteractionState::instance_id`,
+    // `terminal_id` identifies the specific terminal tab within that interaction.
+    PtyEvent(u64, u64, widget::terminal::PtyEvent),
     // Clipboard → PTY paste (scope name identifies the interaction).
     TerminalPaste(String, Option<String>),
     // Per-instance agent events. Key format: `<instance_id>/<session_id>`.
@@ -403,35 +404,40 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
         // Clipboard → PTY paste.
         Message::TerminalPaste(key, Some(text)) => {
             if let Some(ix) = state.interaction_mut(&key)
-                && let Some(ref mut ts) = ix.terminal
+                && let Some(tt) = ix.active_terminal_mut()
             {
-                ts.paste_text(&text);
+                tt.state.paste_text(&text);
             }
         }
         Message::TerminalPaste(_, None) => {}
-        // Per-instance PTY events
-        Message::PtyEvent(ix_id, evt) => {
+        // Per-terminal PTY events
+        Message::PtyEvent(ix_id, terminal_id, evt) => {
             use widget::terminal::PtyEvent;
             let Some(ix) = state.interaction_mut_by_ix_id(ix_id) else {
                 return Task::none();
             };
+            let Some(idx) = ix.find_terminal_index(terminal_id) else {
+                return Task::none();
+            };
             match evt {
                 PtyEvent::Ready(writer, master) => {
-                    if let Some(ref mut ts) = ix.terminal {
-                        ts.set_writer(writer.into_writer());
-                        ts.set_master(master.into_master());
-                        tracing::info!(ix_id, "PTY writer ready");
+                    if let Some(tt) = ix.terminals.get_mut(idx) {
+                        tt.state.set_writer(writer.into_writer());
+                        tt.state.set_master(master.into_master());
+                        tracing::info!(ix_id, terminal_id, "PTY writer ready");
                     }
                 }
                 PtyEvent::Output(bytes) => {
-                    if let Some(ref mut ts) = ix.terminal {
-                        ts.feed(&bytes);
+                    if let Some(tt) = ix.terminals.get_mut(idx) {
+                        tt.state.feed(&bytes);
                     }
                 }
                 PtyEvent::Exited => {
-                    tracing::info!(ix_id, "PTY child exited");
-                    ix.terminal = None;
-                    ix.terminal_focused = false;
+                    tracing::info!(ix_id, terminal_id, "PTY child exited");
+                    ix.terminals.remove(idx);
+                    ix.active_tab = interaction::adjust_active_after_remove(ix.active_tab, idx);
+                    ix.terminal_focused =
+                        ix.visible && matches!(ix.active_tab, ActiveTab::Terminal(_));
                 }
             }
         }
@@ -611,7 +617,7 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
             // Get the active area's interaction state for keyboard routing.
             let active_info = state.active_interaction().map(|(i, _key)| {
                 let agent_chat_active =
-                    i.visible && i.mode == InteractionMode::AgentChat && i.active().is_some();
+                    i.visible && i.active_tab == ActiveTab::Chat && i.active().is_some();
                 let terminal_focused = i.terminal_focused;
                 (agent_chat_active, terminal_focused)
             });
@@ -665,8 +671,8 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                             "c" => {
                                 let selection = state
                                     .interaction_mut(routing_key)
-                                    .and_then(|ix| ix.terminal.as_ref())
-                                    .and_then(|ts| ts.selection_text());
+                                    .and_then(|ix| ix.active_terminal())
+                                    .and_then(|tt| tt.state.selection_text());
                                 if let Some(text) = selection {
                                     return iced::clipboard::write(text);
                                 }
@@ -682,9 +688,9 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                     }
 
                     if let Some(ix) = state.interaction_mut(routing_key)
-                        && let Some(ref mut ts) = ix.terminal
+                        && let Some(tt) = ix.active_terminal_mut()
                     {
-                        ts.write_key(key, mods, text.as_deref());
+                        tt.state.write_key(key, mods, text.as_deref());
                     }
                 }
             }
@@ -1201,13 +1207,13 @@ fn subscription(state: &State) -> Subscription<Message> {
         );
     }
 
-    // Per-instance PTY subscriptions. Keyed by the stable `instance_id` so the
-    // subscription (and its live shell) survives scope renames like promoting
-    // an exploration to a real change.
+    // Per-terminal PTY subscriptions. Keyed by the stable `instance_id` and
+    // the per-tab `terminal.id` so each tab's shell survives scope renames
+    // (e.g. exploration→change promotion) and tab reorders.
     let pty_cwd = state.project.project_root.clone();
     let push_pty = |ix: &interaction::InteractionState, subs: &mut Vec<Subscription<Message>>| {
-        if ix.terminal.is_some() {
-            let key = format!("pty:ix:{}", ix.instance_id);
+        for tt in &ix.terminals {
+            let key = format!("pty:ix:{}/term:{}", ix.instance_id, tt.id);
             subs.push(widget::terminal::pty_subscription(key, pty_cwd.clone()).map(tagged_pty));
         }
     };
@@ -1289,11 +1295,12 @@ fn theme_detect_stream() -> impl iced::futures::Stream<Item = theme::ColorMode> 
 // Non-capturing mapper functions for Subscription::map.
 // The key embedded in the tuple carries the routing info.
 fn tagged_pty((key, e): (String, widget::terminal::PtyEvent)) -> Message {
-    let ix_id = key
-        .strip_prefix("pty:ix:")
-        .and_then(|s| s.parse::<u64>().ok())
-        .unwrap_or(0);
-    Message::PtyEvent(ix_id, e)
+    // Key shape: `pty:ix:{instance_id}/term:{terminal_id}`.
+    let rest = key.strip_prefix("pty:ix:").unwrap_or(&key);
+    let (ix_str, term_str) = rest.split_once("/term:").unwrap_or((rest, ""));
+    let ix_id = ix_str.parse::<u64>().unwrap_or(0);
+    let terminal_id = term_str.parse::<u64>().unwrap_or(0);
+    Message::PtyEvent(ix_id, terminal_id, e)
 }
 fn tagged_agent((key, e): (String, agent::AgentEvent)) -> Message {
     // Strip the `agent:ix:` prefix; the remainder is `<instance_id>/<session_id>`.

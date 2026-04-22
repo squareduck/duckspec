@@ -12,7 +12,7 @@ use crate::vcs::{ChangedFile, FileStatus};
 use crate::widget::list_view::{self, Badge, ListRow};
 use crate::widget::{collapsible, interaction_toggle, tab_bar, tree_view, vertical_scroll};
 
-use super::interaction::{self, AgentSession, InteractionMode, InteractionState, SessionControls};
+use super::interaction::{self, AgentSession, InteractionState, SessionControls};
 
 const ICON_BRANCH: &[u8] = include_bytes!("../../assets/icon_branch.svg");
 const ICON_FILE: &[u8] = include_bytes!("../../assets/icon_file.svg");
@@ -284,9 +284,6 @@ pub fn update(
             interaction::ensure_sessions(ix, &name, project.project_root.as_deref(), highlighter);
             if !ix.visible {
                 ix.visible = true;
-                if ix.mode == InteractionMode::Terminal {
-                    interaction::spawn_terminal(ix);
-                }
             }
         }
         Message::ToggleSection(id) => {
@@ -416,9 +413,6 @@ pub fn update(
             let ix = state.interactions.entry(name.clone()).or_default();
             interaction::ensure_sessions(ix, &name, project.project_root.as_deref(), highlighter);
             ix.visible = true;
-            if ix.mode == InteractionMode::Terminal {
-                interaction::spawn_terminal(ix);
-            }
         }
         Message::RemoveExploration(name) => {
             state.explorations.retain(|n| n != &name);
