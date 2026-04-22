@@ -3,12 +3,12 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
-use iced::widget::{button, column, container, row, text, Space};
+use iced::widget::{Space, button, column, container, row, text};
 use iced::{Element, Length};
 
 use crate::data::{ChangeData, ProjectData, StepCompletion};
 use crate::theme;
-use crate::vcs::{self, ChangedFile, FileStatus};
+use crate::vcs::{ChangedFile, FileStatus};
 use crate::widget::list_view::{self, Badge, ListRow};
 use crate::widget::{collapsible, interaction_toggle, tab_bar, tree_view, vertical_scroll};
 
@@ -134,7 +134,6 @@ fn is_collapse_by_default(dir: &str) -> bool {
 }
 
 impl State {
-
     /// Whether the currently selected change is an exploration (virtual).
     pub fn is_exploration_selected(&self) -> bool {
         self.selected_change
@@ -197,11 +196,7 @@ impl State {
 /// path header below the tab bar, and content lookups point to the new archive
 /// location. Handles artifact tabs (`changes/<old>/…`) and VCS diff tabs
 /// (`vcs:…/changes/<old>/…`). Tab titles are unchanged (they're filenames).
-fn rewrite_tab_ids_for_archive(
-    tabs: &mut tab_bar::TabState,
-    old_name: &str,
-    archived_name: &str,
-) {
+fn rewrite_tab_ids_for_archive(tabs: &mut tab_bar::TabState, old_name: &str, archived_name: &str) {
     let artifact_old = format!("changes/{old_name}/");
     let artifact_new = format!("archive/{archived_name}/");
     let vcs_old = format!("/changes/{old_name}/");
@@ -250,7 +245,10 @@ pub enum Message {
     AddExploration,
     RemoveExploration(String),
     /// Navigate to a change and open one of its artifacts.
-    OpenArtifact { change: String, artifact_id: String },
+    OpenArtifact {
+        change: String,
+        artifact_id: String,
+    },
     ScrollList(f32),
 }
 
@@ -318,16 +316,28 @@ pub fn update(
             };
             match msg {
                 interaction::Msg::NewSession => {
-                    let Some(ix) = state.active_interaction_mut() else { return };
-                    interaction::ensure_sessions(ix, &scope, project.project_root.as_deref(), highlighter);
+                    let Some(ix) = state.active_interaction_mut() else {
+                        return;
+                    };
+                    interaction::ensure_sessions(
+                        ix,
+                        &scope,
+                        project.project_root.as_deref(),
+                        highlighter,
+                    );
                     let new_session = AgentSession::new(scope.clone());
-                    let _ = crate::chat_store::save_session(&new_session.session, project.project_root.as_deref());
+                    let _ = crate::chat_store::save_session(
+                        &new_session.session,
+                        project.project_root.as_deref(),
+                    );
                     ix.sessions.insert(0, new_session);
                     ix.active_session = 0;
                     interaction::reconcile_display_names(&mut ix.sessions);
                 }
                 interaction::Msg::SelectSession(id) => {
-                    let Some(ix) = state.active_interaction_mut() else { return };
+                    let Some(ix) = state.active_interaction_mut() else {
+                        return;
+                    };
                     if let Some(idx) = ix.find_session_index(&id) {
                         ix.active_session = idx;
                     }
@@ -335,44 +345,39 @@ pub fn update(
                 interaction::Msg::ClearSession => {
                     // Multi-session areas don't surface a Clear button, but
                     // handle it defensively by resetting the active session.
-                    let Some(ix) = state.active_interaction_mut() else { return };
+                    let Some(ix) = state.active_interaction_mut() else {
+                        return;
+                    };
                     clear_active_session(ix, &scope, project.project_root.as_deref());
                 }
                 other => {
-                    let Some(ix) = state.active_interaction_mut() else { return };
+                    let Some(ix) = state.active_interaction_mut() else {
+                        return;
+                    };
                     interaction::update_with_side_effects(
-                        ix, other, &scope,
-                        project.project_root.as_deref(), highlighter,
+                        ix,
+                        other,
+                        &scope,
+                        project.project_root.as_deref(),
+                        highlighter,
                     );
                 }
             }
         }
         Message::SelectChangedFile(path) => {
             if let Some(root) = &project.project_root
-                && let Some(diff) = vcs::file_diff(root, &path) {
-                    let id = format!("vcs:{}", path.display());
-                    let title = path
-                        .file_name()
-                        .map(|n| n.to_string_lossy().to_string())
-                        .unwrap_or_else(|| path.display().to_string());
-
-                    let ext = path
-                        .extension()
-                        .and_then(|e| e.to_str())
-                        .unwrap_or("txt");
-                    let syntax = highlighter.find_syntax(ext);
-                    let old_lines: Vec<String> = diff.old_content.lines().map(String::from).collect();
-                    let new_lines: Vec<String> = diff.new_content.lines().map(String::from).collect();
-                    let highlight = crate::widget::diff_view::DiffHighlight {
-                        old_spans: highlighter.highlight_lines(&old_lines, syntax),
-                        new_spans: highlighter.highlight_lines(&new_lines, syntax),
-                    };
-
-                    let diff_status = diff.status;
-                    let diff_path = diff.path.clone();
-                    let editor = crate::widget::diff_view::build_editor(&diff, Some(&highlight));
-                    state.tabs.open_diff(id, title, editor, diff_path, diff_status);
-                }
+                && let Some(content) =
+                    crate::widget::diff_view::build_diff_tab(root, &path, highlighter)
+            {
+                let id = format!("vcs:{}", path.display());
+                let title = path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_else(|| path.display().to_string());
+                state
+                    .tabs
+                    .open_diff(id, title, content.editor, content.path, content.status);
+            }
         }
         Message::TabContent(tab_bar::TabContentMsg::EditorAction(action)) => {
             crate::handle_editor_action(&mut state.tabs, action, highlighter);
@@ -382,7 +387,11 @@ pub fn update(
             let name = format!("Exploration {}", state.exploration_counter);
             state.explorations.push(name.clone());
             state.selected_change = Some(name.clone());
-            crate::chat_store::save_explorations(&state.explorations, state.exploration_counter, project.project_root.as_deref());
+            crate::chat_store::save_explorations(
+                &state.explorations,
+                state.exploration_counter,
+                project.project_root.as_deref(),
+            );
             // Auto-open interaction panel with a fresh session.
             let ix = state.interactions.entry(name.clone()).or_default();
             interaction::ensure_sessions(ix, &name, project.project_root.as_deref(), highlighter);
@@ -398,9 +407,16 @@ pub fn update(
                 state.selected_change = None;
             }
             crate::chat_store::delete_scope(&name, project.project_root.as_deref());
-            crate::chat_store::save_explorations(&state.explorations, state.exploration_counter, project.project_root.as_deref());
+            crate::chat_store::save_explorations(
+                &state.explorations,
+                state.exploration_counter,
+                project.project_root.as_deref(),
+            );
         }
-        Message::OpenArtifact { change, artifact_id } => {
+        Message::OpenArtifact {
+            change,
+            artifact_id,
+        } => {
             state.selected_change = Some(change.clone());
             state.expanded_nodes.clear();
             if let Some(ch) = project
@@ -409,10 +425,7 @@ pub fn update(
                 .chain(project.archived_changes.iter())
                 .find(|c| c.name == change)
             {
-                crate::data::TreeNode::collect_parent_ids(
-                    &ch.cap_tree,
-                    &mut state.expanded_nodes,
-                );
+                crate::data::TreeNode::collect_parent_ids(&ch.cap_tree, &mut state.expanded_nodes);
             }
             open_artifact(state, &artifact_id, project, highlighter);
         }
@@ -448,12 +461,20 @@ pub fn compute_obvious_command(state: &State, project: &ProjectData) -> Option<S
             .steps
             .iter()
             .all(|s| matches!(s.completion, StepCompletion::Done));
-        return Some(if all_done { "ds-archive".into() } else { "ds-apply".into() });
+        return Some(if all_done {
+            "ds-archive".into()
+        } else {
+            "ds-apply".into()
+        });
     }
 
     // Caps exist → feature flow needs steps next; refinement/doc-only is ready to archive.
     if !change.cap_tree.is_empty() {
-        return Some(if change.has_design { "ds-step".into() } else { "ds-archive".into() });
+        return Some(if change.has_design {
+            "ds-step".into()
+        } else {
+            "ds-archive".into()
+        });
     }
 
     // No caps yet — walk the feature-flow ladder.
@@ -470,8 +491,12 @@ pub fn compute_obvious_command(state: &State, project: &ProjectData) -> Option<S
 /// Call after update() and after project reload.
 pub fn refresh_obvious_command(state: &mut State, project: &ProjectData) {
     let cmd = compute_obvious_command(state, project);
-    let Some(name) = state.selected_change.clone() else { return };
-    let Some(ix) = state.interactions.get_mut(&name) else { return };
+    let Some(name) = state.selected_change.clone() else {
+        return;
+    };
+    let Some(ix) = state.interactions.get_mut(&name) else {
+        return;
+    };
     for ax in ix.sessions.iter_mut() {
         ax.obvious_command = cmd.clone();
     }
@@ -479,10 +504,7 @@ pub fn refresh_obvious_command(state: &mut State, project: &ProjectData) {
 
 // ── View ─────────────────────────────────────────────────────────────────────
 
-pub fn view<'a>(
-    state: &'a State,
-    project: &'a ProjectData,
-) -> Element<'a, Message> {
+pub fn view<'a>(state: &'a State, project: &'a ProjectData) -> Element<'a, Message> {
     let list = view_list(state, project);
     let divider = container(Space::new().height(Length::Fill))
         .width(1.0)
@@ -507,11 +529,7 @@ pub fn view<'a>(
 
         if has_tabs {
             let content = view_content(state, project);
-            main_row = main_row.push(
-                container(content)
-                    .width(Length::Fill)
-                    .height(Length::Fill),
-            );
+            main_row = main_row.push(container(content).width(Length::Fill).height(Length::Fill));
 
             let visible = ix.is_some_and(|i| i.visible);
             let width = ix.map_or(theme::INTERACTION_COLUMN_WIDTH, |i| i.width);
@@ -551,8 +569,9 @@ pub fn view<'a>(
     let visible = ix.is_some_and(|i| i.visible);
     let width = ix.map_or(theme::INTERACTION_COLUMN_WIDTH, |i| i.width);
 
-    let toggle =
-        interaction_toggle::view(visible, width, |m| Message::Interaction(interaction::Msg::Handle(m)));
+    let toggle = interaction_toggle::view(visible, width, |m| {
+        Message::Interaction(interaction::Msg::Handle(m))
+    });
 
     let mut main_row = row![
         container(list)
@@ -560,23 +579,23 @@ pub fn view<'a>(
             .height(Length::Fill)
             .style(theme::surface),
         divider,
-        container(content)
-            .width(Length::Fill)
-            .height(Length::Fill),
+        container(content).width(Length::Fill).height(Length::Fill),
         toggle,
     ];
 
     if let Some(ix) = ix
-        && ix.visible {
-            let interaction_col = interaction::view_column(ix, Message::Interaction, SessionControls::Multi);
+        && ix.visible
+    {
+        let interaction_col =
+            interaction::view_column(ix, Message::Interaction, SessionControls::Multi);
 
-            main_row = main_row.push(
-                container(interaction_col)
-                    .width(ix.width)
-                    .height(Length::Fill)
-                    .style(theme::surface),
-            );
-        }
+        main_row = main_row.push(
+            container(interaction_col)
+                .width(ix.width)
+                .height(Length::Fill)
+                .style(theme::surface),
+        );
+    }
 
     main_row.height(Length::Fill).into()
 }
@@ -609,7 +628,11 @@ fn tab_breadcrumbs(id: &str, selected: &str, selected_archived: bool) -> Vec<Str
     }
 
     if let Some(path) = id.strip_prefix("vcs:") {
-        let root = if selected_archived { "Archive" } else { "Changes" };
+        let root = if selected_archived {
+            "Archive"
+        } else {
+            "Changes"
+        };
         return vec![
             root.into(),
             selected.into(),
@@ -701,7 +724,11 @@ mod breadcrumb_tests {
     #[test]
     fn tab_archive_proposal() {
         assert_eq!(
-            tab_breadcrumbs("archive/2026-04-20-01-foo/proposal.md", "2026-04-20-01-foo", true),
+            tab_breadcrumbs(
+                "archive/2026-04-20-01-foo/proposal.md",
+                "2026-04-20-01-foo",
+                true
+            ),
             vec!["Archive", "2026-04-20-01-foo", "Proposal"]
         );
     }
@@ -718,7 +745,12 @@ mod breadcrumb_tests {
     fn tab_vcs_archived() {
         assert_eq!(
             tab_breadcrumbs("vcs:src/main.rs", "2026-04-20-01-foo", true),
-            vec!["Archive", "2026-04-20-01-foo", "Changed files", "src/main.rs"]
+            vec![
+                "Archive",
+                "2026-04-20-01-foo",
+                "Changed files",
+                "src/main.rs"
+            ]
         );
     }
 
@@ -772,7 +804,10 @@ mod breadcrumb_tests {
     fn exploration_root_after_selection() {
         let state = make_state("Exploration 1", &["Exploration 1"]);
         let project = make_project(&[], &[]);
-        assert_eq!(breadcrumbs(&state, &project), vec!["Explorations", "Exploration 1"]);
+        assert_eq!(
+            breadcrumbs(&state, &project),
+            vec!["Explorations", "Exploration 1"]
+        );
     }
 
     #[test]
@@ -782,7 +817,10 @@ mod breadcrumb_tests {
         // active_changes contains the new name.
         let state = make_state("real-change", &[]);
         let project = make_project(&["real-change"], &[]);
-        assert_eq!(breadcrumbs(&state, &project), vec!["Changes", "real-change"]);
+        assert_eq!(
+            breadcrumbs(&state, &project),
+            vec!["Changes", "real-change"]
+        );
     }
 
     #[test]
@@ -800,7 +838,11 @@ mod breadcrumb_tests {
     // ── compute_obvious_command ─────────────────────────────────────────────
 
     fn tree_node(id: &str) -> crate::data::TreeNode {
-        crate::data::TreeNode { id: id.into(), label: id.into(), children: vec![] }
+        crate::data::TreeNode {
+            id: id.into(),
+            label: id.into(),
+            children: vec![],
+        }
     }
 
     fn step(done: bool) -> crate::data::StepInfo {
@@ -847,7 +889,10 @@ mod breadcrumb_tests {
     fn obvious_exploration_always_explore() {
         let state = make_state("Exploration 1", &["Exploration 1"]);
         let project = make_project(&[], &[]);
-        assert_eq!(compute_obvious_command(&state, &project).as_deref(), Some("ds-explore"));
+        assert_eq!(
+            compute_obvious_command(&state, &project).as_deref(),
+            Some("ds-explore")
+        );
     }
 
     #[test]
@@ -861,7 +906,10 @@ mod breadcrumb_tests {
     fn obvious_empty_change_suggests_propose() {
         let state = make_state("foo", &[]);
         let project = make_project(&["foo"], &[]);
-        assert_eq!(compute_obvious_command(&state, &project).as_deref(), Some("ds-propose"));
+        assert_eq!(
+            compute_obvious_command(&state, &project).as_deref(),
+            Some("ds-propose")
+        );
     }
 
     #[test]
@@ -869,7 +917,10 @@ mod breadcrumb_tests {
         let state = make_state("foo", &[]);
         let mut project = make_project(&["foo"], &[]);
         set_change(&mut project, "foo", |c| c.has_proposal = true);
-        assert_eq!(compute_obvious_command(&state, &project).as_deref(), Some("ds-design"));
+        assert_eq!(
+            compute_obvious_command(&state, &project).as_deref(),
+            Some("ds-design")
+        );
     }
 
     #[test]
@@ -880,7 +931,10 @@ mod breadcrumb_tests {
             c.has_proposal = true;
             c.has_design = true;
         });
-        assert_eq!(compute_obvious_command(&state, &project).as_deref(), Some("ds-spec"));
+        assert_eq!(
+            compute_obvious_command(&state, &project).as_deref(),
+            Some("ds-spec")
+        );
     }
 
     #[test]
@@ -892,7 +946,10 @@ mod breadcrumb_tests {
             c.has_design = true;
             c.cap_tree = vec![tree_node("caps/auth")];
         });
-        assert_eq!(compute_obvious_command(&state, &project).as_deref(), Some("ds-step"));
+        assert_eq!(
+            compute_obvious_command(&state, &project).as_deref(),
+            Some("ds-step")
+        );
     }
 
     #[test]
@@ -903,7 +960,10 @@ mod breadcrumb_tests {
         set_change(&mut project, "foo", |c| {
             c.cap_tree = vec![tree_node("caps/auth")];
         });
-        assert_eq!(compute_obvious_command(&state, &project).as_deref(), Some("ds-archive"));
+        assert_eq!(
+            compute_obvious_command(&state, &project).as_deref(),
+            Some("ds-archive")
+        );
     }
 
     #[test]
@@ -916,7 +976,10 @@ mod breadcrumb_tests {
             c.cap_tree = vec![tree_node("caps/auth")];
             c.steps = vec![step(false), step(true)];
         });
-        assert_eq!(compute_obvious_command(&state, &project).as_deref(), Some("ds-apply"));
+        assert_eq!(
+            compute_obvious_command(&state, &project).as_deref(),
+            Some("ds-apply")
+        );
     }
 
     // ── rewrite_tab_ids_for_archive ─────────────────────────────────────────
@@ -949,7 +1012,10 @@ mod breadcrumb_tests {
             tabs.preview.as_ref().map(|t| t.id.as_str()),
             Some("archive/2026-04-20-01-foo/proposal.md"),
         );
-        assert_eq!(tabs.file_tabs[0].id, "archive/2026-04-20-01-foo/caps/auth/spec.md");
+        assert_eq!(
+            tabs.file_tabs[0].id,
+            "archive/2026-04-20-01-foo/caps/auth/spec.md"
+        );
         // Unrelated change left alone.
         assert_eq!(tabs.file_tabs[1].id, "changes/bar/proposal.md");
         // Non-change tab left alone.
@@ -999,17 +1065,16 @@ mod breadcrumb_tests {
             c.cap_tree = vec![tree_node("caps/auth")];
             c.steps = vec![step(true), step(true)];
         });
-        assert_eq!(compute_obvious_command(&state, &project).as_deref(), Some("ds-archive"));
+        assert_eq!(
+            compute_obvious_command(&state, &project).as_deref(),
+            Some("ds-archive")
+        );
     }
 }
 
 /// Reset the active session for a scope: cancel agent, delete persisted file,
 /// and replace with a fresh empty session under a new id.
-fn clear_active_session(
-    ix: &mut InteractionState,
-    scope: &str,
-    project_root: Option<&Path>,
-) {
+fn clear_active_session(ix: &mut InteractionState, scope: &str, project_root: Option<&Path>) {
     if ix.sessions.is_empty() {
         ix.sessions.push(AgentSession::new(scope.to_string()));
         ix.active_session = 0;
@@ -1020,11 +1085,7 @@ fn clear_active_session(
         if let Some(handle) = &ax.agent_handle {
             handle.cancel();
         }
-        crate::chat_store::delete_session(
-            &ax.session.scope,
-            &ax.session.id,
-            project_root,
-        );
+        crate::chat_store::delete_session(&ax.session.scope, &ax.session.id, project_root);
     }
     ix.sessions[idx] = AgentSession::new(scope.to_string());
     ix.active_session = idx;
@@ -1114,12 +1175,11 @@ fn view_list<'a>(state: &'a State, project: &'a ProjectData) -> Element<'a, Mess
         .style(theme::section_header)
         .padding([theme::SPACING_XS, theme::SPACING_SM]);
 
-        let mut col = column![
-            row![
-                container(header).width(Length::Fill),
-                collapsible::add_button(Message::AddExploration),
-            ]
-        ].spacing(0.0);
+        let mut col = column![row![
+            container(header).width(Length::Fill),
+            collapsible::add_button(Message::AddExploration),
+        ]]
+        .spacing(0.0);
 
         if expanded {
             col = col.push(collapsible::top_divider());
@@ -1207,9 +1267,13 @@ fn view_caps_section<'a>(
     error_ids: &HashSet<String>,
 ) -> Element<'a, Message> {
     let content = if change.cap_tree.is_empty() {
-        container(text("No capability changes").size(theme::font_md()).color(theme::text_muted()))
-            .padding([theme::SPACING_XS, theme::SPACING_SM])
-            .into()
+        container(
+            text("No capability changes")
+                .size(theme::font_md())
+                .color(theme::text_muted()),
+        )
+        .padding([theme::SPACING_XS, theme::SPACING_SM])
+        .into()
     } else {
         tree_view::view(
             &change.cap_tree,
@@ -1242,12 +1306,8 @@ fn view_steps_section<'a>(
             let (icon_bytes, icon_tint): (&'static [u8], Option<iced::Color>) =
                 match step.completion {
                     StepCompletion::Done => (ICON_STEP_DONE, Some(theme::success())),
-                    StepCompletion::Partial(0, _) | StepCompletion::NoTasks => {
-                        (ICON_STEP, None)
-                    }
-                    StepCompletion::Partial(_, _) => {
-                        (ICON_STEP_PARTIAL, Some(theme::warning()))
-                    }
+                    StepCompletion::Partial(0, _) | StepCompletion::NoTasks => (ICON_STEP, None),
+                    StepCompletion::Partial(_, _) => (ICON_STEP_PARTIAL, Some(theme::warning())),
                 };
             let mut r = ListRow::new(step.label.as_str())
                 .icon(icon_bytes)
@@ -1286,7 +1346,11 @@ struct FileTree {
 
 impl FileTree {
     fn new(path: PathBuf) -> Self {
-        Self { dirs: BTreeMap::new(), files: vec![], path }
+        Self {
+            dirs: BTreeMap::new(),
+            files: vec![],
+            path,
+        }
     }
 
     fn insert(&mut self, file: ChangedFile) {
@@ -1481,11 +1545,7 @@ fn icon_for_artifact(label: &str) -> &'static [u8] {
 }
 
 fn view_content<'a>(state: &'a State, project: &'a ProjectData) -> Element<'a, Message> {
-    let bar = tab_bar::view_bar(
-        &state.tabs,
-        Message::SelectTab,
-        Message::CloseTab,
-    );
+    let bar = tab_bar::view_bar(&state.tabs, Message::SelectTab, Message::CloseTab);
     let body = tab_bar::view_content(&state.tabs).map(Message::TabContent);
 
     // Error panel for the active artifact.
@@ -1556,7 +1616,14 @@ fn open_artifact(
 ) {
     if let Some(content) = project.read_artifact(id) {
         let title = id.rsplit('/').next().unwrap_or(id).to_string();
-        crate::open_artifact_tab(&mut state.tabs, id.to_string(), title, content, id, highlighter);
+        crate::open_artifact_tab(
+            &mut state.tabs,
+            id.to_string(),
+            title,
+            content,
+            id,
+            highlighter,
+        );
     }
 }
 
@@ -1565,7 +1632,10 @@ mod file_tree_tests {
     use super::*;
 
     fn cf(path: &str, status: FileStatus) -> ChangedFile {
-        ChangedFile { path: PathBuf::from(path), status }
+        ChangedFile {
+            path: PathBuf::from(path),
+            status,
+        }
     }
 
     #[test]

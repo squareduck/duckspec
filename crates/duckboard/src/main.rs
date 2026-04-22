@@ -250,13 +250,15 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
         }
         Message::FileChanged(events) => {
             tracing::debug!(count = events.len(), "file watcher events received");
-            let duckspec_root = state.project.duckspec_root.as_deref();
+            let duckspec_root = state.project.duckspec_root.clone();
+            let project_root = state.project.project_root.clone();
             let mut tree_changed = false;
+            let mut vcs_state_changed = false;
 
             for event in &events {
                 match event {
                     watcher::FileEvent::Modified(path) => {
-                        if let Some(root) = duckspec_root {
+                        if let Some(root) = duckspec_root.as_deref() {
                             if let Ok(rel) = path.strip_prefix(root) {
                                 let id = rel.to_string_lossy().to_string();
                                 if let Some(content) = state.project.read_artifact(&id) {
@@ -269,9 +271,13 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                                 tree_changed = true;
                             }
                         }
+                        if let Some(root) = project_root.as_deref() {
+                            refresh_file_tabs_for_path(state, root, path);
+                            refresh_diff_tabs_for_path(state, root, path);
+                        }
                     }
                     watcher::FileEvent::Removed(path) => {
-                        if let Some(root) = duckspec_root {
+                        if let Some(root) = duckspec_root.as_deref() {
                             if let Ok(rel) = path.strip_prefix(root) {
                                 let id = rel.to_string_lossy().to_string();
                                 state.change.tabs.close_by_id(&id);
@@ -282,10 +288,17 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                                 tree_changed = true;
                             }
                         }
+                        if let Some(root) = project_root.as_deref()
+                            && let Ok(rel) = path.strip_prefix(root) {
+                                let diff_id = format!("vcs:{}", rel.display());
+                                state.change.tabs.close_by_id(&diff_id);
+                                state.caps.tabs.close_by_id(&diff_id);
+                                state.codex.tabs.close_by_id(&diff_id);
+                            }
                     }
                     watcher::FileEvent::VcsStateChanged(path) => {
                         tracing::debug!(path = %path.display(), "git state changed — refreshing");
-                        // refresh_changed_files at end of handler picks this up.
+                        vcs_state_changed = true;
                     }
                 }
             }
@@ -295,6 +308,11 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                 // their content from disk so editors reflect the moved files.
                 refresh_open_tabs(state);
             }
+
+            if vcs_state_changed
+                && let Some(root) = project_root.as_deref() {
+                    refresh_all_diff_tabs(state, root);
+                }
 
             refresh_changed_files(state);
         }
@@ -873,6 +891,75 @@ pub fn rehighlight(
 fn refresh_changed_files(state: &mut State) {
     if let Some(root) = &state.project.project_root {
         state.change.set_changed_files(vcs::changed_files(root));
+    }
+}
+
+/// Re-read any open `file:`-prefixed tabs whose underlying path matches
+/// `changed_path`. Used when the watcher reports a file modification.
+fn refresh_file_tabs_for_path(
+    state: &mut State,
+    project_root: &std::path::Path,
+    changed_path: &std::path::Path,
+) {
+    let Ok(rel) = changed_path.strip_prefix(project_root) else { return };
+    let id = format!("file:{}", rel.display());
+    let Ok(content) = std::fs::read_to_string(changed_path) else { return };
+    for tabs in [&mut state.change.tabs, &mut state.caps.tabs, &mut state.codex.tabs] {
+        tabs.refresh_content(&id, content.clone(), &state.highlighter);
+    }
+}
+
+/// Rebuild any open `vcs:`-prefixed tabs whose underlying path matches
+/// `changed_path`. If the file no longer differs from HEAD, close the tab.
+fn refresh_diff_tabs_for_path(
+    state: &mut State,
+    project_root: &std::path::Path,
+    changed_path: &std::path::Path,
+) {
+    let Ok(rel) = changed_path.strip_prefix(project_root) else { return };
+    let id = format!("vcs:{}", rel.display());
+    rebuild_diff_tab(state, project_root, &id, rel);
+}
+
+/// Rebuild every open diff tab — used on VCS state changes (HEAD/index/refs)
+/// where the diff baseline shifts for all open diffs at once.
+fn refresh_all_diff_tabs(state: &mut State, project_root: &std::path::Path) {
+    let ids: Vec<String> = [&state.change.tabs, &state.caps.tabs, &state.codex.tabs]
+        .into_iter()
+        .flat_map(|tabs| {
+            tabs.preview
+                .iter()
+                .chain(tabs.file_tabs.iter())
+                .filter(|t| matches!(t.view, tab_bar::TabView::Diff { .. }))
+                .map(|t| t.id.clone())
+        })
+        .collect();
+    let mut seen = std::collections::HashSet::new();
+    for id in ids {
+        if !seen.insert(id.clone()) { continue; }
+        let Some(rel_str) = id.strip_prefix("vcs:") else { continue };
+        let rel = std::path::PathBuf::from(rel_str);
+        rebuild_diff_tab(state, project_root, &id, &rel);
+    }
+}
+
+fn rebuild_diff_tab(
+    state: &mut State,
+    project_root: &std::path::Path,
+    id: &str,
+    rel: &std::path::Path,
+) {
+    match widget::diff_view::build_diff_tab(project_root, rel, &state.highlighter) {
+        Some(content) => {
+            for tabs in [&mut state.change.tabs, &mut state.caps.tabs, &mut state.codex.tabs] {
+                tabs.refresh_diff(id, content.editor.clone(), content.path.clone(), content.status);
+            }
+        }
+        None => {
+            for tabs in [&mut state.change.tabs, &mut state.caps.tabs, &mut state.codex.tabs] {
+                tabs.close_by_id(id);
+            }
+        }
     }
 }
 

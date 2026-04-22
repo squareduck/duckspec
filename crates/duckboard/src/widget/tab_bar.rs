@@ -222,7 +222,7 @@ impl TabState {
     }
 
     /// Update the content of a text tab by its id. Checks both preview and
-    /// file tabs.
+    /// file tabs. Preserves scroll position and cursor across the rebuild.
     pub fn refresh_content(
         &mut self,
         id: &str,
@@ -236,10 +236,52 @@ impl TabState {
             .find(|t| t.id == id);
         if let Some(tab) = tab
             && let TabView::Editor { editor, .. } = &mut tab.view {
-                *editor = EditorState::new(&new_source);
+                let mut next = EditorState::new(&new_source);
+                carry_view_state(editor, &mut next);
+                *editor = next;
                 crate::rehighlight(editor, id, highlighter);
             }
     }
+
+    /// Update a diff tab in place. Preserves scroll/cursor and refreshes
+    /// the underlying path/status fields. No-op if the tab isn't a diff.
+    pub fn refresh_diff(
+        &mut self,
+        id: &str,
+        mut new_editor: EditorState,
+        new_path: std::path::PathBuf,
+        new_status: FileStatus,
+    ) {
+        let tab = self
+            .preview
+            .iter_mut()
+            .chain(self.file_tabs.iter_mut())
+            .find(|t| t.id == id);
+        if let Some(tab) = tab
+            && let TabView::Diff { editor, path, status } = &mut tab.view {
+                carry_view_state(editor, &mut new_editor);
+                *editor = new_editor;
+                *path = new_path;
+                *status = new_status;
+            }
+    }
+}
+
+/// Copy view-only state (scroll, cursor, selection, bottom-pin) from `prev`
+/// to `next`, clamping cursor/anchor to the new line count.
+fn carry_view_state(prev: &EditorState, next: &mut EditorState) {
+    next.scroll_x = prev.scroll_x;
+    next.scroll_y = prev.scroll_y;
+    next.pinned_to_bottom = prev.pinned_to_bottom;
+    next.cursor = clamp_pos(prev.cursor, &next.lines);
+    next.anchor = prev.anchor.map(|p| clamp_pos(p, &next.lines));
+}
+
+fn clamp_pos(pos: text_edit::Pos, lines: &[String]) -> text_edit::Pos {
+    let max_line = lines.len().saturating_sub(1);
+    let line = pos.line.min(max_line);
+    let line_len = lines.get(line).map(|s| s.chars().count()).unwrap_or(0);
+    text_edit::Pos::new(line, pos.col.min(line_len))
 }
 
 // ── Views ────────────────────────────────────────────────────────────────────

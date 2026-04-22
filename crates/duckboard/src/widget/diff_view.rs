@@ -3,11 +3,49 @@
 //! Builds an EditorState from diff data so it can be rendered via the TextEdit
 //! widget, inheriting selection, copy, and horizontal scroll for free.
 
-use crate::highlight::HighlightSpan;
+use std::path::{Path, PathBuf};
+
+use crate::highlight::{HighlightSpan, SyntaxHighlighter};
 use crate::theme;
-use crate::vcs::{DiffData, DiffLine, LineKind};
+use crate::vcs::{self, DiffData, DiffLine, FileStatus, LineKind};
 
 use super::text_edit::{EditorState, LineBgKind};
+
+/// Materialised diff tab content: the editor plus the path/status fields a
+/// `TabView::Diff` carries. Returns `None` when the file no longer differs
+/// from HEAD (e.g. the change was just committed externally).
+pub struct DiffTabContent {
+    pub editor: EditorState,
+    pub path: PathBuf,
+    pub status: FileStatus,
+}
+
+/// Build a diff tab's contents for `rel_path` against the working tree at
+/// `repo_root`. Returns `None` when there is no diff to show.
+pub fn build_diff_tab(
+    repo_root: &Path,
+    rel_path: &Path,
+    highlighter: &SyntaxHighlighter,
+) -> Option<DiffTabContent> {
+    let diff = vcs::file_diff(repo_root, rel_path)?;
+    let ext = rel_path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("txt");
+    let syntax = highlighter.find_syntax(ext);
+    let old_lines: Vec<String> = diff.old_content.lines().map(String::from).collect();
+    let new_lines: Vec<String> = diff.new_content.lines().map(String::from).collect();
+    let highlight = DiffHighlight {
+        old_spans: highlighter.highlight_lines(&old_lines, syntax),
+        new_spans: highlighter.highlight_lines(&new_lines, syntax),
+    };
+    let editor = build_editor(&diff, Some(&highlight));
+    Some(DiffTabContent {
+        editor,
+        path: diff.path,
+        status: diff.status,
+    })
+}
 
 /// Pre-computed syntax highlight data for a diff.
 #[derive(Debug, Clone)]
