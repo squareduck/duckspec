@@ -56,6 +56,11 @@ Work through the current step's `## Tasks` list in order:
      flag it to the user, but don't add tasks to the current step without
      confirmation.
 
+5. **After all tasks are checked**, run `ds check <step-file>` to validate the
+   step file. If errors are reported (canonical-order issues, malformed task
+   syntax, broken markers, schema violations from in-progress edits), fix them
+   before handoff. Run `ds format <step-file>` if the report hints at it.
+
 ## Write gate
 
 No write gate. The step's tasks have already been reviewed and approved during
