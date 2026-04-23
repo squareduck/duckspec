@@ -21,7 +21,9 @@ Prebuilt tarballs for macOS (Apple Silicon) and Linux (x86_64) are attached to e
 # macOS
 curl -L https://github.com/squareduck/duckspec/releases/latest/download/ds-<version>-aarch64-apple-darwin.tar.gz \
   | tar -xz && mv ds ~/.local/bin/    # or anywhere on PATH
+```
 
+```sh
 # Linux
 curl -L https://github.com/squareduck/duckspec/releases/latest/download/ds-<version>-x86_64-unknown-linux-gnu.tar.gz \
   | tar -xz && mv ds ~/.local/bin/
