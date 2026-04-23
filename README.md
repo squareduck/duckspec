@@ -39,7 +39,7 @@ cargo install --locked --git https://github.com/squareduck/duckspec.git duckspec
 
 Download `Duckboard-<version>.dmg` from the [latest release](https://github.com/squareduck/duckspec/releases/latest), open it, and drag `Duckboard.app` to `Applications`.
 
-The bundle is currently unsigned — on first launch macOS will warn "unidentified developer". Right-click the app → *Open* → *Open* once to trust it; subsequent launches are normal.
+The bundle is ad-hoc signed but not notarized. On first launch macOS will block it with an "unidentified developer" warning; open *System Settings → Privacy & Security*, scroll to the bottom, and click *Open Anyway* next to Duckboard. Subsequent launches are normal.
 
 Or from source:
 

@@ -126,6 +126,14 @@ bundle:
     </plist>
     PLIST
 
+    echo "==> Ad-hoc code signing"
+    # Ad-hoc signature (no Developer ID): macOS Sequoia+ rejects
+    # completely-unsigned apps as "damaged". An ad-hoc signature is
+    # enough to downgrade that to the familiar "unidentified developer"
+    # warning which the user can allow via System Settings → Privacy &
+    # Security. Proper signing + notarization is a later step.
+    codesign --force --deep --sign - "${APP}"
+
     echo "==> Built ${APP}"
 
 # Wrap Duckboard.app in a drag-to-Applications DMG at dist/Duckboard.dmg.
