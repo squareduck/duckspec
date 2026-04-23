@@ -14,8 +14,6 @@ pub struct ProjectData {
     pub archived_changes: Vec<ChangeData>,
     pub cap_tree: Vec<TreeNode>,
     pub codex_entries: Vec<TreeNode>,
-    pub cap_count: usize,
-    pub codex_count: usize,
     /// Per-change validation results, populated on audit.
     pub validations: HashMap<String, ChangeValidation>,
     /// Project-level audit findings (artifact errors outside changes,
@@ -126,10 +124,6 @@ pub struct TreeNode {
 }
 
 impl TreeNode {
-    pub fn is_leaf(&self) -> bool {
-        self.children.is_empty()
-    }
-
     /// Collect the IDs of all non-leaf nodes in the tree (recursively).
     pub fn collect_parent_ids(nodes: &[TreeNode], out: &mut std::collections::HashSet<String>) {
         for node in nodes {
@@ -158,26 +152,16 @@ impl ProjectData {
     }
 
     fn load_from(project_root: &Path, duckspec_root: Option<&Path>) -> Self {
-        let (cap_tree, cap_count, codex_entries, codex_count, active_changes, archived_changes) =
-            match duckspec_root {
-                Some(root) => {
-                    let cap_tree = build_tree(&root.join("caps"), "caps");
-                    let cap_count = count_leaf_caps(&cap_tree);
-                    let codex_entries = build_file_list(&root.join("codex"), "codex");
-                    let codex_count = codex_entries.len();
-                    let active_changes = build_changes(&root.join("changes"), "changes");
-                    let archived_changes = build_changes(&root.join("archive"), "archive");
-                    (
-                        cap_tree,
-                        cap_count,
-                        codex_entries,
-                        codex_count,
-                        active_changes,
-                        archived_changes,
-                    )
-                }
-                None => Default::default(),
-            };
+        let (cap_tree, codex_entries, active_changes, archived_changes) = match duckspec_root {
+            Some(root) => {
+                let cap_tree = build_tree(&root.join("caps"), "caps");
+                let codex_entries = build_file_list(&root.join("codex"), "codex");
+                let active_changes = build_changes(&root.join("changes"), "changes");
+                let archived_changes = build_changes(&root.join("archive"), "archive");
+                (cap_tree, codex_entries, active_changes, archived_changes)
+            }
+            None => Default::default(),
+        };
 
         let (validations, project_audit) = match duckspec_root {
             Some(ds) => run_audit(ds, Some(project_root)),
@@ -191,8 +175,6 @@ impl ProjectData {
             archived_changes,
             cap_tree,
             codex_entries,
-            cap_count,
-            codex_count,
             validations,
             project_audit,
         }
@@ -420,23 +402,6 @@ fn compute_step_completion(path: &Path) -> StepCompletion {
     } else {
         StepCompletion::Partial(done, total)
     }
-}
-
-/// Count capabilities (directories that have a spec.md child).
-fn count_leaf_caps(nodes: &[TreeNode]) -> usize {
-    let mut count = 0;
-    for node in nodes {
-        if node
-            .children
-            .iter()
-            .any(|c| c.label == "spec.md" || c.label == "doc.md")
-        {
-            count += 1;
-        }
-        let subdirs: Vec<_> = node.children.iter().filter(|c| !c.is_leaf()).collect();
-        count += count_leaf_caps(&subdirs.iter().map(|n| (*n).clone()).collect::<Vec<_>>());
-    }
-    count
 }
 
 fn is_dir(entry: &fs::DirEntry) -> bool {

@@ -28,6 +28,12 @@ release version:
         exit 1
     fi
 
+    # Treat warnings as errors for the release build. Catches dead code,
+    # unused imports, and the like *before* the tag goes out — a broken
+    # CI run on a cut release is awkward to undo.
+    echo "==> Checking release build (warnings as errors)"
+    RUSTFLAGS="-D warnings" cargo check --release --workspace
+
     cargo set-version --workspace {{ version }}
 
     jj commit -m "release: v{{ version }}"
