@@ -144,26 +144,49 @@ impl TreeNode {
 // ── Loading ──────────────────────────────────────────────────────────────────
 
 impl ProjectData {
-    pub fn load() -> Self {
-        match find_duckspec_root() {
-            Some(root) => Self::load_from(&root),
-            None => Self::default(),
-        }
+    /// Open the project rooted at `project_root`. If a `duckspec/` directory
+    /// exists inside it, load artifacts; otherwise keep the roots set so
+    /// duckboard still "has" a project but displays empty panels.
+    pub fn open(project_root: &Path) -> Self {
+        let duckspec = project_root.join("duckspec");
+        let duckspec_root = if duckspec.is_dir() {
+            Some(duckspec)
+        } else {
+            None
+        };
+        Self::load_from(project_root, duckspec_root.as_deref())
     }
 
-    fn load_from(root: &Path) -> Self {
-        let cap_tree = build_tree(&root.join("caps"), "caps");
-        let cap_count = count_leaf_caps(&cap_tree);
-        let codex_entries = build_file_list(&root.join("codex"), "codex");
-        let codex_count = codex_entries.len();
-        let active_changes = build_changes(&root.join("changes"), "changes");
-        let archived_changes = build_changes(&root.join("archive"), "archive");
-        let project_root = find_repo_root();
-        let (validations, project_audit) = run_audit(root, project_root.as_deref());
+    fn load_from(project_root: &Path, duckspec_root: Option<&Path>) -> Self {
+        let (cap_tree, cap_count, codex_entries, codex_count, active_changes, archived_changes) =
+            match duckspec_root {
+                Some(root) => {
+                    let cap_tree = build_tree(&root.join("caps"), "caps");
+                    let cap_count = count_leaf_caps(&cap_tree);
+                    let codex_entries = build_file_list(&root.join("codex"), "codex");
+                    let codex_count = codex_entries.len();
+                    let active_changes = build_changes(&root.join("changes"), "changes");
+                    let archived_changes = build_changes(&root.join("archive"), "archive");
+                    (
+                        cap_tree,
+                        cap_count,
+                        codex_entries,
+                        codex_count,
+                        active_changes,
+                        archived_changes,
+                    )
+                }
+                None => Default::default(),
+            };
+
+        let (validations, project_audit) = match duckspec_root {
+            Some(ds) => run_audit(ds, Some(project_root)),
+            None => (HashMap::new(), ProjectAudit::default()),
+        };
 
         Self {
-            project_root,
-            duckspec_root: Some(root.to_path_buf()),
+            project_root: Some(project_root.to_path_buf()),
+            duckspec_root: duckspec_root.map(Path::to_path_buf),
             active_changes,
             archived_changes,
             cap_tree,
@@ -178,10 +201,10 @@ impl ProjectData {
     pub fn reload(&mut self) {
         let old_validations = std::mem::take(&mut self.validations);
         let old_project_audit = std::mem::take(&mut self.project_audit);
-        if let Some(root) = self.duckspec_root.clone() {
-            *self = Self::load_from(&root);
+        if let Some(project_root) = self.project_root.clone() {
+            *self = Self::open(&project_root);
         } else {
-            *self = Self::load();
+            *self = Self::default();
         }
         // Preserve existing audit results — only refresh on explicit user action.
         self.validations = old_validations;
@@ -236,32 +259,6 @@ pub fn strip_archive_prefix(name: &str) -> Option<&str> {
 }
 
 // ── Filesystem helpers ───────────────────────────────────────────────────────
-
-/// Find the repository root by walking up from cwd looking for `.git` or `.jj`.
-fn find_repo_root() -> Option<PathBuf> {
-    let mut dir = std::env::current_dir().ok()?;
-    loop {
-        if dir.join(".git").exists() || dir.join(".jj").exists() {
-            return Some(dir);
-        }
-        if !dir.pop() {
-            return None;
-        }
-    }
-}
-
-fn find_duckspec_root() -> Option<PathBuf> {
-    let mut dir = std::env::current_dir().ok()?;
-    loop {
-        let candidate = dir.join("duckspec");
-        if candidate.is_dir() {
-            return Some(candidate);
-        }
-        if !dir.pop() {
-            return None;
-        }
-    }
-}
 
 fn read_sorted_dir(dir: &Path) -> Vec<fs::DirEntry> {
     let Ok(rd) = fs::read_dir(dir) else {

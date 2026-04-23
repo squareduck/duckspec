@@ -305,6 +305,7 @@ pub fn view<'a>(state: &'a TextSearchState) -> Element<'a, Msg> {
     let input = text_input("Search in files…", &state.query)
         .on_input(Msg::QueryChanged)
         .size(theme::font_md())
+        .font(theme::content_font())
         .padding([theme::SPACING_SM, theme::SPACING_MD])
         .width(Length::Fill)
         .style(finder_input_style)
@@ -362,9 +363,11 @@ pub fn view<'a>(state: &'a TextSearchState) -> Element<'a, Msg> {
     let stack_hint = "⇧⏎ stack".to_string();
     let left = text(left_text)
         .size(theme::font_sm())
+        .font(theme::content_font())
         .color(theme::text_muted());
     let hints = text(format!("⏎ open   {stack_hint}"))
         .size(theme::font_sm())
+        .font(theme::content_font())
         .color(theme::text_muted());
     let status_bar = container(
         row![left, Space::new().width(Length::Fill), hints].align_y(Center),
@@ -409,6 +412,7 @@ fn scope_segment<'a>(this: Scope, active: Scope) -> Element<'a, Msg> {
     button(
         text(this.label())
             .size(theme::font_sm())
+            .font(theme::content_font())
             .color(if is_active {
                 theme::text_primary()
             } else {

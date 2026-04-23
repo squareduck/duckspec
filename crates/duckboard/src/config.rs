@@ -9,7 +9,18 @@ use serde::{Deserialize, Serialize};
 pub struct Config {
     pub ui: FontConfig,
     pub content: FontConfig,
+    pub projects: ProjectsConfig,
 }
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ProjectsConfig {
+    /// Most-recently-opened first. Capped at RECENT_CAP.
+    pub recent: Vec<PathBuf>,
+}
+
+/// Maximum number of entries kept in `projects.recent`.
+const RECENT_CAP: usize = 12;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -29,6 +40,28 @@ impl Default for Config {
                 font_family: String::from("monospace"),
                 font_size: 13.0,
             },
+            projects: ProjectsConfig::default(),
+        }
+    }
+}
+
+impl ProjectsConfig {
+    /// Promote `path` to the head of the recent list, deduping by canonical
+    /// form when available and capping the list length. No-op if `path` is
+    /// empty.
+    pub fn touch(&mut self, path: &Path) {
+        if path.as_os_str().is_empty() {
+            return;
+        }
+        let canonical = path.canonicalize().ok();
+        let target = canonical.as_deref().unwrap_or(path);
+        self.recent.retain(|p| {
+            let pc = p.canonicalize().ok();
+            pc.as_deref().unwrap_or(p.as_path()) != target
+        });
+        self.recent.insert(0, target.to_path_buf());
+        if self.recent.len() > RECENT_CAP {
+            self.recent.truncate(RECENT_CAP);
         }
     }
 }

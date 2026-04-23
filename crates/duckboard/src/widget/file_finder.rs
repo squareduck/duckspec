@@ -183,6 +183,7 @@ pub fn view<'a>(state: &'a FileFinderState) -> Element<'a, Msg> {
     let input = text_input("Search files...", &state.query)
         .on_input(Msg::QueryChanged)
         .size(theme::font_md())
+        .font(theme::content_font())
         .padding([theme::SPACING_SM, theme::SPACING_MD])
         .width(Length::Fill)
         .style(finder_input_style)
@@ -227,6 +228,7 @@ pub fn view<'a>(state: &'a FileFinderState) -> Element<'a, Msg> {
         .unwrap_or(0);
     let status = text(format!("{count} / {total}"))
         .size(theme::font_sm())
+        .font(theme::content_font())
         .color(theme::text_muted());
 
     let panel = container(

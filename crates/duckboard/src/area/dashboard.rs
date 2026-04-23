@@ -1,5 +1,7 @@
 //! Dashboard area — sleek start screen with changes and audit overview.
 
+use std::path::{Path, PathBuf};
+
 use iced::widget::text::Wrapping;
 use iced::widget::{Space, button, column, container, row, scrollable, svg, text};
 use iced::{Center, Element, Length};
@@ -21,6 +23,10 @@ pub enum Message {
     ExplorationClicked(String),
     AddExploration,
     SelectAuditError { change: String, artifact_id: String },
+    /// Show the project-picker modal.
+    OpenProjectPicker,
+    /// Open a specific project root immediately (used by the recents list).
+    OpenRecent(PathBuf),
 }
 
 // ── Update ───────────────────────────────────────────────────────────────────
@@ -43,31 +49,43 @@ pub fn view<'a>(
     _state: &'a State,
     project: &'a ProjectData,
     explorations: &'a [crate::chat_store::Exploration],
+    recent_projects: &'a [PathBuf],
 ) -> Element<'a, Message> {
-    let header = view_header();
+    let header = view_header(project);
 
-    let items = view_items_panel(project, explorations);
-    let audit = view_audit_panel(project);
+    let body: Element<'a, Message> = if project.project_root.is_none() {
+        column![
+            header,
+            Space::new().height(theme::SPACING_XL),
+            view_empty_state(recent_projects),
+        ]
+        .height(Length::Fill)
+        .into()
+    } else {
+        let items = view_items_panel(project, explorations);
+        let audit = view_audit_panel(project);
 
-    let divider = container(Space::new().height(Length::Fill))
-        .width(1.0)
-        .style(theme::divider);
+        let divider = container(Space::new().height(Length::Fill))
+            .width(1.0)
+            .style(theme::divider);
 
-    let panels = row![
-        container(items)
-            .width(Length::FillPortion(1))
+        let panels = row![
+            container(items)
+                .width(Length::FillPortion(1))
+                .height(Length::Fill)
+                .padding([0.0, theme::SPACING_XL]),
+            divider,
+            container(audit)
+                .width(Length::FillPortion(1))
+                .height(Length::Fill)
+                .padding([0.0, theme::SPACING_XL]),
+        ]
+        .height(Length::Fill);
+
+        column![header, Space::new().height(theme::SPACING_LG), panels]
             .height(Length::Fill)
-            .padding([0.0, theme::SPACING_XL]),
-        divider,
-        container(audit)
-            .width(Length::FillPortion(1))
-            .height(Length::Fill)
-            .padding([0.0, theme::SPACING_XL]),
-    ]
-    .height(Length::Fill);
-
-    let body =
-        column![header, Space::new().height(theme::SPACING_LG), panels,].height(Length::Fill);
+            .into()
+    };
 
     container(body)
         .padding([theme::SPACING_XL, theme::SPACING_LG])
@@ -78,7 +96,7 @@ pub fn view<'a>(
 
 // ── Header ──────────────────────────────────────────────────────────────────
 
-fn view_header<'a>() -> Element<'a, Message> {
+fn view_header<'a>(project: &'a ProjectData) -> Element<'a, Message> {
     let sep = || {
         text(" \u{00b7} ")
             .size(theme::font_sm())
@@ -113,7 +131,144 @@ fn view_header<'a>() -> Element<'a, Message> {
     ]
     .spacing(1.0);
 
-    container(logo).padding([0.0, theme::SPACING_LG]).into()
+    // Mirror the column layout of the panels below (equal FillPortion(1)
+    // halves separated by a 1px spacer, each padded by SPACING_XL, and
+    // each inner section offset by SPACING_SM) so the project name lines
+    // up with the "Audit" heading, and the logo sits above "Explorations".
+    let section_pad = |el: Element<'a, Message>| -> Element<'a, Message> {
+        container(el)
+            .padding([0.0, theme::SPACING_SM])
+            .width(Length::Fill)
+            .into()
+    };
+
+    let left_half = container(section_pad(logo.into()))
+        .width(Length::FillPortion(1))
+        .padding([0.0, theme::SPACING_XL]);
+
+    let right_half: Element<'a, Message> = if let Some(root) = &project.project_root {
+        let name = root
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| root.display().to_string());
+        let content = row![
+            text(name)
+                .size(22.0)
+                .color(theme::text_primary())
+                .wrapping(Wrapping::None),
+            Space::new().width(Length::Fill),
+            open_project_button("Change project"),
+        ]
+        .align_y(Center)
+        .width(Length::Fill);
+        container(section_pad(content.into()))
+            .width(Length::FillPortion(1))
+            .padding([0.0, theme::SPACING_XL])
+            .into()
+    } else {
+        container(Space::new())
+            .width(Length::FillPortion(1))
+            .padding([0.0, theme::SPACING_XL])
+            .into()
+    };
+
+    // 1px spacer where the panels' divider would be, so the two halves
+    // split at the exact same x as the divider below.
+    let spacer = Space::new().width(1.0);
+
+    row![left_half, spacer, right_half]
+        .align_y(Center)
+        .width(Length::Fill)
+        .into()
+}
+
+fn open_project_button<'a>(label: &'a str) -> Element<'a, Message> {
+    let plus_icon = svg(svg::Handle::from_memory(
+        crate::widget::collapsible::ICON_PLUS,
+    ))
+    .width(theme::font_md())
+    .height(theme::font_md())
+    .style(theme::svg_tint(theme::accent()));
+    button(
+        row![
+            plus_icon,
+            text(label).size(theme::font_md()).color(theme::accent()),
+        ]
+        .spacing(theme::SPACING_XS)
+        .align_y(Center),
+    )
+    .on_press(Message::OpenProjectPicker)
+    .padding([theme::SPACING_SM, theme::SPACING_MD])
+    .style(theme::dashboard_action)
+    .into()
+}
+
+// ── Empty state (no project open) ──────────────────────────────────────────
+
+fn view_empty_state<'a>(recent: &'a [PathBuf]) -> Element<'a, Message> {
+    let prompt = text("No project open")
+        .size(theme::font_md())
+        .color(theme::text_secondary());
+    let hint = text("Open a directory to get started. \u{2318}O")
+        .size(theme::font_sm())
+        .color(theme::text_muted());
+
+    let mut col = column![
+        prompt,
+        hint,
+        Space::new().height(theme::SPACING_MD),
+        open_project_button("Open project..."),
+    ]
+    .spacing(theme::SPACING_SM)
+    .align_x(iced::Alignment::Start)
+    .max_width(520.0);
+
+    if !recent.is_empty() {
+        col = col.push(Space::new().height(theme::SPACING_LG));
+        col = col.push(
+            text("Recent")
+                .size(theme::font_sm())
+                .color(theme::text_secondary()),
+        );
+        for path in recent {
+            col = col.push(recent_row(path));
+        }
+    }
+
+    // Mirror the header's nested padding (XL from the column container
+    // plus SM from the section wrapper) so empty-state text starts at
+    // the exact same x as the "duckspec" title above it.
+    container(container(col).padding([0.0, theme::SPACING_SM]))
+        .padding([0.0, theme::SPACING_XL])
+        .width(Length::Fill)
+        .into()
+}
+
+fn recent_row<'a>(path: &'a Path) -> Element<'a, Message> {
+    let label = path
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| path.display().to_string());
+    let full = path.display().to_string();
+
+    let content = column![
+        text(label)
+            .size(theme::font_md())
+            .color(theme::text_primary())
+            .wrapping(Wrapping::None),
+        text(full)
+            .size(theme::font_sm())
+            .color(theme::text_muted())
+            .wrapping(Wrapping::None),
+    ]
+    .spacing(2.0);
+
+    button(content)
+        .on_press(Message::OpenRecent(path.to_path_buf()))
+        .width(Length::Fill)
+        .padding([theme::SPACING_SM, theme::SPACING_MD])
+        .style(theme::list_item)
+        .into()
 }
 
 // ── Items panel (left) ─────────────────────────────────────────────────────

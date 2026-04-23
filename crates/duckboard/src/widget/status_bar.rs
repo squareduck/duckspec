@@ -1,15 +1,17 @@
 //! Thin status bar strip showing the user's current selection path.
 //!
 //! Each area produces its own `Vec<String>` of segments via its own
-//! `breadcrumbs(...)` function; this widget renders them uniformly.
+//! `breadcrumbs(...)` function; this widget renders them uniformly. An
+//! optional `trailing` label is right-aligned and used by the shell to show
+//! the current project folder.
 
 use iced::widget::text::Wrapping;
-use iced::widget::{container, row, text};
+use iced::widget::{Space, container, row, text};
 use iced::{Element, Length};
 
 use crate::theme;
 
-pub fn view<'a, Msg: 'a>(segments: Vec<String>) -> Element<'a, Msg> {
+pub fn view<'a, Msg: 'a>(segments: Vec<String>, trailing: Option<String>) -> Element<'a, Msg> {
     let mut bar = row![].spacing(theme::SPACING_XS);
     let last = segments.len().saturating_sub(1);
     for (i, seg) in segments.into_iter().enumerate() {
@@ -30,6 +32,15 @@ pub fn view<'a, Msg: 'a>(segments: Vec<String>) -> Element<'a, Msg> {
                 .size(theme::font_sm())
                 .wrapping(Wrapping::None)
                 .color(color),
+        );
+    }
+    if let Some(label) = trailing {
+        bar = bar.push(Space::new().width(Length::Fill));
+        bar = bar.push(
+            text(label)
+                .size(theme::font_sm())
+                .wrapping(Wrapping::None)
+                .color(theme::text_secondary()),
         );
     }
     container(bar)

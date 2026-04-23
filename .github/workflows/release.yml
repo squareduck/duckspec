@@ -1,0 +1,145 @@
+name: Release
+
+# On `v*` tag push (e.g. `v0.1.0`), build release artifacts and attach
+# them to a GitHub Release:
+#   - ds-<version>-aarch64-apple-darwin.tar.gz    (ds CLI, macOS ARM64)
+#   - ds-<version>-x86_64-unknown-linux-gnu.tar.gz (ds CLI, Linux x86_64)
+#   - Duckboard-<version>.dmg                     (duckboard GUI, macOS ARM64)
+#
+# Cut a release with: `just release 0.2.0` (bumps workspace version,
+# commits, pushes, and tags). Tag push triggers this workflow.
+#
+# duckboard is macOS-only (iced + winit); ds is the shared CLI and
+# builds on both platforms.
+
+on:
+  push:
+    tags:
+      - 'v*'
+  # Allow manual re-runs without re-tagging while iterating on the workflow.
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  # macOS: builds both binaries, packages ds as a tarball and duckboard
+  # as a DMG.
+  macos-arm64:
+    name: macOS (aarch64)
+    runs-on: macos-14
+    env:
+      TARGET: aarch64-apple-darwin
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+
+      - name: Install just
+        uses: extractions/setup-just@v2
+
+      - name: Resolve version
+        id: version
+        run: |
+          # Prefer the tag (e.g. v0.1.0 → 0.1.0); fall back to the
+          # workspace version for manual-dispatch runs.
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+              V="${GITHUB_REF_NAME#v}"
+          else
+              V=$(cargo pkgid -p duckboard | awk -F'#' '{print $NF}')
+          fi
+          echo "version=${V}" >> "$GITHUB_OUTPUT"
+
+      - name: Build release binaries
+        run: cargo build --release -p duckspec -p duckboard
+
+      - name: Package ds tarball
+        id: ds
+        run: |
+          mkdir -p dist
+          ARCHIVE="ds-${{ steps.version.outputs.version }}-${TARGET}.tar.gz"
+          tar -C target/release -czf "dist/${ARCHIVE}" ds
+          echo "archive=dist/${ARCHIVE}" >> "$GITHUB_OUTPUT"
+
+      - name: Build Duckboard DMG
+        run: just bundle-dmg
+
+      - name: Locate DMG
+        id: dmg
+        run: |
+          DMG=$(ls dist/Duckboard-*.dmg | head -1)
+          echo "dmg=${DMG}" >> "$GITHUB_OUTPUT"
+          ls -la dist/
+
+      - name: Create / update release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            ${{ steps.ds.outputs.archive }}
+            ${{ steps.dmg.outputs.dmg }}
+          generate_release_notes: true
+          draft: false
+
+      - name: Upload artifact (manual dispatch)
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-arm64
+          path: |
+            ${{ steps.ds.outputs.archive }}
+            ${{ steps.dmg.outputs.dmg }}
+
+  # Linux: ds CLI only. duckboard (iced/winit) needs a separate story
+  # for Linux — skipped for now.
+  linux-x86_64:
+    name: Linux (x86_64)
+    runs-on: ubuntu-latest
+    env:
+      TARGET: x86_64-unknown-linux-gnu
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+
+      - name: Resolve version
+        id: version
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+              V="${GITHUB_REF_NAME#v}"
+          else
+              V=$(cargo pkgid -p duckspec | awk -F'#' '{print $NF}')
+          fi
+          echo "version=${V}" >> "$GITHUB_OUTPUT"
+
+      - name: Build ds
+        run: cargo build --release -p duckspec
+
+      - name: Package ds tarball
+        id: ds
+        run: |
+          mkdir -p dist
+          ARCHIVE="ds-${{ steps.version.outputs.version }}-${TARGET}.tar.gz"
+          tar -C target/release -czf "dist/${ARCHIVE}" ds
+          echo "archive=dist/${ARCHIVE}" >> "$GITHUB_OUTPUT"
+
+      - name: Create / update release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ steps.ds.outputs.archive }}
+          generate_release_notes: true
+          draft: false
+
+      - name: Upload artifact (manual dispatch)
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-x86_64
+          path: ${{ steps.ds.outputs.archive }}

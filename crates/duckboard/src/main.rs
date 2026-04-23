@@ -44,6 +44,7 @@ struct State {
     settings: area::settings::State,
     file_finder: widget::file_finder::FileFinderState,
     text_search: widget::text_search::TextSearchState,
+    project_picker: widget::project_picker::ProjectPickerState,
     /// Shared via `Arc` so background tasks (e.g. search-stack highlighting)
     /// can hold a handle without blocking the UI on syntax-set ownership.
     highlighter: Arc<highlight::SyntaxHighlighter>,
@@ -51,29 +52,21 @@ struct State {
 
 impl State {
     fn new() -> Self {
-        let project = ProjectData::load();
-        tracing::info!(
-            root = ?project.duckspec_root,
-            caps = project.cap_count,
-            codex = project.codex_count,
-            changes = project.active_changes.len(),
-            "project loaded"
-        );
-        let mut change = area::change::State::new(project.project_root.as_deref());
-        if let Some(root) = &project.project_root {
-            change.set_changed_files(vcs::changed_files(root));
-        }
-
-        // Expand all tree nodes by default.
-        let mut caps_expanded = std::collections::HashSet::new();
-        data::TreeNode::collect_parent_ids(&project.cap_tree, &mut caps_expanded);
-        let caps_state = area::caps::State {
-            expanded_nodes: caps_expanded,
-            ..Default::default()
-        };
+        // Start with no project open — the user picks one from the dashboard
+        // (button, recents list, or Cmd+O). Previously we walked up from CWD
+        // for a `duckspec/` dir, but that breaks for launches from a GUI
+        // (`.app` bundles have CWD=`/`) and surprised users who wanted a
+        // blank slate.
+        let project = ProjectData::default();
+        let change = area::change::State::new(None);
+        let caps_state = area::caps::State::default();
 
         let config = config::load();
         theme::set_fonts(&config);
+        tracing::info!(
+            recent = config.projects.recent.len(),
+            "duckboard started with no project"
+        );
         Self {
             active_area: Area::Dashboard,
             project,
@@ -85,7 +78,37 @@ impl State {
             settings: area::settings::State::default(),
             file_finder: widget::file_finder::FileFinderState::default(),
             text_search: widget::text_search::TextSearchState::default(),
+            project_picker: widget::project_picker::ProjectPickerState::default(),
             highlighter: Arc::new(highlight::SyntaxHighlighter::new()),
+        }
+    }
+
+    /// Switch to the project rooted at `path`. Rebuilds subordinate area
+    /// state so stale tabs / interactions from the previous project are
+    /// discarded, then refreshes audit and recents.
+    fn open_project(&mut self, path: PathBuf) {
+        tracing::info!(path = %path.display(), "opening project");
+        self.project = ProjectData::open(&path);
+        // Rebuild area states tied to the old project root. Dropping the
+        // previous `change::State` also drops any live interactions /
+        // agent sessions / terminals from that project.
+        self.change = area::change::State::new(self.project.project_root.as_deref());
+        if let Some(root) = &self.project.project_root {
+            self.change.set_changed_files(vcs::changed_files(root));
+        }
+        let mut caps_expanded = std::collections::HashSet::new();
+        data::TreeNode::collect_parent_ids(&self.project.cap_tree, &mut caps_expanded);
+        self.caps = area::caps::State {
+            expanded_nodes: caps_expanded,
+            ..Default::default()
+        };
+        self.codex = area::codex::State::default();
+        self.project.revalidate();
+        self.active_area = Area::Dashboard;
+
+        self.config.projects.touch(&path);
+        if let Err(e) = config::save(&self.config) {
+            tracing::warn!("failed to persist recent projects: {e}");
         }
     }
 
@@ -164,6 +187,10 @@ enum Message {
     FileFinder(widget::file_finder::Msg),
     // Project-wide text search
     TextSearch(widget::text_search::Msg),
+    // Project picker (choose a project root to open).
+    ProjectPicker(widget::project_picker::Msg),
+    /// Open a project rooted at this path (from picker confirm or recents).
+    OpenProject(PathBuf),
     // Async search-stack highlighting: one message per unique file once the
     // background `highlight_lines_until` job finishes. `spans` is wrapped in
     // `Arc` so the message is cheap to clone; the handler clones the inner
@@ -385,6 +412,66 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                 }
             }
         }
+        Message::ProjectPicker(msg) => {
+            use widget::project_picker::Msg;
+            match msg {
+                Msg::Open => {
+                    state.project_picker.open();
+                    for ix in state.change.interactions.values_mut() {
+                        ix.terminal_focused = false;
+                    }
+                    state.caps.interaction.terminal_focused = false;
+                    state.codex.interaction.terminal_focused = false;
+                    return Task::batch([
+                        iced::widget::operation::focus(widget::project_picker::INPUT_ID),
+                        iced::widget::operation::move_cursor_to_end(
+                            widget::project_picker::INPUT_ID,
+                        ),
+                    ]);
+                }
+                Msg::Close => {
+                    state.project_picker.close();
+                }
+                Msg::QueryChanged(q) => {
+                    if state.project_picker.handle_input(q) {
+                        // The handler rewrote the query (erased a full
+                        // segment); snap the cursor to the new end so the
+                        // widget's internal offset doesn't land past-EOL.
+                        return iced::widget::operation::move_cursor_to_end(
+                            widget::project_picker::INPUT_ID,
+                        );
+                    }
+                }
+                Msg::SelectNext => {
+                    state.project_picker.select_next();
+                }
+                Msg::SelectPrev => {
+                    state.project_picker.select_prev();
+                }
+                Msg::TabComplete => {
+                    state.project_picker.tab_complete();
+                    // Snap the cursor to the end of the freshly-expanded
+                    // path so the next keystroke continues typing instead
+                    // of inserting mid-word.
+                    return iced::widget::operation::move_cursor_to_end(
+                        widget::project_picker::INPUT_ID,
+                    );
+                }
+                Msg::Confirm => {
+                    if let Some(path) = state.project_picker.resolved_path() {
+                        state.project_picker.close();
+                        return update(state, Message::OpenProject(path));
+                    }
+                }
+                Msg::PickPath(path) => {
+                    state.project_picker.close();
+                    return update(state, Message::OpenProject(path));
+                }
+            }
+        }
+        Message::OpenProject(path) => {
+            state.open_project(path);
+        }
         Message::SearchStackHighlighted {
             area,
             tab_id,
@@ -531,6 +618,15 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
         }
         Message::Dashboard(msg) => {
             match &msg {
+                area::dashboard::Message::OpenProjectPicker => {
+                    return update(
+                        state,
+                        Message::ProjectPicker(widget::project_picker::Msg::Open),
+                    );
+                }
+                area::dashboard::Message::OpenRecent(path) => {
+                    return update(state, Message::OpenProject(path.clone()));
+                }
                 area::dashboard::Message::ChangeClicked(name)
                 | area::dashboard::Message::ArchivedChangeClicked(name)
                 | area::dashboard::Message::ExplorationClicked(name) => {
@@ -868,7 +964,19 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
         Message::KeyPress(key, mods, text) => {
             // Cmd+P: open file finder.
             if mods.command() && key == keyboard::Key::Character("p".into()) {
-                return update(state, Message::FileFinder(widget::file_finder::Msg::Open));
+                // Skip when no project is loaded — file finder needs a project
+                // root to walk. Cmd+O is the open-project key in that case.
+                if state.project.project_root.is_some() {
+                    return update(state, Message::FileFinder(widget::file_finder::Msg::Open));
+                }
+            }
+
+            // Cmd+O: open the project picker.
+            if mods.command() && key == keyboard::Key::Character("o".into()) {
+                return update(
+                    state,
+                    Message::ProjectPicker(widget::project_picker::Msg::Open),
+                );
             }
 
             // Cmd+Shift+F: open project-wide text search.
@@ -922,6 +1030,61 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                         let _ = update(
                             state,
                             Message::TextSearch(widget::text_search::Msg::SelectPrev),
+                        );
+                    }
+                    _ => {}
+                }
+                return Task::none();
+            }
+
+            // When project picker is visible, route navigation keys.
+            if state.project_picker.visible {
+                use keyboard::key::Named;
+                match &key {
+                    keyboard::Key::Named(Named::Escape) => {
+                        let _ = update(
+                            state,
+                            Message::ProjectPicker(widget::project_picker::Msg::Close),
+                        );
+                    }
+                    keyboard::Key::Named(Named::Tab) => {
+                        // Must propagate the Task — TabComplete returns a
+                        // `move_cursor_to_end` operation that would be
+                        // dropped by `let _ = ...`, leaving the caret in
+                        // the middle of the freshly-completed path.
+                        return update(
+                            state,
+                            Message::ProjectPicker(widget::project_picker::Msg::TabComplete),
+                        );
+                    }
+                    keyboard::Key::Named(Named::Enter) => {
+                        return update(
+                            state,
+                            Message::ProjectPicker(widget::project_picker::Msg::Confirm),
+                        );
+                    }
+                    keyboard::Key::Named(Named::ArrowDown) => {
+                        let _ = update(
+                            state,
+                            Message::ProjectPicker(widget::project_picker::Msg::SelectNext),
+                        );
+                    }
+                    keyboard::Key::Named(Named::ArrowUp) => {
+                        let _ = update(
+                            state,
+                            Message::ProjectPicker(widget::project_picker::Msg::SelectPrev),
+                        );
+                    }
+                    _ if mods.control() && key == keyboard::Key::Character("n".into()) => {
+                        let _ = update(
+                            state,
+                            Message::ProjectPicker(widget::project_picker::Msg::SelectNext),
+                        );
+                    }
+                    _ if mods.control() && key == keyboard::Key::Character("p".into()) => {
+                        let _ = update(
+                            state,
+                            Message::ProjectPicker(widget::project_picker::Msg::SelectPrev),
                         );
                     }
                     _ => {}
@@ -2163,10 +2326,13 @@ fn view(state: &State) -> Element<'_, Message> {
     );
 
     let area_content: Element<'_, Message> = match state.active_area {
-        Area::Dashboard => {
-            area::dashboard::view(&state.dashboard, &state.project, &state.change.explorations)
-                .map(Message::Dashboard)
-        }
+        Area::Dashboard => area::dashboard::view(
+            &state.dashboard,
+            &state.project,
+            &state.change.explorations,
+            &state.config.projects.recent,
+        )
+        .map(Message::Dashboard),
         Area::Change => area::change::view(&state.change, &state.project).map(Message::Change),
         Area::Caps => area::caps::view(&state.caps, &state.project).map(Message::Caps),
         Area::Codex => area::codex::view(&state.codex, &state.project).map(Message::Codex),
@@ -2182,7 +2348,12 @@ fn view(state: &State) -> Element<'_, Message> {
         Area::Codex => area::codex::breadcrumbs(&state.codex, &state.project),
         Area::Settings => area::settings::breadcrumbs(),
     };
-    let status_bar = widget::status_bar::view(segments);
+    let project_label = state
+        .project
+        .project_root
+        .as_ref()
+        .and_then(|p| p.file_name().map(|n| n.to_string_lossy().to_string()));
+    let status_bar = widget::status_bar::view(segments, project_label);
     let status_divider = container(Space::new().width(Length::Fill))
         .height(1.0)
         .style(theme::divider);
@@ -2205,7 +2376,14 @@ fn view(state: &State) -> Element<'_, Message> {
     ]
     .height(Length::Fill);
 
-    if state.file_finder.visible {
+    if state.project_picker.visible {
+        let overlay = widget::project_picker::view(
+            &state.project_picker,
+            &state.config.projects.recent,
+        )
+        .map(Message::ProjectPicker);
+        stack![main_view, overlay].into()
+    } else if state.file_finder.visible {
         let overlay = widget::file_finder::view(&state.file_finder).map(Message::FileFinder);
         stack![main_view, overlay].into()
     } else if state.text_search.visible {
