@@ -43,7 +43,7 @@ const SECTION_HEADING_SIZE: f32 = 18.0;
 pub fn view<'a>(
     _state: &'a State,
     project: &'a ProjectData,
-    explorations: &'a [String],
+    explorations: &'a [crate::chat_store::Exploration],
 ) -> Element<'a, Message> {
     let header = view_header();
 
@@ -121,7 +121,7 @@ fn view_header<'a>() -> Element<'a, Message> {
 
 fn view_items_panel<'a>(
     project: &'a ProjectData,
-    explorations: &'a [String],
+    explorations: &'a [crate::chat_store::Exploration],
 ) -> Element<'a, Message> {
     let mut content = column![].spacing(theme::SPACING_LG);
 
@@ -156,8 +156,8 @@ fn view_items_panel<'a>(
 
     // ── Explorations ────────────────────────────────────────────────────
     let mut exp_list = column![].spacing(2.0);
-    for name in explorations {
-        exp_list = exp_list.push(exploration_row(name));
+    for exp in explorations {
+        exp_list = exp_list.push(exploration_row(&exp.id, &exp.display_name));
     }
     let plus_icon = svg(svg::Handle::from_memory(
         crate::widget::collapsible::ICON_PLUS,
@@ -622,7 +622,7 @@ fn change_row<'a>(
         .into()
 }
 
-fn exploration_row(name: &str) -> Element<'_, Message> {
+fn exploration_row<'a>(id: &str, display_name: &'a str) -> Element<'a, Message> {
     let icon = svg(svg::Handle::from_memory(ICON_EXPLORE))
         .width(ICON_SIZE)
         .height(ICON_SIZE)
@@ -630,7 +630,7 @@ fn exploration_row(name: &str) -> Element<'_, Message> {
 
     let label = row![
         icon,
-        text(name)
+        text(display_name)
             .size(theme::font_md())
             .color(theme::text_primary())
             .wrapping(Wrapping::None),
@@ -640,7 +640,7 @@ fn exploration_row(name: &str) -> Element<'_, Message> {
     .width(Length::Fill);
 
     button(label)
-        .on_press(Message::ExplorationClicked(name.to_string()))
+        .on_press(Message::ExplorationClicked(id.to_string()))
         .width(Length::Fill)
         .padding([theme::SPACING_SM, theme::SPACING_MD])
         .style(theme::list_item)

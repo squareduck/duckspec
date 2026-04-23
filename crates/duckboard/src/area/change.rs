@@ -6,7 +6,9 @@ use std::path::{Path, PathBuf};
 use iced::widget::{Space, button, column, container, row, text};
 use iced::{Element, Length};
 
+use crate::chat_store::Exploration;
 use crate::data::{ChangeData, ProjectData, StepCompletion};
+use crate::scope::ScopeKind;
 use crate::theme;
 use crate::vcs::{ChangedFile, FileStatus};
 use crate::widget::list_view::{self, ListRow};
@@ -43,11 +45,13 @@ pub struct State {
     /// Per-change interaction states keyed by change name.
     /// Switching changes keeps previous sessions alive.
     pub interactions: HashMap<String, InteractionState>,
-    /// Virtual exploration changes (not persisted to duckspec).
-    pub explorations: Vec<String>,
-    /// Counter for generating unique exploration names.
+    /// Virtual exploration changes (not persisted to duckspec). Each carries
+    /// a stable `id` used as the on-disk scope key plus a mutable
+    /// `display_name` the UI shows.
+    pub explorations: Vec<Exploration>,
+    /// Counter for seeding default exploration display names.
     pub exploration_counter: usize,
-    /// Name of the exploration row currently under the cursor, if any. When
+    /// Id of the exploration row currently under the cursor, if any. When
     /// set, the exploration row's icon slot renders a close button instead.
     pub hovered_exploration: Option<String>,
     /// Vertical scroll offset for the list column.
@@ -141,30 +145,52 @@ impl State {
     /// Whether the currently selected change is an exploration (virtual).
     pub fn is_exploration_selected(&self) -> bool {
         self.selected_change
-            .as_ref()
-            .is_some_and(|name| self.explorations.contains(name))
+            .as_deref()
+            .is_some_and(|id| self.explorations.iter().any(|e| e.id == id))
+    }
+
+    /// Classify a scope key: is it an exploration or a real change?
+    pub fn scope_kind_for(&self, scope: &str) -> ScopeKind {
+        if self.explorations.iter().any(|e| e.id == scope) {
+            ScopeKind::Exploration
+        } else {
+            ScopeKind::Change
+        }
+    }
+
+    /// Human-readable label for a scope: exploration display_name if the
+    /// scope is an exploration id, else the scope key itself.
+    pub fn scope_display_label(&self, scope: &str) -> String {
+        self.explorations
+            .iter()
+            .find(|e| e.id == scope)
+            .map(|e| e.display_name.clone())
+            .unwrap_or_else(|| scope.to_string())
     }
 
     /// Promote an exploration to a real change: remove from explorations list,
-    /// migrate interaction state and chat sessions to the new name.
+    /// migrate interaction state and chat sessions from the exploration's id
+    /// scope to the new change name. Lookup is by exploration id; display
+    /// name is irrelevant here.
     pub fn promote_exploration(
         &mut self,
-        exploration_name: &str,
+        exploration_id: &str,
         real_name: &str,
         project_root: Option<&Path>,
     ) {
-        self.explorations.retain(|n| n != exploration_name);
-        if let Some(mut ix) = self.interactions.remove(exploration_name) {
+        self.explorations.retain(|e| e.id != exploration_id);
+        if let Some(mut ix) = self.interactions.remove(exploration_id) {
             for ax in ix.sessions.iter_mut() {
                 ax.session.scope = real_name.to_string();
+                ax.scope_kind = ScopeKind::Change;
             }
-            interaction::reconcile_display_names(&mut ix.sessions);
+            interaction::reconcile_display_names(&mut ix.sessions, real_name);
             self.interactions.insert(real_name.to_string(), ix);
         }
-        if self.selected_change.as_deref() == Some(exploration_name) {
+        if self.selected_change.as_deref() == Some(exploration_id) {
             self.selected_change = Some(real_name.to_string());
         }
-        crate::chat_store::rename_scope(exploration_name, real_name, project_root);
+        crate::chat_store::rename_scope(exploration_id, real_name, project_root);
         crate::chat_store::save_explorations(
             &self.explorations,
             self.exploration_counter,
@@ -185,7 +211,7 @@ impl State {
             for ax in ix.sessions.iter_mut() {
                 ax.session.scope = archived_name.to_string();
             }
-            interaction::reconcile_display_names(&mut ix.sessions);
+            interaction::reconcile_display_names(&mut ix.sessions, archived_name);
             self.interactions.insert(archived_name.to_string(), ix);
         }
         if self.selected_change.as_deref() == Some(old_name) {
@@ -276,7 +302,8 @@ pub fn update(
             state.expanded_nodes.clear();
 
             // Expand tree nodes for real changes.
-            if !state.explorations.contains(&name)
+            let is_exploration = state.explorations.iter().any(|e| e.id == name);
+            if !is_exploration
                 && let Some(change) = project
                     .active_changes
                     .iter()
@@ -290,8 +317,17 @@ pub fn update(
             }
 
             // Auto-open interaction and ensure at least one session exists.
+            let kind = state.scope_kind_for(&name);
+            let label = state.scope_display_label(&name);
             let ix = state.interactions.entry(name.clone()).or_default();
-            interaction::ensure_sessions(ix, &name, project.project_root.as_deref(), highlighter);
+            interaction::ensure_sessions_with_label(
+                ix,
+                &name,
+                &label,
+                kind,
+                project.project_root.as_deref(),
+                highlighter,
+            );
             if !ix.visible {
                 ix.visible = true;
             }
@@ -321,25 +357,29 @@ pub fn update(
                 Some(n) => n,
                 None => return,
             };
+            let kind = state.scope_kind_for(&scope);
+            let label = state.scope_display_label(&scope);
             match msg {
                 interaction::Msg::NewSession => {
                     let Some(ix) = state.active_interaction_mut() else {
                         return;
                     };
-                    interaction::ensure_sessions(
+                    interaction::ensure_sessions_with_label(
                         ix,
                         &scope,
+                        &label,
+                        kind,
                         project.project_root.as_deref(),
                         highlighter,
                     );
-                    let new_session = AgentSession::new(scope.clone());
+                    let new_session = AgentSession::new(scope.clone(), kind);
                     let _ = crate::chat_store::save_session(
                         &new_session.session,
                         project.project_root.as_deref(),
                     );
                     ix.sessions.insert(0, new_session);
                     ix.active_session = 0;
-                    interaction::reconcile_display_names(&mut ix.sessions);
+                    interaction::reconcile_display_names(&mut ix.sessions, &label);
                 }
                 interaction::Msg::SelectSession(id) => {
                     let Some(ix) = state.active_interaction_mut() else {
@@ -355,7 +395,13 @@ pub fn update(
                     let Some(ix) = state.active_interaction_mut() else {
                         return;
                     };
-                    clear_active_session(ix, &scope, project.project_root.as_deref());
+                    clear_active_session(
+                        ix,
+                        &scope,
+                        &label,
+                        kind,
+                        project.project_root.as_deref(),
+                    );
                 }
                 other => {
                     let Some(ix) = state.active_interaction_mut() else {
@@ -365,6 +411,8 @@ pub fn update(
                         ix,
                         other,
                         &scope,
+                        &label,
+                        kind,
                         project.project_root.as_deref(),
                         highlighter,
                     );
@@ -412,40 +460,49 @@ pub fn update(
         }
         Message::AddExploration => {
             state.exploration_counter += 1;
-            let name = format!("Exploration {}", state.exploration_counter);
-            state.explorations.push(name.clone());
-            state.selected_change = Some(name.clone());
+            let exp = Exploration::new(state.exploration_counter);
+            let id = exp.id.clone();
+            let display_name = exp.display_name.clone();
+            state.explorations.push(exp);
+            state.selected_change = Some(id.clone());
             crate::chat_store::save_explorations(
                 &state.explorations,
                 state.exploration_counter,
                 project.project_root.as_deref(),
             );
             // Auto-open interaction panel with a fresh session.
-            let ix = state.interactions.entry(name.clone()).or_default();
-            interaction::ensure_sessions(ix, &name, project.project_root.as_deref(), highlighter);
+            let ix = state.interactions.entry(id.clone()).or_default();
+            interaction::ensure_sessions_with_label(
+                ix,
+                &id,
+                &display_name,
+                ScopeKind::Exploration,
+                project.project_root.as_deref(),
+                highlighter,
+            );
             ix.visible = true;
         }
-        Message::RemoveExploration(name) => {
-            state.explorations.retain(|n| n != &name);
-            state.interactions.remove(&name);
-            if state.selected_change.as_deref() == Some(&name) {
+        Message::RemoveExploration(id) => {
+            state.explorations.retain(|e| e.id != id);
+            state.interactions.remove(&id);
+            if state.selected_change.as_deref() == Some(&id) {
                 state.selected_change = None;
             }
-            if state.hovered_exploration.as_deref() == Some(&name) {
+            if state.hovered_exploration.as_deref() == Some(&id) {
                 state.hovered_exploration = None;
             }
-            crate::chat_store::delete_scope(&name, project.project_root.as_deref());
+            crate::chat_store::delete_scope(&id, project.project_root.as_deref());
             crate::chat_store::save_explorations(
                 &state.explorations,
                 state.exploration_counter,
                 project.project_root.as_deref(),
             );
         }
-        Message::HoverExploration(name) => {
-            state.hovered_exploration = Some(name);
+        Message::HoverExploration(id) => {
+            state.hovered_exploration = Some(id);
         }
-        Message::UnhoverExploration(name) => {
-            if state.hovered_exploration.as_deref() == Some(name.as_str()) {
+        Message::UnhoverExploration(id) => {
+            if state.hovered_exploration.as_deref() == Some(id.as_str()) {
                 state.hovered_exploration = None;
             }
         }
@@ -480,7 +537,7 @@ pub fn compute_obvious_command(state: &State, project: &ProjectData) -> Option<S
     let selected = state.selected_change.as_deref()?;
 
     // Exploration (virtual) — always orient first.
-    if state.explorations.iter().any(|e| e == selected) {
+    if state.explorations.iter().any(|e| e.id == selected) {
         return Some("ds-explore".into());
     }
 
@@ -644,8 +701,8 @@ pub fn breadcrumbs(state: &State, project: &ProjectData) -> Vec<String> {
     };
 
     // Exploration mode renders no tab; show only the exploration root.
-    if state.explorations.iter().any(|e| e == selected) {
-        return vec!["Explorations".into(), selected.into()];
+    if let Some(exp) = state.explorations.iter().find(|e| e.id == selected) {
+        return vec!["Explorations".into(), exp.display_name.clone()];
     }
 
     let is_archived = project.archived_changes.iter().any(|c| c.name == selected);
@@ -803,7 +860,7 @@ mod breadcrumb_tests {
         assert_eq!(tab_breadcrumbs("weird-id", "foo", false), vec!["weird-id"]);
     }
 
-    fn make_state(selected: &str, explorations: &[&str]) -> State {
+    fn make_state(selected: &str, explorations: &[(&str, &str)]) -> State {
         State {
             selected_change: Some(selected.to_string()),
             expanded_sections: HashSet::new(),
@@ -812,7 +869,13 @@ mod breadcrumb_tests {
             tabs: tab_bar::TabState::default(),
             changed_files: vec![],
             interactions: HashMap::new(),
-            explorations: explorations.iter().map(|s| s.to_string()).collect(),
+            explorations: explorations
+                .iter()
+                .map(|(id, name)| Exploration {
+                    id: (*id).to_string(),
+                    display_name: (*name).to_string(),
+                })
+                .collect(),
             exploration_counter: 0,
             hovered_exploration: None,
             list_scroll: 0.0,
@@ -839,7 +902,10 @@ mod breadcrumb_tests {
 
     #[test]
     fn exploration_root_after_selection() {
-        let state = make_state("Exploration 1", &["Exploration 1"]);
+        let state = make_state(
+            "exploration-1000",
+            &[("exploration-1000", "Exploration 1")],
+        );
         let project = make_project(&[], &[]);
         assert_eq!(
             breadcrumbs(&state, &project),
@@ -925,7 +991,10 @@ mod breadcrumb_tests {
 
     #[test]
     fn obvious_exploration_always_explore() {
-        let state = make_state("Exploration 1", &["Exploration 1"]);
+        let state = make_state(
+            "exploration-1000",
+            &[("exploration-1000", "Exploration 1")],
+        );
         let project = make_project(&[], &[]);
         assert_eq!(
             compute_obvious_command(&state, &project).as_deref(),
@@ -1112,10 +1181,18 @@ mod breadcrumb_tests {
 }
 
 /// Reset the active session for a scope: cancel agent, delete persisted file,
-/// and replace with a fresh empty session under a new id.
-fn clear_active_session(ix: &mut InteractionState, scope: &str, project_root: Option<&Path>) {
+/// and replace with a fresh empty session under a new id. `scope_label` is
+/// the human name shown in the session dropdown.
+fn clear_active_session(
+    ix: &mut InteractionState,
+    scope: &str,
+    scope_label: &str,
+    scope_kind: ScopeKind,
+    project_root: Option<&Path>,
+) {
     if ix.sessions.is_empty() {
-        ix.sessions.push(AgentSession::new(scope.to_string()));
+        ix.sessions
+            .push(AgentSession::new(scope.to_string(), scope_kind));
         ix.active_session = 0;
         return;
     }
@@ -1126,9 +1203,9 @@ fn clear_active_session(ix: &mut InteractionState, scope: &str, project_root: Op
         }
         crate::chat_store::delete_session(&ax.session.scope, &ax.session.id, project_root);
     }
-    ix.sessions[idx] = AgentSession::new(scope.to_string());
+    ix.sessions[idx] = AgentSession::new(scope.to_string(), scope_kind);
     ix.active_session = idx;
-    interaction::reconcile_display_names(&mut ix.sessions);
+    interaction::reconcile_display_names(&mut ix.sessions, scope_label);
 }
 
 fn view_list<'a>(state: &'a State, project: &'a ProjectData) -> Element<'a, Message> {
@@ -1137,19 +1214,19 @@ fn view_list<'a>(state: &'a State, project: &'a ProjectData) -> Element<'a, Mess
     // Exploration changes (virtual) — listed first. On hover, the icon
     // slot is swapped for a close button so the close affordance is always
     // at the left edge of the row, unaffected by horizontal panning.
-    for name in &state.explorations {
-        let is_selected = state.selected_change.as_deref() == Some(name.as_str());
-        let is_hovered = state.hovered_exploration.as_deref() == Some(name.as_str());
-        let mut r = ListRow::new(name.as_str())
+    for exp in &state.explorations {
+        let is_selected = state.selected_change.as_deref() == Some(exp.id.as_str());
+        let is_hovered = state.hovered_exploration.as_deref() == Some(exp.id.as_str());
+        let mut r = ListRow::new(exp.display_name.as_str())
             .selected(is_selected)
-            .on_press(Message::SelectChange(name.clone()))
+            .on_press(Message::SelectChange(exp.id.clone()))
             .on_hover(
-                Message::HoverExploration(name.clone()),
-                Message::UnhoverExploration(name.clone()),
+                Message::HoverExploration(exp.id.clone()),
+                Message::UnhoverExploration(exp.id.clone()),
             );
         if is_hovered {
             r = r.leading(collapsible::close_button_sized(
-                Message::RemoveExploration(name.clone()),
+                Message::RemoveExploration(exp.id.clone()),
                 list_view::ICON_SIZE,
             ));
         } else {

@@ -53,6 +53,12 @@ pub struct ChatSession {
     /// Set after the first successful turn; persisted so conversations can be
     /// resumed across app restarts.
     pub claude_session_id: Option<String>,
+    /// Short summary produced by the title hook after the first
+    /// user/assistant exchange. `Some` for change sessions that have been
+    /// summarised; `None` otherwise (including all exploration/caps/codex
+    /// sessions — explorations store their title on the Exploration itself,
+    /// caps/codex don't summarise). Also used as a "don't resummarise" flag.
+    pub title: Option<String>,
 }
 
 impl ChatSession {
@@ -74,6 +80,7 @@ impl ChatSession {
             is_streaming: false,
             pending_text: String::new(),
             claude_session_id: None,
+            title: None,
         }
     }
 }
@@ -87,13 +94,52 @@ struct PersistedSession {
     messages: Vec<ChatMessage>,
     #[serde(default)]
     claude_session_id: Option<String>,
+    #[serde(default)]
+    title: Option<String>,
+}
+
+/// Return `(first user text, first assistant text)` for a session, or `None`
+/// if either half is missing. Used by the title summariser after the first
+/// successful turn.
+pub fn first_exchange(session: &ChatSession) -> Option<(String, String)> {
+    let mut user: Option<String> = None;
+    let mut assistant: Option<String> = None;
+    for msg in &session.messages {
+        for block in &msg.content {
+            if let ContentBlock::Text(t) = block {
+                match msg.role {
+                    Role::User if user.is_none() => {
+                        user = Some(t.clone());
+                    }
+                    Role::Assistant if user.is_some() && assistant.is_none() => {
+                        assistant = Some(t.clone());
+                    }
+                    _ => {}
+                }
+            }
+        }
+        if user.is_some() && assistant.is_some() {
+            break;
+        }
+    }
+    match (user, assistant) {
+        (Some(u), Some(a)) => Some((u, a)),
+        _ => None,
+    }
 }
 
 /// Recompute `display_name` on every session so that sessions sharing the
 /// same minute-prefix get `#1`, `#2`, ... suffixes in chronological order,
 /// and singletons have no suffix.
-pub fn reconcile_display_names(sessions: &mut [ChatSession]) {
+///
+/// `scope_label` is the human-readable label for this scope (change name,
+/// exploration display_name, or "caps"/"codex") — used when the session
+/// hasn't been summarised yet. Sessions with `title` set use that instead.
+pub fn reconcile_display_names(sessions: &mut [ChatSession], scope_label: &str) {
     use std::collections::HashMap;
+    let label_for = |s: &ChatSession| -> String {
+        s.title.clone().unwrap_or_else(|| scope_label.to_string())
+    };
     let mut groups: HashMap<String, Vec<usize>> = HashMap::new();
     for (i, s) in sessions.iter().enumerate() {
         let prefix = minute_prefix_from_nanos(s.created_at_nanos);
@@ -104,11 +150,13 @@ pub fn reconcile_display_names(sessions: &mut [ChatSession]) {
         if indices.len() == 1 {
             let i = indices[0];
             let minute = minute_prefix_from_nanos(sessions[i].created_at_nanos);
-            sessions[i].display_name = format!("{} {}", minute, sessions[i].scope);
+            let label = label_for(&sessions[i]);
+            sessions[i].display_name = format!("{minute} {label}");
         } else {
             for (n, i) in indices.iter().enumerate() {
                 let minute = minute_prefix_from_nanos(sessions[*i].created_at_nanos);
-                sessions[*i].display_name = format!("{} #{} {}", minute, n + 1, sessions[*i].scope);
+                let label = label_for(&sessions[*i]);
+                sessions[*i].display_name = format!("{minute} #{} {label}", n + 1);
             }
         }
     }
@@ -197,10 +245,14 @@ pub fn load_sessions_for(scope: &str, project_root: Option<&Path>) -> Vec<ChatSe
             is_streaming: false,
             pending_text: String::new(),
             claude_session_id: persisted.claude_session_id,
+            title: persisted.title,
         });
     }
     sessions.sort_by(|a, b| b.created_at_nanos.cmp(&a.created_at_nanos));
-    reconcile_display_names(&mut sessions);
+    // At load time we don't yet have the caller's preferred label (exploration
+    // display_name may differ from scope key). Use the scope key as a
+    // placeholder; callers re-reconcile with the right label afterwards.
+    reconcile_display_names(&mut sessions, scope);
     sessions
 }
 
@@ -214,6 +266,7 @@ pub fn save_session(session: &ChatSession, project_root: Option<&Path>) -> anyho
         created_at_nanos: session.created_at_nanos,
         messages: session.messages.clone(),
         claude_session_id: session.claude_session_id.clone(),
+        title: session.title.clone(),
     };
     let data = serde_json::to_string_pretty(&persisted)?;
     std::fs::write(path, data)?;
@@ -253,15 +306,38 @@ pub fn rename_scope(old: &str, new: &str, project_root: Option<&Path>) {
     }
 }
 
-// ── Exploration persistence (unchanged) ─────────────────────────────────────
+// ── Exploration persistence ─────────────────────────────────────────────────
 
+/// An exploration tracks a free-form chat scope that may eventually be promoted
+/// to a real change. `id` is the stable directory key for `chats/<id>/`;
+/// `display_name` is what the UI shows and can be updated by the title
+/// summariser without moving the chat directory.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Exploration {
+    pub id: String,
+    pub display_name: String,
+}
+
+impl Exploration {
+    /// Mint a new exploration with a stable, timestamp-based id. `counter` is
+    /// only used to seed the default display_name — the id is derived from
+    /// the wall clock so two quick-fire creates don't collide.
+    pub fn new(counter: usize) -> Self {
+        let nanos = current_local_datetime().unix_timestamp_nanos();
+        Self {
+            id: format!("exploration-{nanos}"),
+            display_name: format!("Exploration {counter}"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 struct ExplorationData {
-    explorations: Vec<String>,
+    explorations: Vec<Exploration>,
     counter: usize,
 }
 
-pub fn load_explorations(project_root: Option<&Path>) -> (Vec<String>, usize) {
+pub fn load_explorations(project_root: Option<&Path>) -> (Vec<Exploration>, usize) {
     let path = crate::config::data_dir(project_root).join("explorations.json");
     let Ok(data) = std::fs::read_to_string(&path) else {
         return (vec![], 0);
@@ -272,7 +348,11 @@ pub fn load_explorations(project_root: Option<&Path>) -> (Vec<String>, usize) {
     (state.explorations, state.counter)
 }
 
-pub fn save_explorations(explorations: &[String], counter: usize, project_root: Option<&Path>) {
+pub fn save_explorations(
+    explorations: &[Exploration],
+    counter: usize,
+    project_root: Option<&Path>,
+) {
     let dir = crate::config::data_dir(project_root);
     if let Err(e) = std::fs::create_dir_all(&dir) {
         tracing::warn!("failed to create explorations directory: {e}");

@@ -7,6 +7,7 @@ use iced::Element;
 use crate::agent::{AgentHandle, SlashCommand};
 use crate::chat_store::ChatSession;
 use crate::highlight::SyntaxHighlighter;
+use crate::scope::ScopeKind;
 use crate::theme;
 use crate::widget::{
     agent_chat, collapsible, interaction_toggle, list_view,
@@ -56,6 +57,10 @@ pub enum SessionControls {
 
 pub struct AgentSession {
     pub session: ChatSession,
+    /// What kind of duckspec object this session belongs to. Runtime-only
+    /// (not persisted) — set by the caller when sessions are created or
+    /// loaded. Drives the `CurrentScopeHook` blurb on the first turn.
+    pub scope_kind: ScopeKind,
     pub agent_handle: Option<AgentHandle>,
     pub chat_input: EditorState,
     pub chat_commands: Vec<SlashCommand>,
@@ -79,14 +84,15 @@ pub struct AgentSession {
 
 impl AgentSession {
     /// Create a fresh session for a scope.
-    pub fn new(scope: String) -> Self {
-        Self::from_session(ChatSession::new(scope))
+    pub fn new(scope: String, scope_kind: ScopeKind) -> Self {
+        Self::from_session(ChatSession::new(scope), scope_kind)
     }
 
     /// Wrap a loaded ChatSession with fresh UI state.
-    pub fn from_session(session: ChatSession) -> Self {
+    pub fn from_session(session: ChatSession, scope_kind: ScopeKind) -> Self {
         Self {
             session,
+            scope_kind,
             agent_handle: None,
             chat_input: EditorState::new(""),
             chat_commands: Vec::new(),
@@ -419,6 +425,8 @@ fn make_queue_editor(text: &str, highlighter: &SyntaxHighlighter) -> EditorState
 /// message into the session, marks streaming, clears the input, and rebuilds
 /// the chat editor blocks. No-op if no agent handle is attached.
 pub fn send_prompt_text(ax: &mut AgentSession, text: String, highlighter: &SyntaxHighlighter) {
+    use duckchat::{ContextHook, TurnRequest};
+
     let Some(handle) = &ax.agent_handle else {
         return;
     };
@@ -431,6 +439,21 @@ pub fn send_prompt_text(ax: &mut AgentSession, text: String, highlighter: &Synta
     } else {
         text.clone()
     };
+
+    // First time Claude sees this conversation — include a scope orientation
+    // blurb so the agent doesn't have to ask which change/exploration/etc.
+    // we're in. Subsequent turns ride `--resume` and skip this.
+    let mut system_additions = Vec::new();
+    if ax.session.claude_session_id.is_none() {
+        let scope = crate::scope::SessionScope {
+            kind: ax.scope_kind,
+            scope_key: ax.session.scope.clone(),
+        };
+        if let Some(out) = crate::scope::CurrentScopeHook.compute(&scope) {
+            system_additions.push(out.text);
+        }
+    }
+
     ax.session.messages.push(crate::chat_store::ChatMessage {
         role: crate::chat_store::Role::User,
         content: vec![crate::chat_store::ContentBlock::Text(text)],
@@ -438,7 +461,11 @@ pub fn send_prompt_text(ax: &mut AgentSession, text: String, highlighter: &Synta
     });
     ax.session.is_streaming = true;
     ax.session.pending_text.clear();
-    handle.send_prompt(prompt, None);
+
+    let mut req = TurnRequest::new(prompt, handle.working_dir().to_path_buf());
+    req.system_additions = system_additions;
+    handle.send_turn(req);
+
     ax.chat_input = EditorState::new("");
     rehighlight_input(&mut ax.chat_input, highlighter);
     ax.chat_completion.visible = false;
@@ -660,13 +687,22 @@ pub fn update_with_side_effects(
     state: &mut InteractionState,
     msg: Msg,
     scope: &str,
+    scope_label: &str,
+    scope_kind: ScopeKind,
     project_root: Option<&std::path::Path>,
     highlighter: &SyntaxHighlighter,
 ) {
     update(state, msg, highlighter);
 
     if state.visible && state.active_tab == ActiveTab::Chat {
-        ensure_sessions(state, scope, project_root, highlighter);
+        ensure_sessions_with_label(
+            state,
+            scope,
+            scope_label,
+            scope_kind,
+            project_root,
+            highlighter,
+        );
     }
 
     state.terminal_focused =
@@ -676,13 +712,18 @@ pub fn update_with_side_effects(
 // ── Session management ─────────────────────────────────────────────────────
 
 /// Clear and reset the active session for single-session areas (Caps, Codex).
+///
+/// `scope` is the on-disk key; `scope` is used directly as the display label
+/// since caps/codex have no separate human name.
 pub fn clear_single_session(
     ix: &mut InteractionState,
     scope: &str,
+    scope_kind: ScopeKind,
     project_root: Option<&std::path::Path>,
 ) {
     if ix.sessions.is_empty() {
-        ix.sessions.push(AgentSession::new(scope.to_string()));
+        ix.sessions
+            .push(AgentSession::new(scope.to_string(), scope_kind));
         ix.active_session = 0;
         return;
     }
@@ -693,9 +734,9 @@ pub fn clear_single_session(
         }
         crate::chat_store::delete_session(&ax.session.scope, &ax.session.id, project_root);
     }
-    ix.sessions[idx] = AgentSession::new(scope.to_string());
+    ix.sessions[idx] = AgentSession::new(scope.to_string(), scope_kind);
     ix.active_session = idx;
-    reconcile_display_names(&mut ix.sessions);
+    reconcile_display_names(&mut ix.sessions, scope);
 }
 
 // ── Spawn helpers ───────────────────────────────────────────────────────────
@@ -743,10 +784,16 @@ pub fn adjust_active_after_remove(active: ActiveTab, removed_idx: usize) -> Acti
 }
 
 /// Ensure the interaction has at least one session for the scope.
+///
 /// On first call, loads any persisted sessions; if none, creates one empty.
-pub fn ensure_sessions(
+/// `scope` is the on-disk key (directory name); `scope_label` is the
+/// human-readable label shown in the session dropdown (may differ — e.g. an
+/// exploration's display_name vs. its stable id).
+pub fn ensure_sessions_with_label(
     state: &mut InteractionState,
     scope: &str,
+    scope_label: &str,
+    scope_kind: ScopeKind,
     project_root: Option<&std::path::Path>,
     highlighter: &SyntaxHighlighter,
 ) {
@@ -755,28 +802,35 @@ pub fn ensure_sessions(
     }
     let loaded = crate::chat_store::load_sessions_for(scope, project_root);
     if loaded.is_empty() {
-        let mut ax = AgentSession::new(scope.to_string());
-        reconcile_display_names(std::slice::from_mut(&mut ax));
+        let mut ax = AgentSession::new(scope.to_string(), scope_kind);
+        reconcile_display_names(std::slice::from_mut(&mut ax), scope_label);
         state.sessions.push(ax);
     } else {
         for session in loaded {
-            let mut ax = AgentSession::from_session(session);
+            let mut ax = AgentSession::from_session(session, scope_kind);
             rebuild_chat_editor(&mut ax, highlighter);
             state.sessions.push(ax);
         }
-        // load_sessions_for already reconciled; no-op here.
+        // Re-reconcile with the caller's preferred label (load_sessions_for
+        // used the raw scope key, which is wrong for explorations).
+        reconcile_display_names(&mut state.sessions, scope_label);
     }
     state.active_session = 0;
 }
 
 /// Re-run display-name reconciliation on a slice of `AgentSession`.
 /// Call after inserting a new session or promoting scopes.
-pub fn reconcile_display_names(sessions: &mut [AgentSession]) {
-    // Temporarily move out the ChatSession fields to satisfy the chat_store
-    // signature that takes `&mut [ChatSession]`.
-    // Simpler: iterate and build a Vec of mutable refs is not straightforward,
-    // so we inline the logic here against AgentSession directly.
+///
+/// `scope_label` is the human-readable scope label (change name, exploration
+/// display_name, etc.); sessions with a `title` override it.
+pub fn reconcile_display_names(sessions: &mut [AgentSession], scope_label: &str) {
     use std::collections::HashMap;
+    let label_for = |ax: &AgentSession| -> String {
+        ax.session
+            .title
+            .clone()
+            .unwrap_or_else(|| scope_label.to_string())
+    };
     let mut groups: HashMap<String, Vec<usize>> = HashMap::new();
     for (i, ax) in sessions.iter().enumerate() {
         let prefix = crate::chat_store::minute_prefix_public(ax.session.created_at_nanos);
@@ -788,13 +842,14 @@ pub fn reconcile_display_names(sessions: &mut [AgentSession]) {
             let i = indices[0];
             let minute =
                 crate::chat_store::minute_prefix_public(sessions[i].session.created_at_nanos);
-            sessions[i].session.display_name = format!("{} {}", minute, sessions[i].session.scope);
+            let label = label_for(&sessions[i]);
+            sessions[i].session.display_name = format!("{minute} {label}");
         } else {
             for (n, i) in indices.iter().enumerate() {
                 let minute =
                     crate::chat_store::minute_prefix_public(sessions[*i].session.created_at_nanos);
-                sessions[*i].session.display_name =
-                    format!("{} #{} {}", minute, n + 1, sessions[*i].session.scope);
+                let label = label_for(&sessions[*i]);
+                sessions[*i].session.display_name = format!("{minute} #{} {label}", n + 1);
             }
         }
     }

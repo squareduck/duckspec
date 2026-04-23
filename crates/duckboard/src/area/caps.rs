@@ -75,6 +75,7 @@ pub fn update(
                     interaction::clear_single_session(
                         &mut state.interaction,
                         "caps",
+                        crate::scope::ScopeKind::Caps,
                         project.project_root.as_deref(),
                     );
                 }
@@ -86,6 +87,8 @@ pub fn update(
                         &mut state.interaction,
                         other,
                         "caps",
+                        "caps",
+                        crate::scope::ScopeKind::Caps,
                         project.project_root.as_deref(),
                         highlighter,
                     );

@@ -1184,6 +1184,7 @@ dependencies = [
  "anyhow",
  "dark-light",
  "dirs",
+ "duckchat",
  "duckpond",
  "font-kit",
  "gix",
@@ -1207,6 +1208,19 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "vte",
+]
+
+[[package]]
+name = "duckchat"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "futures",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

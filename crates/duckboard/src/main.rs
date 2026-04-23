@@ -1,5 +1,6 @@
 //! duckboard — GUI for the duckspec framework, built with Iced 0.14.
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use iced::event;
@@ -13,7 +14,9 @@ mod chat_store;
 pub mod config;
 mod data;
 pub mod highlight;
+mod scope;
 mod theme;
+mod title_hints;
 mod vcs;
 mod watcher;
 mod widget;
@@ -201,6 +204,12 @@ enum Message {
     TerminalPaste(String, Option<String>),
     // Per-instance agent events. Key format: `<instance_id>/<session_id>`.
     AgentEvent(String, agent::AgentEvent),
+    // Result of the one-shot title-summary call kicked off after the first
+    // successful turn of a fresh session. Key matches AgentEvent routing.
+    SessionTitleReady {
+        key: String,
+        result: Result<String, String>,
+    },
     // Settings
     Settings(area::settings::Message),
     // System theme changed
@@ -680,6 +689,8 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
         Message::AgentEvent(key, evt) => {
             use agent::AgentEvent;
             let proj_root = state.project.project_root.clone();
+            // `(working_dir, scope_key, first_user_msg, first_assistant_reply)`.
+            let mut title_task_input: Option<(PathBuf, String, String, String)> = None;
             {
                 let Some(ax) = state.agent_session_mut(&key) else {
                     return Task::none();
@@ -726,6 +737,25 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                         if let Err(e) = chat_store::save_session(&ax.session, proj_root.as_deref())
                         {
                             tracing::error!("failed to save chat session: {e}");
+                        }
+                        // Kick off a one-shot title summary after the first
+                        // successful turn. Only for change / exploration
+                        // scopes; caps and codex don't get summarised.
+                        if ax.session.title.is_none()
+                            && matches!(
+                                ax.scope_kind,
+                                scope::ScopeKind::Change | scope::ScopeKind::Exploration
+                            )
+                            && let Some(handle) = ax.agent_handle.as_ref()
+                            && let Some((user, assistant)) =
+                                chat_store::first_exchange(&ax.session)
+                        {
+                            title_task_input = Some((
+                                handle.working_dir().to_path_buf(),
+                                ax.session.scope.clone(),
+                                user,
+                                assistant,
+                            ));
                         }
                     }
                     AgentEvent::Error(msg) => {
@@ -793,6 +823,42 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                     }
                 }
             }
+
+            if let Some((working_dir, scope_key, user, assistant)) = title_task_input {
+                let mut hints = Vec::new();
+                if let Some(hint) = title_hints::build_hint(&user, &scope_key, &state.project) {
+                    hints.push(hint);
+                }
+                let mut req = duckchat::TitleRequest::new(user, assistant);
+                req.context_hints = hints;
+                let route_key = key.clone();
+                let work = async move {
+                    use duckchat::Provider;
+                    let provider = duckchat::claude_code::ClaudeCodeProvider::new();
+                    provider
+                        .title_summary(req, &working_dir)
+                        .await
+                        .map_err(|e| e.to_string())
+                };
+                return Task::perform(work, move |result| Message::SessionTitleReady {
+                    key: route_key.clone(),
+                    result,
+                });
+            }
+        }
+        Message::SessionTitleReady { key, result } => {
+            let title = match result {
+                Ok(t) if !t.trim().is_empty() => t.trim().to_string(),
+                Ok(_) => {
+                    tracing::warn!(key, "title summariser returned empty string");
+                    return Task::none();
+                }
+                Err(e) => {
+                    tracing::warn!(key, "title summary failed: {e}");
+                    return Task::none();
+                }
+            };
+            apply_session_title(state, &key, &title);
         }
         Message::ThemeChanged(mode) => {
             theme::set_mode(mode);
@@ -1195,15 +1261,15 @@ fn reload_and_reconcile(state: &mut State) -> bool {
             .map(|c| c.name.clone());
 
         if let Some(new_name) = new_change
-            && let Some(exploration_name) = state.change.selected_change.clone()
+            && let Some(exploration_id) = state.change.selected_change.clone()
         {
             tracing::info!(
-                from = exploration_name,
+                from = exploration_id,
                 to = new_name.as_str(),
                 "promoting exploration to real change"
             );
             state.change.promote_exploration(
-                &exploration_name,
+                &exploration_id,
                 &new_name,
                 state.project.project_root.as_deref(),
             );
@@ -2031,6 +2097,56 @@ fn flush_pending_text(session: &mut chat_store::ChatSession) {
             content: vec![chat_store::ContentBlock::Text(text)],
             timestamp: String::new(),
         });
+    }
+}
+
+/// Apply a title-summary result to the session identified by `key`, and —
+/// if the session belongs to an exploration scope — also update the
+/// exploration's display_name so the dashboard/list show the new title.
+/// Re-reconciles the owning interaction's session display names and persists.
+fn apply_session_title(state: &mut State, key: &str, title: &str) {
+    let proj_root = state.project.project_root.clone();
+
+    // Look up the session and mark it titled. Collect the info we need
+    // before releasing the borrow.
+    let Some((scope_key, scope_kind)) = ({
+        let Some(ax) = state.agent_session_mut(key) else {
+            return;
+        };
+        if ax.session.title.is_some() {
+            return;
+        }
+        ax.session.title = Some(title.to_string());
+        if let Err(e) = chat_store::save_session(&ax.session, proj_root.as_deref()) {
+            tracing::error!(key, "failed to save chat session after title: {e}");
+        }
+        Some((ax.session.scope.clone(), ax.scope_kind))
+    }) else {
+        return;
+    };
+
+    // For explorations: the title also renames the exploration itself.
+    if scope_kind == scope::ScopeKind::Exploration {
+        if let Some(exp) = state
+            .change
+            .explorations
+            .iter_mut()
+            .find(|e| e.id == scope_key)
+        {
+            exp.display_name = title.to_string();
+        }
+        chat_store::save_explorations(
+            &state.change.explorations,
+            state.change.exploration_counter,
+            proj_root.as_deref(),
+        );
+    }
+
+    // Re-reconcile display names in the owning interaction so the new title
+    // (or exploration display_name) propagates to the session dropdown.
+    let label = state.change.scope_display_label(&scope_key);
+    if let Some(ix) = state.interaction_mut(&scope_key) {
+        interaction::reconcile_display_names(&mut ix.sessions, &label);
     }
 }
 

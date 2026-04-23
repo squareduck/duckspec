@@ -67,6 +67,7 @@ pub fn update(
                     interaction::clear_single_session(
                         &mut state.interaction,
                         "codex",
+                        crate::scope::ScopeKind::Codex,
                         project.project_root.as_deref(),
                     );
                 }
@@ -78,6 +79,8 @@ pub fn update(
                         &mut state.interaction,
                         other,
                         "codex",
+                        "codex",
+                        crate::scope::ScopeKind::Codex,
                         project.project_root.as_deref(),
                         highlighter,
                     );

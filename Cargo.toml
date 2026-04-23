@@ -4,6 +4,7 @@ members = [
     "crates/duckpond",
     "crates/duckspec",
     "crates/duckboard",
+    "crates/duckchat",
 ]
 
 [workspace.package]
@@ -14,6 +15,7 @@ license = "MIT"
 [workspace.dependencies]
 # Internal crates
 duckpond = { path = "crates/duckpond" }
+duckchat = { path = "crates/duckchat" }
 
 # External dependencies
 thiserror = "2"
