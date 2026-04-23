@@ -20,7 +20,6 @@ pub enum Message {
     ArchivedChangeClicked(String),
     ExplorationClicked(String),
     AddExploration,
-    RefreshAudit,
     SelectAuditError { change: String, artifact_id: String },
 }
 
@@ -249,28 +248,13 @@ fn view_audit_panel<'a>(project: &'a ProjectData) -> Element<'a, Message> {
         .into()
     };
 
-    let refresh_btn: Element<'a, Message> = button(
-        text("Refresh")
-            .size(theme::font_sm())
-            .color(theme::accent()),
-    )
-    .on_press(Message::RefreshAudit)
-    .padding([theme::SPACING_XS, theme::SPACING_MD])
-    .style(theme::dashboard_action)
-    .into();
-
-    let header = row![
-        column![
-            text("Audit")
-                .size(SECTION_HEADING_SIZE)
-                .color(theme::text_primary()),
-            summary,
-        ]
-        .spacing(2.0),
-        Space::new().width(Length::Fill),
-        refresh_btn,
+    let header = column![
+        text("Audit")
+            .size(SECTION_HEADING_SIZE)
+            .color(theme::text_primary()),
+        summary,
     ]
-    .align_y(Center)
+    .spacing(2.0)
     .width(Length::Fill);
 
     let header_section = container(header)

@@ -1,4 +1,5 @@
-use std::path::Path;
+use std::collections::HashSet;
+use std::path::{Path, PathBuf};
 
 use duckpond::artifact::spec::TestMarkerKind;
 use duckpond::layout::{self, ArtifactKind};
@@ -68,8 +69,8 @@ fn run_project_status(duckspec_root: &Path, canonical_root: &Path) -> anyhow::Re
 
 fn summarize_change(change_dir: &Path, canonical_root: &Path) -> anyhow::Result<String> {
     let files = collect_files(change_dir)?;
-    let mut deltas = 0usize;
-    let mut new_caps = 0usize;
+    let mut delta_cap_dirs: HashSet<PathBuf> = HashSet::new();
+    let mut new_cap_dirs: HashSet<PathBuf> = HashSet::new();
     let mut steps = 0usize;
     let mut has_proposal = false;
     let mut has_design = false;
@@ -85,14 +86,24 @@ fn summarize_change(change_dir: &Path, canonical_root: &Path) -> anyhow::Result<
             continue;
         };
         match kind {
-            ArtifactKind::SpecDelta | ArtifactKind::DocDelta => deltas += 1,
-            ArtifactKind::ChangeCapSpec | ArtifactKind::ChangeCapDoc => new_caps += 1,
+            ArtifactKind::SpecDelta | ArtifactKind::DocDelta => {
+                if let Some(cap_dir) = relative.parent() {
+                    delta_cap_dirs.insert(cap_dir.to_path_buf());
+                }
+            }
+            ArtifactKind::ChangeCapSpec | ArtifactKind::ChangeCapDoc => {
+                if let Some(cap_dir) = relative.parent() {
+                    new_cap_dirs.insert(cap_dir.to_path_buf());
+                }
+            }
             ArtifactKind::Step => steps += 1,
             ArtifactKind::Proposal => has_proposal = true,
             ArtifactKind::Design => has_design = true,
             _ => {}
         }
     }
+    let deltas = delta_cap_dirs.len();
+    let new_caps = new_cap_dirs.len();
 
     let mut parts = Vec::new();
     if has_proposal {

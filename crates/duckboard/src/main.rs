@@ -238,6 +238,7 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
             let mut tasks: Vec<Task<Message>> = Vec::new();
             refresh_open_tabs(state, &mut tasks);
             refresh_changed_files(state);
+            state.project.revalidate();
             tracing::info!("project reloaded");
             return Task::batch(tasks);
         }
@@ -550,9 +551,6 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                         &state.highlighter,
                     );
                     state.active_area = Area::Change;
-                }
-                area::dashboard::Message::RefreshAudit => {
-                    state.project.revalidate();
                 }
                 area::dashboard::Message::SelectAuditError {
                     change,
