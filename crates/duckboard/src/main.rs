@@ -1,5 +1,7 @@
 //! duckboard — GUI for the duckspec framework, built with Iced 0.14.
 
+use std::sync::Arc;
+
 use iced::event;
 use iced::keyboard;
 use iced::widget::{Space, column, container, row, stack};
@@ -39,7 +41,9 @@ struct State {
     settings: area::settings::State,
     file_finder: widget::file_finder::FileFinderState,
     text_search: widget::text_search::TextSearchState,
-    highlighter: highlight::SyntaxHighlighter,
+    /// Shared via `Arc` so background tasks (e.g. search-stack highlighting)
+    /// can hold a handle without blocking the UI on syntax-set ownership.
+    highlighter: Arc<highlight::SyntaxHighlighter>,
 }
 
 impl State {
@@ -78,7 +82,7 @@ impl State {
             settings: area::settings::State::default(),
             file_finder: widget::file_finder::FileFinderState::default(),
             text_search: widget::text_search::TextSearchState::default(),
-            highlighter: highlight::SyntaxHighlighter::new(),
+            highlighter: Arc::new(highlight::SyntaxHighlighter::new()),
         }
     }
 
@@ -157,6 +161,16 @@ enum Message {
     FileFinder(widget::file_finder::Msg),
     // Project-wide text search
     TextSearch(widget::text_search::Msg),
+    // Async search-stack highlighting: one message per unique file once the
+    // background `highlight_lines_until` job finishes. `spans` is wrapped in
+    // `Arc` so the message is cheap to clone; the handler clones the inner
+    // `Vec` into each slice sharing `abs_path`.
+    SearchStackHighlighted {
+        area: Area,
+        tab_id: String,
+        abs_path: std::path::PathBuf,
+        spans: Arc<Vec<Vec<highlight::HighlightSpan>>>,
+    },
     // File watcher
     FileChanged(Vec<watcher::FileEvent>),
     // Keyboard
@@ -313,10 +327,10 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                 Msg::ConfirmStack => {
                     let query = state.text_search.query.clone();
                     let hits: Vec<_> = state.text_search.results.clone();
-                    if !hits.is_empty() {
-                        open_search_stack_tab(state, &query, hits);
-                    }
                     state.text_search.close();
+                    if !hits.is_empty() {
+                        return open_search_stack_tab(state, &query, hits);
+                    }
                 }
                 Msg::ResultsReady(query_id, results) => {
                     if query_id == state.text_search.latest_query_id {
@@ -327,6 +341,29 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                     // Stale results: discard silently.
                 }
             }
+        }
+        Message::SearchStackHighlighted {
+            area,
+            tab_id,
+            abs_path,
+            spans,
+        } => {
+            let State {
+                change, caps, codex, ..
+            } = state;
+            let tabs = tabs_for_area(area, change, caps, codex);
+            if let Some(tab) = tabs.file_tabs.iter_mut().find(|t| t.id == tab_id)
+                && let tab_bar::TabView::SearchStack { slices, .. } = &mut tab.view
+            {
+                for slice in slices.iter_mut() {
+                    if slice.abs_path == abs_path {
+                        // Clone inner Vec per slice — cheap relative to the
+                        // syntect parse that produced it.
+                        slice.editor.highlight_spans = Some((*spans).clone());
+                    }
+                }
+            }
+            // Tab may have been evicted (MAX_FILE_TABS) or closed — drop silently.
         }
         Message::FileChanged(events) => {
             tracing::debug!(count = events.len(), "file watcher events received");
@@ -672,7 +709,10 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                         } else {
                             widget::text_search::Msg::ConfirmTop
                         };
-                        let _ = update(state, Message::TextSearch(msg));
+                        // Must propagate the returned Task: Shift+Enter's
+                        // `ConfirmStack` kicks off async highlight jobs that
+                        // would be dropped if we discarded this.
+                        return update(state, Message::TextSearch(msg));
                     }
                     keyboard::Key::Named(Named::ArrowDown) => {
                         let _ = update(
@@ -1343,39 +1383,71 @@ fn open_search_hit_as_file(
     }
 }
 
+/// Lines past the hit that a slice might reveal. Slices are fixed at 10
+/// visible lines with the hit near the center, so highlighting the file up
+/// to `hit.line + 10` safely covers the viewport for every slice from that
+/// file. Used as the upper bound for `highlight_lines_until` so we skip
+/// parsing megabytes of unreachable content.
+const SEARCH_SLICE_HIGHLIGHT_TAIL: usize = 10;
+
 /// Open every hit as a "search stack" tab — one read-only slice per match.
 /// Always creates a fresh tab so repeated searches can be compared. Capped
 /// at `text_search::MAX_STACK_SLICES` because each slice holds a full file
 /// buffer, and an unbounded stack would be both slow and unreadable.
-fn open_search_stack_tab(state: &mut State, query: &str, hits: Vec<widget::text_search::SearchHit>) {
+///
+/// Highlighting runs asynchronously per unique file: the tab opens
+/// immediately with unhighlighted (plain-text) slices, and one
+/// [`Message::SearchStackHighlighted`] arrives per file when its windowed
+/// highlight completes. This keeps the UI responsive even with ~50 hits
+/// across many Markdown files, where full-file syntect parses would
+/// otherwise block the main thread for seconds.
+fn open_search_stack_tab(
+    state: &mut State,
+    query: &str,
+    hits: Vec<widget::text_search::SearchHit>,
+) -> Task<Message> {
+    use std::collections::HashMap;
+
     let total = hits.len();
     let hits: Vec<_> = hits
         .into_iter()
         .take(widget::text_search::MAX_STACK_SLICES)
         .collect();
+
+    // Read each unique file once and remember the deepest hit line per file
+    // so the background job knows how far down to highlight.
+    let mut file_contents: HashMap<std::path::PathBuf, String> = HashMap::new();
+    let mut max_hit_line: HashMap<std::path::PathBuf, usize> = HashMap::new();
+
     let mut slices: Vec<tab_bar::SearchSlice> = Vec::with_capacity(hits.len());
     for hit in hits {
-        let Ok(content) = std::fs::read_to_string(&hit.abs_path) else {
-            continue;
-        };
-        let mut editor = widget::text_edit::EditorState::new(&content);
+        if !file_contents.contains_key(&hit.abs_path) {
+            let Ok(content) = std::fs::read_to_string(&hit.abs_path) else {
+                continue;
+            };
+            file_contents.insert(hit.abs_path.clone(), content);
+        }
+        let content = &file_contents[&hit.abs_path];
+
+        let mut editor = widget::text_edit::EditorState::new(content);
         // Mark the match line so it stands out against syntax-highlighted body.
         editor.line_backgrounds = vec![None; editor.lines.len()];
         if let Some(slot) = editor.line_backgrounds.get_mut(hit.line) {
             *slot = Some(widget::text_edit::LineBgKind::Match);
         }
-        // Syntax highlight based on file extension.
-        rehighlight(
-            &mut editor,
-            &format!("file:{}", hit.rel_path),
-            &state.highlighter,
-        );
+        // No synchronous rehighlight: spans arrive via SearchStackHighlighted.
         // Center the match line within the slice's viewport
         // (per_slice_h = 10 lines * 20px = 200px).
         let slice_height = 10.0 * 20.0;
         let target_y = hit.line as f32 * 20.0 + 4.0 - (slice_height / 2.0) + 10.0;
         editor.scroll_y = target_y.max(0.0);
         editor.cursor = widget::text_edit::Pos::new(hit.line, 0);
+
+        max_hit_line
+            .entry(hit.abs_path.clone())
+            .and_modify(|v| *v = (*v).max(hit.line))
+            .or_insert(hit.line);
+
         slices.push(tab_bar::SearchSlice {
             rel_path: hit.rel_path,
             abs_path: hit.abs_path,
@@ -1384,19 +1456,22 @@ fn open_search_stack_tab(state: &mut State, query: &str, hits: Vec<widget::text_
         });
     }
     if slices.is_empty() {
-        return;
+        return Task::none();
     }
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis())
         .unwrap_or(0);
-    let id = format!("search:{now}");
+    let tab_id = format!("search:{now}");
     let title = if total > slices.len() {
         format!("search: {query} ({}/{total})", slices.len())
     } else {
         format!("search: {query}")
     };
+
     ensure_active_area(&mut state.active_area);
+    let area = state.active_area;
+    let highlighter = state.highlighter.clone();
     let State {
         active_area,
         change,
@@ -1405,7 +1480,46 @@ fn open_search_stack_tab(state: &mut State, query: &str, hits: Vec<widget::text_
         ..
     } = state;
     let tabs = tabs_for_area(*active_area, change, caps, codex);
-    tabs.open_search_stack(id, title, query.to_string(), slices);
+    tabs.open_search_stack(tab_id.clone(), title, query.to_string(), slices);
+
+    // Kick off one parallel highlight job per unique file. Each job emits a
+    // `SearchStackHighlighted` message; the handler fans the spans out to
+    // every slice sharing that `abs_path`.
+    let mut jobs: Vec<Task<Message>> = Vec::with_capacity(file_contents.len());
+    for (abs_path, content) in file_contents {
+        let last_line =
+            max_hit_line.get(&abs_path).copied().unwrap_or(0) + SEARCH_SLICE_HIGHLIGHT_TAIL;
+        let ext = abs_path
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("txt")
+            .to_string();
+        let highlighter_job = highlighter.clone();
+        let tab_id_msg = tab_id.clone();
+        let abs_path_msg = abs_path.clone();
+        jobs.push(Task::perform(
+            async move {
+                tokio::task::spawn_blocking(move || {
+                    let lines: Vec<String> = if content.is_empty() {
+                        vec![String::new()]
+                    } else {
+                        content.lines().map(String::from).collect()
+                    };
+                    let syntax = highlighter_job.find_syntax(&ext);
+                    highlighter_job.highlight_lines_until(&lines, syntax, last_line)
+                })
+                .await
+                .unwrap_or_default()
+            },
+            move |spans| Message::SearchStackHighlighted {
+                area,
+                tab_id: tab_id_msg.clone(),
+                abs_path: abs_path_msg.clone(),
+                spans: Arc::new(spans),
+            },
+        ));
+    }
+    Task::batch(jobs)
 }
 
 /// Apply an editor action targeted at one slice of the active SearchStack tab.

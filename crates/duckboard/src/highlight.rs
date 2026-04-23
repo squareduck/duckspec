@@ -69,10 +69,24 @@ impl SyntaxHighlighter {
         lines: &[String],
         syntax: &SyntaxReference,
     ) -> Vec<Vec<HighlightSpan>> {
+        self.highlight_lines_until(lines, syntax, lines.len().saturating_sub(1))
+    }
+
+    /// Highlight lines `0..=last_line` only, returning a vec of that length.
+    /// Callers pass this when a non-scrollable viewport means later lines are
+    /// never visible — saves a full-file parse for each match in a search
+    /// stack. Markdown's stateful parser still runs from line 0 so grammar
+    /// context stays coherent; we just stop emitting beyond `last_line`.
+    pub fn highlight_lines_until(
+        &self,
+        lines: &[String],
+        syntax: &SyntaxReference,
+        last_line: usize,
+    ) -> Vec<Vec<HighlightSpan>> {
         if syntax.name == "Markdown" {
-            self.highlight_markdown(lines, syntax)
+            self.highlight_markdown(lines, syntax, last_line)
         } else {
-            self.highlight_plain(lines, syntax)
+            self.highlight_plain(lines, syntax, last_line)
         }
     }
 
@@ -80,12 +94,14 @@ impl SyntaxHighlighter {
         &self,
         lines: &[String],
         syntax: &SyntaxReference,
+        last_line: usize,
     ) -> Vec<Vec<HighlightSpan>> {
         use syntect::easy::HighlightLines;
 
         let theme = self.active_theme();
         let mut h = HighlightLines::new(syntax, theme);
-        lines
+        let end = last_line.saturating_add(1).min(lines.len());
+        lines[..end]
             .iter()
             .map(|line| self.line_spans(line, &mut h))
             .collect()
@@ -98,6 +114,7 @@ impl SyntaxHighlighter {
         &self,
         lines: &[String],
         md_syntax: &SyntaxReference,
+        last_line: usize,
     ) -> Vec<Vec<HighlightSpan>> {
         use syntect::easy::HighlightLines;
 
@@ -105,9 +122,10 @@ impl SyntaxHighlighter {
         let inline_code_color = inline_code_color(theme);
         let mut md_h = HighlightLines::new(md_syntax, theme);
         let mut code: Option<CodeBlock> = None;
-        let mut out = Vec::with_capacity(lines.len());
+        let end = last_line.saturating_add(1).min(lines.len());
+        let mut out = Vec::with_capacity(end);
 
-        for line in lines {
+        for line in &lines[..end] {
             let closing = code
                 .as_ref()
                 .is_some_and(|c| is_closing_fence(line, c.fence_char, c.fence_len));
