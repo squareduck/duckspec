@@ -21,10 +21,6 @@ use crate::theme;
 const MAX_RESULTS: usize = 500;
 const MAX_PREVIEW_LEN: usize = 300;
 const MAX_VISIBLE: usize = 50;
-/// Ceiling on the number of slices the stack view ("⇧⏎") materializes. Each
-/// slice loads its file into memory, so unbounded expansion would blow up on
-/// a bad query.
-pub const MAX_STACK_SLICES: usize = 50;
 pub const SEARCH_INPUT_ID: &str = "text-search-input";
 /// Name of the folder (relative to project root) that holds duckspec artifacts.
 const DUCKSPEC_DIR: &str = "duckspec";
@@ -363,11 +359,7 @@ pub fn view<'a>(state: &'a TextSearchState) -> Element<'a, Msg> {
     } else {
         format!("{} results", state.results.len())
     };
-    let stack_hint = if state.results.len() > MAX_STACK_SLICES {
-        format!("⇧⏎ stack (first {MAX_STACK_SLICES})")
-    } else {
-        "⇧⏎ stack".to_string()
-    };
+    let stack_hint = "⇧⏎ stack".to_string();
     let left = text(left_text)
         .size(theme::font_sm())
         .color(theme::text_muted());

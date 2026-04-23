@@ -99,7 +99,7 @@ pub fn build_editor(diff: &DiffData, highlight: Option<&DiffHighlight>) -> Edito
     let spans = build_diff_spans(diff, highlight);
 
     let mut editor = EditorState::new("");
-    editor.lines = lines;
+    editor.lines = Arc::new(lines);
     editor.highlight_spans = Some(spans);
     editor.line_backgrounds = backgrounds;
     editor

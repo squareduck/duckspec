@@ -1,5 +1,7 @@
 //! Editor state: positions, blocks, text buffer, cursor, undo/redo, navigation.
 
+use std::sync::Arc;
+
 use crate::highlight::HighlightSpan;
 use crate::theme;
 use iced::Color;
@@ -105,7 +107,11 @@ enum UndoOp {
 
 #[derive(Debug, Clone)]
 pub struct EditorState {
-    pub lines: Vec<String>,
+    /// Shared via `Arc` so read-only consumers (e.g. search-stack slices
+    /// materialised from the same file) can hold cheap clones. Mutating
+    /// paths use `Arc::make_mut` — free for editable tabs where the
+    /// refcount stays at 1, copy-on-write otherwise.
+    pub lines: Arc<Vec<String>>,
     pub cursor: Pos,
     pub anchor: Option<Pos>,
     pub scroll_x: f32,
@@ -147,7 +153,7 @@ impl EditorState {
             lines
         };
         Self {
-            lines,
+            lines: Arc::new(lines),
             cursor: Pos::new(0, 0),
             anchor: None,
             scroll_x: 0.0,
@@ -167,7 +173,7 @@ impl EditorState {
     /// Create an editor from blocks. Lines are rebuilt from block content and fold state.
     pub fn from_blocks(blocks: Vec<Block>) -> Self {
         let mut state = Self {
-            lines: vec![String::new()],
+            lines: Arc::new(vec![String::new()]),
             cursor: Pos::new(0, 0),
             anchor: None,
             scroll_x: 0.0,
@@ -190,19 +196,19 @@ impl EditorState {
     pub fn rebuild_from_blocks(&mut self) {
         let was_at_bottom = self.is_at_bottom();
 
-        self.lines.clear();
+        let lines = Arc::make_mut(&mut self.lines);
+        lines.clear();
         self.block_line_map.clear();
 
         for (block_idx, block) in self.blocks.iter().enumerate() {
-            // Header line.
-            self.lines.push(block.label.clone());
+            lines.push(block.label.clone());
             self.block_line_map.push(BlockLineInfo {
                 block_idx,
                 is_header: true,
             });
 
             for line in &block.lines {
-                self.lines.push(line.clone());
+                lines.push(line.clone());
                 self.block_line_map.push(BlockLineInfo {
                     block_idx,
                     is_header: false,
@@ -210,8 +216,8 @@ impl EditorState {
             }
         }
 
-        if self.lines.is_empty() {
-            self.lines.push(String::new());
+        if lines.is_empty() {
+            lines.push(String::new());
         }
 
         // Clamp cursor.
@@ -383,13 +389,14 @@ impl EditorState {
     }
 
     fn delete_range(&mut self, start: Pos, end: Pos) {
+        let lines = Arc::make_mut(&mut self.lines);
         if start.line == end.line {
-            self.lines[start.line].replace_range(start.col..end.col, "");
+            lines[start.line].replace_range(start.col..end.col, "");
         } else {
-            let tail = self.lines[end.line][end.col..].to_string();
-            self.lines[start.line].truncate(start.col);
-            self.lines[start.line].push_str(&tail);
-            self.lines.drain(start.line + 1..=end.line);
+            let tail = lines[end.line][end.col..].to_string();
+            lines[start.line].truncate(start.col);
+            lines[start.line].push_str(&tail);
+            lines.drain(start.line + 1..=end.line);
         }
     }
 
@@ -404,13 +411,14 @@ impl EditorState {
     pub fn insert_char(&mut self, ch: char) {
         self.delete_selection();
         let pos = self.cursor;
+        let lines = Arc::make_mut(&mut self.lines);
         if ch == '\n' {
-            let tail = self.lines[pos.line][pos.col..].to_string();
-            self.lines[pos.line].truncate(pos.col);
-            self.lines.insert(pos.line + 1, tail);
+            let tail = lines[pos.line][pos.col..].to_string();
+            lines[pos.line].truncate(pos.col);
+            lines.insert(pos.line + 1, tail);
             self.cursor = Pos::new(pos.line + 1, 0);
         } else {
-            self.lines[pos.line].insert(pos.col, ch);
+            lines[pos.line].insert(pos.col, ch);
             self.cursor.col += ch.len_utf8();
         }
         self.push_undo(UndoOp::Insert {
@@ -422,22 +430,23 @@ impl EditorState {
     pub fn insert_text(&mut self, s: &str) {
         self.delete_selection();
         let pos = self.cursor;
-        let lines: Vec<&str> = s.split('\n').collect();
-        if lines.len() == 1 {
-            self.lines[pos.line].insert_str(pos.col, lines[0]);
-            self.cursor.col += lines[0].len();
+        let parts: Vec<&str> = s.split('\n').collect();
+        let lines = Arc::make_mut(&mut self.lines);
+        if parts.len() == 1 {
+            lines[pos.line].insert_str(pos.col, parts[0]);
+            self.cursor.col += parts[0].len();
         } else {
-            let tail = self.lines[pos.line][pos.col..].to_string();
-            self.lines[pos.line].truncate(pos.col);
-            self.lines[pos.line].push_str(lines[0]);
-            for (i, line) in lines[1..].iter().enumerate() {
-                if i == lines.len() - 2 {
+            let tail = lines[pos.line][pos.col..].to_string();
+            lines[pos.line].truncate(pos.col);
+            lines[pos.line].push_str(parts[0]);
+            for (i, line) in parts[1..].iter().enumerate() {
+                if i == parts.len() - 2 {
                     let mut combined = line.to_string();
                     combined.push_str(&tail);
-                    self.lines.insert(pos.line + 1 + i, combined);
+                    lines.insert(pos.line + 1 + i, combined);
                     self.cursor = Pos::new(pos.line + 1 + i, line.len());
                 } else {
-                    self.lines.insert(pos.line + 1 + i, line.to_string());
+                    lines.insert(pos.line + 1 + i, line.to_string());
                 }
             }
         }
@@ -452,7 +461,8 @@ impl EditorState {
             return;
         }
         if self.cursor.col > 0 {
-            let ch = self.lines[self.cursor.line].remove(self.cursor.col - 1);
+            let lines = Arc::make_mut(&mut self.lines);
+            let ch = lines[self.cursor.line].remove(self.cursor.col - 1);
             self.cursor.col -= ch.len_utf8();
             self.push_undo(UndoOp::Delete {
                 start: self.cursor,
@@ -460,10 +470,11 @@ impl EditorState {
                 text: ch.to_string(),
             });
         } else if self.cursor.line > 0 {
-            let removed_line = self.lines.remove(self.cursor.line);
+            let lines = Arc::make_mut(&mut self.lines);
+            let removed_line = lines.remove(self.cursor.line);
             self.cursor.line -= 1;
-            let col = self.lines[self.cursor.line].len();
-            self.lines[self.cursor.line].push_str(&removed_line);
+            let col = lines[self.cursor.line].len();
+            lines[self.cursor.line].push_str(&removed_line);
             self.cursor.col = col;
             self.push_undo(UndoOp::Delete {
                 start: self.cursor,
@@ -477,17 +488,19 @@ impl EditorState {
         if self.delete_selection().is_some() {
             return;
         }
-        let line = &self.lines[self.cursor.line];
-        if self.cursor.col < line.len() {
-            let ch = self.lines[self.cursor.line].remove(self.cursor.col);
+        let line_len = self.lines[self.cursor.line].len();
+        if self.cursor.col < line_len {
+            let lines = Arc::make_mut(&mut self.lines);
+            let ch = lines[self.cursor.line].remove(self.cursor.col);
             self.push_undo(UndoOp::Delete {
                 start: self.cursor,
                 end: Pos::new(self.cursor.line, self.cursor.col + ch.len_utf8()),
                 text: ch.to_string(),
             });
         } else if self.cursor.line + 1 < self.lines.len() {
-            let next = self.lines.remove(self.cursor.line + 1);
-            self.lines[self.cursor.line].push_str(&next);
+            let lines = Arc::make_mut(&mut self.lines);
+            let next = lines.remove(self.cursor.line + 1);
+            lines[self.cursor.line].push_str(&next);
             self.push_undo(UndoOp::Delete {
                 start: self.cursor,
                 end: Pos::new(self.cursor.line + 1, 0),
@@ -508,20 +521,21 @@ impl EditorState {
             }
             UndoOp::Delete { start, text, .. } => {
                 self.cursor = *start;
-                let lines: Vec<&str> = text.split('\n').collect();
-                if lines.len() == 1 {
-                    self.lines[start.line].insert_str(start.col, text);
+                let parts: Vec<&str> = text.split('\n').collect();
+                let lines = Arc::make_mut(&mut self.lines);
+                if parts.len() == 1 {
+                    lines[start.line].insert_str(start.col, text);
                 } else {
-                    let tail = self.lines[start.line][start.col..].to_string();
-                    self.lines[start.line].truncate(start.col);
-                    self.lines[start.line].push_str(lines[0]);
-                    for (i, line) in lines[1..].iter().enumerate() {
-                        if i == lines.len() - 2 {
+                    let tail = lines[start.line][start.col..].to_string();
+                    lines[start.line].truncate(start.col);
+                    lines[start.line].push_str(parts[0]);
+                    for (i, line) in parts[1..].iter().enumerate() {
+                        if i == parts.len() - 2 {
                             let mut combined = line.to_string();
                             combined.push_str(&tail);
-                            self.lines.insert(start.line + 1 + i, combined);
+                            lines.insert(start.line + 1 + i, combined);
                         } else {
-                            self.lines.insert(start.line + 1 + i, line.to_string());
+                            lines.insert(start.line + 1 + i, line.to_string());
                         }
                     }
                 }
@@ -539,22 +553,23 @@ impl EditorState {
         match &op {
             UndoOp::Insert { pos, text } => {
                 self.cursor = *pos;
-                let lines: Vec<&str> = text.split('\n').collect();
-                if lines.len() == 1 {
-                    self.lines[pos.line].insert_str(pos.col, text);
+                let parts: Vec<&str> = text.split('\n').collect();
+                let lines = Arc::make_mut(&mut self.lines);
+                if parts.len() == 1 {
+                    lines[pos.line].insert_str(pos.col, text);
                     self.cursor.col += text.len();
                 } else {
-                    let tail = self.lines[pos.line][pos.col..].to_string();
-                    self.lines[pos.line].truncate(pos.col);
-                    self.lines[pos.line].push_str(lines[0]);
-                    for (i, line) in lines[1..].iter().enumerate() {
-                        if i == lines.len() - 2 {
+                    let tail = lines[pos.line][pos.col..].to_string();
+                    lines[pos.line].truncate(pos.col);
+                    lines[pos.line].push_str(parts[0]);
+                    for (i, line) in parts[1..].iter().enumerate() {
+                        if i == parts.len() - 2 {
                             let mut combined = line.to_string();
                             combined.push_str(&tail);
-                            self.lines.insert(pos.line + 1 + i, combined);
+                            lines.insert(pos.line + 1 + i, combined);
                             self.cursor = Pos::new(pos.line + 1 + i, line.len());
                         } else {
-                            self.lines.insert(pos.line + 1 + i, line.to_string());
+                            lines.insert(pos.line + 1 + i, line.to_string());
                         }
                     }
                 }

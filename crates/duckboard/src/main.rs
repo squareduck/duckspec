@@ -1810,16 +1810,16 @@ fn open_search_hit_as_file(
 const SEARCH_SLICE_HIGHLIGHT_TAIL: usize = 10;
 
 /// Open every hit as a "search stack" tab — one read-only slice per match.
-/// Always creates a fresh tab so repeated searches can be compared. Capped
-/// at `text_search::MAX_STACK_SLICES` because each slice holds a full file
-/// buffer, and an unbounded stack would be both slow and unreadable.
+/// Always creates a fresh tab so repeated searches can be compared. The
+/// total count is bounded only by the search engine's `MAX_RESULTS` cap;
+/// slices from the same file share an `Arc<Vec<String>>` line buffer so
+/// the extra cost of an unbounded stack is O(number of unique files), not
+/// O(number of hits).
 ///
 /// Highlighting runs asynchronously per unique file: the tab opens
 /// immediately with unhighlighted (plain-text) slices, and one
 /// [`Message::SearchStackHighlighted`] arrives per file when its windowed
-/// highlight completes. This keeps the UI responsive even with ~50 hits
-/// across many Markdown files, where full-file syntect parses would
-/// otherwise block the main thread for seconds.
+/// highlight completes.
 fn open_search_stack_tab(
     state: &mut State,
     query: &str,
@@ -1828,33 +1828,35 @@ fn open_search_stack_tab(
     use std::collections::HashMap;
 
     let total = hits.len();
-    let hits: Vec<_> = hits
-        .into_iter()
-        .take(widget::text_search::MAX_STACK_SLICES)
-        .collect();
 
-    // Read each unique file once and remember the deepest hit line per file
-    // so the background job knows how far down to highlight.
-    let mut file_contents: HashMap<std::path::PathBuf, String> = HashMap::new();
+    // Build a base editor once per unique file. All slices for a file
+    // clone this base; `EditorState.lines` is `Arc<Vec<String>>`, so the
+    // line buffer is refcount-shared (O(1) per slice) rather than deep-
+    // cloned. `max_hit_line` drives the windowed highlight's stop row.
+    let mut base_editors: HashMap<std::path::PathBuf, widget::text_edit::EditorState> =
+        HashMap::new();
     let mut max_hit_line: HashMap<std::path::PathBuf, usize> = HashMap::new();
 
     let mut slices: Vec<tab_bar::SearchSlice> = Vec::with_capacity(hits.len());
     for hit in hits {
-        if !file_contents.contains_key(&hit.abs_path) {
+        if !base_editors.contains_key(&hit.abs_path) {
             let Ok(content) = std::fs::read_to_string(&hit.abs_path) else {
                 continue;
             };
-            file_contents.insert(hit.abs_path.clone(), content);
+            base_editors.insert(
+                hit.abs_path.clone(),
+                widget::text_edit::EditorState::new(&content),
+            );
         }
-        let content = &file_contents[&hit.abs_path];
+        let base = &base_editors[&hit.abs_path];
 
-        let mut editor = widget::text_edit::EditorState::new(content);
-        // Mark the match line so it stands out against syntax-highlighted body.
+        // Clone: shares `lines` Arc; per-slice fields below get their own
+        // values so each match line's background can differ.
+        let mut editor = base.clone();
         editor.line_backgrounds = vec![None; editor.lines.len()];
         if let Some(slot) = editor.line_backgrounds.get_mut(hit.line) {
             *slot = Some(widget::text_edit::LineBgKind::Match);
         }
-        // No synchronous rehighlight: spans arrive via SearchStackHighlighted.
         // Center the match line within the slice's viewport
         // (per_slice_h = 10 lines * 20px = 200px).
         let slice_height = 10.0 * 20.0;
@@ -1903,9 +1905,11 @@ fn open_search_stack_tab(
 
     // Kick off one parallel highlight job per unique file. Each job emits a
     // `SearchStackHighlighted` message; the handler fans the spans out to
-    // every slice sharing that `abs_path`.
-    let mut jobs: Vec<Task<Message>> = Vec::with_capacity(file_contents.len());
-    for (abs_path, content) in file_contents {
+    // every slice sharing that `abs_path`. `lines` is the same `Arc` the
+    // slices hold, so the blocking task reads the shared buffer without a
+    // copy.
+    let mut jobs: Vec<Task<Message>> = Vec::with_capacity(base_editors.len());
+    for (abs_path, base) in base_editors {
         let last_line =
             max_hit_line.get(&abs_path).copied().unwrap_or(0) + SEARCH_SLICE_HIGHLIGHT_TAIL;
         let ext = abs_path
@@ -1913,17 +1917,13 @@ fn open_search_stack_tab(
             .and_then(|e| e.to_str())
             .unwrap_or("txt")
             .to_string();
+        let lines = base.lines.clone();
         let highlighter_job = highlighter.clone();
         let tab_id_msg = tab_id.clone();
         let abs_path_msg = abs_path.clone();
         jobs.push(Task::perform(
             async move {
                 tokio::task::spawn_blocking(move || {
-                    let lines: Vec<String> = if content.is_empty() {
-                        vec![String::new()]
-                    } else {
-                        content.lines().map(String::from).collect()
-                    };
                     let syntax = highlighter_job.find_syntax(&ext);
                     highlighter_job.highlight_lines_until(&lines, syntax, last_line)
                 })
