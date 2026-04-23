@@ -171,6 +171,25 @@ enum Message {
         abs_path: std::path::PathBuf,
         spans: Arc<Vec<Vec<highlight::HighlightSpan>>>,
     },
+    // Async file-tab highlighting. `version` is the `EditorState`'s
+    // `highlight_version` at spawn time; the handler drops stale spans
+    // whose version no longer matches (i.e. the user edited during the
+    // highlight window).
+    FileTabHighlighted {
+        area: Area,
+        tab_id: String,
+        version: u64,
+        spans: Arc<Vec<Vec<highlight::HighlightSpan>>>,
+    },
+    // Async diff-tab highlighting. Carries the computed syntect spans for
+    // both sides of the diff; the handler rebuilds the editor's composite
+    // per-line spans via `diff_view::build_diff_spans`.
+    DiffTabHighlighted {
+        area: Area,
+        tab_id: String,
+        version: u64,
+        highlight: Arc<widget::diff_view::DiffHighlight>,
+    },
     // File watcher
     FileChanged(Vec<watcher::FileEvent>),
     // Keyboard
@@ -207,9 +226,11 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
         }
         Message::Refresh => {
             reload_and_reconcile(state);
-            refresh_open_tabs(state);
+            let mut tasks: Vec<Task<Message>> = Vec::new();
+            refresh_open_tabs(state, &mut tasks);
             refresh_changed_files(state);
             tracing::info!("project reloaded");
+            return Task::batch(tasks);
         }
         Message::FileFinder(msg) => {
             use widget::file_finder::Msg;
@@ -239,6 +260,7 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                     state.file_finder.select_prev();
                 }
                 Msg::Confirm => {
+                    let mut task = Task::none();
                     if let Some(rel_path) = state.file_finder.selected_path() {
                         if let Some(root) = &state.project.project_root {
                             let abs = root.join(&rel_path);
@@ -248,25 +270,34 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                                     .file_name()
                                     .map(|n| n.to_string_lossy().to_string())
                                     .unwrap_or_else(|| rel_path.display().to_string());
-                                let tabs = match state.active_area {
-                                    Area::Change => &mut state.change.tabs,
-                                    Area::Caps => &mut state.caps.tabs,
-                                    Area::Codex => &mut state.codex.tabs,
-                                    Area::Dashboard | Area::Settings => {
-                                        state.active_area = Area::Change;
-                                        &mut state.change.tabs
-                                    }
+                                let area = match state.active_area {
+                                    Area::Dashboard | Area::Settings => Area::Change,
+                                    other => other,
                                 };
+                                state.active_area = area;
+                                let tabs = tabs_for_area(
+                                    area,
+                                    &mut state.change,
+                                    &mut state.caps,
+                                    &mut state.codex,
+                                );
                                 tabs.open_file(id.clone(), title, content, Some(abs.clone()));
                                 if let Some(tab) = tabs.file_tabs.iter_mut().find(|t| t.id == id)
                                     && let tab_bar::TabView::Editor { editor, .. } = &mut tab.view
                                 {
-                                    rehighlight(editor, &id, &state.highlighter);
+                                    task = spawn_file_tab_highlight(
+                                        area,
+                                        id,
+                                        editor,
+                                        state.highlighter.clone(),
+                                        false,
+                                    );
                                 }
                             }
                         }
                         state.file_finder.close();
                     }
+                    return task;
                 }
             }
         }
@@ -318,11 +349,13 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                     state.text_search.select_prev();
                 }
                 Msg::ConfirmTop => {
+                    let mut task = Task::none();
                     if let Some(hit) = state.text_search.selected_hit().cloned() {
                         let all = state.text_search.results.clone();
-                        open_search_hit_as_file(state, &hit, &all);
+                        task = open_search_hit_as_file(state, &hit, &all);
                     }
                     state.text_search.close();
+                    return task;
                 }
                 Msg::ConfirmStack => {
                     let query = state.text_search.query.clone();
@@ -365,12 +398,50 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
             }
             // Tab may have been evicted (MAX_FILE_TABS) or closed — drop silently.
         }
+        Message::FileTabHighlighted {
+            area,
+            tab_id,
+            version,
+            spans,
+        } => {
+            let State {
+                change, caps, codex, ..
+            } = state;
+            let tabs = tabs_for_area(area, change, caps, codex);
+            if let Some(editor) = find_editor_mut(tabs, &tab_id)
+                && editor.highlight_version == version
+            {
+                editor.highlight_spans = Some((*spans).clone());
+            }
+            // Version mismatch → user edited since spawn; drop the stale spans.
+            // Tab missing → closed or evicted; drop silently.
+        }
+        Message::DiffTabHighlighted {
+            area,
+            tab_id,
+            version,
+            highlight,
+        } => {
+            let State {
+                change, caps, codex, ..
+            } = state;
+            let tabs = tabs_for_area(area, change, caps, codex);
+            if let Some((editor, diff_data)) = find_diff_tab_mut(tabs, &tab_id)
+                && editor.highlight_version == version
+            {
+                editor.highlight_spans = Some(widget::diff_view::build_diff_spans(
+                    &diff_data,
+                    Some(&highlight),
+                ));
+            }
+        }
         Message::FileChanged(events) => {
             tracing::debug!(count = events.len(), "file watcher events received");
             let duckspec_root = state.project.duckspec_root.clone();
             let project_root = state.project.project_root.clone();
             let mut tree_changed = false;
             let mut vcs_state_changed = false;
+            let mut highlight_tasks: Vec<Task<Message>> = Vec::new();
 
             for event in &events {
                 match event {
@@ -379,20 +450,11 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                             if let Ok(rel) = path.strip_prefix(root) {
                                 let id = rel.to_string_lossy().to_string();
                                 if let Some(content) = state.project.read_artifact(&id) {
-                                    state.change.tabs.refresh_content(
-                                        &id,
-                                        content.clone(),
-                                        &state.highlighter,
-                                    );
-                                    state.caps.tabs.refresh_content(
-                                        &id,
-                                        content.clone(),
-                                        &state.highlighter,
-                                    );
-                                    state.codex.tabs.refresh_content(
+                                    refresh_artifact_tabs(
+                                        state,
                                         &id,
                                         content,
-                                        &state.highlighter,
+                                        &mut highlight_tasks,
                                     );
                                 }
                             }
@@ -401,8 +463,18 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                             }
                         }
                         if let Some(root) = project_root.as_deref() {
-                            refresh_file_tabs_for_path(state, root, path);
-                            refresh_diff_tabs_for_path(state, root, path);
+                            refresh_file_tabs_for_path(
+                                state,
+                                root,
+                                path,
+                                &mut highlight_tasks,
+                            );
+                            refresh_diff_tabs_for_path(
+                                state,
+                                root,
+                                path,
+                                &mut highlight_tasks,
+                            );
                         }
                     }
                     watcher::FileEvent::Removed(path) => {
@@ -436,14 +508,16 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
             if tree_changed && reload_and_reconcile(state) {
                 // Tab IDs were rewritten to new archive paths; re-read
                 // their content from disk so editors reflect the moved files.
-                refresh_open_tabs(state);
+                refresh_open_tabs(state, &mut highlight_tasks);
             }
 
             if vcs_state_changed && let Some(root) = project_root.as_deref() {
-                refresh_all_diff_tabs(state, root);
+                refresh_all_diff_tabs(state, root, &mut highlight_tasks);
             }
 
             refresh_changed_files(state);
+
+            return Task::batch(highlight_tasks);
         }
         Message::Dashboard(msg) => {
             match &msg {
@@ -490,13 +564,50 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
             area::dashboard::update(&mut state.dashboard, msg);
         }
         Message::Change(msg) => {
-            let needs_focus = is_chat_focus_msg(extract_change_interaction_msg(&msg));
-            area::change::update(&mut state.change, msg, &state.project, &state.highlighter);
-            if needs_focus {
-                return focus_chat_input();
+            // Intercept messages that need to return a `Task` to the
+            // runtime. area::change::update otherwise swallows all side
+            // effects and returns `()`.
+            match msg {
+                area::change::Message::TabContent(
+                    tab_bar::TabContentMsg::EditorAction(action),
+                ) => {
+                    return handle_editor_action(
+                        &mut state.change.tabs,
+                        Area::Change,
+                        action,
+                        state.highlighter.clone(),
+                    );
+                }
+                area::change::Message::SelectChangedFile(path) => {
+                    return open_diff_preview(state, Area::Change, &path);
+                }
+                msg => {
+                    let needs_focus =
+                        is_chat_focus_msg(extract_change_interaction_msg(&msg));
+                    area::change::update(
+                        &mut state.change,
+                        msg,
+                        &state.project,
+                        &state.highlighter,
+                    );
+                    if needs_focus {
+                        return focus_chat_input();
+                    }
+                }
             }
         }
         Message::Caps(msg) => {
+            if let area::caps::Message::TabContent(
+                tab_bar::TabContentMsg::EditorAction(action),
+            ) = msg
+            {
+                return handle_editor_action(
+                    &mut state.caps.tabs,
+                    Area::Caps,
+                    action,
+                    state.highlighter.clone(),
+                );
+            }
             let needs_focus = is_chat_focus_msg(extract_caps_interaction_msg(&msg));
             area::caps::update(&mut state.caps, msg, &state.project, &state.highlighter);
             if needs_focus {
@@ -504,6 +615,17 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
             }
         }
         Message::Codex(msg) => {
+            if let area::codex::Message::TabContent(
+                tab_bar::TabContentMsg::EditorAction(action),
+            ) = msg
+            {
+                return handle_editor_action(
+                    &mut state.codex.tabs,
+                    Area::Codex,
+                    action,
+                    state.highlighter.clone(),
+                );
+            }
             let needs_focus = is_chat_focus_msg(extract_codex_interaction_msg(&msg));
             area::codex::update(&mut state.codex, msg, &state.project, &state.highlighter);
             if needs_focus {
@@ -674,7 +796,7 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
         }
         Message::ThemeChanged(mode) => {
             theme::set_mode(mode);
-            rehighlight_all(state);
+            return rehighlight_all(state);
         }
         Message::StreamTick => {
             widget::streaming_indicator::bump_tick();
@@ -751,7 +873,10 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                         let _ = update(state, Message::FileFinder(widget::file_finder::Msg::Close));
                     }
                     keyboard::Key::Named(Named::Enter) => {
-                        let _ = update(
+                        // Must propagate the returned Task: Confirm opens a
+                        // file tab and spawns its async highlight, which
+                        // would be dropped by `let _ = ...`.
+                        return update(
                             state,
                             Message::FileFinder(widget::file_finder::Msg::Confirm),
                         );
@@ -952,17 +1077,55 @@ fn extract_codex_interaction_msg(msg: &area::codex::Message) -> Option<&interact
 ///
 /// `EditorState::highlight_spans` bake in concrete RGB colors at highlight
 /// time, so a theme switch is invisible until every editor is re-highlighted.
-fn rehighlight_all(state: &mut State) {
-    for tabs in [
-        &mut state.change.tabs,
-        &mut state.caps.tabs,
-        &mut state.codex.tabs,
+///
+/// File and diff tabs spawn async jobs (returned as a batched `Task`) so a
+/// theme toggle doesn't block the UI while syntect reparses every open
+/// file. Chat/queue buffers are small and stay sync — their highlight
+/// cost is negligible.
+fn rehighlight_all(state: &mut State) -> Task<Message> {
+    let mut tasks: Vec<Task<Message>> = Vec::new();
+
+    for (area, tabs) in [
+        (Area::Change, &mut state.change.tabs),
+        (Area::Caps, &mut state.caps.tabs),
+        (Area::Codex, &mut state.codex.tabs),
     ] {
         let all_tabs = tabs.preview.iter_mut().chain(tabs.file_tabs.iter_mut());
         for tab in all_tabs {
+            let tab_id = tab.id.clone();
             match &mut tab.view {
-                tab_bar::TabView::Editor { editor, .. } | tab_bar::TabView::Diff { editor, .. } => {
-                    rehighlight(editor, &tab.id, &state.highlighter);
+                tab_bar::TabView::Editor { editor, .. } => {
+                    tasks.push(spawn_file_tab_highlight(
+                        area,
+                        tab_id,
+                        editor,
+                        state.highlighter.clone(),
+                        false,
+                    ));
+                }
+                tab_bar::TabView::Diff {
+                    editor,
+                    path,
+                    diff_data,
+                    ..
+                } => {
+                    // Bump the version so any in-flight job from a previous
+                    // spawn (e.g. opened a second before this toggle) is
+                    // dropped when its result arrives. Clear stale spans so
+                    // the tab falls back to muted colors until the new
+                    // syntect job lands.
+                    editor.highlight_version = editor.highlight_version.wrapping_add(1);
+                    editor.highlight_spans = Some(
+                        widget::diff_view::build_diff_spans(diff_data, None),
+                    );
+                    tasks.push(spawn_diff_highlight(
+                        area,
+                        tab_id,
+                        editor.highlight_version,
+                        path,
+                        diff_data.clone(),
+                        state.highlighter.clone(),
+                    ));
                 }
                 tab_bar::TabView::SearchStack { slices, .. } => {
                     for slice in slices.iter_mut() {
@@ -995,6 +1158,8 @@ fn rehighlight_all(state: &mut State) {
     for ax in state.codex.interaction.sessions.iter_mut() {
         rehighlight_session(ax, &state.highlighter);
     }
+
+    Task::batch(tasks)
 }
 
 /// Reload `ProjectData` and reconcile duckboard-local state: promote a selected
@@ -1079,44 +1244,49 @@ fn reload_and_reconcile(state: &mut State) -> bool {
     archived_any
 }
 
-/// Re-read content for all open text tabs from disk.
-fn refresh_open_tabs(state: &mut State) {
-    for tabs in [
-        &mut state.change.tabs,
-        &mut state.caps.tabs,
-        &mut state.codex.tabs,
+/// Re-read content for all open text tabs from disk and enqueue async
+/// highlight jobs so the refresh doesn't block the UI.
+fn refresh_open_tabs(state: &mut State, tasks: &mut Vec<Task<Message>>) {
+    for (area, tabs) in [
+        (Area::Change, &mut state.change.tabs),
+        (Area::Caps, &mut state.caps.tabs),
+        (Area::Codex, &mut state.codex.tabs),
     ] {
         let all_tabs = tabs.preview.iter_mut().chain(tabs.file_tabs.iter_mut());
         for tab in all_tabs {
-            if let tab_bar::TabView::Editor { .. } = &tab.view
-                && let Some(content) = state.project.read_artifact(&tab.id)
+            let tab_id = tab.id.clone();
+            if let tab_bar::TabView::Editor { editor, .. } = &mut tab.view
+                && let Some(content) = state.project.read_artifact(&tab_id)
             {
-                tabs_refresh_single(tab, content, &state.highlighter);
+                let mut next = widget::text_edit::EditorState::new(&content);
+                next.highlight_version = editor.highlight_version.wrapping_add(1);
+                *editor = next;
+                tasks.push(spawn_file_tab_highlight(
+                    area,
+                    tab_id,
+                    editor,
+                    state.highlighter.clone(),
+                    false,
+                ));
             }
         }
     }
 }
 
-fn tabs_refresh_single(
-    tab: &mut tab_bar::Tab,
-    new_content: String,
-    highlighter: &highlight::SyntaxHighlighter,
-) {
-    if let tab_bar::TabView::Editor { editor, .. } = &mut tab.view {
-        *editor = widget::text_edit::EditorState::new(&new_content);
-        rehighlight(editor, &tab.id, highlighter);
-    }
-}
-
-/// Apply an editor action to the active tab's editor state.
-pub fn handle_editor_action(
+/// Apply an editor action to the active tab's editor state. Returns a
+/// debounced async highlight task when the action mutates content; the
+/// caller must propagate it up to the runtime or the spans will never
+/// refresh. Non-mutating actions (cursor moves, scroll, save) return
+/// `Task::none()`.
+fn handle_editor_action(
     tabs: &mut tab_bar::TabState,
+    area: Area,
     action: widget::text_edit::EditorAction,
-    highlighter: &highlight::SyntaxHighlighter,
-) {
+    highlighter: Arc<highlight::SyntaxHighlighter>,
+) -> Task<Message> {
     let tab = match tabs.active_tab_mut() {
         Some(t) => t,
-        None => return,
+        None => return Task::none(),
     };
 
     if matches!(action, widget::text_edit::EditorAction::SaveRequested) {
@@ -1134,24 +1304,33 @@ pub fn handle_editor_action(
                 }
             }
         }
-        return;
+        return Task::none();
     }
 
     if let widget::text_edit::EditorAction::OpenUrl(url) = &action {
         if let Err(err) = opener::open(url) {
             tracing::warn!(%url, %err, "failed to open editor URL");
         }
-        return;
+        return Task::none();
     }
 
-    let (editor, tab_id) = match &mut tab.view {
-        tab_bar::TabView::Editor { editor, .. } => (editor, tab.id.as_str()),
-        tab_bar::TabView::Diff { editor, .. } => (editor, tab.id.as_str()),
-        tab_bar::TabView::SearchStack { .. } => return,
+    let tab_id = tab.id.clone();
+    let (editor, is_diff) = match &mut tab.view {
+        tab_bar::TabView::Editor { editor, .. } => (editor, false),
+        tab_bar::TabView::Diff { editor, .. } => (editor, true),
+        tab_bar::TabView::SearchStack { .. } => return Task::none(),
     };
 
     if editor.apply_action(action) {
-        rehighlight(editor, tab_id, highlighter);
+        // Diff tabs are read-only, so `apply_action` shouldn't return true
+        // for them. Guard anyway: a future editable-diff variant would break
+        // silently otherwise.
+        if is_diff {
+            return Task::none();
+        }
+        spawn_file_tab_highlight(area, tab_id, editor, highlighter, true)
+    } else {
+        Task::none()
     }
 }
 
@@ -1170,6 +1349,186 @@ pub fn rehighlight(
     editor.highlight_spans = Some(highlighter.highlight_lines(&editor.lines, syntax));
 }
 
+/// Pause before running the blocking highlight so that a burst of edits
+/// doesn't spawn one 500ms syntect job per keystroke. Stale results are
+/// also dropped by the version check, but `spawn_blocking` can't be
+/// cancelled — so the sleep saves wasted CPU on throwaway work.
+const HIGHLIGHT_DEBOUNCE_MS: u64 = 150;
+
+/// Kick off an async syntax-highlight for an editable file tab. The
+/// current `highlight_version` is snapshotted at spawn time and echoed back
+/// in [`Message::FileTabHighlighted`]; the handler only applies the spans
+/// if the editor's version still matches, so edits during the highlight
+/// window simply drop the result.
+fn spawn_file_tab_highlight(
+    area: Area,
+    tab_id: String,
+    editor: &widget::text_edit::EditorState,
+    highlighter: Arc<highlight::SyntaxHighlighter>,
+    debounce: bool,
+) -> Task<Message> {
+    let version = editor.highlight_version;
+    let lines = editor.lines.clone();
+    let path_str = tab_id.strip_prefix("file:").unwrap_or(&tab_id).to_string();
+    let ext = std::path::Path::new(&path_str)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("txt")
+        .to_string();
+    let delay = if debounce {
+        std::time::Duration::from_millis(HIGHLIGHT_DEBOUNCE_MS)
+    } else {
+        std::time::Duration::ZERO
+    };
+    Task::perform(
+        async move {
+            if !delay.is_zero() {
+                tokio::time::sleep(delay).await;
+            }
+            tokio::task::spawn_blocking(move || {
+                let syntax = highlighter.find_syntax(&ext);
+                highlighter.highlight_lines(&lines, syntax)
+            })
+            .await
+            .unwrap_or_default()
+        },
+        move |spans| Message::FileTabHighlighted {
+            area,
+            tab_id,
+            version,
+            spans: Arc::new(spans),
+        },
+    )
+}
+
+/// Kick off an async syntect highlight for both sides of a diff. The
+/// handler rebuilds `editor.highlight_spans` via
+/// [`widget::diff_view::build_diff_spans`] when the version still matches.
+fn spawn_diff_highlight(
+    area: Area,
+    tab_id: String,
+    version: u64,
+    rel_path: &std::path::Path,
+    diff_data: Arc<vcs::DiffData>,
+    highlighter: Arc<highlight::SyntaxHighlighter>,
+) -> Task<Message> {
+    let ext = rel_path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("txt")
+        .to_string();
+    Task::perform(
+        async move {
+            tokio::task::spawn_blocking(move || {
+                widget::diff_view::compute_diff_highlight(&diff_data, &ext, &highlighter)
+            })
+            .await
+            .unwrap_or_else(|_| widget::diff_view::DiffHighlight {
+                old_spans: Vec::new(),
+                new_spans: Vec::new(),
+            })
+        },
+        move |highlight| Message::DiffTabHighlighted {
+            area,
+            tab_id,
+            version,
+            highlight: Arc::new(highlight),
+        },
+    )
+}
+
+/// Open a diff tab for `rel_path` in the given area's preview slot, then
+/// return the async task that computes its syntect highlight. The tab
+/// renders with fallback muted colors until the task completes.
+fn open_diff_preview(state: &mut State, area: Area, rel_path: &std::path::Path) -> Task<Message> {
+    let Some(root) = state.project.project_root.as_deref() else {
+        return Task::none();
+    };
+    let Some(content) = widget::diff_view::build_diff_tab(root, rel_path) else {
+        return Task::none();
+    };
+    let id = format!("vcs:{}", rel_path.display());
+    let title = rel_path
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| rel_path.display().to_string());
+    let diff_data = content.diff_data.clone();
+    let path_for_task = rel_path.to_path_buf();
+
+    let tabs = tabs_for_area(area, &mut state.change, &mut state.caps, &mut state.codex);
+    tabs.open_diff(
+        id.clone(),
+        title,
+        content.editor,
+        content.path,
+        content.status,
+        content.diff_data,
+    );
+
+    // Snapshot the version we spawned against; the handler drops stale
+    // spans if the tab was refreshed out from under the job.
+    let version = tabs
+        .preview
+        .as_ref()
+        .and_then(|t| {
+            if let tab_bar::TabView::Diff { editor, .. } = &t.view {
+                Some(editor.highlight_version)
+            } else {
+                None
+            }
+        })
+        .unwrap_or(0);
+
+    spawn_diff_highlight(
+        area,
+        id,
+        version,
+        &path_for_task,
+        diff_data,
+        state.highlighter.clone(),
+    )
+}
+
+/// Walk the active area's `TabState` to find a file tab (preview or
+/// `file_tabs`) by id. Returns a mutable reference to the editor if the
+/// tab exists and is an `Editor` view.
+fn find_editor_mut<'a>(
+    tabs: &'a mut tab_bar::TabState,
+    tab_id: &str,
+) -> Option<&'a mut widget::text_edit::EditorState> {
+    let tab = tabs
+        .preview
+        .as_mut()
+        .filter(|t| t.id == tab_id)
+        .or_else(|| tabs.file_tabs.iter_mut().find(|t| t.id == tab_id))?;
+    match &mut tab.view {
+        tab_bar::TabView::Editor { editor, .. } => Some(editor),
+        _ => None,
+    }
+}
+
+/// Like `find_editor_mut` but for `Diff` tabs. Returns the editor plus the
+/// `DiffData` needed to rebuild composite per-line spans.
+fn find_diff_tab_mut<'a>(
+    tabs: &'a mut tab_bar::TabState,
+    tab_id: &str,
+) -> Option<(
+    &'a mut widget::text_edit::EditorState,
+    Arc<vcs::DiffData>,
+)> {
+    let tab = tabs
+        .preview
+        .as_mut()
+        .filter(|t| t.id == tab_id)
+        .or_else(|| tabs.file_tabs.iter_mut().find(|t| t.id == tab_id))?;
+    match &mut tab.view {
+        tab_bar::TabView::Diff {
+            editor, diff_data, ..
+        } => Some((editor, diff_data.clone())),
+        _ => None,
+    }
+}
+
 /// Refresh the VCS changed files list.
 fn refresh_changed_files(state: &mut State) {
     if let Some(root) = &state.project.project_root {
@@ -1179,10 +1538,36 @@ fn refresh_changed_files(state: &mut State) {
 
 /// Re-read any open `file:`-prefixed tabs whose underlying path matches
 /// `changed_path`. Used when the watcher reports a file modification.
+/// Re-read an artifact (duckspec-tracked file) into any open preview /
+/// file tabs across all three areas, then enqueue async highlight jobs.
+fn refresh_artifact_tabs(
+    state: &mut State,
+    id: &str,
+    content: String,
+    tasks: &mut Vec<Task<Message>>,
+) {
+    for (area, tabs) in [
+        (Area::Change, &mut state.change.tabs),
+        (Area::Caps, &mut state.caps.tabs),
+        (Area::Codex, &mut state.codex.tabs),
+    ] {
+        if let Some(editor) = tabs.refresh_content(id, content.clone()) {
+            tasks.push(spawn_file_tab_highlight(
+                area,
+                id.to_string(),
+                editor,
+                state.highlighter.clone(),
+                false,
+            ));
+        }
+    }
+}
+
 fn refresh_file_tabs_for_path(
     state: &mut State,
     project_root: &std::path::Path,
     changed_path: &std::path::Path,
+    tasks: &mut Vec<Task<Message>>,
 ) {
     let Ok(rel) = changed_path.strip_prefix(project_root) else {
         return;
@@ -1191,12 +1576,20 @@ fn refresh_file_tabs_for_path(
     let Ok(content) = std::fs::read_to_string(changed_path) else {
         return;
     };
-    for tabs in [
-        &mut state.change.tabs,
-        &mut state.caps.tabs,
-        &mut state.codex.tabs,
+    for (area, tabs) in [
+        (Area::Change, &mut state.change.tabs),
+        (Area::Caps, &mut state.caps.tabs),
+        (Area::Codex, &mut state.codex.tabs),
     ] {
-        tabs.refresh_content(&id, content.clone(), &state.highlighter);
+        if let Some(editor) = tabs.refresh_content(&id, content.clone()) {
+            tasks.push(spawn_file_tab_highlight(
+                area,
+                id.clone(),
+                editor,
+                state.highlighter.clone(),
+                false,
+            ));
+        }
     }
 }
 
@@ -1206,17 +1599,22 @@ fn refresh_diff_tabs_for_path(
     state: &mut State,
     project_root: &std::path::Path,
     changed_path: &std::path::Path,
+    tasks: &mut Vec<Task<Message>>,
 ) {
     let Ok(rel) = changed_path.strip_prefix(project_root) else {
         return;
     };
     let id = format!("vcs:{}", rel.display());
-    rebuild_diff_tab(state, project_root, &id, rel);
+    rebuild_diff_tab(state, project_root, &id, rel, tasks);
 }
 
 /// Rebuild every open diff tab — used on VCS state changes (HEAD/index/refs)
 /// where the diff baseline shifts for all open diffs at once.
-fn refresh_all_diff_tabs(state: &mut State, project_root: &std::path::Path) {
+fn refresh_all_diff_tabs(
+    state: &mut State,
+    project_root: &std::path::Path,
+    tasks: &mut Vec<Task<Message>>,
+) {
     let ids: Vec<String> = [&state.change.tabs, &state.caps.tabs, &state.codex.tabs]
         .into_iter()
         .flat_map(|tabs| {
@@ -1236,7 +1634,7 @@ fn refresh_all_diff_tabs(state: &mut State, project_root: &std::path::Path) {
             continue;
         };
         let rel = std::path::PathBuf::from(rel_str);
-        rebuild_diff_tab(state, project_root, &id, &rel);
+        rebuild_diff_tab(state, project_root, &id, &rel, tasks);
     }
 }
 
@@ -1245,20 +1643,38 @@ fn rebuild_diff_tab(
     project_root: &std::path::Path,
     id: &str,
     rel: &std::path::Path,
+    tasks: &mut Vec<Task<Message>>,
 ) {
-    match widget::diff_view::build_diff_tab(project_root, rel, &state.highlighter) {
+    match widget::diff_view::build_diff_tab(project_root, rel) {
         Some(content) => {
-            for tabs in [
-                &mut state.change.tabs,
-                &mut state.caps.tabs,
-                &mut state.codex.tabs,
+            for (area, tabs) in [
+                (Area::Change, &mut state.change.tabs),
+                (Area::Caps, &mut state.caps.tabs),
+                (Area::Codex, &mut state.codex.tabs),
             ] {
                 tabs.refresh_diff(
                     id,
                     content.editor.clone(),
                     content.path.clone(),
                     content.status,
+                    content.diff_data.clone(),
                 );
+                // After `refresh_diff`, the editor's `highlight_version` has
+                // inherited from the prior one (via `carry_view_state`); bump
+                // it so any in-flight previous-generation highlight is
+                // discarded when it arrives.
+                if let Some((editor, _)) = find_diff_tab_mut(tabs, id) {
+                    editor.highlight_version = editor.highlight_version.wrapping_add(1);
+                    let version = editor.highlight_version;
+                    tasks.push(spawn_diff_highlight(
+                        area,
+                        id.to_string(),
+                        version,
+                        rel,
+                        content.diff_data.clone(),
+                        state.highlighter.clone(),
+                    ));
+                }
             }
         }
         None => {
@@ -1345,9 +1761,9 @@ fn open_search_hit_as_file(
     state: &mut State,
     hit: &widget::text_search::SearchHit,
     all_hits: &[widget::text_search::SearchHit],
-) {
+) -> Task<Message> {
     let Ok(content) = std::fs::read_to_string(&hit.abs_path) else {
-        return;
+        return Task::none();
     };
     let id = format!("file:{}", hit.rel_path);
     let title = std::path::Path::new(&hit.rel_path)
@@ -1361,12 +1777,13 @@ fn open_search_hit_as_file(
         .map(|h| h.line)
         .collect();
     ensure_active_area(&mut state.active_area);
+    let area = state.active_area;
+    let highlighter = state.highlighter.clone();
     let State {
         active_area,
         change,
         caps,
         codex,
-        highlighter,
         ..
     } = state;
     let tabs = tabs_for_area(*active_area, change, caps, codex);
@@ -1374,12 +1791,14 @@ fn open_search_hit_as_file(
     if let Some(tab) = tabs.file_tabs.iter_mut().find(|t| t.id == id)
         && let tab_bar::TabView::Editor { editor, .. } = &mut tab.view
     {
-        rehighlight(editor, &id, highlighter);
         set_match_line_highlights(editor, &match_lines);
         // Approximate viewport = 600px. LINE_HEIGHT is 20px in text_edit.
         let target_y = line as f32 * 20.0 - 300.0;
         editor.scroll_y = target_y.max(0.0);
         editor.cursor = widget::text_edit::Pos::new(line, 0);
+        spawn_file_tab_highlight(area, id, editor, highlighter, false)
+    } else {
+        Task::none()
     }
 }
 

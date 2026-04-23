@@ -92,8 +92,10 @@ pub fn update(
                 }
             }
         }
-        Message::TabContent(tab_bar::TabContentMsg::EditorAction(action)) => {
-            crate::handle_editor_action(&mut state.tabs, action, highlighter);
+        Message::TabContent(tab_bar::TabContentMsg::EditorAction(_)) => {
+            // Intercepted by `main::update` for `Message::Caps` so the async
+            // highlight `Task` can be propagated. No-op defensive fallback.
+            let _ = highlighter;
         }
         Message::TabContent(tab_bar::TabContentMsg::OpenInNewTab(_)) => {
             // Diff tabs only surface in the change area; ignore elsewhere.

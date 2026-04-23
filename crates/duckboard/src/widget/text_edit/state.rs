@@ -115,6 +115,11 @@ pub struct EditorState {
     redo_stack: Vec<UndoOp>,
     /// Cached syntax-highlighted spans per line. `None` means stale/unset.
     pub highlight_spans: Option<Vec<Vec<HighlightSpan>>>,
+    /// Bumped on every content-mutating `apply_action` (and every
+    /// `rebuild_from_blocks`). Async highlighters read this at spawn time and
+    /// the `TabHighlighted` handler drops stale results whose version no
+    /// longer matches.
+    pub highlight_version: u64,
     /// Per-line background tags (e.g. diff added/removed). Empty = no
     /// backgrounds. Resolved to a Color at render time so theme toggles
     /// take effect without rebuilding the editor.
@@ -151,6 +156,7 @@ impl EditorState {
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
             highlight_spans: None,
+            highlight_version: 0,
             line_backgrounds: Vec::new(),
             blocks: Vec::new(),
             block_line_map: Vec::new(),
@@ -170,6 +176,7 @@ impl EditorState {
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
             highlight_spans: None,
+            highlight_version: 0,
             line_backgrounds: Vec::new(),
             blocks,
             block_line_map: Vec::new(),
@@ -212,6 +219,7 @@ impl EditorState {
         self.cursor.col = self.cursor.col.min(self.lines[self.cursor.line].len());
         self.anchor = None;
         self.highlight_spans = None;
+        self.highlight_version = self.highlight_version.wrapping_add(1);
 
         if was_at_bottom {
             self.scroll_to_bottom();
@@ -245,6 +253,14 @@ impl EditorState {
     /// (i.e. the caller should re-run syntax highlighting).
     pub fn apply_action(&mut self, action: EditorAction) -> bool {
         let mutates = action.is_mutating();
+        if mutates {
+            // Keep `highlight_spans` in place so edited lines retain their
+            // previous colors while the async re-highlight is in flight.
+            // The renderer sources text from the current line (not
+            // `span.text`), so characters stay correct; colors near the
+            // edit point may be briefly misaligned until new spans land.
+            self.highlight_version = self.highlight_version.wrapping_add(1);
+        }
 
         match action {
             EditorAction::Insert(ch) => self.insert_char(ch),

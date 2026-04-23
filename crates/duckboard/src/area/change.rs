@@ -371,23 +371,18 @@ pub fn update(
                 }
             }
         }
-        Message::SelectChangedFile(path) => {
-            if let Some(root) = &project.project_root
-                && let Some(content) =
-                    crate::widget::diff_view::build_diff_tab(root, &path, highlighter)
-            {
-                let id = format!("vcs:{}", path.display());
-                let title = path
-                    .file_name()
-                    .map(|n| n.to_string_lossy().to_string())
-                    .unwrap_or_else(|| path.display().to_string());
-                state
-                    .tabs
-                    .open_diff(id, title, content.editor, content.path, content.status);
-            }
+        Message::SelectChangedFile(_) => {
+            // Intercepted by `main::update` so the async diff-highlight
+            // `Task` can be propagated to the runtime.
+            let _ = project;
         }
-        Message::TabContent(tab_bar::TabContentMsg::EditorAction(action)) => {
-            crate::handle_editor_action(&mut state.tabs, action, highlighter);
+        Message::TabContent(tab_bar::TabContentMsg::EditorAction(_)) => {
+            // Intercepted by `main::update` for `Message::Change` so the
+            // async highlight `Task` can be propagated. This arm is
+            // unreachable via the top-level dispatch; keep it as a
+            // defensive no-op in case an internal caller ever constructs
+            // one directly.
+            let _ = highlighter;
         }
         Message::TabContent(tab_bar::TabContentMsg::OpenInNewTab(rel_path)) => {
             if let Some(root) = &project.project_root {

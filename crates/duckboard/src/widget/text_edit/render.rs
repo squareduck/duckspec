@@ -878,6 +878,13 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for TextEdit<'a, M> {
                         );
                     } else {
                         // Syntax highlighting spans — need to slice for this visual row.
+                        // Text is sliced from the CURRENT line (`row_text`),
+                        // not from `span.text`, so that stale spans left over
+                        // from the pre-edit highlight still render the
+                        // current characters. Colors can be slightly
+                        // misaligned near the edit point until the async
+                        // re-highlight completes, but the visible content
+                        // always matches the buffer.
                         let spans = self
                             .state
                             .highlight_spans
@@ -885,6 +892,7 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for TextEdit<'a, M> {
                             .and_then(|cache| cache.get(line_idx));
 
                         if let Some(spans) = spans {
+                            let row_chars = row_text.chars().count();
                             let mut col = 0usize;
                             for span in spans {
                                 let span_chars = span.text.chars().count();
@@ -892,38 +900,75 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for TextEdit<'a, M> {
                                 if span_end > char_start && col < char_end {
                                     let vis_start = col.max(char_start) - char_start;
                                     let vis_end = span_end.min(char_end) - char_start;
-                                    let slice: String = span
-                                        .text
-                                        .chars()
-                                        .skip(col.max(char_start) - col)
-                                        .take(vis_end - vis_start)
-                                        .collect();
-                                    if !slice.is_empty() {
-                                        let sw = slice.chars().count() as f32 * cell_w;
-                                        let sx =
-                                            content_x + CONTENT_PAD + vis_start as f32 * cell_w
+                                    let take_end = vis_end.min(row_chars);
+                                    if take_end > vis_start {
+                                        let slice: String = row_text
+                                            .chars()
+                                            .skip(vis_start)
+                                            .take(take_end - vis_start)
+                                            .collect();
+                                        if !slice.is_empty() {
+                                            let sw = slice.chars().count() as f32 * cell_w;
+                                            let sx = content_x
+                                                + CONTENT_PAD
+                                                + vis_start as f32 * cell_w
                                                 - scroll_x;
-                                        renderer.fill_text(
-                                            iced::advanced::Text {
-                                                content: slice,
-                                                bounds: Size::new(sw + cell_w, LINE_HEIGHT),
-                                                size: Pixels(font_size()),
-                                                line_height: text::LineHeight::Absolute(Pixels(
-                                                    LINE_HEIGHT,
-                                                )),
-                                                font: theme::content_font(),
-                                                align_x: alignment::Horizontal::Left.into(),
-                                                align_y: alignment::Vertical::Top,
-                                                shaping: text::Shaping::Basic,
-                                                wrapping: text::Wrapping::None,
-                                            },
-                                            Point::new(sx, y),
-                                            span.color,
-                                            content_clip,
-                                        );
+                                            renderer.fill_text(
+                                                iced::advanced::Text {
+                                                    content: slice,
+                                                    bounds: Size::new(sw + cell_w, LINE_HEIGHT),
+                                                    size: Pixels(font_size()),
+                                                    line_height: text::LineHeight::Absolute(
+                                                        Pixels(LINE_HEIGHT),
+                                                    ),
+                                                    font: theme::content_font(),
+                                                    align_x: alignment::Horizontal::Left.into(),
+                                                    align_y: alignment::Vertical::Top,
+                                                    shaping: text::Shaping::Basic,
+                                                    wrapping: text::Wrapping::None,
+                                                },
+                                                Point::new(sx, y),
+                                                span.color,
+                                                content_clip,
+                                            );
+                                        }
                                     }
                                 }
                                 col = span_end;
+                            }
+                            // Any chars the user has typed past where the
+                            // stale spans ended get a default-color paint so
+                            // inserts at end-of-line aren't invisible.
+                            if row_chars > col.saturating_sub(char_start) {
+                                let tail_start = col.saturating_sub(char_start);
+                                let tail_start = tail_start.min(row_chars);
+                                let tail: String =
+                                    row_text.chars().skip(tail_start).collect();
+                                if !tail.is_empty() {
+                                    let tw = tail.chars().count() as f32 * cell_w;
+                                    let tx = content_x
+                                        + CONTENT_PAD
+                                        + tail_start as f32 * cell_w
+                                        - scroll_x;
+                                    renderer.fill_text(
+                                        iced::advanced::Text {
+                                            content: tail,
+                                            bounds: Size::new(tw + cell_w, LINE_HEIGHT),
+                                            size: Pixels(font_size()),
+                                            line_height: text::LineHeight::Absolute(Pixels(
+                                                LINE_HEIGHT,
+                                            )),
+                                            font: theme::content_font(),
+                                            align_x: alignment::Horizontal::Left.into(),
+                                            align_y: alignment::Vertical::Top,
+                                            shaping: text::Shaping::Basic,
+                                            wrapping: text::Wrapping::None,
+                                        },
+                                        Point::new(tx, y),
+                                        theme::text_primary(),
+                                        content_clip,
+                                    );
+                                }
                             }
                         } else {
                             renderer.fill_text(

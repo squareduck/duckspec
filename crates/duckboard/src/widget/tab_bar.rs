@@ -5,11 +5,13 @@
 //! (up to `MAX_FILE_TABS`) hold files opened via the file finder (Ctrl+P),
 //! with oldest-first eviction.
 
+use std::sync::Arc;
+
 use iced::widget::{Space, button, column, container, row, scrollable, svg, text};
 use iced::{Center, Element, Length};
 
 use crate::theme;
-use crate::vcs::FileStatus;
+use crate::vcs::{DiffData, FileStatus};
 use crate::widget::text_edit::{self, EditorAction, EditorState};
 
 const ICON_FILE: &[u8] = include_bytes!("../../assets/icon_file.svg");
@@ -42,11 +44,15 @@ pub enum TabView {
         editor: EditorState,
         path: Option<std::path::PathBuf>,
     },
-    /// VCS diff view (read-only editor with per-line backgrounds).
+    /// VCS diff view (read-only editor with per-line backgrounds). `diff_data`
+    /// is retained so an async syntect highlight can rebuild `editor.
+    /// highlight_spans` without re-fetching from VCS, and so theme toggles
+    /// can regenerate the composite per-line spans correctly.
     Diff {
         editor: EditorState,
         path: std::path::PathBuf,
         status: FileStatus,
+        diff_data: Arc<DiffData>,
     },
     /// Project-wide search results rendered as a vertical stack of read-only
     /// slice editors, one per match. Each slice is pre-scrolled to its match
@@ -169,6 +175,7 @@ impl TabState {
         editor: EditorState,
         path: std::path::PathBuf,
         status: FileStatus,
+        diff_data: Arc<DiffData>,
     ) {
         self.preview = Some(Tab {
             id,
@@ -177,6 +184,7 @@ impl TabState {
                 editor,
                 path,
                 status,
+                diff_data,
             },
         });
         self.active = ActiveTab::Preview;
@@ -301,24 +309,32 @@ impl TabState {
 
     /// Update the content of a text tab by its id. Checks both preview and
     /// file tabs. Preserves scroll position and cursor across the rebuild.
+    /// Replace an editor tab's content from disk while preserving scroll,
+    /// cursor, selection, and bottom-pin state. Bumps the editor's
+    /// `highlight_version` so any in-flight async highlight targeting the
+    /// old content is dropped when its result arrives. Returns a mutable
+    /// reference to the editor so the caller can spawn a fresh highlight
+    /// job; returns `None` if the tab is missing or isn't an `Editor`.
     pub fn refresh_content(
         &mut self,
         id: &str,
         new_source: String,
-        highlighter: &crate::highlight::SyntaxHighlighter,
-    ) {
+    ) -> Option<&mut EditorState> {
         let tab = self
             .preview
             .iter_mut()
             .chain(self.file_tabs.iter_mut())
-            .find(|t| t.id == id);
-        if let Some(tab) = tab
-            && let TabView::Editor { editor, .. } = &mut tab.view
-        {
+            .find(|t| t.id == id)?;
+        if let TabView::Editor { editor, .. } = &mut tab.view {
             let mut next = EditorState::new(&new_source);
             carry_view_state(editor, &mut next);
+            // Inherit + bump so a prior spawn's result won't overwrite the
+            // new content's (not-yet-computed) spans.
+            next.highlight_version = editor.highlight_version.wrapping_add(1);
             *editor = next;
-            crate::rehighlight(editor, id, highlighter);
+            Some(editor)
+        } else {
+            None
         }
     }
 
@@ -335,6 +351,7 @@ impl TabState {
         mut new_editor: EditorState,
         new_path: std::path::PathBuf,
         new_status: FileStatus,
+        new_diff_data: Arc<DiffData>,
     ) {
         let tab = self
             .preview
@@ -346,12 +363,14 @@ impl TabState {
                 editor,
                 path,
                 status,
+                diff_data,
             } = &mut tab.view
         {
             carry_view_state(editor, &mut new_editor);
             *editor = new_editor;
             *path = new_path;
             *status = new_status;
+            *diff_data = new_diff_data;
         }
     }
 }
