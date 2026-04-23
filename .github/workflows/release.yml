@@ -130,11 +130,13 @@ jobs:
           echo "archive=dist/${ARCHIVE}" >> "$GITHUB_OUTPUT"
 
       - name: Create / update release
+        # `generate_release_notes` intentionally left off — the macOS
+        # job owns the release body so we don't end up with two
+        # "Full Changelog" lines when both jobs write to the release.
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
           files: ${{ steps.ds.outputs.archive }}
-          generate_release_notes: true
           draft: false
 
       - name: Upload artifact (manual dispatch)
