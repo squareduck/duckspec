@@ -2,42 +2,42 @@
 //!
 //! Two layers:
 //!
-//! - [`ListRow`] — builder for a single row (icon + label + optional badge /
-//!   trailing). Used standalone by file_finder and slash-completion for
-//!   visual consistency.
+//! - [`ListRow`] — builder for a single row (leading + icon + label). Used
+//!   standalone by file_finder and slash-completion for visual consistency.
 //! - [`view`] — renders `Vec<ListRow>` as a column, with empty-state text.
 //!   Callers own scrolling and section wrapping (`collapsible::view`).
+//!
+//! Error state is conveyed by coloring the label and icon red via the
+//! [`ListRow::errored`] setter. Rows carry no trailing indicators, so
+//! horizontal panning (see [`super::horizontal_pan`]) can scroll freely
+//! without hiding per-row affordances.
 
 use std::borrow::Cow;
 
 use iced::widget::text::Wrapping;
-use iced::widget::{Space, button, column, container, row, svg, text};
+use iced::widget::{MouseArea, Space, button, column, container, row, svg, text};
 use iced::{Color, Element, Length};
 
 use crate::theme;
 use crate::widget::horizontal_pan;
 use crate::widget::pan_row::PanRow;
 
-const ICON_SIZE: f32 = 14.0;
+pub const ICON_SIZE: f32 = 14.0;
 
 type StyleFn = fn(&iced::Theme, button::Status) -> button::Style;
-
-pub enum Badge {
-    ErrorDot,
-    ErrorCount(u32),
-}
 
 pub struct ListRow<'a, Msg> {
     label: Cow<'a, str>,
     icon: Option<&'static [u8]>,
     icon_tint: Option<Color>,
     leading: Option<Element<'a, Msg>>,
-    trailing: Option<Element<'a, Msg>>,
-    sticky_trailing: Option<Element<'a, Msg>>,
-    badge: Option<Badge>,
     indent_level: usize,
     selected: bool,
+    errored: bool,
     on_press: Option<Msg>,
+    /// (on_enter, on_exit) — wraps the row in a mouse_area so callers can
+    /// track cursor hover (e.g. to swap the icon for a close button).
+    hover: Option<(Msg, Msg)>,
     spacing: f32,
     fill_width: bool,
 }
@@ -49,12 +49,11 @@ impl<'a, Msg: Clone + 'a> ListRow<'a, Msg> {
             icon: None,
             icon_tint: None,
             leading: None,
-            trailing: None,
-            sticky_trailing: None,
-            badge: None,
             indent_level: 0,
             selected: false,
+            errored: false,
             on_press: None,
+            hover: None,
             spacing: theme::SPACING_XS,
             fill_width: true,
         }
@@ -69,7 +68,7 @@ impl<'a, Msg: Clone + 'a> ListRow<'a, Msg> {
         self
     }
 
-    /// Override horizontal spacing between leading / icon / label / trailing.
+    /// Override horizontal spacing between leading / icon / label.
     pub fn spacing(mut self, spacing: f32) -> Self {
         self.spacing = spacing;
         self
@@ -81,6 +80,7 @@ impl<'a, Msg: Clone + 'a> ListRow<'a, Msg> {
     }
 
     /// Override the default `text_muted` tint applied to the icon SVG.
+    /// Ignored when the row is `errored` — error tint wins.
     pub fn icon_tint(mut self, tint: Color) -> Self {
         self.icon_tint = Some(tint);
         self
@@ -88,26 +88,6 @@ impl<'a, Msg: Clone + 'a> ListRow<'a, Msg> {
 
     pub fn leading(mut self, el: Element<'a, Msg>) -> Self {
         self.leading = Some(el);
-        self
-    }
-
-    pub fn trailing(mut self, el: Element<'a, Msg>) -> Self {
-        self.trailing = Some(el);
-        self
-    }
-
-    /// Trailing element pinned to the right edge of the visible viewport
-    /// rather than the row's natural width — stays in place as the column
-    /// pans horizontally. Only takes effect in the `view()` path
-    /// (`fill_width = false`); in fill-width mode it renders identically
-    /// to a regular `trailing` element.
-    pub fn sticky_trailing(mut self, el: Element<'a, Msg>) -> Self {
-        self.sticky_trailing = Some(el);
-        self
-    }
-
-    pub fn badge(mut self, badge: Badge) -> Self {
-        self.badge = Some(badge);
         self
     }
 
@@ -121,8 +101,24 @@ impl<'a, Msg: Clone + 'a> ListRow<'a, Msg> {
         self
     }
 
+    /// Mark the row as containing errors. Tints the label and the icon red;
+    /// the specific diagnostic is expected to be shown elsewhere (inline
+    /// error panel, dashboard).
+    pub fn errored(mut self, err: bool) -> Self {
+        self.errored = err;
+        self
+    }
+
     pub fn on_press(mut self, msg: Msg) -> Self {
         self.on_press = Some(msg);
+        self
+    }
+
+    /// Emit `enter` when the cursor enters the row and `exit` when it
+    /// leaves. Click behavior is unaffected — the underlying button still
+    /// fires `on_press`.
+    pub fn on_hover(mut self, enter: Msg, exit: Msg) -> Self {
+        self.hover = Some((enter, exit));
         self
     }
 
@@ -133,27 +129,21 @@ impl<'a, Msg: Clone + 'a> ListRow<'a, Msg> {
             inner = inner.push(leading);
         }
         if let Some(bytes) = self.icon {
-            inner = inner.push(icon_svg(bytes, self.icon_tint));
+            let tint = if self.errored {
+                Some(theme::error())
+            } else {
+                self.icon_tint
+            };
+            inner = inner.push(icon_svg(bytes, tint));
         }
 
-        inner = inner.push(
-            text(self.label)
-                .size(theme::font_md())
-                .wrapping(Wrapping::None),
-        );
-
-        // In shrink-width mode, sticky_trailing is overlaid by PanRow at the
-        // viewport's right edge. In fill-width mode there's no panning to
-        // anchor against, so it falls back to a regular inline trailing.
-        let mut sticky_trailing = self.sticky_trailing;
-        let mut inline_trailing = self.trailing.or_else(|| self.badge.map(render_badge));
-        if self.fill_width && inline_trailing.is_none() {
-            inline_trailing = sticky_trailing.take();
+        let mut label = text(self.label)
+            .size(theme::font_md())
+            .wrapping(Wrapping::None);
+        if self.errored {
+            label = label.color(theme::error());
         }
-        if let Some(t) = inline_trailing {
-            inner = inner.push(Space::new().width(Length::Fill));
-            inner = inner.push(t);
-        }
+        inner = inner.push(label);
 
         let content: Element<'a, Msg> = if self.indent_level > 0 {
             let indent = (self.indent_level as f32) * theme::SPACING_LG;
@@ -178,19 +168,30 @@ impl<'a, Msg: Clone + 'a> ListRow<'a, Msg> {
             if let Some(msg) = self.on_press {
                 btn = btn.on_press(msg);
             }
-            btn.into()
+            let elem: Element<'a, Msg> = btn.into();
+            match self.hover {
+                Some((enter, exit)) => MouseArea::new(elem)
+                    .on_enter(enter)
+                    .on_exit(exit)
+                    .into(),
+                None => elem,
+            }
         } else {
             // Shrink-width path: a button at natural width can't paint a
             // viewport-spanning highlight. PanRow reads the visible viewport
-            // and paints/hits across it instead.
+            // and paints/hits across it instead. Hover is driven by PanRow
+            // rather than a wrapping `MouseArea` — PanRow's hover state
+            // survives content swaps inside the row (e.g. icon ↔ close
+            // button), whereas `MouseArea` recomputes from `layout.bounds`
+            // and can oscillate when those bounds change between renders.
             let mut row = PanRow::new(content)
                 .padding([theme::SPACING_XS, theme::SPACING_SM])
                 .style(style);
             if let Some(msg) = self.on_press {
                 row = row.on_press(msg);
             }
-            if let Some(st) = sticky_trailing {
-                row = row.sticky_trailing(st);
+            if let Some((enter, exit)) = self.hover {
+                row = row.on_hover(enter, exit);
             }
             row.into()
         }
@@ -233,17 +234,4 @@ fn icon_svg<'a, Msg: 'a>(bytes: &'static [u8], tint: Option<Color>) -> Element<'
         .height(ICON_SIZE)
         .style(theme::svg_tint(tint.unwrap_or_else(theme::text_muted)))
         .into()
-}
-
-fn render_badge<'a, Msg: 'a>(badge: Badge) -> Element<'a, Msg> {
-    match badge {
-        Badge::ErrorDot => text("\u{2022}")
-            .size(theme::font_md())
-            .color(theme::error())
-            .into(),
-        Badge::ErrorCount(n) => text(n.to_string())
-            .size(theme::font_sm())
-            .color(theme::error())
-            .into(),
-    }
 }

@@ -15,9 +15,16 @@ pub const ICON_CLOSE: &[u8] = include_bytes!("../../assets/icon_close.svg");
 /// sit at the right edge of a row that supplies the surrounding padding.
 /// No internal padding — the caller's row owns the spacing.
 pub fn close_button<'a, M: Clone + 'a>(on_press: M) -> Element<'a, M> {
+    close_button_sized(on_press, theme::font_sm())
+}
+
+/// Close button at a caller-chosen pixel size. Use this when the close
+/// button replaces a list-row icon on hover and the two must match widths
+/// so the row's label doesn't jump.
+pub fn close_button_sized<'a, M: Clone + 'a>(on_press: M, size: f32) -> Element<'a, M> {
     let icon = svg(svg::Handle::from_memory(ICON_CLOSE))
-        .width(theme::font_sm())
-        .height(theme::font_sm())
+        .width(size)
+        .height(size)
         .style(theme::svg_tint(theme::text_muted()));
     button(icon)
         .on_press(on_press)

@@ -496,6 +496,19 @@ fn run_audit(
         }
     }
 
+    // Surface unresolved step @spec refs as per-file errors so the sidebar
+    // badge and inline error panel pick them up automatically.
+    for r in &report.unresolved_step_refs {
+        let step_id = r.step_file.display().to_string();
+        let msg = format!("@spec does not resolve: {}", r.key.display());
+        let entry = validations.entry(r.change_name.clone()).or_default();
+        if let Some((_, msgs)) = entry.file_errors.iter_mut().find(|(p, _)| p == &step_id) {
+            msgs.push(msg);
+        } else {
+            entry.file_errors.push((step_id, vec![msg]));
+        }
+    }
+
     let project_audit = ProjectAudit {
         artifact_errors: report
             .artifact_errors

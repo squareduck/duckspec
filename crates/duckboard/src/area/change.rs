@@ -9,7 +9,7 @@ use iced::{Element, Length};
 use crate::data::{ChangeData, ProjectData, StepCompletion};
 use crate::theme;
 use crate::vcs::{ChangedFile, FileStatus};
-use crate::widget::list_view::{self, Badge, ListRow};
+use crate::widget::list_view::{self, ListRow};
 use crate::widget::{collapsible, interaction_toggle, tab_bar, tree_view, vertical_scroll};
 
 use super::interaction::{self, AgentSession, InteractionState, SessionControls};
@@ -47,6 +47,9 @@ pub struct State {
     pub explorations: Vec<String>,
     /// Counter for generating unique exploration names.
     pub exploration_counter: usize,
+    /// Name of the exploration row currently under the cursor, if any. When
+    /// set, the exploration row's icon slot renders a close button instead.
+    pub hovered_exploration: Option<String>,
     /// Vertical scroll offset for the list column.
     pub list_scroll: f32,
 }
@@ -72,6 +75,7 @@ impl State {
             interactions: HashMap::new(),
             explorations,
             exploration_counter,
+            hovered_exploration: None,
             list_scroll: 0.0,
         }
     }
@@ -244,6 +248,12 @@ pub enum Message {
     TabContent(tab_bar::TabContentMsg),
     AddExploration,
     RemoveExploration(String),
+    HoverExploration(String),
+    /// Payload is the exploration name the row thinks it's clearing. Only
+    /// clear the hover state if it still matches — otherwise a stale exit
+    /// from row N can wipe a fresh enter from row N+1 when both fire in
+    /// the same event dispatch.
+    UnhoverExploration(String),
     /// Navigate to a change and open one of its artifacts.
     OpenArtifact {
         change: String,
@@ -426,12 +436,23 @@ pub fn update(
             if state.selected_change.as_deref() == Some(&name) {
                 state.selected_change = None;
             }
+            if state.hovered_exploration.as_deref() == Some(&name) {
+                state.hovered_exploration = None;
+            }
             crate::chat_store::delete_scope(&name, project.project_root.as_deref());
             crate::chat_store::save_explorations(
                 &state.explorations,
                 state.exploration_counter,
                 project.project_root.as_deref(),
             );
+        }
+        Message::HoverExploration(name) => {
+            state.hovered_exploration = Some(name);
+        }
+        Message::UnhoverExploration(name) => {
+            if state.hovered_exploration.as_deref() == Some(name.as_str()) {
+                state.hovered_exploration = None;
+            }
         }
         Message::OpenArtifact {
             change,
@@ -798,6 +819,7 @@ mod breadcrumb_tests {
             interactions: HashMap::new(),
             explorations: explorations.iter().map(|s| s.to_string()).collect(),
             exploration_counter: 0,
+            hovered_exploration: None,
             list_scroll: 0.0,
             known_file_dirs: HashSet::new(),
         }
@@ -898,6 +920,7 @@ mod breadcrumb_tests {
             interactions: HashMap::new(),
             explorations: vec![],
             exploration_counter: 0,
+            hovered_exploration: None,
             list_scroll: 0.0,
             known_file_dirs: HashSet::new(),
         };
@@ -1116,33 +1139,44 @@ fn clear_active_session(ix: &mut InteractionState, scope: &str, project_root: Op
 fn view_list<'a>(state: &'a State, project: &'a ProjectData) -> Element<'a, Message> {
     let mut rows: Vec<ListRow<'a, Message>> = vec![];
 
-    // Exploration changes (virtual) — listed first.
+    // Exploration changes (virtual) — listed first. On hover, the icon
+    // slot is swapped for a close button so the close affordance is always
+    // at the left edge of the row, unaffected by horizontal panning.
     for name in &state.explorations {
         let is_selected = state.selected_change.as_deref() == Some(name.as_str());
-        let close_btn = collapsible::close_button(Message::RemoveExploration(name.clone()));
-        rows.push(
-            ListRow::new(name.as_str())
-                .icon(ICON_EXPLORE)
-                .sticky_trailing(close_btn)
-                .selected(is_selected)
-                .on_press(Message::SelectChange(name.clone())),
-        );
+        let is_hovered = state.hovered_exploration.as_deref() == Some(name.as_str());
+        let mut r = ListRow::new(name.as_str())
+            .selected(is_selected)
+            .on_press(Message::SelectChange(name.clone()))
+            .on_hover(
+                Message::HoverExploration(name.clone()),
+                Message::UnhoverExploration(name.clone()),
+            );
+        if is_hovered {
+            r = r.leading(collapsible::close_button_sized(
+                Message::RemoveExploration(name.clone()),
+                list_view::ICON_SIZE,
+            ));
+        } else {
+            r = r.icon(ICON_EXPLORE);
+        }
+        rows.push(r);
     }
 
     // Active changes from duckspec.
     for ch in &project.active_changes {
         let is_selected = state.selected_change.as_ref() == Some(&ch.name);
-        let mut r = ListRow::new(ch.name.as_str())
-            .icon(ICON_BRANCH)
-            .selected(is_selected)
-            .on_press(Message::SelectChange(ch.name.clone()));
-        if let Some(v) = project.validations.get(&ch.name) {
-            let count = v.total_count();
-            if count > 0 {
-                r = r.badge(Badge::ErrorCount(count as u32));
-            }
-        }
-        rows.push(r);
+        let has_err = project
+            .validations
+            .get(&ch.name)
+            .is_some_and(|v| v.total_count() > 0);
+        rows.push(
+            ListRow::new(ch.name.as_str())
+                .icon(ICON_BRANCH)
+                .selected(is_selected)
+                .errored(has_err)
+                .on_press(Message::SelectChange(ch.name.clone())),
+        );
     }
 
     let selector = list_view::view(rows, None);
@@ -1153,17 +1187,15 @@ fn view_list<'a>(state: &'a State, project: &'a ProjectData) -> Element<'a, Mess
         .iter()
         .map(|ch| {
             let is_selected = state.selected_change.as_ref() == Some(&ch.name);
-            let mut r = ListRow::new(ch.name.as_str())
+            let has_err = project
+                .validations
+                .get(&ch.name)
+                .is_some_and(|v| v.total_count() > 0);
+            ListRow::new(ch.name.as_str())
                 .icon(ICON_BRANCH)
                 .selected(is_selected)
-                .on_press(Message::SelectChange(ch.name.clone()));
-            if let Some(v) = project.validations.get(&ch.name) {
-                let count = v.total_count();
-                if count > 0 {
-                    r = r.badge(Badge::ErrorCount(count as u32));
-                }
-            }
-            r
+                .errored(has_err)
+                .on_press(Message::SelectChange(ch.name.clone()))
         })
         .collect();
 
@@ -1253,13 +1285,11 @@ fn view_overview_section<'a>(
     let mut rows: Vec<ListRow<'a, Message>> = vec![];
 
     let mut push_file = |label: &'static str, id: String, has_err: bool| {
-        let mut r = ListRow::new(label)
+        let r = ListRow::new(label)
             .icon(icon_for_artifact(label))
             .selected(active_id == Some(id.as_str()))
+            .errored(has_err)
             .on_press(Message::SelectItem(id));
-        if has_err {
-            r = r.badge(Badge::ErrorDot);
-        }
         rows.push(r);
     };
 
@@ -1330,15 +1360,14 @@ fn view_steps_section<'a>(
                     StepCompletion::Partial(0, _) | StepCompletion::NoTasks => (ICON_STEP, None),
                     StepCompletion::Partial(_, _) => (ICON_STEP_PARTIAL, Some(theme::warning())),
                 };
+            let has_err = error_ids.contains(&step.id);
             let mut r = ListRow::new(step.label.as_str())
                 .icon(icon_bytes)
                 .selected(active_id == Some(step.id.as_str()))
+                .errored(has_err)
                 .on_press(Message::SelectItem(step.id.clone()));
             if let Some(tint) = icon_tint {
                 r = r.icon_tint(tint);
-            }
-            if error_ids.contains(&step.id) {
-                r = r.badge(Badge::ErrorDot);
             }
             r
         })

@@ -146,6 +146,20 @@ pub fn bg_list_hover() -> Color {
     }
 }
 
+/// Persistent background for the selected list row — a touch stronger than
+/// `bg_list_hover` (75% mix toward elevated vs. 50%), so selection is
+/// visible at rest without chasing the hover tint.
+pub fn bg_list_selected() -> Color {
+    let a = bg_surface();
+    let b = bg_elevated();
+    Color {
+        r: a.r * 0.25 + b.r * 0.75,
+        g: a.g * 0.25 + b.g * 0.75,
+        b: a.b * 0.25 + b.b * 0.75,
+        a: 1.0,
+    }
+}
+
 /// Background for collapsible section headers — a 70% mix toward
 /// `bg_elevated`. The full elevated tone reads as too dark in the light
 /// theme, but a flat halfway value collides with `bg_list_hover`, so the
@@ -678,11 +692,11 @@ pub fn list_item(_theme: &Theme, status: button::Status) -> button::Style {
 
 pub fn list_item_active(_theme: &Theme, status: button::Status) -> button::Style {
     let bg = match status {
-        button::Status::Hovered => Some(bg_list_hover().into()),
-        _ => None,
+        button::Status::Hovered => bg_elevated(),
+        _ => bg_list_selected(),
     };
     button::Style {
-        background: bg,
+        background: Some(bg.into()),
         text_color: accent(),
         border: Border::default(),
         ..Default::default()

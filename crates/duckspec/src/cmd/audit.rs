@@ -130,8 +130,10 @@ fn print_report(report: &AuditReport, project_root: &Path) {
 
     for r in &report.unresolved_step_refs {
         eprintln!(
-            "  {} step @spec task does not resolve: {}",
+            "  {} {}:{} — step @spec task does not resolve: {}",
             "×".red(),
+            r.step_file.display(),
+            r.line,
             r.key.display()
         );
     }

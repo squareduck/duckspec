@@ -8,7 +8,7 @@ use iced::widget::{Space, row};
 use crate::data::TreeNode;
 use crate::theme;
 use crate::widget::collapsible;
-use crate::widget::list_view::{self, Badge, ListRow};
+use crate::widget::list_view::{self, ListRow};
 
 const ICON_FOLDER: &[u8] = include_bytes!("../../assets/icon_folder.svg");
 const ICON_FILE: &[u8] = include_bytes!("../../assets/icon_file.svg");
@@ -61,16 +61,13 @@ pub fn view<'a, M: Clone + 'a>(
                 )
             };
 
-            let mut r = ListRow::new(node.label)
+            ListRow::new(node.label)
                 .leading(leading)
                 .icon(icon_bytes)
                 .indent(node.depth)
                 .selected(is_selected)
-                .on_press(on_press);
-            if has_error {
-                r = r.badge(Badge::ErrorDot);
-            }
-            r
+                .errored(has_error)
+                .on_press(on_press)
         })
         .collect();
 

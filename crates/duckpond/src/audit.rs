@@ -11,7 +11,8 @@
 //! 2. Cross-file change validation via [`crate::check::check_change`] for
 //!    every active change.
 //! 3. A scan of source files for `@spec` backlinks and verification that
-//!    every backlink resolves to a scenario.
+//!    every backlink resolves to a scenario in main caps or in any active
+//!    change.
 //! 4. Confirmation that every `test:code` scenario has at least one source
 //!    backlink.
 //! 5. For each active change, confirmation that every `test:code` scenario
@@ -144,6 +145,11 @@ pub struct MissingStepCoverage {
 #[derive(Debug)]
 pub struct UnresolvedStepRef {
     pub change_name: String,
+    /// Path to the step file containing the unresolved reference, relative
+    /// to the duckspec root (e.g. `changes/<name>/steps/01-foo.md`).
+    pub step_file: PathBuf,
+    /// 1-based line number of the task within the step file.
+    pub line: usize,
     pub key: ScenarioKey,
 }
 
@@ -300,17 +306,32 @@ fn audit_full(
     // 3. Build the scenario index across all cap specs.
     let scenario_index = build_scenario_index(duckspec_root, canonical_root)?;
 
+    // 3b. Collect scenarios introduced by each active change. Active-change
+    //     scenarios count as "known" for backlink resolution so that code
+    //     written for an in-flight change does not fail audit before the
+    //     change is archived into main caps.
+    let mut per_change_scenarios: HashMap<String, Vec<ChangeScenario>> = HashMap::new();
+    let mut active_change_keys: HashSet<ScenarioKey> = HashSet::new();
+    for change_name in &change_names {
+        let change_dir = changes_dir.join(change_name);
+        let scenarios = build_change_scenarios(duckspec_root, canonical_root, &change_dir)?;
+        for s in &scenarios {
+            active_change_keys.insert(s.key.clone());
+        }
+        per_change_scenarios.insert(change_name.clone(), scenarios);
+    }
+
     // 4. Scan source files for backlinks.
     let backlinks = scan_source_files(project_root, duckspec_root, config)?;
 
-    // 5. Every backlink must resolve.
+    // 5. Every backlink must resolve against main caps or any active change.
     for bl in &backlinks {
         let key = ScenarioKey {
             cap_path: bl.cap_path.clone(),
             requirement: bl.requirement.clone(),
             scenario: bl.scenario.clone(),
         };
-        if !scenario_index.contains_key(&key) {
+        if !scenario_index.contains_key(&key) && !active_change_keys.contains(&key) {
             report.unresolved_backlinks.push(UnresolvedBacklink {
                 source_file: bl.file.clone(),
                 line: bl.line,
@@ -333,8 +354,9 @@ fn audit_full(
     // 7. For each active change: test:code scenarios covered by step tasks
     //    and step refs resolve.
     for change_name in &change_names {
-        let change_dir = changes_dir.join(change_name);
-        let change_scenarios = build_change_scenarios(duckspec_root, canonical_root, &change_dir)?;
+        let change_scenarios = per_change_scenarios
+            .remove(change_name)
+            .unwrap_or_default();
         let test_code: Vec<ScenarioKey> = change_scenarios
             .iter()
             .filter(|s| s.test_code)
@@ -344,7 +366,7 @@ fn audit_full(
         let step_refs = collect_step_refs(duckspec_root, canonical_root, change_name)?;
 
         if !test_code.is_empty() {
-            let ref_set: HashSet<&ScenarioKey> = step_refs.iter().collect();
+            let ref_set: HashSet<&ScenarioKey> = step_refs.iter().map(|r| &r.key).collect();
             let missing: Vec<ScenarioKey> = test_code
                 .iter()
                 .filter(|k| !ref_set.contains(*k))
@@ -365,10 +387,12 @@ fn audit_full(
             known.insert(s.key.clone());
         }
         for r in &step_refs {
-            if !known.contains(r) {
+            if !known.contains(&r.key) {
                 report.unresolved_step_refs.push(UnresolvedStepRef {
                     change_name: change_name.clone(),
-                    key: r.clone(),
+                    step_file: r.step_file.clone(),
+                    line: r.line,
+                    key: r.key.clone(),
                 });
             }
         }
@@ -438,7 +462,7 @@ fn audit_change(
         .collect();
     let step_refs = collect_step_refs(duckspec_root, canonical_root, change_name)?;
     if !test_code.is_empty() {
-        let ref_set: HashSet<&ScenarioKey> = step_refs.iter().collect();
+        let ref_set: HashSet<&ScenarioKey> = step_refs.iter().map(|r| &r.key).collect();
         let missing: Vec<ScenarioKey> = test_code
             .iter()
             .filter(|k| !ref_set.contains(*k))
@@ -458,10 +482,12 @@ fn audit_change(
         known.insert(s.key.clone());
     }
     for r in &step_refs {
-        if !known.contains(r) {
+        if !known.contains(&r.key) {
             report.unresolved_step_refs.push(UnresolvedStepRef {
                 change_name: change_name.to_string(),
-                key: r.clone(),
+                step_file: r.step_file.clone(),
+                line: r.line,
+                key: r.key.clone(),
             });
         }
     }
@@ -898,11 +924,18 @@ fn backlink_key_set(backlinks: &[SourceBacklink]) -> HashSet<ScenarioKey> {
 // Step refs
 // ---------------------------------------------------------------------------
 
+/// A step `@spec` task reference paired with the step file it came from.
+struct StepRef {
+    key: ScenarioKey,
+    step_file: PathBuf,
+    line: usize,
+}
+
 fn collect_step_refs(
     duckspec_root: &Path,
     canonical_root: &Path,
     change_name: &str,
-) -> Result<Vec<ScenarioKey>, AuditError> {
+) -> Result<Vec<StepRef>, AuditError> {
     let steps_dir = duckspec_root
         .join("changes")
         .join(change_name)
@@ -931,6 +964,7 @@ fn collect_step_refs(
         let Ok(step) = parse::step::parse_step(&elements) else {
             continue;
         };
+        let relative = relative.to_path_buf();
 
         for task in &step.tasks {
             if let TaskContent::SpecRef {
@@ -939,10 +973,14 @@ fn collect_step_refs(
                 scenario,
             } = &task.content
             {
-                refs.push(ScenarioKey {
-                    cap_path: capability.clone(),
-                    requirement: requirement.clone(),
-                    scenario: scenario.clone(),
+                refs.push(StepRef {
+                    key: ScenarioKey {
+                        cap_path: capability.clone(),
+                        requirement: requirement.clone(),
+                        scenario: scenario.clone(),
+                    },
+                    step_file: relative.clone(),
+                    line: offset_to_line(&source, task.span.offset),
                 });
             }
             for sub in &task.subtasks {
@@ -952,10 +990,14 @@ fn collect_step_refs(
                     scenario,
                 } = &sub.content
                 {
-                    refs.push(ScenarioKey {
-                        cap_path: capability.clone(),
-                        requirement: requirement.clone(),
-                        scenario: scenario.clone(),
+                    refs.push(StepRef {
+                        key: ScenarioKey {
+                            cap_path: capability.clone(),
+                            requirement: requirement.clone(),
+                            scenario: scenario.clone(),
+                        },
+                        step_file: relative.clone(),
+                        line: offset_to_line(&source, sub.span.offset),
                     });
                 }
             }
@@ -963,6 +1005,12 @@ fn collect_step_refs(
     }
 
     Ok(refs)
+}
+
+/// Convert a byte offset into a 1-based line number within `source`.
+fn offset_to_line(source: &str, offset: usize) -> usize {
+    let clamped = offset.min(source.len());
+    source[..clamped].bytes().filter(|b| *b == b'\n').count() + 1
 }
 
 // ---------------------------------------------------------------------------
