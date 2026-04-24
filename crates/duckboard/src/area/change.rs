@@ -1267,7 +1267,7 @@ fn view_list<'a>(
             .errored(has_err)
             .on_press(Message::SelectChange(ch.name.clone()));
         if kanban.card_id_for_change(&ch.name).is_some() {
-            r = r.leading(card_link_button(&ch.name));
+            r = r.after_icon(card_link_button(&ch.name));
         }
         rows.push(r);
     }
@@ -1291,7 +1291,7 @@ fn view_list<'a>(
                 .errored(has_err)
                 .on_press(Message::SelectChange(ch.name.clone()));
             if kanban.card_id_for_change(base).is_some() {
-                r = r.leading(card_link_button(base));
+                r = r.after_icon(card_link_button(base));
             }
             r
         })

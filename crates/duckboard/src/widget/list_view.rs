@@ -31,6 +31,11 @@ pub struct ListRow<'a, Msg> {
     icon: Option<&'static [u8]>,
     icon_tint: Option<Color>,
     leading: Option<Element<'a, Msg>>,
+    /// Element rendered between the main icon and the label. Distinct from
+    /// `leading` (which sits at the far left, before the icon) — use this
+    /// for decorations/actions that attach to the row's subject, not to its
+    /// leading gutter.
+    after_icon: Option<Element<'a, Msg>>,
     indent_level: usize,
     selected: bool,
     errored: bool,
@@ -49,6 +54,7 @@ impl<'a, Msg: Clone + 'a> ListRow<'a, Msg> {
             icon: None,
             icon_tint: None,
             leading: None,
+            after_icon: None,
             indent_level: 0,
             selected: false,
             errored: false,
@@ -88,6 +94,11 @@ impl<'a, Msg: Clone + 'a> ListRow<'a, Msg> {
 
     pub fn leading(mut self, el: Element<'a, Msg>) -> Self {
         self.leading = Some(el);
+        self
+    }
+
+    pub fn after_icon(mut self, el: Element<'a, Msg>) -> Self {
+        self.after_icon = Some(el);
         self
     }
 
@@ -135,6 +146,9 @@ impl<'a, Msg: Clone + 'a> ListRow<'a, Msg> {
                 self.icon_tint
             };
             inner = inner.push(icon_svg(bytes, tint));
+        }
+        if let Some(after_icon) = self.after_icon {
+            inner = inner.push(after_icon);
         }
 
         let mut label = text(self.label)

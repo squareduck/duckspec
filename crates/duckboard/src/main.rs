@@ -120,19 +120,30 @@ impl State {
     /// Resolve a scope (bare change name / "caps" / "codex") to its interaction state.
     fn interaction_mut(&mut self, scope: &str) -> Option<&mut interaction::InteractionState> {
         match scope {
-            KEY_CAPS => Some(&mut self.caps.interaction),
-            KEY_CODEX => Some(&mut self.codex.interaction),
-            _ => {
-                if self.change.interactions.contains_key(scope) {
-                    return self.change.interactions.get_mut(scope);
-                }
-                // Kanban-owned scope: interaction state is keyed by card id,
-                // so resolve scope → card id first (immutable pass), then
-                // look up by that id.
-                let card_id = self.kanban.card_id_for_scope(scope)?;
-                self.kanban.interactions.get_mut(&card_id)
-            }
+            KEY_CAPS => return Some(&mut self.caps.interaction),
+            KEY_CODEX => return Some(&mut self.codex.interaction),
+            _ => {}
         }
+        // When the user is on the Kanban area, kanban owns the interaction —
+        // even if the scope key (change name) collides with an entry in
+        // `change.interactions` left over from a prior visit to the Change
+        // area for this same change (possible after exploration→change
+        // promotion). Without this preference, keyboard routing reads the
+        // wrong state and shortcuts like Tab-to-complete silently no-op.
+        if self.active_area == Area::Kanban
+            && let Some(card_id) = self.kanban.card_id_for_scope(scope)
+            && self.kanban.interactions.contains_key(&card_id)
+        {
+            return self.kanban.interactions.get_mut(&card_id);
+        }
+        if self.change.interactions.contains_key(scope) {
+            return self.change.interactions.get_mut(scope);
+        }
+        // Kanban fallback for non-kanban areas (subscription events, etc.):
+        // interaction state is keyed by card id, so resolve scope → card id
+        // first (immutable pass), then look up by that id.
+        let card_id = self.kanban.card_id_for_scope(scope)?;
+        self.kanban.interactions.get_mut(&card_id)
     }
 
     /// Resolve a stable `InteractionState::instance_id` to its state.
@@ -187,7 +198,12 @@ impl State {
                 let card_id = self.kanban.selected_card.as_deref()?;
                 let card = self.kanban.cards.iter().find(|c| c.id == card_id)?;
                 let scope = area::kanban::card_scope_key(card)?;
-                let ix = self.kanban.interactions.get(card_id)?;
+                // Post-promotion the card's chat lives in `change.interactions`
+                // under the change name; pre-promotion on the kanban side.
+                let ix = match card.change_name.as_deref() {
+                    Some(name) => self.change.interactions.get(name)?,
+                    None => self.kanban.interactions.get(card_id)?,
+                };
                 Some((ix, scope))
             }
             Area::Dashboard | Area::Settings => None,
@@ -739,6 +755,7 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                             area::kanban::Message::SelectCard(card_id),
                             &state.project,
                             &state.highlighter,
+                            &mut state.change.interactions,
                         );
                     }
                 }
@@ -841,37 +858,32 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                     state.project.project_root.as_deref(),
                 );
                 // Re-open via the SelectCard path so the interaction state is
-                // freshly seeded for the new scope.
+                // freshly seeded for the new scope. `open_card` stashes the
+                // card description onto the fresh session so the first turn
+                // will inject it as system context.
                 area::kanban::update(
                     &mut state.kanban,
                     area::kanban::Message::SelectCard(card_id.clone()),
                     &state.project,
                     &state.highlighter,
+                    &mut state.change.interactions,
                 );
                 return focus_chat_input();
             }
-            // Kanban → Change artifact: switch area, then hand off to the
-            // change area's existing OpenArtifact handler.
-            if let area::kanban::Message::OpenArtifact {
-                ref change,
-                ref artifact_id,
-            } = msg
-            {
-                let change_name = change.clone();
-                let artifact_id = artifact_id.clone();
+            // Kanban → Change selection: switch area + select the change.
+            if let area::kanban::Message::OpenChange(ref change_name) = msg {
+                let change_name = change_name.clone();
                 area::kanban::update(
                     &mut state.kanban,
                     msg,
                     &state.project,
                     &state.highlighter,
+                    &mut state.change.interactions,
                 );
                 state.active_area = Area::Change;
                 area::change::update(
                     &mut state.change,
-                    area::change::Message::OpenArtifact {
-                        change: change_name,
-                        artifact_id,
-                    },
+                    area::change::Message::SelectChange(change_name),
                     &state.project,
                     &state.highlighter,
                 );
@@ -879,7 +891,13 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
             }
             let needs_focus =
                 is_chat_focus_msg(extract_kanban_interaction_msg(&msg));
-            area::kanban::update(&mut state.kanban, msg, &state.project, &state.highlighter);
+            area::kanban::update(
+                &mut state.kanban,
+                msg,
+                &state.project,
+                &state.highlighter,
+                &mut state.change.interactions,
+            );
             if needs_focus {
                 return focus_chat_input();
             }
@@ -1127,6 +1145,18 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                     state,
                     Message::ProjectPicker(widget::project_picker::Msg::Open),
                 );
+            }
+
+            // Cmd+N in the Kanban area: add a new card and open its modal.
+            // Area-scoped so it doesn't fight the Change area's Cmd+N
+            // (which spawns a chat session or exploration and is handled
+            // inside the chat-focus block further down).
+            if mods.command()
+                && key == keyboard::Key::Character("n".into())
+                && state.active_area == Area::Kanban
+                && state.project.project_root.is_some()
+            {
+                return update(state, Message::Kanban(area::kanban::Message::AddCard));
             }
 
             // Cmd+Shift+F: open project-wide text search.
@@ -1678,11 +1708,24 @@ fn reload_and_reconcile(state: &mut State) -> bool {
                 to = new_name.as_str(),
                 "promoting kanban-card exploration to real change"
             );
-            state.kanban.promote_exploration(
+            let migrated_ix = state.kanban.promote_exploration(
                 &card_id,
                 &new_name,
                 state.project.project_root.as_deref(),
             );
+            // Card-owned exploration is now the change: move the live
+            // InteractionState into `change.interactions`. Invariant: the
+            // change was just created by this exploration, so no prior
+            // entry should exist — warn and overwrite if one somehow does.
+            if let Some(ix) = migrated_ix {
+                if state.change.interactions.contains_key(&new_name) {
+                    tracing::warn!(
+                        change = new_name.as_str(),
+                        "unexpected existing change.interactions entry at promotion; overwriting",
+                    );
+                }
+                state.change.interactions.insert(new_name.clone(), ix);
+            }
             if let Some(exp_id) = exploration_id {
                 // Exploration record now shadowed by the change — drop it so
                 // the bare-exploration list stays clean for both areas.
@@ -2586,6 +2629,7 @@ fn view(state: &State) -> Element<'_, Message> {
     };
     let sidebar = widget::sidebar::view(
         &state.active_area,
+        state.project.project_root.is_some(),
         Message::AreaSelected,
         Message::Refresh,
         Message::ThemeChanged(next_mode),
@@ -2599,7 +2643,7 @@ fn view(state: &State) -> Element<'_, Message> {
             &state.config.projects.recent,
         )
         .map(Message::Dashboard),
-        Area::Kanban => area::kanban::view(&state.kanban, &state.project, &state.change.explorations)
+        Area::Kanban => area::kanban::view(&state.kanban, &state.project, &state.change.explorations, &state.change.interactions)
             .map(Message::Kanban),
         Area::Change => area::change::view(&state.change, &state.project, &state.kanban)
             .map(Message::Change),

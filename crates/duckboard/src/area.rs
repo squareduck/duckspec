@@ -19,8 +19,8 @@ pub enum Area {
 impl Area {
     pub const NAV: [Area; 5] = [
         Area::Dashboard,
-        Area::Kanban,
         Area::Change,
+        Area::Kanban,
         Area::Caps,
         Area::Codex,
     ];
