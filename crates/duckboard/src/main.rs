@@ -1147,6 +1147,17 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                 );
             }
 
+            // Cmd+Shift+N: spawn another duckboard process. Iced is single-window
+            // per-process, so a new "window" is a new instance — independent state,
+            // file watcher, PTYs. Config writes race last-write-wins on quit.
+            if mods.command()
+                && mods.shift()
+                && matches!(&key, keyboard::Key::Character(c) if c.eq_ignore_ascii_case("n"))
+            {
+                spawn_new_instance();
+                return Task::none();
+            }
+
             // Cmd+N in the Kanban area: add a new card and open its modal.
             // Area-scoped so it doesn't fight the Change area's Cmd+N
             // (which spawns a chat session or exploration and is handled
@@ -2827,6 +2838,23 @@ fn tagged_agent((key, e): (String, agent::AgentEvent)) -> Message {
     // Strip the `agent:ix:` prefix; the remainder is `<instance_id>/<session_id>`.
     let routing_key = key.strip_prefix("agent:ix:").unwrap_or(&key).to_string();
     Message::AgentEvent(routing_key, e)
+}
+
+/// Launch another duckboard process detached from this one. Used by
+/// Cmd+Shift+N to give the user a second window — Iced 0.14's single-window
+/// model means a new window is necessarily a new process.
+fn spawn_new_instance() {
+    let exe = match std::env::current_exe() {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::warn!("spawn_new_instance: current_exe failed: {e}");
+            return;
+        }
+    };
+    match std::process::Command::new(&exe).spawn() {
+        Ok(child) => tracing::info!(pid = child.id(), exe = %exe.display(), "spawned new duckboard instance"),
+        Err(e) => tracing::warn!(exe = %exe.display(), "spawn_new_instance: spawn failed: {e}"),
+    }
 }
 
 fn main() -> iced::Result {
