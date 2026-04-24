@@ -6,11 +6,15 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use iced::widget::{Space, button, column, container, row, scrollable, stack, text};
-use iced::{Center, Element, Fill, Length};
+use iced::widget::{
+    Space, button, column, container, mouse_area, row, scrollable, stack, svg, text,
+};
+use iced::{Center, Element, Length};
+
+const ICON_CLOSE: &[u8] = include_bytes!("../../assets/icon_close.svg");
 use time::OffsetDateTime;
 
-use super::interaction::{self, InteractionState, SessionControls};
+use super::interaction::{self, AgentSession, InteractionState, SessionControls};
 use crate::chat_store::Exploration;
 use crate::data::{self, ChangeData, ProjectData, StepCompletion};
 use crate::highlight::SyntaxHighlighter;
@@ -84,30 +88,34 @@ impl State {
     /// `change_name` on the card, migrates the card's interaction state
     /// (sessions' scope, scope_kind, display names) and renames the on-disk
     /// chats directory from `chats/<exploration_id>/` to `chats/<real_name>/`.
-    /// Caller is responsible for persisting `kanban.json`.
+    ///
+    /// Returns the card's `InteractionState` (removed from `self.interactions`)
+    /// so the caller can re-home it into `state.change.interactions` under
+    /// the new change name — post-promotion, a card's chat *is* its change's
+    /// chat, so the state lives on the Change side of the world. Caller is
+    /// responsible for persisting `kanban.json` and inserting the returned
+    /// state.
     pub fn promote_exploration(
         &mut self,
         card_id: &str,
         real_name: &str,
         project_root: Option<&Path>,
-    ) {
-        let Some(card) = self.cards.iter_mut().find(|c| c.id == card_id) else {
-            return;
-        };
-        let Some(exploration_id) = card.exploration_id.clone() else {
-            return;
-        };
+    ) -> Option<InteractionState> {
+        let card = self.cards.iter_mut().find(|c| c.id == card_id)?;
+        let exploration_id = card.exploration_id.clone()?;
         card.change_name = Some(real_name.to_string());
 
-        if let Some(ix) = self.interactions.get_mut(card_id) {
+        let migrated = self.interactions.remove(card_id).map(|mut ix| {
             for ax in ix.sessions.iter_mut() {
                 ax.session.scope = real_name.to_string();
                 ax.scope_kind = ScopeKind::Change;
             }
             interaction::reconcile_display_names(&mut ix.sessions, real_name);
-        }
+            ix
+        });
 
         crate::chat_store::rename_scope(&exploration_id, real_name, project_root);
+        migrated
     }
 }
 
@@ -157,13 +165,10 @@ pub enum Message {
     /// Interaction message targeted at the currently selected card's
     /// chat/terminal state.
     Interaction(interaction::Msg),
-    /// Navigate to the Change area and open an artifact of the card's
-    /// attached change. Main loop intercepts to switch areas and delegates
-    /// to `area::change::Message::OpenArtifact`.
-    OpenArtifact {
-        change: String,
-        artifact_id: String,
-    },
+    /// Navigate to the Change area and select the card's attached change.
+    /// Main loop intercepts to switch areas and delegates to
+    /// `area::change::Message::SelectChange`.
+    OpenChange(String),
 }
 
 // ── Update ───────────────────────────────────────────────────────────────────
@@ -173,6 +178,7 @@ pub fn update(
     message: Message,
     project: &ProjectData,
     highlighter: &SyntaxHighlighter,
+    change_interactions: &mut HashMap<String, InteractionState>,
 ) {
     match message {
         Message::AddCard => {
@@ -187,14 +193,31 @@ pub fn update(
             let id = card.id.clone();
             state.cards.push(card);
             kanban_store::save(&state.cards, project.project_root.as_deref());
-            open_card(state, &id, project, highlighter);
+            open_card(state, &id, project, highlighter, change_interactions);
         }
         Message::SelectCard(id) => {
-            open_card(state, &id, project, highlighter);
+            open_card(state, &id, project, highlighter, change_interactions);
         }
         Message::CloseModal => {
             state.modal_open = false;
             state.modal_focused = false;
+            // Auto-cleanup: closing a modal on a still-blank card (empty
+            // description, no exploration, no change) drops the card so
+            // stray Cmd-N presses don't litter the board with empty
+            // placeholders. Only safe when there's nothing attached —
+            // a card with an exploration/change has meaningful state
+            // worth keeping even if the description is empty.
+            if let Some(id) = state.selected_card.clone()
+                && let Some(card) = state.cards.iter().find(|c| c.id == id)
+                && card.description.trim().is_empty()
+                && card.exploration_id.is_none()
+                && card.change_name.is_none()
+            {
+                state.cards.retain(|c| c.id != id);
+                state.interactions.remove(&id);
+                state.selected_card = None;
+                kanban_store::save(&state.cards, project.project_root.as_deref());
+            }
         }
         Message::ModalFocusChanged(v) => {
             state.modal_focused = v;
@@ -206,11 +229,32 @@ pub fn update(
             let was_mutating = action.is_mutating();
             state.description_editor.apply_action(action);
             if was_mutating {
-                if let Some(id) = state.selected_card.clone()
-                    && let Some(card) = state.cards.iter_mut().find(|c| c.id == id)
-                {
-                    card.description = state.description_editor.lines.join("\n");
+                if let Some(id) = state.selected_card.clone() {
+                    let new_description = state.description_editor.lines.join("\n");
+                    let change_name = state
+                        .cards
+                        .iter_mut()
+                        .find(|c| c.id == id)
+                        .map(|c| {
+                            c.description = new_description.clone();
+                            c.change_name.clone()
+                        })
+                        .unwrap_or(None);
                     kanban_store::save(&state.cards, project.project_root.as_deref());
+                    // Mirror the latest description into the card's active
+                    // chat session so the next turn re-injects it as
+                    // system context. Post-promotion the state lives under
+                    // `change_interactions`; pre-promotion on the kanban
+                    // side.
+                    let ix = match change_name.as_deref() {
+                        Some(name) => change_interactions.get_mut(name),
+                        None => state.interactions.get_mut(&id),
+                    };
+                    if let Some(ix) = ix
+                        && let Some(ax) = ix.active_mut()
+                    {
+                        ax.card_description = Some(new_description);
+                    }
                 }
                 let syntax = highlighter.find_syntax("md");
                 state.description_editor.highlight_spans =
@@ -243,10 +287,41 @@ pub fn update(
             } else {
                 derived_title
             };
-            let Some(ix) = state.interactions.get_mut(&card_id) else {
+            // Post-promotion (card has a change_name) the state lives in
+            // `change_interactions` keyed by change name; pre-promotion it
+            // lives on the kanban side keyed by card id.
+            let is_multi = card.change_name.is_some();
+            let ix = match card.change_name.as_deref() {
+                Some(name) => change_interactions.get_mut(name),
+                None => state.interactions.get_mut(&card_id),
+            };
+            let Some(ix) = ix else {
                 return;
             };
             match msg {
+                interaction::Msg::NewSession if is_multi => {
+                    interaction::ensure_sessions_with_label(
+                        ix,
+                        &scope_key,
+                        &scope_label,
+                        scope_kind,
+                        project.project_root.as_deref(),
+                        highlighter,
+                    );
+                    let new_session = AgentSession::new(scope_key.clone(), scope_kind);
+                    let _ = crate::chat_store::save_session(
+                        &new_session.session,
+                        project.project_root.as_deref(),
+                    );
+                    ix.sessions.insert(0, new_session);
+                    ix.active_session = 0;
+                    interaction::reconcile_display_names(&mut ix.sessions, &scope_label);
+                }
+                interaction::Msg::SelectSession(id) if is_multi => {
+                    if let Some(idx) = ix.find_session_index(&id) {
+                        ix.active_session = idx;
+                    }
+                }
                 interaction::Msg::ClearSession => {
                     interaction::clear_single_session(
                         ix,
@@ -256,7 +331,8 @@ pub fn update(
                     );
                 }
                 interaction::Msg::NewSession | interaction::Msg::SelectSession(_) => {
-                    // Cards are single-session; ignore.
+                    // Single-session (pre-promotion) card: ignore session
+                    // management messages — no UI surfaces them anyway.
                 }
                 other => {
                     interaction::update_with_side_effects(
@@ -277,11 +353,9 @@ pub fn update(
             // back into kanban to seed `card.exploration_id` and the
             // interaction state. See the intercept in `Message::Kanban`.
         }
-        Message::OpenArtifact { .. } => {
-            // Intercepted in main.rs — switches to the Change area and
-            // routes to `area::change::Message::OpenArtifact`. Dismiss the
-            // modal here so returning to Kanban later doesn't pop it open
-            // over the kanban board.
+        Message::OpenChange(_) => {
+            // Intercepted in main.rs — switches area + selects change.
+            // Dismiss the modal so kanban doesn't re-pop it on return.
             state.modal_open = false;
             state.modal_focused = false;
         }
@@ -320,6 +394,7 @@ fn open_card(
     id: &str,
     project: &ProjectData,
     highlighter: &SyntaxHighlighter,
+    change_interactions: &mut HashMap<String, InteractionState>,
 ) {
     let card_snapshot = state
         .cards
@@ -333,8 +408,9 @@ fn open_card(
             Some(highlighter.highlight_lines(&state.description_editor.lines, syntax));
 
         // When the card has an exploration/change attached, ensure the
-        // per-card InteractionState exists and its session is materialised
-        // from disk (same path change::SelectChange uses).
+        // InteractionState exists and its session is materialised from
+        // disk. Post-promotion the state lives in `change_interactions`
+        // (the card is its change); pre-promotion on the kanban side.
         if let Some(scope_key) = card_scope_key(&card)
             && let Some(scope_kind) = card_scope_kind(&card)
         {
@@ -344,7 +420,10 @@ fn open_card(
             } else {
                 derived_title
             };
-            let ix = state.interactions.entry(id.to_string()).or_default();
+            let ix = match card.change_name.as_deref() {
+                Some(name) => change_interactions.entry(name.to_string()).or_default(),
+                None => state.interactions.entry(id.to_string()).or_default(),
+            };
             interaction::ensure_sessions_with_label(
                 ix,
                 &scope_key_owned,
@@ -353,6 +432,12 @@ fn open_card(
                 project.project_root.as_deref(),
                 highlighter,
             );
+            // Rehydrate the active session's ephemeral card-description
+            // mirror. `send_prompt_text` reads it to decide whether to
+            // inject the description as system context on the next turn.
+            if let Some(ax) = ix.active_mut() {
+                ax.card_description = Some(card.description.clone());
+            }
             ix.visible = true;
         }
     }
@@ -458,36 +543,56 @@ fn find_change<'a>(project: &'a ProjectData, change_name: &str) -> Option<&'a Ch
         })
 }
 
-/// Build `(label, artifact_id)` pairs for every opened file on a change.
-/// Entries match the IDs `area::change::open_artifact` understands: the
-/// on-disk relative path inside `duckspec/`. Proposal and design first,
-/// then cap-tree leaves, then steps.
-fn artifact_entries(change: &ChangeData) -> Vec<(String, String)> {
-    let mut out = Vec::new();
-    if change.has_proposal {
-        out.push(("proposal.md".into(), format!("{}/proposal.md", change.prefix)));
+/// One-word summary of where the card sits in the lifecycle, driven by
+/// whichever artifact is most recently present on its attached change.
+/// `None` for a bare card with no exploration and no change.
+fn stage_label(card: &Card, project: &ProjectData) -> Option<&'static str> {
+    let change_name = match card.change_name.as_deref() {
+        Some(n) => n,
+        // No change yet: an exploration-only card is "Exploring"; a blank
+        // card gets no stage label (the Explore CTA speaks for itself).
+        None => {
+            return card.exploration_id.as_ref().map(|_| "Exploring");
+        }
+    };
+    let Some(change) = find_change(project, change_name) else {
+        return Some("Change created");
+    };
+    if !change.steps.is_empty() {
+        let all_done = change
+            .steps
+            .iter()
+            .all(|s| matches!(s.completion, StepCompletion::Done));
+        let any_progress = change.steps.iter().any(|s| {
+            matches!(
+                s.completion,
+                StepCompletion::Partial(_, _) | StepCompletion::Done
+            )
+        });
+        return Some(if all_done {
+            "Steps applied"
+        } else if any_progress {
+            "Steps in progress"
+        } else {
+            "Steps created"
+        });
+    }
+    if cap_tree_has_leaves(&change.cap_tree) {
+        return Some("Capabilities created");
     }
     if change.has_design {
-        out.push(("design.md".into(), format!("{}/design.md", change.prefix)));
+        return Some("Designed");
     }
-    collect_tree_leaves(&change.cap_tree, &mut out);
-    for step in &change.steps {
-        out.push((step.label.clone(), step.id.clone()));
+    if change.has_proposal {
+        return Some("Proposed");
     }
-    out
+    Some("Change created")
 }
 
-/// Walk the cap-tree and emit leaf artifacts (anything whose `id` ends in
-/// `.md`). Intermediate nodes are capability-group headers and don't open.
-fn collect_tree_leaves(nodes: &[data::TreeNode], out: &mut Vec<(String, String)>) {
-    for node in nodes {
-        if node.id.ends_with(".md") {
-            out.push((node.label.clone(), node.id.clone()));
-        }
-        if !node.children.is_empty() {
-            collect_tree_leaves(&node.children, out);
-        }
-    }
+fn cap_tree_has_leaves(nodes: &[data::TreeNode]) -> bool {
+    nodes
+        .iter()
+        .any(|n| n.id.ends_with(".md") || cap_tree_has_leaves(&n.children))
 }
 
 /// Extract a card title from its description. Uses the first non-blank line;
@@ -514,6 +619,12 @@ pub fn derive_title(description: &str) -> String {
 
 // ── View ─────────────────────────────────────────────────────────────────────
 
+/// Fixed per-column width. Columns don't flex to fill the viewport — the
+/// board becomes horizontally scrollable when the window is narrower than
+/// the full span of columns side-by-side. This keeps card titles readable
+/// regardless of how many columns are on screen.
+const KANBAN_COLUMN_WIDTH: f32 = 280.0;
+
 const COLUMN_ORDER: [(Column, &str); 6] = [
     (Column::Inbox, "Inbox"),
     (Column::Exploring, "Exploring"),
@@ -527,6 +638,7 @@ pub fn view<'a>(
     state: &'a State,
     project: &'a ProjectData,
     explorations: &'a [Exploration],
+    change_interactions: &'a HashMap<String, InteractionState>,
 ) -> Element<'a, Message> {
     let mut grouped: [Vec<(&Card, Column)>; 6] = Default::default();
     for card in &state.cards {
@@ -550,6 +662,22 @@ pub fn view<'a>(
     for (i, (_, title)) in COLUMN_ORDER.iter().enumerate() {
         cols_row = cols_row.push(view_column(title, &grouped[i], project));
     }
+    // Columns use a fixed min width so each stays readable; the board
+    // becomes horizontally scrollable when the window is narrower than the
+    // full span of columns side-by-side. The scrollbar reserves its own
+    // gutter below the columns (rather than the default overlay) so it
+    // doesn't clip the column's bottom border when visible.
+    let cols_scrollbar = iced::widget::scrollable::Direction::Horizontal(
+        iced::widget::scrollable::Scrollbar::new()
+            .width(4)
+            .scroller_width(4)
+            .spacing(theme::SPACING_MD),
+    );
+    let cols_scroll = scrollable(cols_row)
+        .direction(cols_scrollbar)
+        .style(theme::thin_scrollbar)
+        .width(Length::Fill)
+        .height(Length::Fill);
 
     let has_project = project.project_root.is_some();
     let add_btn: Element<'a, Message> = if has_project {
@@ -577,7 +705,7 @@ pub fn view<'a>(
     .align_y(Center)
     .padding([theme::SPACING_SM, theme::SPACING_MD]);
 
-    let body = container(cols_row)
+    let body = container(cols_scroll)
         .width(Length::Fill)
         .height(Length::Fill)
         .padding(iced::Padding {
@@ -608,12 +736,35 @@ pub fn view<'a>(
     };
 
     // Mirror the change-area layout: content | toggle | [interaction col].
-    // The interaction belongs to the currently selected card — surfaced
-    // at area level so it stays usable while/after the modal is open.
-    let ix = state
+    // The interaction belongs to the currently open card — only surfaced
+    // while the card modal is open, so the right column always reflects
+    // the card that is currently on screen.
+    // Post-promotion, a card's chat lives in `change.interactions` (the card
+    // *is* its change). Pre-promotion, it lives in `state.interactions`
+    // keyed by card id.
+    let ix = if state.modal_open
+        && let Some(id) = state.selected_card.as_deref()
+        && let Some(card) = state.cards.iter().find(|c| c.id == id)
+    {
+        match card.change_name.as_deref() {
+            Some(name) => change_interactions.get(name),
+            None => state.interactions.get(id),
+        }
+    } else {
+        None
+    };
+
+    // A card "becomes" its change once promoted: surface the same multi-
+    // session UI (CHATS header, session selector, "+") the Change area uses.
+    // Pre-promotion (exploration only) we keep Single mode — explorations
+    // are single-session by design.
+    let controls = state
         .selected_card
         .as_deref()
-        .and_then(|id| state.interactions.get(id));
+        .and_then(|id| state.cards.iter().find(|c| c.id == id))
+        .and_then(|c| c.change_name.as_deref())
+        .map(|_| SessionControls::Multi)
+        .unwrap_or(SessionControls::Single);
 
     let visible = ix.is_some_and(|i| i.visible);
     let width = ix.map_or(theme::INTERACTION_COLUMN_WIDTH, |i| i.width);
@@ -636,7 +787,7 @@ pub fn view<'a>(
     if let Some(ix) = ix
         && ix.visible
     {
-        let ix_col = interaction::view_column(ix, Message::Interaction, SessionControls::Single);
+        let ix_col = interaction::view_column(ix, Message::Interaction, controls);
         main_row = main_row.push(
             container(ix_col)
                 .width(ix.width)
@@ -664,7 +815,7 @@ fn view_column<'a>(
             .color(theme::text_muted()),
     ]
     .align_y(Center)
-    .padding([theme::SPACING_XS, theme::SPACING_SM]);
+    .padding([theme::SPACING_SM, theme::SPACING_MD]);
 
     let body: Element<'a, Message> = if cards.is_empty() {
         container(
@@ -672,14 +823,16 @@ fn view_column<'a>(
                 .size(theme::font_sm())
                 .color(theme::text_muted()),
         )
-        .padding(theme::SPACING_SM)
+        .padding(theme::SPACING_MD)
         .into()
     } else {
-        let mut card_col = column![].spacing(theme::SPACING_XS);
+        let mut card_col = column![].spacing(theme::SPACING_SM);
         for (card, col) in cards {
             card_col = card_col.push(view_card_row(card, *col, project));
         }
-        scrollable(container(card_col).padding(theme::SPACING_XS))
+        scrollable(container(card_col).padding(theme::SPACING_MD))
+            .direction(theme::thin_scrollbar_direction())
+            .style(theme::thin_scrollbar)
             .height(Length::Fill)
             .into()
     };
@@ -692,7 +845,7 @@ fn view_column<'a>(
     .height(Length::Fill);
 
     container(inner)
-        .width(Fill)
+        .width(Length::Fixed(KANBAN_COLUMN_WIDTH))
         .height(Length::Fill)
         .style(column_style)
         .into()
@@ -767,22 +920,36 @@ fn view_modal<'a>(
     explorations: &'a [Exploration],
 ) -> Element<'a, Message> {
     let col = classify(card, project, explorations);
-    let metadata = view_modal_metadata(state, card, col, project, explorations);
+    let metadata = view_modal_metadata(state, card, col, project);
 
-    let panel = container(
-        container(metadata)
-            .max_width(560.0)
-            .width(Length::Fill),
+    // Full-screen clickable backdrop — pressing anywhere closes the modal.
+    let backdrop = mouse_area(
+        container(Space::new().width(Length::Fill).height(Length::Fill))
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .style(modal_backdrop),
     )
-    .max_width(560.0)
-    .style(modal_panel);
+    .on_press(Message::CloseModal);
 
-    container(column![Space::new().height(80.0), panel].align_x(Center))
+    // The panel itself absorbs presses so clicks inside don't bubble to the
+    // backdrop and close the modal. Reusing `ModalFocusChanged(true)` as a
+    // semantically correct focus-claim on any in-panel click.
+    let panel = mouse_area(
+        container(metadata)
+            .max_width(640.0)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .style(modal_panel),
+    )
+    .on_press(Message::ModalFocusChanged(true));
+
+    let centered_panel = container(panel)
         .width(Length::Fill)
         .height(Length::Fill)
-        .align_x(Center)
-        .style(modal_backdrop)
-        .into()
+        .padding([48.0, 32.0])
+        .center_x(Length::Fill);
+
+    stack![backdrop, centered_panel].into()
 }
 
 fn view_modal_metadata<'a>(
@@ -790,44 +957,85 @@ fn view_modal_metadata<'a>(
     card: &'a Card,
     col: Column,
     project: &'a ProjectData,
-    explorations: &'a [Exploration],
 ) -> Element<'a, Message> {
-    let col_label = column_label(col);
-
     let derived = derive_title(&card.description);
     let title_label = if derived.is_empty() {
         "Untitled".to_string()
     } else {
         derived
     };
-    let title_view = text(title_label).size(18.0).color(theme::text_primary());
+    let title_view = text(title_label).size(22.0).color(theme::text_primary());
 
-    let delete_btn = button(
-        text("Delete")
-            .size(theme::font_md())
-            .color(theme::error()),
-    )
-    .on_press(Message::DeleteCard(card.id.clone()))
-    .padding([theme::SPACING_XS, theme::SPACING_MD])
-    .style(theme::list_item);
+    let close_icon = svg(svg::Handle::from_memory(ICON_CLOSE))
+        .width(16.0)
+        .height(16.0)
+        .style(theme::svg_tint(theme::text_secondary()));
+    let close_btn = button(close_icon)
+        .on_press(Message::CloseModal)
+        .padding(theme::SPACING_XS)
+        .style(theme::list_item);
 
     let title_row = row![
         title_view,
         Space::new().width(Length::Fill),
-        delete_btn,
+        close_btn,
     ]
     .align_y(Center)
     .spacing(theme::SPACING_SM);
 
-    let state_row = row![
-        text("State:")
-            .size(theme::font_sm())
-            .color(theme::text_secondary()),
-        text(col_label)
-            .size(theme::font_sm())
-            .color(theme::text_primary()),
-    ]
-    .spacing(theme::SPACING_SM);
+    // Status row — left: stage indicator (derived from the latest artifact
+    // present on the attached change); right: one navigation/CTA button.
+    // Artifacts themselves live in the Change area; this row just tells
+    // the user where the card is in the lifecycle and gives them a single
+    // jump point.
+    let stage = stage_label(card, project);
+    let action: Option<Element<'a, Message>> =
+        if let Some(change_name) = card.change_name.as_deref() {
+            Some(
+                button(
+                    text(format!("Change - {change_name}"))
+                        .size(theme::font_sm())
+                        .color(theme::text_primary()),
+                )
+                .on_press(Message::OpenChange(change_name.to_string()))
+                .padding([theme::SPACING_XS, theme::SPACING_MD])
+                .style(pill)
+                .into(),
+            )
+        } else if card.exploration_id.is_none() && !col.is_archived() {
+            Some(
+                button(
+                    text("Explore")
+                        .size(theme::font_sm())
+                        .color(theme::accent()),
+                )
+                .on_press(Message::StartExploration(card.id.clone()))
+                .padding([theme::SPACING_XS, theme::SPACING_MD])
+                .style(pill_accent)
+                .into(),
+            )
+        } else {
+            None
+        };
+    let status_row: Option<Element<'a, Message>> = match (stage, action) {
+        (None, None) => None,
+        (stage, action) => {
+            let stage_el: Element<'a, Message> = match stage {
+                Some(label) => text(label)
+                    .size(theme::font_sm())
+                    .color(theme::text_secondary())
+                    .into(),
+                None => Space::new().width(0.0).height(0.0).into(),
+            };
+            let mut r = row![stage_el, Space::new().width(Length::Fill)]
+                .align_y(Center)
+                .spacing(theme::SPACING_SM);
+            if let Some(action) = action {
+                r = r.push(action);
+            }
+            Some(r.into())
+        }
+    };
 
     let description_editor = text_edit::TextEdit::new(
         &state.description_editor,
@@ -840,100 +1048,19 @@ fn view_modal_metadata<'a>(
 
     let description_box = container(description_editor)
         .width(Length::Fill)
-        .height(180.0)
+        .height(Length::Fill)
         .padding(theme::SPACING_SM)
         .style(modal_editor_wrap);
 
-    let exploration_line = match card.exploration_id.as_deref() {
-        Some(id) => {
-            let name = explorations
-                .iter()
-                .find(|e| e.id == id)
-                .map(|e| e.display_name.as_str())
-                .unwrap_or("(missing)");
-            format!("Exploration: {name}")
-        }
-        None => "Exploration: (none)".into(),
-    };
-    let change_line = match card.change_name.as_deref() {
-        Some(name) => format!("Change: {name}"),
-        None => "Change: (none)".into(),
-    };
-
-    let mut body = column![
-        title_row,
-        state_row,
-        container(Space::new().height(1.0).width(Length::Fill)).style(column_divider),
-        description_box,
-    ]
-    .spacing(theme::SPACING_SM);
-
-    // "Start exploration" — only surfaced when the card is truly bare;
-    // once attachments exist the interaction column on the right takes over.
-    if card_scope_key(card).is_none() && !col.is_archived() {
-        let start_btn = button(
-            text("Start exploration")
-                .size(theme::font_md())
-                .color(theme::accent()),
-        )
-        .on_press(Message::StartExploration(card.id.clone()))
-        .padding([theme::SPACING_XS, theme::SPACING_MD])
-        .style(theme::list_item);
-        body = body.push(Space::new().height(theme::SPACING_XS));
-        body = body.push(start_btn);
+    let mut body = column![title_row].spacing(theme::SPACING_MD);
+    if let Some(status_row) = status_row {
+        body = body.push(status_row);
     }
-
-    // Artifact list — only when an attached change has something to open.
-    if let Some(change_name) = card.change_name.as_deref()
-        && let Some(change) = find_change(project, change_name)
-    {
-        let artifacts = artifact_entries(change);
-        if !artifacts.is_empty() {
-            body = body.push(
-                container(Space::new().height(1.0).width(Length::Fill)).style(column_divider),
-            );
-            body = body.push(
-                text("Artifacts")
-                    .size(theme::font_sm())
-                    .color(theme::text_secondary()),
-            );
-            let mut list = column![].spacing(theme::SPACING_XS);
-            for (label, artifact_id) in artifacts {
-                let btn = button(
-                    text(label)
-                        .size(theme::font_md())
-                        .color(theme::text_primary()),
-                )
-                .on_press(Message::OpenArtifact {
-                    change: change_name.to_string(),
-                    artifact_id,
-                })
-                .padding([theme::SPACING_XS, theme::SPACING_SM])
-                .style(theme::list_item)
-                .width(Length::Fill);
-                list = list.push(btn);
-            }
-            body = body.push(list);
-        }
-    }
-
-    body = body
-        .push(container(Space::new().height(1.0).width(Length::Fill)).style(column_divider))
-        .push(
-            text(exploration_line)
-                .size(theme::font_sm())
-                .color(theme::text_secondary()),
-        )
-        .push(
-            text(change_line)
-                .size(theme::font_sm())
-                .color(theme::text_secondary()),
-        )
-        .push(Space::new().height(theme::SPACING_SM))
-        .push(view_action_row(card, col));
+    body = body.push(description_box);
+    body = body.push(view_action_row(card, col));
 
     container(body)
-        .padding(theme::SPACING_LG)
+        .padding(theme::SPACING_XL)
         .width(Length::Fill)
         .height(Length::Fill)
         .into()
@@ -941,36 +1068,40 @@ fn view_modal_metadata<'a>(
 
 fn view_action_row<'a>(card: &'a Card, col: Column) -> Element<'a, Message> {
     let lifecycle: Element<'a, Message> = if col.is_archived() {
-        button(text("Unarchive").size(theme::font_md()))
-            .on_press(Message::UnarchiveCard(card.id.clone()))
-            .padding([theme::SPACING_XS, theme::SPACING_MD])
-            .style(theme::list_item)
-            .into()
+        button(
+            text("Unarchive")
+                .size(theme::font_md())
+                .color(theme::text_primary()),
+        )
+        .on_press(Message::UnarchiveCard(card.id.clone()))
+        .padding([theme::SPACING_SM, theme::SPACING_LG])
+        .style(action_btn)
+        .into()
     } else {
-        button(text("Discard").size(theme::font_md()))
-            .on_press(Message::DiscardCard(card.id.clone()))
-            .padding([theme::SPACING_XS, theme::SPACING_MD])
-            .style(theme::list_item)
-            .into()
+        button(
+            text("Abandon")
+                .size(theme::font_md())
+                .color(theme::text_primary()),
+        )
+        .on_press(Message::DiscardCard(card.id.clone()))
+        .padding([theme::SPACING_SM, theme::SPACING_LG])
+        .style(action_btn)
+        .into()
     };
 
-    row![lifecycle, Space::new().width(Length::Fill)]
+    let delete_btn = button(
+        text("Delete")
+            .size(theme::font_md())
+            .color(theme::error()),
+    )
+    .on_press(Message::DeleteCard(card.id.clone()))
+    .padding([theme::SPACING_SM, theme::SPACING_LG])
+    .style(action_btn);
+
+    row![Space::new().width(Length::Fill), lifecycle, delete_btn]
         .spacing(theme::SPACING_SM)
         .align_y(Center)
         .into()
-}
-
-fn column_label(col: Column) -> &'static str {
-    match col {
-        Column::Inbox => "Inbox",
-        Column::Exploring => "Exploring",
-        Column::Ready => "Ready",
-        Column::InProgress => "In Progress",
-        Column::Completed => "Completed",
-        Column::ArchivedDone => "Archived (done)",
-        Column::ArchivedAbandoned => "Archived (abandoned)",
-        Column::ArchivedDiscarded => "Archived (discarded)",
-    }
 }
 
 // ── Breadcrumbs ──────────────────────────────────────────────────────────────
@@ -1027,8 +1158,8 @@ fn modal_backdrop(_theme: &iced::Theme) -> container::Style {
     container::Style {
         background: Some(
             iced::Color {
-                a: 0.5,
-                ..theme::bg_base()
+                a: 0.55,
+                ..iced::Color::BLACK
             }
             .into(),
         ),
@@ -1042,7 +1173,15 @@ fn modal_panel(_theme: &iced::Theme) -> container::Style {
         border: iced::Border {
             color: theme::border_color(),
             width: 1.0,
-            radius: 8.0.into(),
+            radius: 12.0.into(),
+        },
+        shadow: iced::Shadow {
+            color: iced::Color {
+                a: 0.35,
+                ..iced::Color::BLACK
+            },
+            offset: iced::Vector::new(0.0, 12.0),
+            blur_radius: 32.0,
         },
         ..Default::default()
     }
@@ -1054,7 +1193,58 @@ fn modal_editor_wrap(_theme: &iced::Theme) -> container::Style {
         border: iced::Border {
             color: theme::border_color(),
             width: 1.0,
-            radius: 4.0.into(),
+            radius: 6.0.into(),
+        },
+        ..Default::default()
+    }
+}
+
+fn action_btn(_theme: &iced::Theme, status: button::Status) -> button::Style {
+    let bg = match status {
+        button::Status::Hovered => theme::bg_hover(),
+        _ => theme::bg_elevated(),
+    };
+    button::Style {
+        background: Some(bg.into()),
+        text_color: theme::text_primary(),
+        border: iced::Border {
+            color: theme::border_color(),
+            width: 1.0,
+            radius: 6.0.into(),
+        },
+        ..Default::default()
+    }
+}
+
+fn pill(_theme: &iced::Theme, status: button::Status) -> button::Style {
+    let bg = match status {
+        button::Status::Hovered => theme::bg_hover(),
+        _ => theme::bg_elevated(),
+    };
+    button::Style {
+        background: Some(bg.into()),
+        text_color: theme::text_primary(),
+        border: iced::Border {
+            color: theme::border_color(),
+            width: 1.0,
+            radius: 999.0.into(),
+        },
+        ..Default::default()
+    }
+}
+
+fn pill_accent(_theme: &iced::Theme, status: button::Status) -> button::Style {
+    let bg = match status {
+        button::Status::Hovered => theme::bg_hover(),
+        _ => theme::bg_elevated(),
+    };
+    button::Style {
+        background: Some(bg.into()),
+        text_color: theme::accent(),
+        border: iced::Border {
+            color: theme::accent(),
+            width: 1.0,
+            radius: 999.0.into(),
         },
         ..Default::default()
     }

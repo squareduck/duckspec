@@ -59,6 +59,11 @@ pub struct ChatSession {
     /// sessions — explorations store their title on the Exploration itself,
     /// caps/codex don't summarise). Also used as a "don't resummarise" flag.
     pub title: Option<String>,
+    /// The kanban card description most recently injected into this chat's
+    /// system context. Persisted so we only re-inject when the card
+    /// description actually changes between turns (first turn always injects
+    /// when non-empty).
+    pub last_seeded_description: Option<String>,
 }
 
 impl ChatSession {
@@ -81,6 +86,7 @@ impl ChatSession {
             pending_text: String::new(),
             claude_session_id: None,
             title: None,
+            last_seeded_description: None,
         }
     }
 }
@@ -96,6 +102,8 @@ struct PersistedSession {
     claude_session_id: Option<String>,
     #[serde(default)]
     title: Option<String>,
+    #[serde(default)]
+    last_seeded_description: Option<String>,
 }
 
 /// Return `(first user text, first assistant text)` for a session, or `None`
@@ -246,6 +254,7 @@ pub fn load_sessions_for(scope: &str, project_root: Option<&Path>) -> Vec<ChatSe
             pending_text: String::new(),
             claude_session_id: persisted.claude_session_id,
             title: persisted.title,
+            last_seeded_description: persisted.last_seeded_description,
         });
     }
     sessions.sort_by(|a, b| b.created_at_nanos.cmp(&a.created_at_nanos));
@@ -267,6 +276,7 @@ pub fn save_session(session: &ChatSession, project_root: Option<&Path>) -> anyho
         messages: session.messages.clone(),
         claude_session_id: session.claude_session_id.clone(),
         title: session.title.clone(),
+        last_seeded_description: session.last_seeded_description.clone(),
     };
     let data = serde_json::to_string_pretty(&persisted)?;
     std::fs::write(path, data)?;

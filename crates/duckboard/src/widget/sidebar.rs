@@ -29,6 +29,7 @@ fn area_icon(area: Area) -> svg::Handle {
 
 pub fn view<'a, M: Clone + 'a>(
     active: &Area,
+    project_open: bool,
     on_area: impl Fn(Area) -> M + 'a,
     on_refresh: M,
     on_toggle_theme: M,
@@ -37,6 +38,10 @@ pub fn view<'a, M: Clone + 'a>(
 
     for area in Area::NAV {
         let is_active = *active == area;
+        // Project-scoped areas are inert until a project is opened — the
+        // Dashboard is where the user picks one, so it stays enabled.
+        let needs_project = !matches!(area, Area::Dashboard);
+        let enabled = !needs_project || project_open;
         let style = if is_active {
             theme::nav_button_active as fn(&iced::Theme, button::Status) -> button::Style
         } else {
@@ -44,8 +49,10 @@ pub fn view<'a, M: Clone + 'a>(
         };
         let tint = if is_active {
             theme::accent()
-        } else {
+        } else if enabled {
             theme::text_secondary()
+        } else {
+            theme::text_muted()
         };
         let icon = svg(area_icon(area))
             .width(20)
@@ -60,15 +67,20 @@ pub fn view<'a, M: Clone + 'a>(
         )
         .width(36)
         .height(36)
-        .on_press(on_area(area))
+        .on_press_maybe(enabled.then(|| on_area(area)))
         .style(style);
         nav = nav.push(btn);
     }
 
+    let refresh_tint = if project_open {
+        theme::text_secondary()
+    } else {
+        theme::text_muted()
+    };
     let refresh_icon = svg(svg::Handle::from_memory(ICON_REFRESH))
         .width(18)
         .height(18)
-        .style(theme::svg_tint(theme::text_secondary()));
+        .style(theme::svg_tint(refresh_tint));
     let refresh = button(
         container(refresh_icon)
             .width(Length::Fill)
@@ -78,7 +90,7 @@ pub fn view<'a, M: Clone + 'a>(
     )
     .width(36)
     .height(36)
-    .on_press(on_refresh)
+    .on_press_maybe(project_open.then(|| on_refresh.clone()))
     .style(theme::nav_button);
 
     let theme_icon = svg(svg::Handle::from_memory(ICON_THEME))
