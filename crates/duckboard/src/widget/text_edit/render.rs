@@ -326,15 +326,19 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for TextEdit<'a, M> {
 
         // Measure cell width on first event if not set.
         if internal.cell_width == 0.0 {
-            let measured = measure_cell_width(renderer);
-            internal.cell_width = measured;
-            if self.show_gutter {
-                let digits = digit_count(self.state.line_count());
-                internal.gutter_width = (digits as f32) * measured + GUTTER_PAD * 2.0;
-            } else {
-                internal.gutter_width = 0.0;
-            }
+            internal.cell_width = measure_cell_width(renderer);
         }
+        // Refresh gutter width from live state every event. The draw path
+        // formats line numbers from the current `line_count()`, so a cached
+        // gutter — e.g. left over from a previously-mounted file with a
+        // different digit count — would put click math out of sync with the
+        // visible gutter and offset the cursor by a fixed number of cells.
+        internal.gutter_width = if self.show_gutter {
+            let digits = digit_count(self.state.line_count());
+            (digits as f32) * internal.cell_width + GUTTER_PAD * 2.0
+        } else {
+            0.0
+        };
 
         // Compute wrap layout if enabled.
         let cell_w = if internal.cell_width > 0.0 {
