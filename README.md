@@ -93,6 +93,10 @@ Source code points back to the scenarios it verifies via `@spec` backlinks in co
 
 Not everything belongs in the change lifecycle. `/ds-codex` creates persistent knowledge pages in `duckspec/codex/` — architecture decisions, onboarding guides, cross-cutting rationale. Written directly, no deltas, no archive.
 
+### Backfill
+
+Adopting duckspec on an existing codebase doesn't need a different workflow — just a different entry point. `/ds-backfill` picks one cohesive slice of existing behavior, uses your tests as the map for what's worth capturing, flags any genuine coverage gaps, and hands off to the normal `/ds-propose` → `/ds-spec` flow. Run it again whenever you want to capture another slice; partial coverage is fine indefinitely.
+
 ### Workflow paths
 
 Not every change needs every phase. Pick the shape that fits:
@@ -121,6 +125,12 @@ Not every change needs every phase. Pick the shape that fits:
 ```
 /ds-explore → /ds-codex
 ```
+
+**Backfill** — capturing existing code into capabilities, one slice at a time:
+```
+/ds-backfill → /ds-propose → /ds-spec → /ds-archive
+```
+If the slice's tests have real coverage gaps you want to close in the same change, the path extends through `/ds-step` → `/ds-apply` (and `/ds-design` first if test infrastructure needs designing).
 
 ## CLI Commands
 

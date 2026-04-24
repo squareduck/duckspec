@@ -46,7 +46,8 @@ pub enum PlanError {
 
 /// Known stage names for hooks.
 pub const STAGES: &[&str] = &[
-    "explore", "propose", "design", "spec", "step", "apply", "archive", "verify", "codex",
+    "explore", "backfill", "propose", "design", "spec", "step", "apply", "archive", "verify",
+    "codex",
 ];
 
 /// Position of a hook relative to the stage.
