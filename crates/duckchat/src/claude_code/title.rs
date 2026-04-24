@@ -9,13 +9,18 @@
 use std::io::Read;
 use std::path::Path;
 use std::process::Stdio;
+use std::time::Duration;
 
 use tokio::sync::oneshot;
 
 use crate::error::Error;
 use crate::request::TitleRequest;
+use crate::shell_env::SHELL_ENV;
 
 use super::TITLE_MODEL;
+
+/// Matches the run-turn budget — keeps both spawns consistent.
+const SHELL_ENV_TIMEOUT: Duration = Duration::from_millis(500);
 
 /// Max characters of the assistant reply we feed into the summariser. Keeps
 /// the prompt tight when the agent produces a long opening response.
@@ -42,9 +47,14 @@ pub async fn title_summary(req: TitleRequest, working_dir: &Path) -> Result<Stri
 fn build_prompt(req: &TitleRequest) -> String {
     let truncated = truncate_chars(&req.assistant_reply, ASSISTANT_REPLY_CHAR_CAP);
     let mut out = String::from(
-        "Summarize this conversation as a 3-5 word title. \
-Plain text, no quotes, no trailing punctuation. Sentence case — \
-capitalize only the first word and proper nouns.\n\n",
+        "Write a 3-6 word title naming what the USER is trying to do in \
+this session. Lean on the User message and any Hint lines. Use the \
+assistant reply only to extract the topic or domain when the user message \
+is brief (e.g. a bare slash command). Ignore the assistant's opening \
+filler — phrases like \"Based on my review\", \"Here's what I found\", \
+\"Let me look at\", \"After reviewing\" — and focus on the substantive \
+thing being discussed. Plain text, no quotes, no trailing punctuation. \
+Sentence case — capitalize only the first word and proper nouns.\n\n",
     );
     for hint in &req.context_hints {
         let trimmed = hint.trim();
@@ -76,15 +86,19 @@ fn truncate_chars(s: &str, cap: usize) -> &str {
 }
 
 fn run_sync(prompt: &str, working_dir: &Path) -> Result<String, Error> {
-    let mut child = std::process::Command::new("claude")
-        .arg("-p")
+    let mut cmd = std::process::Command::new("claude");
+    cmd.arg("-p")
         .arg("--model")
         .arg(TITLE_MODEL)
         .arg(prompt)
         .current_dir(working_dir)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
+        .stderr(Stdio::null());
+
+    SHELL_ENV.apply(&mut cmd, SHELL_ENV_TIMEOUT);
+
+    let mut child = cmd
         .spawn()
         .map_err(|e| Error::Spawn(format!("failed to spawn claude for title: {e}")))?;
 

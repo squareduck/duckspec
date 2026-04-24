@@ -1,13 +1,22 @@
 //! Spawns `claude -p` and drives a single turn.
 
+use std::time::Duration;
+
 use tokio::sync::mpsc;
 
 use crate::cancel::CancelToken;
 use crate::error::Error;
 use crate::event::AgentEvent;
 use crate::request::{ToolPolicy, TurnOutcome, TurnRequest};
+use crate::shell_env::SHELL_ENV;
 
 use super::protocol::{ProtocolMsg, parse_protocol_line};
+
+/// How long a subprocess spawn will wait for the background shell-env
+/// harvest before giving up and inheriting the parent env. Long-running
+/// turns can afford a few hundred milliseconds on the first spawn; by the
+/// time a second turn runs the harvest is cached.
+const SHELL_ENV_TIMEOUT: Duration = Duration::from_millis(500);
 
 /// Run a single prompt turn by spawning `claude -p` and streaming its output.
 /// Returns the session ID from the result message (for `--resume` on next
@@ -47,6 +56,8 @@ pub async fn run_turn(
     if let Some(model) = req.model.as_deref() {
         cmd.arg("--model").arg(model);
     }
+
+    SHELL_ENV.apply(&mut cmd, SHELL_ENV_TIMEOUT);
 
     let mut child = cmd
         .spawn()
