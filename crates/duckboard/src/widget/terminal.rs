@@ -1286,6 +1286,14 @@ fn pty_worker(cwd: Option<std::path::PathBuf>) -> impl iced::futures::Stream<Ite
 
             // Spawn default shell.
             let mut cmd = portable_pty::CommandBuilder::new_default_prog();
+            // Tell the child shell what terminal we emulate. Without this,
+            // GUI launches (where the parent process has no TERM from
+            // launchd) leave readline in a no-cursor-control mode and the
+            // backspace echo degenerates to a bare space — cursor appears
+            // to advance forward. xterm-256color is universally available
+            // in terminfo; COLORTERM lets apps opt into 24-bit color.
+            cmd.env("TERM", "xterm-256color");
+            cmd.env("COLORTERM", "truecolor");
             cmd.env("PROMPT_EOL_MARK", "");
             if let Some(ref path) = cwd {
                 cmd.cwd(path);
@@ -1524,4 +1532,45 @@ fn csi_modifier(mods: keyboard::Modifiers) -> u8 {
         m += 4;
     }
     m
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn grid_row(term: &Term<Listener>, row: usize, width: usize) -> String {
+        let grid = term.grid();
+        (0..width)
+            .map(|c| grid[Line(row as i32)][Column(c)].c)
+            .collect()
+    }
+
+    fn cursor_col(term: &Term<Listener>) -> usize {
+        term.renderable_content().cursor.point.column.0
+    }
+
+    /// Guards the assumption behind the TERM fix: given a proper BS-SP-BS
+    /// echo (what the shell emits when it thinks it's talking to a real
+    /// terminal), the grid erases left-to-right and the cursor walks back.
+    /// If this ever regresses, the on-screen symptom is that Backspace
+    /// appears to advance the cursor forward.
+    #[test]
+    fn readline_style_backspace_echo_erases_char() {
+        let mut s = TerminalState::new().unwrap();
+        s.feed(b"abc");
+        assert_eq!(cursor_col(&s.term), 3);
+        assert_eq!(grid_row(&s.term, 0, 5), "abc  ");
+
+        s.feed(b"\x08 \x08");
+        assert_eq!(cursor_col(&s.term), 2);
+        assert_eq!(grid_row(&s.term, 0, 5), "ab   ");
+
+        s.feed(b"\x08 \x08");
+        assert_eq!(cursor_col(&s.term), 1);
+        assert_eq!(grid_row(&s.term, 0, 5), "a    ");
+
+        s.feed(b"\x08 \x08");
+        assert_eq!(cursor_col(&s.term), 0);
+        assert_eq!(grid_row(&s.term, 0, 5), "     ");
+    }
 }
