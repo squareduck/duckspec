@@ -14,6 +14,7 @@ mod chat_store;
 pub mod config;
 mod data;
 pub mod highlight;
+mod path_env;
 mod scope;
 mod theme;
 mod title_hints;
@@ -2509,6 +2510,12 @@ fn tagged_agent((key, e): (String, agent::AgentEvent)) -> Message {
 }
 
 fn main() -> iced::Result {
+    // Must run before any threads are spawned (tracing, iced runtime, etc.).
+    // When launched from Finder, launchd gives the .app bundle a stripped
+    // PATH that misses every user-level install dir — any Command::new spawn
+    // in the app would fail with ENOENT.
+    path_env::augment();
+
     tracing_subscriber::fmt::init();
 
     // Detect system dark/light mode before creating the window.

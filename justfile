@@ -49,6 +49,53 @@ release version:
     echo "🦆 Release v{{ version }} triggered. Watch CI at:"
     echo "   https://github.com/squareduck/duckspec/actions"
 
+# Replace the existing release for the current workspace version.
+# Deletes the GitHub release + tag and re-pushes the tag at HEAD so CI
+# rebuilds the artifacts. Use this for small fixes that don't warrant a
+# version bump; for a new version, use `just release <version>`.
+rerelease:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    if [ -n "$(jj diff)" ]; then
+        echo "Error: working copy has uncommitted changes. Commit or abandon them first."
+        exit 1
+    fi
+
+    VERSION=$(cargo pkgid -p duckboard | awk -F'#' '{print $NF}')
+    TAG="v${VERSION}"
+
+    # Safety: only rewrite the tag if it *is* the latest one. Prevents a
+    # stale local workspace version from clobbering a newer published tag.
+    LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || true)
+    if [ "${LATEST_TAG}" != "${TAG}" ]; then
+        echo "Error: latest tag is '${LATEST_TAG:-<none>}' but workspace version is '${VERSION}'."
+        echo "Refusing to rewrite a tag that doesn't match the current version."
+        exit 1
+    fi
+
+    if ! gh release view "${TAG}" >/dev/null 2>&1; then
+        echo "Error: no existing GitHub release for ${TAG}."
+        echo "For a first release of this version, use: just release ${VERSION}"
+        exit 1
+    fi
+
+    echo "==> Re-releasing ${TAG} at $(git rev-parse --short HEAD)"
+
+    echo "==> Checking release build (warnings as errors)"
+    RUSTFLAGS="-D warnings" cargo check --release --workspace
+
+    echo "==> Deleting GitHub release + remote tag ${TAG}"
+    gh release delete "${TAG}" --cleanup-tag --yes
+
+    echo "==> Recreating and pushing tag ${TAG}"
+    git tag -f "${TAG}"
+    git push origin "${TAG}"
+
+    echo ""
+    echo "🦆 Re-release ${TAG} triggered. Watch CI at:"
+    echo "   https://github.com/squareduck/duckspec/actions"
+
 # Build a macOS Duckboard.app bundle at dist/Duckboard.app.
 bundle:
     #!/usr/bin/env bash
