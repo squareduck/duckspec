@@ -1167,13 +1167,25 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                         }
                     }
 
-                    // Cmd-N (Ctrl-N off-mac): new chat session in the change area.
-                    // Only fires while agent chat is the active interaction so it
-                    // doesn't shadow the rest of the app.
+                    // Cmd-N (Ctrl-N off-mac): spawn a fresh exploration when the
+                    // current scope is an exploration, otherwise start a new
+                    // chat session inside the current change. Explorations use
+                    // the single-session UI, so reusing NewSession would just
+                    // visually clear the current chat — and Clear is button-only
+                    // by design.
                     if state.active_area == Area::Change
                         && mods.command()
                         && key == keyboard::Key::Character("n".into())
                     {
+                        if state.change.is_exploration_selected() {
+                            return Task::batch([
+                                update(
+                                    state,
+                                    Message::Change(area::change::Message::AddExploration),
+                                ),
+                                focus_chat_input(),
+                            ]);
+                        }
                         return dispatch_interaction_msg(
                             state,
                             routing_key,
