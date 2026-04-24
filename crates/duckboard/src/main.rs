@@ -2516,6 +2516,12 @@ fn main() -> iced::Result {
     // in the app would fail with ENOENT.
     path_env::augment();
 
+    // Kick off a background harvest of the user's login-shell env so
+    // subprocesses we later spawn (claude and anything it runs) see the
+    // same tool-manager activation (mise, asdf, nix, rustup, …) the user
+    // gets in their terminal. Non-blocking — just starts the thread.
+    duckchat::shell_env::init();
+
     tracing_subscriber::fmt::init();
 
     // Detect system dark/light mode before creating the window.
