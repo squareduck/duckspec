@@ -14,6 +14,7 @@ mod chat_store;
 pub mod config;
 mod data;
 pub mod highlight;
+mod kanban_store;
 mod path_env;
 mod scope;
 mod theme;
@@ -39,6 +40,7 @@ struct State {
     project: ProjectData,
     config: config::Config,
     dashboard: area::dashboard::State,
+    kanban: area::kanban::State,
     change: area::change::State,
     caps: area::caps::State,
     codex: area::codex::State,
@@ -73,6 +75,7 @@ impl State {
             project,
             config,
             dashboard: area::dashboard::State::default(),
+            kanban: area::kanban::State::default(),
             change,
             caps: caps_state,
             codex: area::codex::State::default(),
@@ -104,6 +107,7 @@ impl State {
             ..Default::default()
         };
         self.codex = area::codex::State::default();
+        self.kanban = area::kanban::State::for_project(self.project.project_root.as_deref());
         self.project.revalidate();
         self.active_area = Area::Dashboard;
 
@@ -118,7 +122,16 @@ impl State {
         match scope {
             KEY_CAPS => Some(&mut self.caps.interaction),
             KEY_CODEX => Some(&mut self.codex.interaction),
-            _ => self.change.interactions.get_mut(scope),
+            _ => {
+                if self.change.interactions.contains_key(scope) {
+                    return self.change.interactions.get_mut(scope);
+                }
+                // Kanban-owned scope: interaction state is keyed by card id,
+                // so resolve scope → card id first (immutable pass), then
+                // look up by that id.
+                let card_id = self.kanban.card_id_for_scope(scope)?;
+                self.kanban.interactions.get_mut(&card_id)
+            }
         }
     }
 
@@ -135,7 +148,15 @@ impl State {
         if self.codex.interaction.instance_id == ix_id {
             return Some(&mut self.codex.interaction);
         }
-        self.change
+        if let Some(ix) = self
+            .change
+            .interactions
+            .values_mut()
+            .find(|ix| ix.instance_id == ix_id)
+        {
+            return Some(ix);
+        }
+        self.kanban
             .interactions
             .values_mut()
             .find(|ix| ix.instance_id == ix_id)
@@ -159,6 +180,16 @@ impl State {
             }
             Area::Caps => Some((&self.caps.interaction, KEY_CAPS)),
             Area::Codex => Some((&self.codex.interaction, KEY_CODEX)),
+            Area::Kanban => {
+                if !self.kanban.modal_open {
+                    return None;
+                }
+                let card_id = self.kanban.selected_card.as_deref()?;
+                let card = self.kanban.cards.iter().find(|c| c.id == card_id)?;
+                let scope = area::kanban::card_scope_key(card)?;
+                let ix = self.kanban.interactions.get(card_id)?;
+                Some((ix, scope))
+            }
             Area::Dashboard | Area::Settings => None,
         }
     }
@@ -169,6 +200,14 @@ impl State {
             Area::Change => self.change.selected_change.clone(),
             Area::Caps => Some(KEY_CAPS.to_string()),
             Area::Codex => Some(KEY_CODEX.to_string()),
+            Area::Kanban => {
+                if !self.kanban.modal_open {
+                    return None;
+                }
+                let card_id = self.kanban.selected_card.as_deref()?;
+                let card = self.kanban.cards.iter().find(|c| c.id == card_id)?;
+                area::kanban::card_scope_key(card).map(str::to_string)
+            }
             Area::Dashboard | Area::Settings => None,
         }
     }
@@ -181,6 +220,7 @@ enum Message {
     AreaSelected(Area),
     Refresh,
     Dashboard(area::dashboard::Message),
+    Kanban(area::kanban::Message),
     Change(area::change::Message),
     Caps(area::caps::Message),
     Codex(area::codex::Message),
@@ -309,7 +349,9 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                                     .map(|n| n.to_string_lossy().to_string())
                                     .unwrap_or_else(|| rel_path.display().to_string());
                                 let area = match state.active_area {
-                                    Area::Dashboard | Area::Settings => Area::Change,
+                                    Area::Dashboard | Area::Kanban | Area::Settings => {
+                                        Area::Change
+                                    }
                                     other => other,
                                 };
                                 state.active_area = area;
@@ -685,6 +727,21 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                 area::change::Message::SelectChangedFile(path) => {
                     return open_diff_preview(state, Area::Change, &path);
                 }
+                area::change::Message::OpenKanbanCardForChange(change_name) => {
+                    if let Some(card_id) = state
+                        .kanban
+                        .card_id_for_change(&change_name)
+                        .map(str::to_string)
+                    {
+                        state.active_area = Area::Kanban;
+                        area::kanban::update(
+                            &mut state.kanban,
+                            area::kanban::Message::SelectCard(card_id),
+                            &state.project,
+                            &state.highlighter,
+                        );
+                    }
+                }
                 msg => {
                     let needs_focus =
                         is_chat_focus_msg(extract_change_interaction_msg(&msg));
@@ -732,6 +789,97 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
             }
             let needs_focus = is_chat_focus_msg(extract_codex_interaction_msg(&msg));
             area::codex::update(&mut state.codex, msg, &state.project, &state.highlighter);
+            if needs_focus {
+                return focus_chat_input();
+            }
+        }
+        Message::Kanban(msg) => {
+            // Hard delete cascades to the attached exploration (if any). Run
+            // the cascade BEFORE kanban::update so we can still look up the
+            // card's exploration_id. Matches the pattern used for cross-
+            // module teardown elsewhere in this file.
+            if let area::kanban::Message::DeleteCard(ref card_id) = msg {
+                let exp_id = state
+                    .kanban
+                    .cards
+                    .iter()
+                    .find(|c| &c.id == card_id)
+                    .and_then(|c| c.exploration_id.clone());
+                if let Some(exp_id) = exp_id {
+                    state.change.explorations.retain(|e| e.id != exp_id);
+                    state.change.interactions.remove(&exp_id);
+                    if state.change.selected_change.as_deref() == Some(&exp_id) {
+                        state.change.selected_change = None;
+                    }
+                    chat_store::delete_scope(&exp_id, state.project.project_root.as_deref());
+                    chat_store::save_explorations(
+                        &state.change.explorations,
+                        state.change.exploration_counter,
+                        state.project.project_root.as_deref(),
+                    );
+                }
+            }
+            // StartExploration: mint the Exploration on state.change.explorations
+            // with the backlink, stamp card.exploration_id, then reopen the
+            // card so kanban::open_card seeds the InteractionState from disk.
+            if let area::kanban::Message::StartExploration(ref card_id) = msg {
+                state.change.exploration_counter += 1;
+                let mut exp = chat_store::Exploration::new(state.change.exploration_counter);
+                exp.card_id = Some(card_id.clone());
+                let exp_id = exp.id.clone();
+                state.change.explorations.push(exp);
+                chat_store::save_explorations(
+                    &state.change.explorations,
+                    state.change.exploration_counter,
+                    state.project.project_root.as_deref(),
+                );
+                if let Some(card) = state.kanban.cards.iter_mut().find(|c| &c.id == card_id) {
+                    card.exploration_id = Some(exp_id);
+                }
+                kanban_store::save(
+                    &state.kanban.cards,
+                    state.project.project_root.as_deref(),
+                );
+                // Re-open via the SelectCard path so the interaction state is
+                // freshly seeded for the new scope.
+                area::kanban::update(
+                    &mut state.kanban,
+                    area::kanban::Message::SelectCard(card_id.clone()),
+                    &state.project,
+                    &state.highlighter,
+                );
+                return focus_chat_input();
+            }
+            // Kanban → Change artifact: switch area, then hand off to the
+            // change area's existing OpenArtifact handler.
+            if let area::kanban::Message::OpenArtifact {
+                ref change,
+                ref artifact_id,
+            } = msg
+            {
+                let change_name = change.clone();
+                let artifact_id = artifact_id.clone();
+                area::kanban::update(
+                    &mut state.kanban,
+                    msg,
+                    &state.project,
+                    &state.highlighter,
+                );
+                state.active_area = Area::Change;
+                area::change::update(
+                    &mut state.change,
+                    area::change::Message::OpenArtifact {
+                        change: change_name,
+                        artifact_id,
+                    },
+                    &state.project,
+                    &state.highlighter,
+                );
+                return Task::none();
+            }
+            let needs_focus =
+                is_chat_focus_msg(extract_kanban_interaction_msg(&msg));
+            area::kanban::update(&mut state.kanban, msg, &state.project, &state.highlighter);
             if needs_focus {
                 return focus_chat_input();
             }
@@ -895,10 +1043,11 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                 change,
                 caps,
                 codex,
+                kanban,
                 highlighter,
                 ..
             } = state;
-            let ax = resolve_session_mut(change, caps, codex, &key);
+            let ax = resolve_session_mut(change, caps, codex, kanban, &key);
             if let Some(ax) = ax {
                 let is_streaming = ax.session.is_streaming;
                 interaction::rebuild_chat_editor(ax, highlighter);
@@ -1138,6 +1287,18 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                 return Task::none();
             }
 
+            // Kanban modal: ESC closes only when the modal itself holds focus.
+            // `modal_focused` is flipped off when an embedded chat/terminal
+            // grabs focus (step 4), so ESC there goes to the agent chat
+            // instead of dismissing the card.
+            if state.active_area == Area::Kanban
+                && state.kanban.modal_open
+                && state.kanban.modal_focused
+                && matches!(&key, keyboard::Key::Named(keyboard::key::Named::Escape))
+            {
+                return update(state, Message::Kanban(area::kanban::Message::CloseModal));
+            }
+
             // Get the active area's interaction state for keyboard routing.
             let active_info = state.active_interaction().map(|(i, _key)| {
                 let agent_chat_active =
@@ -1242,6 +1403,7 @@ fn resolve_session_mut<'a>(
     change: &'a mut area::change::State,
     caps: &'a mut area::caps::State,
     codex: &'a mut area::codex::State,
+    kanban: &'a mut area::kanban::State,
     key: &str,
 ) -> Option<&'a mut interaction::AgentSession> {
     let (ix_id_str, session_id) = key.split_once('/')?;
@@ -1250,8 +1412,14 @@ fn resolve_session_mut<'a>(
         &mut caps.interaction
     } else if codex.interaction.instance_id == ix_id {
         &mut codex.interaction
+    } else if let Some(ix) = change
+        .interactions
+        .values_mut()
+        .find(|ix| ix.instance_id == ix_id)
+    {
+        ix
     } else {
-        change
+        kanban
             .interactions
             .values_mut()
             .find(|ix| ix.instance_id == ix_id)?
@@ -1267,10 +1435,21 @@ fn dispatch_interaction_msg(state: &mut State, key: &str, msg: interaction::Msg)
             state,
             Message::Codex(area::codex::Message::Interaction(msg)),
         ),
-        _ => update(
-            state,
-            Message::Change(area::change::Message::Interaction(msg)),
-        ),
+        _ => {
+            // Kanban-owned scope (exploration_id or change_name of a card).
+            // For non-kanban scopes fall through to the change area.
+            if state.kanban.card_id_for_scope(key).is_some() {
+                update(
+                    state,
+                    Message::Kanban(area::kanban::Message::Interaction(msg)),
+                )
+            } else {
+                update(
+                    state,
+                    Message::Change(area::change::Message::Interaction(msg)),
+                )
+            }
+        }
     }
 }
 
@@ -1307,6 +1486,14 @@ fn extract_caps_interaction_msg(msg: &area::caps::Message) -> Option<&interactio
 
 fn extract_codex_interaction_msg(msg: &area::codex::Message) -> Option<&interaction::Msg> {
     if let area::codex::Message::Interaction(m) = msg {
+        Some(m)
+    } else {
+        None
+    }
+}
+
+fn extract_kanban_interaction_msg(msg: &area::kanban::Message) -> Option<&interaction::Msg> {
+    if let area::kanban::Message::Interaction(m) = msg {
         Some(m)
     } else {
         None
@@ -1398,6 +1585,19 @@ fn rehighlight_all(state: &mut State) -> Task<Message> {
     for ax in state.codex.interaction.sessions.iter_mut() {
         rehighlight_session(ax, &state.highlighter);
     }
+    for ix in state.kanban.interactions.values_mut() {
+        for ax in ix.sessions.iter_mut() {
+            rehighlight_session(ax, &state.highlighter);
+        }
+    }
+    // Kanban description editor — markdown, rendered only when the modal is
+    // open but re-highlight eagerly so a theme toggle doesn't flash stale
+    // colors next time the user opens a card.
+    state.kanban.description_editor.highlight_spans = Some(
+        state
+            .highlighter
+            .highlight_lines(&state.kanban.description_editor.lines, md_syntax),
+    );
 
     Task::batch(tasks)
 }
@@ -1445,6 +1645,56 @@ fn reload_and_reconcile(state: &mut State) -> bool {
             state.change.promote_exploration(
                 &exploration_id,
                 &new_name,
+                state.project.project_root.as_deref(),
+            );
+        }
+    } else if let Some(card_id) = state.kanban.selected_card.clone() {
+        // Kanban-owned exploration promotion. Uses the same heuristic as
+        // the Changes area: if the selected card has an unpromoted
+        // exploration and a new change directory just appeared, bind it.
+        let card_needs_change = state
+            .kanban
+            .cards
+            .iter()
+            .find(|c| c.id == card_id)
+            .map(|c| c.exploration_id.is_some() && c.change_name.is_none())
+            .unwrap_or(false);
+        if card_needs_change
+            && let Some(new_name) = state
+                .project
+                .active_changes
+                .iter()
+                .find(|c| !old_change_names.contains(&c.name))
+                .map(|c| c.name.clone())
+        {
+            let exploration_id = state
+                .kanban
+                .cards
+                .iter()
+                .find(|c| c.id == card_id)
+                .and_then(|c| c.exploration_id.clone());
+            tracing::info!(
+                card = card_id.as_str(),
+                to = new_name.as_str(),
+                "promoting kanban-card exploration to real change"
+            );
+            state.kanban.promote_exploration(
+                &card_id,
+                &new_name,
+                state.project.project_root.as_deref(),
+            );
+            if let Some(exp_id) = exploration_id {
+                // Exploration record now shadowed by the change — drop it so
+                // the bare-exploration list stays clean for both areas.
+                state.change.explorations.retain(|e| e.id != exp_id);
+                chat_store::save_explorations(
+                    &state.change.explorations,
+                    state.change.exploration_counter,
+                    state.project.project_root.as_deref(),
+                );
+            }
+            kanban_store::save(
+                &state.kanban.cards,
                 state.project.project_root.as_deref(),
             );
         }
@@ -1958,7 +2208,10 @@ fn spawn_text_search(state: &mut State, query: String) -> Task<Message> {
 /// current area. Inlined at each call site so borrow-splitting lets callers
 /// keep a parallel `&state.highlighter`.
 fn ensure_active_area(active_area: &mut Area) {
-    if matches!(*active_area, Area::Dashboard | Area::Settings) {
+    if matches!(
+        *active_area,
+        Area::Dashboard | Area::Kanban | Area::Settings
+    ) {
         *active_area = Area::Change;
     }
 }
@@ -1973,7 +2226,7 @@ fn tabs_for_area<'a>(
         Area::Change => &mut change.tabs,
         Area::Caps => &mut caps.tabs,
         Area::Codex => &mut codex.tabs,
-        Area::Dashboard | Area::Settings => &mut change.tabs,
+        Area::Dashboard | Area::Kanban | Area::Settings => &mut change.tabs,
     }
 }
 
@@ -2346,7 +2599,10 @@ fn view(state: &State) -> Element<'_, Message> {
             &state.config.projects.recent,
         )
         .map(Message::Dashboard),
-        Area::Change => area::change::view(&state.change, &state.project).map(Message::Change),
+        Area::Kanban => area::kanban::view(&state.kanban, &state.project, &state.change.explorations)
+            .map(Message::Kanban),
+        Area::Change => area::change::view(&state.change, &state.project, &state.kanban)
+            .map(Message::Change),
         Area::Caps => area::caps::view(&state.caps, &state.project).map(Message::Caps),
         Area::Codex => area::codex::view(&state.codex, &state.project).map(Message::Codex),
         Area::Settings => {
@@ -2356,6 +2612,7 @@ fn view(state: &State) -> Element<'_, Message> {
 
     let segments = match state.active_area {
         Area::Dashboard => area::dashboard::breadcrumbs(),
+        Area::Kanban => area::kanban::breadcrumbs(),
         Area::Change => area::change::breadcrumbs(&state.change, &state.project),
         Area::Caps => area::caps::breadcrumbs(&state.caps),
         Area::Codex => area::codex::breadcrumbs(&state.codex, &state.project),
@@ -2435,6 +2692,9 @@ fn subscription(state: &State) -> Subscription<Message> {
     }
     push_pty(&state.caps.interaction, &mut subs);
     push_pty(&state.codex.interaction, &mut subs);
+    for ix in state.kanban.interactions.values() {
+        push_pty(ix, &mut subs);
+    }
 
     // Per-session agent subscriptions. Key format: `agent:ix:<instance_id>/<session_id>`.
     // Like PTYs, keyed by `instance_id` so in-flight agent streams survive renames.
@@ -2451,6 +2711,9 @@ fn subscription(state: &State) -> Subscription<Message> {
         }
         push_scope(&state.caps.interaction, &mut subs);
         push_scope(&state.codex.interaction, &mut subs);
+        for ix in state.kanban.interactions.values() {
+            push_scope(ix, &mut subs);
+        }
     }
 
     // Global keyboard events.
@@ -2483,6 +2746,7 @@ fn any_session_streaming(state: &State) -> bool {
     check(&state.caps.interaction)
         || check(&state.codex.interaction)
         || state.change.interactions.values().any(check)
+        || state.kanban.interactions.values().any(check)
 }
 
 fn theme_subscription() -> Subscription<Message> {

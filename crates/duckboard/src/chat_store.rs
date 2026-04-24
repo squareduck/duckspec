@@ -311,11 +311,15 @@ pub fn rename_scope(old: &str, new: &str, project_root: Option<&Path>) {
 /// An exploration tracks a free-form chat scope that may eventually be promoted
 /// to a real change. `id` is the stable directory key for `chats/<id>/`;
 /// `display_name` is what the UI shows and can be updated by the title
-/// summariser without moving the chat directory.
+/// summariser without moving the chat directory. `card_id` backlinks to a
+/// kanban card when the exploration was started from one — card-owned
+/// explorations are hidden from the Changes area list.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Exploration {
     pub id: String,
     pub display_name: String,
+    #[serde(default)]
+    pub card_id: Option<String>,
 }
 
 impl Exploration {
@@ -327,6 +331,7 @@ impl Exploration {
         Self {
             id: format!("exploration-{nanos}"),
             display_name: format!("Exploration {counter}"),
+            card_id: None,
         }
     }
 }
