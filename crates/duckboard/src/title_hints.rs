@@ -28,6 +28,11 @@ pub fn build_hint(user_msg: &str, scope_key: &str, project: &ProjectData) -> Opt
 Summarise what they seem to be exploring."
                 .into(),
         ),
+        "ds-backfill" => Some(
+            "user is backfilling existing code into duckspec — picking one capability \
+candidate to capture from existing behavior. Summarise which area is being captured."
+                .into(),
+        ),
         "ds-propose" => Some(
             "user is authoring a proposal for the current change. \
 Summarise what's being proposed."
