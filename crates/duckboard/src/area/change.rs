@@ -26,6 +26,7 @@ const ICON_STEP: &[u8] = include_bytes!("../../assets/icon_step.svg");
 const ICON_STEP_DONE: &[u8] = include_bytes!("../../assets/icon_step_done.svg");
 const ICON_STEP_PARTIAL: &[u8] = include_bytes!("../../assets/icon_step_partial.svg");
 const ICON_EXPLORE: &[u8] = include_bytes!("../../assets/icon_explore.svg");
+const ICON_KANBAN: &[u8] = include_bytes!("../../assets/icon_kanban.svg");
 
 // ── State ────────────────────────────────────────────────────────────────────
 
@@ -285,6 +286,10 @@ pub enum Message {
         change: String,
         artifact_id: String,
     },
+    /// Navigate to the kanban card linked to a given change. Handled by
+    /// the main loop (switches `active_area` to Kanban and opens the card
+    /// modal); a no-op here so the message body can be a plain String.
+    OpenKanbanCardForChange(String),
     ScrollList(f32),
 }
 
@@ -522,6 +527,9 @@ pub fn update(
             }
             open_artifact(state, &artifact_id, project, highlighter);
         }
+        Message::OpenKanbanCardForChange(_) => {
+            // Handled in main.rs — crosses area boundaries.
+        }
         Message::ScrollList(offset) => {
             state.list_scroll = offset;
         }
@@ -597,8 +605,12 @@ pub fn refresh_obvious_command(state: &mut State, project: &ProjectData) {
 
 // ── View ─────────────────────────────────────────────────────────────────────
 
-pub fn view<'a>(state: &'a State, project: &'a ProjectData) -> Element<'a, Message> {
-    let list = view_list(state, project);
+pub fn view<'a>(
+    state: &'a State,
+    project: &'a ProjectData,
+    kanban: &'a super::kanban::State,
+) -> Element<'a, Message> {
+    let list = view_list(state, project, kanban);
     let divider = container(Space::new().height(Length::Fill))
         .width(1.0)
         .style(theme::divider);
@@ -874,6 +886,7 @@ mod breadcrumb_tests {
                 .map(|(id, name)| Exploration {
                     id: (*id).to_string(),
                     display_name: (*name).to_string(),
+                    card_id: None,
                 })
                 .collect(),
             exploration_counter: 0,
@@ -1208,13 +1221,19 @@ fn clear_active_session(
     interaction::reconcile_display_names(&mut ix.sessions, scope_label);
 }
 
-fn view_list<'a>(state: &'a State, project: &'a ProjectData) -> Element<'a, Message> {
+fn view_list<'a>(
+    state: &'a State,
+    project: &'a ProjectData,
+    kanban: &'a super::kanban::State,
+) -> Element<'a, Message> {
     let mut rows: Vec<ListRow<'a, Message>> = vec![];
 
     // Exploration changes (virtual) — listed first. On hover, the icon
     // slot is swapped for a close button so the close affordance is always
     // at the left edge of the row, unaffected by horizontal panning.
-    for exp in &state.explorations {
+    // Explorations owned by a kanban card (card_id set) are hidden here
+    // — they surface on the Kanban board instead.
+    for exp in state.explorations.iter().filter(|e| e.card_id.is_none()) {
         let is_selected = state.selected_change.as_deref() == Some(exp.id.as_str());
         let is_hovered = state.hovered_exploration.as_deref() == Some(exp.id.as_str());
         let mut r = ListRow::new(exp.display_name.as_str())
@@ -1242,13 +1261,15 @@ fn view_list<'a>(state: &'a State, project: &'a ProjectData) -> Element<'a, Mess
             .validations
             .get(&ch.name)
             .is_some_and(|v| v.total_count() > 0);
-        rows.push(
-            ListRow::new(ch.name.as_str())
-                .icon(ICON_BRANCH)
-                .selected(is_selected)
-                .errored(has_err)
-                .on_press(Message::SelectChange(ch.name.clone())),
-        );
+        let mut r = ListRow::new(ch.name.as_str())
+            .icon(ICON_BRANCH)
+            .selected(is_selected)
+            .errored(has_err)
+            .on_press(Message::SelectChange(ch.name.clone()));
+        if kanban.card_id_for_change(&ch.name).is_some() {
+            r = r.leading(card_link_button(&ch.name));
+        }
+        rows.push(r);
     }
 
     let selector = list_view::view(rows, None);
@@ -1263,11 +1284,16 @@ fn view_list<'a>(state: &'a State, project: &'a ProjectData) -> Element<'a, Mess
                 .validations
                 .get(&ch.name)
                 .is_some_and(|v| v.total_count() > 0);
-            ListRow::new(ch.name.as_str())
+            let base = crate::data::strip_archive_prefix(&ch.name).unwrap_or(&ch.name);
+            let mut r = ListRow::new(ch.name.as_str())
                 .icon(ICON_BRANCH)
                 .selected(is_selected)
                 .errored(has_err)
-                .on_press(Message::SelectChange(ch.name.clone()))
+                .on_press(Message::SelectChange(ch.name.clone()));
+            if kanban.card_id_for_change(base).is_some() {
+                r = r.leading(card_link_button(base));
+            }
+            r
         })
         .collect();
 
@@ -1664,6 +1690,21 @@ fn icon_for_artifact(label: &str) -> &'static [u8] {
         l if l.starts_with("doc") => ICON_DOC,
         _ => ICON_FILE,
     }
+}
+
+/// Leading-slot button that jumps to the kanban card linked to a change.
+/// Sized to match `list_view::ICON_SIZE` so the change's main icon doesn't
+/// jump when this is shown.
+fn card_link_button<'a>(change_name: &str) -> Element<'a, Message> {
+    let icon = iced::widget::svg(iced::widget::svg::Handle::from_memory(ICON_KANBAN))
+        .width(list_view::ICON_SIZE)
+        .height(list_view::ICON_SIZE)
+        .style(theme::svg_tint(theme::accent()));
+    button(icon)
+        .on_press(Message::OpenKanbanCardForChange(change_name.to_string()))
+        .padding(0.0)
+        .style(theme::icon_button)
+        .into()
 }
 
 fn view_content<'a>(state: &'a State, project: &'a ProjectData) -> Element<'a, Message> {
