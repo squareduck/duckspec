@@ -2687,7 +2687,7 @@ fn view(state: &State) -> Element<'_, Message> {
         Area::Kanban => area::kanban::breadcrumbs(),
         Area::Change => area::change::breadcrumbs(&state.change, &state.project),
         Area::Caps => area::caps::breadcrumbs(&state.caps),
-        Area::Codex => area::codex::breadcrumbs(&state.codex, &state.project),
+        Area::Codex => area::codex::breadcrumbs(&state.codex),
         Area::Settings => area::settings::breadcrumbs(),
     };
     let project_label = state
