@@ -106,34 +106,21 @@ struct PersistedSession {
     last_seeded_description: Option<String>,
 }
 
-/// Return `(first user text, first assistant text)` for a session, or `None`
-/// if either half is missing. Used by the title summariser after the first
-/// successful turn.
-pub fn first_exchange(session: &ChatSession) -> Option<(String, String)> {
-    let mut user: Option<String> = None;
-    let mut assistant: Option<String> = None;
+/// Return the first user text block in the session. Used by the title
+/// summariser, which derives titles from the user's intent (message + scope
+/// hints) and deliberately ignores the assistant's reply.
+pub fn first_user_text(session: &ChatSession) -> Option<String> {
     for msg in &session.messages {
+        if !matches!(msg.role, Role::User) {
+            continue;
+        }
         for block in &msg.content {
             if let ContentBlock::Text(t) = block {
-                match msg.role {
-                    Role::User if user.is_none() => {
-                        user = Some(t.clone());
-                    }
-                    Role::Assistant if user.is_some() && assistant.is_none() => {
-                        assistant = Some(t.clone());
-                    }
-                    _ => {}
-                }
+                return Some(t.clone());
             }
         }
-        if user.is_some() && assistant.is_some() {
-            break;
-        }
     }
-    match (user, assistant) {
-        (Some(u), Some(a)) => Some((u, a)),
-        _ => None,
-    }
+    None
 }
 
 /// Recompute `display_name` on every session so that sessions sharing the

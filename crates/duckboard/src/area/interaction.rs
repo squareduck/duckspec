@@ -1068,9 +1068,28 @@ fn view_session_bar<'a, M: 'a + Clone>(
                 .padding([2.0, theme::SPACING_SM])
                 .style(theme::session_bar_button);
 
-            let row = row![Space::new().width(Length::Fill), clear_btn]
-                .spacing(theme::SPACING_XS)
-                .align_y(iced::Center);
+            // Layout budget: SM padding on each side of the bar, the Clear
+            // button (its own SM padding around the label), an XS spacer
+            // between label and button, and a 4px safety margin so the title
+            // text doesn't kiss the button's edge.
+            let clear_w = measure_text("Clear", theme::font_sm()) + theme::SPACING_SM * 2.0;
+            let overhead = theme::SPACING_SM * 2.0 + theme::SPACING_XS + clear_w + 4.0;
+            let available = (state.width - overhead).max(0.0);
+            let active_name = state.active().map(|ax| ax.session.display_name.as_str());
+            let label = active_name
+                .map(|n| truncate_to_width(n, available, theme::font_sm()))
+                .unwrap_or_default();
+
+            let row = row![
+                text(label)
+                    .size(theme::font_sm())
+                    .color(theme::text_secondary())
+                    .wrapping(iced::widget::text::Wrapping::None),
+                Space::new().width(Length::Fill),
+                clear_btn,
+            ]
+            .spacing(theme::SPACING_XS)
+            .align_y(iced::Center);
 
             column![
                 container(row)

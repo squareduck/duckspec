@@ -967,8 +967,14 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
         Message::AgentEvent(key, evt) => {
             use agent::AgentEvent;
             let proj_root = state.project.project_root.clone();
-            // `(working_dir, scope_key, first_user_msg, first_assistant_reply)`.
-            let mut title_task_input: Option<(PathBuf, String, String, String)> = None;
+            // `(working_dir, scope_key, scope_kind, first_user_msg, card_description)`.
+            let mut title_task_input: Option<(
+                PathBuf,
+                String,
+                scope::ScopeKind,
+                String,
+                Option<String>,
+            )> = None;
             {
                 let Some(ax) = state.agent_session_mut(&key) else {
                     return Task::none();
@@ -1025,14 +1031,14 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                                 scope::ScopeKind::Change | scope::ScopeKind::Exploration
                             )
                             && let Some(handle) = ax.agent_handle.as_ref()
-                            && let Some((user, assistant)) =
-                                chat_store::first_exchange(&ax.session)
+                            && let Some(user) = chat_store::first_user_text(&ax.session)
                         {
                             title_task_input = Some((
                                 handle.working_dir().to_path_buf(),
                                 ax.session.scope.clone(),
+                                ax.scope_kind,
                                 user,
-                                assistant,
+                                ax.card_description.clone(),
                             ));
                         }
                     }
@@ -1111,12 +1117,25 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                 Task::none()
             };
 
-            if let Some((working_dir, scope_key, user, assistant)) = title_task_input {
+            if let Some((working_dir, scope_key, scope_kind, user, card_description)) =
+                title_task_input
+            {
+                use duckchat::ContextHook;
                 let mut hints = Vec::new();
                 if let Some(hint) = title_hints::build_hint(&user, &scope_key, &state.project) {
                     hints.push(hint);
                 }
-                let mut req = duckchat::TitleRequest::new(user, assistant);
+                let scope_input = scope::SessionScope {
+                    kind: scope_kind,
+                    scope_key: scope_key.clone(),
+                };
+                if let Some(out) = scope::CurrentScopeHook.compute(&scope_input) {
+                    hints.push(out.text);
+                }
+                if let Some(card_hint) = title_hints::build_card_hint(card_description.as_deref()) {
+                    hints.push(card_hint);
+                }
+                let mut req = duckchat::TitleRequest::new(user);
                 req.context_hints = hints;
                 let route_key = key.clone();
                 let work = async move {
