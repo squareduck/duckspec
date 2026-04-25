@@ -107,6 +107,41 @@ fn extract_slash_command(msg: &str) -> Option<&str> {
     first.strip_prefix('/')
 }
 
+/// Max chars of card description we feed into the title summariser. The
+/// first line (typically a markdown H1) carries most of the signal; the
+/// body adds disambiguating context. Anything past this is overflow.
+const CARD_DESCRIPTION_CHAR_CAP: usize = 600;
+
+/// Build a hint surfacing the kanban card the session was started from.
+/// The card's first line is usually a markdown title that names the user's
+/// intent ("# Test summarization") — exactly what the title should reflect.
+/// Returns `None` for sessions with no attached card or an empty
+/// description.
+pub fn build_card_hint(card_description: Option<&str>) -> Option<String> {
+    let raw = card_description?.trim();
+    if raw.is_empty() {
+        return None;
+    }
+    let truncated = truncate_chars(raw, CARD_DESCRIPTION_CHAR_CAP);
+    Some(format!(
+        "this session was started from a kanban card. The card's first line \
+is usually a markdown heading naming the user's intent — prefer it as the \
+title's anchor. Card content:\n{truncated}"
+    ))
+}
+
+fn truncate_chars(s: &str, cap: usize) -> &str {
+    if s.chars().count() <= cap {
+        return s;
+    }
+    let end = s
+        .char_indices()
+        .nth(cap)
+        .map(|(i, _)| i)
+        .unwrap_or(s.len());
+    &s[..end]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -184,6 +219,27 @@ mod tests {
         let project = ProjectData::default();
         let hint = build_hint("/ds-apply", "ghost-change", &project).unwrap();
         assert!(hint.contains("next step"));
+    }
+
+    #[test]
+    fn card_hint_none_for_missing_or_empty_description() {
+        assert!(build_card_hint(None).is_none());
+        assert!(build_card_hint(Some("")).is_none());
+        assert!(build_card_hint(Some("   \n  ")).is_none());
+    }
+
+    #[test]
+    fn card_hint_includes_card_content() {
+        let hint = build_card_hint(Some("# Test summarization\n\nmore text")).unwrap();
+        assert!(hint.contains("# Test summarization"));
+        assert!(hint.contains("kanban card"));
+    }
+
+    #[test]
+    fn card_hint_truncates_long_descriptions() {
+        let long = "x".repeat(CARD_DESCRIPTION_CHAR_CAP + 100);
+        let hint = build_card_hint(Some(&long)).unwrap();
+        assert!(hint.chars().filter(|c| *c == 'x').count() == CARD_DESCRIPTION_CHAR_CAP);
     }
 
     #[test]

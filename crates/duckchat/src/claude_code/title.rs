@@ -22,10 +22,6 @@ use super::TITLE_MODEL;
 /// Matches the run-turn budget — keeps both spawns consistent.
 const SHELL_ENV_TIMEOUT: Duration = Duration::from_millis(500);
 
-/// Max characters of the assistant reply we feed into the summariser. Keeps
-/// the prompt tight when the agent produces a long opening response.
-const ASSISTANT_REPLY_CHAR_CAP: usize = 500;
-
 pub async fn title_summary(req: TitleRequest, working_dir: &Path) -> Result<String, Error> {
     let prompt = build_prompt(&req);
     let working_dir = working_dir.to_path_buf();
@@ -45,16 +41,13 @@ pub async fn title_summary(req: TitleRequest, working_dir: &Path) -> Result<Stri
 }
 
 fn build_prompt(req: &TitleRequest) -> String {
-    let truncated = truncate_chars(&req.assistant_reply, ASSISTANT_REPLY_CHAR_CAP);
     let mut out = String::from(
         "Write a 3-6 word title naming what the USER is trying to do in \
-this session. Lean on the User message and any Hint lines. Use the \
-assistant reply only to extract the topic or domain when the user message \
-is brief (e.g. a bare slash command). Ignore the assistant's opening \
-filler — phrases like \"Based on my review\", \"Here's what I found\", \
-\"Let me look at\", \"After reviewing\" — and focus on the substantive \
-thing being discussed. Plain text, no quotes, no trailing punctuation. \
-Sentence case — capitalize only the first word and proper nouns.\n\n",
+this session. Use only the User message and any Hint lines — Hints explain \
+slash commands and the current scope, so they carry the real intent when \
+the user message is a bare command. Plain text, no quotes, no trailing \
+punctuation. Sentence case — capitalize only the first word and proper \
+nouns.\n\n",
     );
     for hint in &req.context_hints {
         let trimmed = hint.trim();
@@ -67,22 +60,7 @@ Sentence case — capitalize only the first word and proper nouns.\n\n",
     }
     out.push_str("User: ");
     out.push_str(req.user_message.trim());
-    out.push_str("\n\nAssistant: ");
-    out.push_str(truncated.trim());
     out
-}
-
-fn truncate_chars(s: &str, cap: usize) -> &str {
-    if s.chars().count() <= cap {
-        return s;
-    }
-    // Take `cap` chars without splitting a UTF-8 boundary.
-    let end = s
-        .char_indices()
-        .nth(cap)
-        .map(|(i, _)| i)
-        .unwrap_or(s.len());
-    &s[..end]
 }
 
 fn run_sync(prompt: &str, working_dir: &Path) -> Result<String, Error> {
@@ -157,23 +135,17 @@ mod tests {
     }
 
     #[test]
-    fn truncate_chars_respects_utf8_boundary() {
-        let s = "héllo world";
-        assert_eq!(truncate_chars(s, 5), "héllo");
-    }
-
-    #[test]
     fn build_prompt_omits_hint_section_when_empty() {
-        let req = TitleRequest::new("hello", "hi there");
+        let req = TitleRequest::new("hello");
         let out = build_prompt(&req);
         assert!(!out.contains("Hint:"));
         assert!(out.contains("User: hello"));
-        assert!(out.contains("Assistant: hi there"));
+        assert!(!out.contains("Assistant"));
     }
 
     #[test]
     fn build_prompt_renders_hints_as_header_lines() {
-        let mut req = TitleRequest::new("/ds-apply", "Let me implement step three...");
+        let mut req = TitleRequest::new("/ds-apply");
         req.context_hints
             .push("user is implementing step 03-add-login-form".into());
         req.context_hints.push("  ".into()); // empty/whitespace — should be skipped

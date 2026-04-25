@@ -76,23 +76,27 @@ pub struct TurnOutcome {
     pub session_id: String,
 }
 
-/// Input to `Provider::title_summary`. Carries the opening user/assistant
-/// exchange plus an arbitrary list of caller-supplied context hints. Each
-/// hint is rendered as a `Hint: ...` line in the summariser prompt, giving
-/// the caller a place to inject domain-specific nudges (e.g. "user is
-/// implementing step 03-foo") without duckchat needing to know about them.
+/// Input to `Provider::title_summary`. Carries the user's opening message
+/// plus an arbitrary list of caller-supplied context hints. Each hint is
+/// rendered as a `Hint: ...` line in the summariser prompt, giving the
+/// caller a place to inject domain-specific nudges (e.g. "user is
+/// implementing step 03-foo") or scope orientation without duckchat needing
+/// to know about them.
+///
+/// Deliberately excludes the assistant's reply: the title should reflect
+/// the user's intent for the session, not whatever the agent said in
+/// response. Slash commands carry intent in the hint; the user message
+/// itself disambiguates everything else.
 #[derive(Debug, Clone)]
 pub struct TitleRequest {
     pub user_message: String,
-    pub assistant_reply: String,
     pub context_hints: Vec<String>,
 }
 
 impl TitleRequest {
-    pub fn new(user_message: impl Into<String>, assistant_reply: impl Into<String>) -> Self {
+    pub fn new(user_message: impl Into<String>) -> Self {
         Self {
             user_message: user_message.into(),
-            assistant_reply: assistant_reply.into(),
             context_hints: Vec::new(),
         }
     }
