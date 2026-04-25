@@ -757,6 +757,11 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                             &state.highlighter,
                             &mut state.change.interactions,
                         );
+                        if state.kanban.modal_open {
+                            return iced::widget::operation::focus(
+                                area::kanban::DESCRIPTION_EDITOR_ID,
+                            );
+                        }
                     }
                 }
                 msg => {
@@ -891,6 +896,13 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
             }
             let needs_focus =
                 is_chat_focus_msg(extract_kanban_interaction_msg(&msg));
+            // Opening a card modal (fresh or existing) auto-focuses the
+            // description editor — it's the only interactable element on
+            // the card frame itself.
+            let opens_modal = matches!(
+                msg,
+                area::kanban::Message::AddCard | area::kanban::Message::SelectCard(_)
+            );
             area::kanban::update(
                 &mut state.kanban,
                 msg,
@@ -898,6 +910,11 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                 &state.highlighter,
                 &mut state.change.interactions,
             );
+            if opens_modal && state.kanban.modal_open {
+                return iced::widget::operation::focus(
+                    area::kanban::DESCRIPTION_EDITOR_ID,
+                );
+            }
             if needs_focus {
                 return focus_chat_input();
             }
