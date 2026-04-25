@@ -364,7 +364,6 @@ pub fn update(
             state.modal_focused = false;
         }
         Message::ArchiveCard(id) => {
-            state.modal_focused = true;
             let nanos = OffsetDateTime::now_local()
                 .unwrap_or_else(|_| OffsetDateTime::now_utc())
                 .unix_timestamp_nanos();
@@ -372,6 +371,8 @@ pub fn update(
                 card.archived_at_nanos = Some(nanos);
             }
             kanban_store::save(&state.cards, project.project_root.as_deref());
+            state.modal_open = false;
+            state.modal_focused = false;
         }
         Message::UnarchiveCard(id) => {
             state.modal_focused = true;
