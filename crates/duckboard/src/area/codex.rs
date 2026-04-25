@@ -1,19 +1,20 @@
 //! Codex area — browse codex entries.
 
-use iced::widget::column;
+use std::collections::HashSet;
+
+use iced::widget::{column, container, text};
 use iced::{Element, Length};
 
 use crate::data::ProjectData;
-use crate::widget::list_view::ListRow;
-use crate::widget::{collapsible, list_view, tab_bar, vertical_scroll};
+use crate::theme;
+use crate::widget::{collapsible, tab_bar, tree_view, vertical_scroll};
 
 use super::interaction::{self, InteractionState, SessionControls};
-
-const ICON_FILE: &[u8] = include_bytes!("../../assets/icon_file.svg");
 
 // ── State ────────────────────────────────────────────────────────────────────
 
 pub struct State {
+    pub expanded_nodes: HashSet<String>,
     pub section_expanded: bool,
     pub tabs: tab_bar::TabState,
     pub interaction: InteractionState,
@@ -23,6 +24,7 @@ pub struct State {
 impl Default for State {
     fn default() -> Self {
         Self {
+            expanded_nodes: HashSet::new(),
             section_expanded: true,
             tabs: tab_bar::TabState::default(),
             interaction: InteractionState::default(),
@@ -36,6 +38,7 @@ impl Default for State {
 #[derive(Debug, Clone)]
 pub enum Message {
     ToggleSection,
+    ToggleNode(String),
     SelectItem(String),
     SelectTab(usize),
     CloseTab(usize),
@@ -55,6 +58,11 @@ pub fn update(
     match message {
         Message::ToggleSection => {
             state.section_expanded = !state.section_expanded;
+        }
+        Message::ToggleNode(id) => {
+            if !state.expanded_nodes.remove(&id) {
+                state.expanded_nodes.insert(id);
+            }
         }
         Message::SelectItem(id) => {
             open_artifact(state, &id, project, highlighter);
@@ -120,23 +128,30 @@ pub fn view<'a>(state: &'a State, project: &'a ProjectData) -> Element<'a, Messa
 }
 
 fn view_list<'a>(state: &'a State, project: &'a ProjectData) -> Element<'a, Message> {
-    let active_id = state.tabs.active_tab().map(|t| t.id.as_str());
-    let rows: Vec<ListRow<'a, Message>> = project
-        .codex_entries
-        .iter()
-        .map(|entry| {
-            ListRow::new(entry.label.as_str())
-                .icon(ICON_FILE)
-                .selected(active_id == Some(entry.id.as_str()))
-                .on_press(Message::SelectItem(entry.id.clone()))
-        })
-        .collect();
+    let tree = if project.codex_entries.is_empty() {
+        container(
+            text("No codex entries")
+                .size(theme::font_md())
+                .color(theme::text_muted()),
+        )
+        .padding([theme::SPACING_XS, theme::SPACING_SM])
+        .into()
+    } else {
+        tree_view::view(
+            &project.codex_entries,
+            &state.expanded_nodes,
+            state.tabs.active_tab().map(|t| t.id.as_str()),
+            &HashSet::new(),
+            Message::ToggleNode,
+            Message::SelectItem,
+        )
+    };
 
     let section = collapsible::view(
         "Codex",
         state.section_expanded,
         Message::ToggleSection,
-        list_view::view(rows, Some("No codex entries")),
+        tree,
     );
 
     vertical_scroll::view(
@@ -181,15 +196,11 @@ fn open_artifact(
 
 // ── Breadcrumbs ──────────────────────────────────────────────────────────────
 
-pub fn breadcrumbs(state: &State, project: &ProjectData) -> Vec<String> {
-    let Some(tab) = state.tabs.active_tab() else {
-        return vec!["Codex".into()];
-    };
-    let label = project
-        .codex_entries
-        .iter()
-        .find(|e| e.id == tab.id)
-        .map(|e| e.label.clone())
-        .unwrap_or_else(|| tab.id.clone());
-    vec!["Codex".into(), label]
+pub fn breadcrumbs(state: &State) -> Vec<String> {
+    let mut crumbs = vec!["Codex".into()];
+    if let Some(tab) = state.tabs.active_tab() {
+        let rest = tab.id.strip_prefix("codex/").unwrap_or(&tab.id);
+        crumbs.extend(rest.split('/').map(String::from));
+    }
+    crumbs
 }

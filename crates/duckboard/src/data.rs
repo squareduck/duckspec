@@ -155,7 +155,7 @@ impl ProjectData {
         let (cap_tree, codex_entries, active_changes, archived_changes) = match duckspec_root {
             Some(root) => {
                 let cap_tree = build_tree(&root.join("caps"), "caps");
-                let codex_entries = build_file_list(&root.join("codex"), "codex");
+                let codex_entries = build_tree_contents(&root.join("codex"), "codex");
                 let active_changes = build_changes(&root.join("changes"), "changes");
                 let archived_changes = build_changes(&root.join("archive"), "archive");
                 (cap_tree, codex_entries, active_changes, archived_changes)
@@ -301,25 +301,6 @@ fn build_tree_contents(dir: &Path, id_prefix: &str) -> Vec<TreeNode> {
 
     files.extend(dirs);
     files
-}
-
-/// Flat list of markdown files in a directory (non-recursive).
-fn build_file_list(dir: &Path, id_prefix: &str) -> Vec<TreeNode> {
-    let entries = read_sorted_dir(dir);
-    let mut nodes = vec![];
-
-    for entry in entries {
-        let name = entry.file_name().to_string_lossy().to_string();
-        if name.ends_with(".md") && !is_dir(&entry) {
-            let stem = name.trim_end_matches(".md").to_string();
-            nodes.push(TreeNode {
-                id: format!("{}/{}", id_prefix, name),
-                label: stem,
-                children: vec![],
-            });
-        }
-    }
-    nodes
 }
 
 fn build_changes(dir: &Path, dir_prefix: &str) -> Vec<ChangeData> {
