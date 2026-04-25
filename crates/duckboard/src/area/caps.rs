@@ -3,21 +3,19 @@
 use std::collections::HashSet;
 
 use iced::widget::{column, container, text};
-use iced::{Element, Length};
+use iced::Element;
 
 use crate::data::ProjectData;
 use crate::theme;
 use crate::widget::{collapsible, tab_bar, tree_view, vertical_scroll};
 
-use super::interaction::{self, InteractionState, SessionControls};
+use super::interaction::{self, InteractionState};
 
 // ── State ────────────────────────────────────────────────────────────────────
 
 pub struct State {
     pub expanded_nodes: HashSet<String>,
     pub section_expanded: bool,
-    pub tabs: tab_bar::TabState,
-    pub interaction: InteractionState,
     pub list_scroll: f32,
 }
 
@@ -26,8 +24,6 @@ impl Default for State {
         Self {
             expanded_nodes: HashSet::new(),
             section_expanded: true,
-            tabs: tab_bar::TabState::default(),
-            interaction: InteractionState::default(),
             list_scroll: 0.0,
         }
     }
@@ -40,10 +36,7 @@ pub enum Message {
     ToggleSection,
     ToggleNode(String),
     SelectItem(String),
-    SelectTab(usize),
-    CloseTab(usize),
     Interaction(interaction::Msg),
-    TabContent(tab_bar::TabContentMsg),
     ScrollList(f32),
 }
 
@@ -51,6 +44,8 @@ pub enum Message {
 
 pub fn update(
     state: &mut State,
+    tabs: &mut tab_bar::TabState,
+    interaction_state: &mut InteractionState,
     message: Message,
     project: &ProjectData,
     highlighter: &crate::highlight::SyntaxHighlighter,
@@ -65,50 +60,33 @@ pub fn update(
             }
         }
         Message::SelectItem(id) => {
-            open_artifact(state, &id, project, highlighter);
+            open_artifact(tabs, &id, project, highlighter);
         }
-        Message::SelectTab(idx) => state.tabs.select(idx),
-        Message::CloseTab(idx) => state.tabs.close(idx),
-        Message::Interaction(msg) => {
-            match msg {
-                interaction::Msg::ClearSession => {
-                    interaction::clear_single_session(
-                        &mut state.interaction,
-                        "caps",
-                        crate::scope::ScopeKind::Caps,
-                        project.project_root.as_deref(),
-                    );
-                }
-                interaction::Msg::NewSession | interaction::Msg::SelectSession(_) => {
-                    // Caps is single-session; ignore.
-                }
-                other => {
-                    interaction::update_with_side_effects(
-                        &mut state.interaction,
-                        other,
-                        "caps",
-                        "caps",
-                        crate::scope::ScopeKind::Caps,
-                        project.project_root.as_deref(),
-                        highlighter,
-                    );
-                }
+        Message::Interaction(msg) => match msg {
+            interaction::Msg::ClearSession => {
+                interaction::clear_single_session(
+                    interaction_state,
+                    "caps",
+                    "caps",
+                    crate::scope::ScopeKind::Caps,
+                    project.project_root.as_deref(),
+                );
             }
-        }
-        Message::TabContent(tab_bar::TabContentMsg::EditorAction(_)) => {
-            // Intercepted by `main::update` for `Message::Caps` so the async
-            // highlight `Task` can be propagated. No-op defensive fallback.
-            let _ = highlighter;
-        }
-        Message::TabContent(tab_bar::TabContentMsg::OpenInNewTab(_)) => {
-            // Diff tabs only surface in the change area; ignore elsewhere.
-        }
-        Message::TabContent(tab_bar::TabContentMsg::SearchSliceAction(idx, action)) => {
-            crate::handle_search_slice_action(&mut state.tabs, idx, action);
-        }
-        Message::TabContent(tab_bar::TabContentMsg::OpenSearchSlice(idx)) => {
-            crate::handle_open_search_slice(&mut state.tabs, idx, highlighter);
-        }
+            interaction::Msg::NewSession | interaction::Msg::SelectSession(_) => {
+                // Caps is single-session; ignore.
+            }
+            other => {
+                interaction::update_with_side_effects(
+                    interaction_state,
+                    other,
+                    "caps",
+                    "caps",
+                    crate::scope::ScopeKind::Caps,
+                    project.project_root.as_deref(),
+                    highlighter,
+                );
+            }
+        },
         Message::ScrollList(offset) => {
             state.list_scroll = offset;
         }
@@ -117,17 +95,11 @@ pub fn update(
 
 // ── View ─────────────────────────────────────────────────────────────────────
 
-pub fn view<'a>(state: &'a State, project: &'a ProjectData) -> Element<'a, Message> {
-    interaction::area_layout(
-        view_list(state, project),
-        view_content(state),
-        &state.interaction,
-        SessionControls::Single,
-        Message::Interaction,
-    )
-}
-
-fn view_list<'a>(state: &'a State, project: &'a ProjectData) -> Element<'a, Message> {
+pub fn view_list<'a>(
+    state: &'a State,
+    project: &'a ProjectData,
+    tabs: &'a tab_bar::TabState,
+) -> Element<'a, Message> {
     let tree = if project.cap_tree.is_empty() {
         container(
             text("No capabilities")
@@ -140,7 +112,7 @@ fn view_list<'a>(state: &'a State, project: &'a ProjectData) -> Element<'a, Mess
         tree_view::view(
             &project.cap_tree,
             &state.expanded_nodes,
-            state.tabs.active_tab().map(|t| t.id.as_str()),
+            tabs.active_tab().map(|t| t.id.as_str()),
             &std::collections::HashSet::new(),
             Message::ToggleNode,
             Message::SelectItem,
@@ -161,17 +133,10 @@ fn view_list<'a>(state: &'a State, project: &'a ProjectData) -> Element<'a, Mess
     )
 }
 
-fn view_content<'a>(state: &'a State) -> Element<'a, Message> {
-    let bar = tab_bar::view_bar(&state.tabs, Message::SelectTab, Message::CloseTab);
-    let body = tab_bar::view_content(&state.tabs).map(Message::TabContent);
-
-    column![bar, body].height(Length::Fill).into()
-}
-
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
 fn open_artifact(
-    state: &mut State,
+    tabs: &mut tab_bar::TabState,
     id: &str,
     project: &ProjectData,
     highlighter: &crate::highlight::SyntaxHighlighter,
@@ -180,7 +145,7 @@ fn open_artifact(
         let title = id.rsplit('/').next().unwrap_or(id).to_string();
         let path = project.duckspec_root.as_ref().map(|r| r.join(id));
         crate::open_artifact_tab(
-            &mut state.tabs,
+            tabs,
             id.to_string(),
             title,
             content,
@@ -193,9 +158,9 @@ fn open_artifact(
 
 // ── Breadcrumbs ──────────────────────────────────────────────────────────────
 
-pub fn breadcrumbs(state: &State) -> Vec<String> {
+pub fn breadcrumbs(tabs: &tab_bar::TabState) -> Vec<String> {
     let mut crumbs = vec!["Capabilities".into()];
-    if let Some(tab) = state.tabs.active_tab() {
+    if let Some(tab) = tabs.active_tab() {
         let rest = tab.id.strip_prefix("caps/").unwrap_or(&tab.id);
         crumbs.extend(rest.split('/').map(String::from));
     }

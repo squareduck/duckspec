@@ -22,6 +22,41 @@ pub enum ScopeKind {
     Codex,
 }
 
+/// Identity of an interaction column scope. Acts as the key for the global
+/// `state.interactions` map and is computed from the active area + that
+/// area's selection. The string variants carry the same value used as the
+/// on-disk scope key (`ChatSession.scope`), so chat_store calls remain
+/// straightforward.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum Scope {
+    Caps,
+    Codex,
+    Change(String),
+    Exploration(String),
+}
+
+impl Scope {
+    /// String key used by chat_store and on-disk paths. Matches the value
+    /// stored in `ChatSession.scope`.
+    pub fn key(&self) -> &str {
+        match self {
+            Scope::Caps => "caps",
+            Scope::Codex => "codex",
+            Scope::Change(name) => name.as_str(),
+            Scope::Exploration(id) => id.as_str(),
+        }
+    }
+
+    pub fn kind(&self) -> ScopeKind {
+        match self {
+            Scope::Caps => ScopeKind::Caps,
+            Scope::Codex => ScopeKind::Codex,
+            Scope::Change(_) => ScopeKind::Change,
+            Scope::Exploration(_) => ScopeKind::Exploration,
+        }
+    }
+}
+
 /// Input the `CurrentScopeHook` reads. Built by `send_prompt_text` right
 /// before dispatching the first turn of a session.
 pub struct SessionScope {

@@ -107,26 +107,25 @@ fn extract_slash_command(msg: &str) -> Option<&str> {
     first.strip_prefix('/')
 }
 
-/// Max chars of card description we feed into the title summariser. The
-/// first line (typically a markdown H1) carries most of the signal; the
-/// body adds disambiguating context. Anything past this is overflow.
-const CARD_DESCRIPTION_CHAR_CAP: usize = 600;
+/// Max chars of idea body we feed into the title summariser. The first line
+/// (typically a markdown H1) carries most of the signal; the body adds
+/// disambiguating context. Anything past this is overflow.
+const IDEA_BODY_CHAR_CAP: usize = 600;
 
-/// Build a hint surfacing the kanban card the session was started from.
-/// The card's first line is usually a markdown title that names the user's
-/// intent ("# Test summarization") — exactly what the title should reflect.
-/// Returns `None` for sessions with no attached card or an empty
-/// description.
-pub fn build_card_hint(card_description: Option<&str>) -> Option<String> {
-    let raw = card_description?.trim();
+/// Build a hint surfacing the idea the session was started from. The idea's
+/// first line is usually a markdown H1 that names the user's intent ("# Test
+/// summarization") — exactly what the title should reflect. Returns `None`
+/// for sessions with no attached idea or an empty body.
+pub fn build_idea_hint(idea_body: Option<&str>) -> Option<String> {
+    let raw = idea_body?.trim();
     if raw.is_empty() {
         return None;
     }
-    let truncated = truncate_chars(raw, CARD_DESCRIPTION_CHAR_CAP);
+    let truncated = truncate_chars(raw, IDEA_BODY_CHAR_CAP);
     Some(format!(
-        "this session was started from a kanban card. The card's first line \
-is usually a markdown heading naming the user's intent — prefer it as the \
-title's anchor. Card content:\n{truncated}"
+        "this session was started from an idea. The idea's first line is \
+usually a markdown heading naming the user's intent — prefer it as the \
+title's anchor. Idea content:\n{truncated}"
     ))
 }
 
@@ -222,24 +221,24 @@ mod tests {
     }
 
     #[test]
-    fn card_hint_none_for_missing_or_empty_description() {
-        assert!(build_card_hint(None).is_none());
-        assert!(build_card_hint(Some("")).is_none());
-        assert!(build_card_hint(Some("   \n  ")).is_none());
+    fn idea_hint_none_for_missing_or_empty_body() {
+        assert!(build_idea_hint(None).is_none());
+        assert!(build_idea_hint(Some("")).is_none());
+        assert!(build_idea_hint(Some("   \n  ")).is_none());
     }
 
     #[test]
-    fn card_hint_includes_card_content() {
-        let hint = build_card_hint(Some("# Test summarization\n\nmore text")).unwrap();
+    fn idea_hint_includes_body_content() {
+        let hint = build_idea_hint(Some("# Test summarization\n\nmore text")).unwrap();
         assert!(hint.contains("# Test summarization"));
-        assert!(hint.contains("kanban card"));
+        assert!(hint.contains("idea"));
     }
 
     #[test]
-    fn card_hint_truncates_long_descriptions() {
-        let long = "x".repeat(CARD_DESCRIPTION_CHAR_CAP + 100);
-        let hint = build_card_hint(Some(&long)).unwrap();
-        assert!(hint.chars().filter(|c| *c == 'x').count() == CARD_DESCRIPTION_CHAR_CAP);
+    fn idea_hint_truncates_long_bodies() {
+        let long = "x".repeat(IDEA_BODY_CHAR_CAP + 100);
+        let hint = build_idea_hint(Some(&long)).unwrap();
+        assert!(hint.chars().filter(|c| *c == 'x').count() == IDEA_BODY_CHAR_CAP);
     }
 
     #[test]

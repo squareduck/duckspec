@@ -816,6 +816,28 @@ pub fn session_bar_button(_theme: &Theme, status: button::Status) -> button::Sty
     }
 }
 
+/// Destructive variant of `session_bar_button` — same shape, error-colored
+/// text and a tinted hover background to telegraph the irreversible action.
+pub fn session_bar_button_destructive(
+    _theme: &Theme,
+    status: button::Status,
+) -> button::Style {
+    let bg = match status {
+        button::Status::Hovered => Some(bg_hover().into()),
+        _ => Some(bg_surface().into()),
+    };
+    button::Style {
+        background: bg,
+        text_color: error(),
+        border: Border {
+            color: border_color(),
+            width: 1.0,
+            radius: BORDER_RADIUS.into(),
+        },
+        ..Default::default()
+    }
+}
+
 // ── VCS helpers ────────────────────────────────────────────────────────────
 
 pub fn vcs_status_color(status: &crate::vcs::FileStatus) -> Color {

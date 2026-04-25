@@ -309,10 +309,10 @@ fn view_items_panel<'a>(
     }
 
     // ── Explorations ────────────────────────────────────────────────────
-    // Explorations owned by a kanban card are hidden here; they surface on
-    // the Kanban board instead.
+    // Explorations owned by an idea are hidden here; they surface on the
+    // Ideas list instead.
     let mut exp_list = column![].spacing(2.0);
-    for exp in explorations.iter().filter(|e| e.card_id.is_none()) {
+    for exp in explorations.iter().filter(|e| e.idea_path.is_none()) {
         exp_list = exp_list.push(exploration_row(&exp.id, &exp.display_name));
     }
     let plus_icon = svg(svg::Handle::from_memory(

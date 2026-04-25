@@ -7,7 +7,7 @@ use crate::area::Area;
 use crate::theme;
 
 const ICON_DASHBOARD: &[u8] = include_bytes!("../../assets/icon_dashboard.svg");
-const ICON_KANBAN: &[u8] = include_bytes!("../../assets/icon_kanban.svg");
+const ICON_IDEAS: &[u8] = include_bytes!("../../assets/icon_ideas.svg");
 const ICON_CHANGE: &[u8] = include_bytes!("../../assets/icon_change.svg");
 const ICON_CAPS: &[u8] = include_bytes!("../../assets/icon_caps.svg");
 const ICON_CODEX: &[u8] = include_bytes!("../../assets/icon_codex.svg");
@@ -18,7 +18,7 @@ const ICON_SETTINGS: &[u8] = include_bytes!("../../assets/icon_settings.svg");
 fn area_icon(area: Area) -> svg::Handle {
     let bytes: &'static [u8] = match area {
         Area::Dashboard => ICON_DASHBOARD,
-        Area::Kanban => ICON_KANBAN,
+        Area::Ideas => ICON_IDEAS,
         Area::Change => ICON_CHANGE,
         Area::Caps => ICON_CAPS,
         Area::Codex => ICON_CODEX,

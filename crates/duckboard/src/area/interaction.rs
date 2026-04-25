@@ -812,19 +812,23 @@ pub fn update_with_side_effects(
 
 // ── Session management ─────────────────────────────────────────────────────
 
-/// Clear and reset the active session for single-session areas (Caps, Codex).
+/// Clear and reset the active session for single-session areas (Caps, Codex,
+/// pre-promotion ideas).
 ///
-/// `scope` is the on-disk key; `scope` is used directly as the display label
-/// since caps/codex have no separate human name.
+/// `scope` is the on-disk key; `scope_label` is the human-readable label used
+/// when the session has no `title`. They differ for ideas (label = idea title,
+/// scope = `exploration-…` id); caps/codex pass the same string for both.
 pub fn clear_single_session(
     ix: &mut InteractionState,
     scope: &str,
+    scope_label: &str,
     scope_kind: ScopeKind,
     project_root: Option<&std::path::Path>,
 ) {
     if ix.sessions.is_empty() {
-        ix.sessions
-            .push(AgentSession::new(scope.to_string(), scope_kind));
+        let mut ax = AgentSession::new(scope.to_string(), scope_kind);
+        reconcile_display_names(std::slice::from_mut(&mut ax), scope_label);
+        ix.sessions.push(ax);
         ix.active_session = 0;
         return;
     }
@@ -837,7 +841,7 @@ pub fn clear_single_session(
     }
     ix.sessions[idx] = AgentSession::new(scope.to_string(), scope_kind);
     ix.active_session = idx;
-    reconcile_display_names(&mut ix.sessions, scope);
+    reconcile_display_names(&mut ix.sessions, scope_label);
 }
 
 // ── Spawn helpers ───────────────────────────────────────────────────────────
@@ -957,50 +961,6 @@ pub fn reconcile_display_names(sessions: &mut [AgentSession], scope_label: &str)
 }
 
 // ── Shared area layout ────────────────────────────────────────────────────
-
-/// Standard area layout: list | divider | content | toggle | [interaction column].
-/// Used by Caps and Codex (and potentially others with the same structure).
-pub fn area_layout<'a, M: 'a + Clone>(
-    list: Element<'a, M>,
-    content: Element<'a, M>,
-    interaction: &'a InteractionState,
-    controls: SessionControls,
-    wrap: impl Fn(Msg) -> M + 'a + Clone,
-) -> Element<'a, M> {
-    use iced::Length;
-    use iced::widget::{Space, container, row};
-
-    let divider = container(Space::new().height(Length::Fill))
-        .width(1.0)
-        .style(crate::theme::divider);
-
-    let toggle = crate::widget::interaction_toggle::view(interaction.visible, interaction.width, {
-        let w = wrap.clone();
-        move |m| w(Msg::Handle(m))
-    });
-
-    let mut main_row = row![
-        container(list)
-            .width(crate::theme::LIST_COLUMN_WIDTH)
-            .height(Length::Fill)
-            .style(crate::theme::surface),
-        divider,
-        container(content).width(Length::Fill).height(Length::Fill),
-        toggle,
-    ];
-
-    if interaction.visible {
-        let interaction_col = view_column(interaction, wrap, controls);
-        main_row = main_row.push(
-            container(interaction_col)
-                .width(interaction.width)
-                .height(Length::Fill)
-                .style(crate::theme::surface),
-        );
-    }
-
-    main_row.height(Length::Fill).into()
-}
 
 // ── View ────────────────────────────────────────────────────────────────────
 
@@ -1188,7 +1148,22 @@ fn view_session_bar<'a, M: 'a + Clone>(
 
 /// Measure the rendered width of `text` at `size` using iced's default UI font
 /// (matches what `text(...)` renders without a `.font()` override).
-fn measure_text(text: &str, size: f32) -> f32 {
+pub(crate) fn measure_text(text: &str, size: f32) -> f32 {
+    measure_text_with_shaping(text, size, iced::widget::text::Shaping::Basic)
+}
+
+/// Measure with `Shaping::Advanced` — the shaper `text_input` uses internally.
+/// Use this when sizing a container around a text_input so the field's
+/// width matches what the widget will actually render at.
+pub(crate) fn measure_text_advanced(text: &str, size: f32) -> f32 {
+    measure_text_with_shaping(text, size, iced::widget::text::Shaping::Advanced)
+}
+
+fn measure_text_with_shaping(
+    text: &str,
+    size: f32,
+    shaping: iced::widget::text::Shaping,
+) -> f32 {
     use iced::advanced::graphics::text::Paragraph;
     use iced::advanced::text::Paragraph as _;
     let t = iced::advanced::text::Text {
@@ -1199,7 +1174,7 @@ fn measure_text(text: &str, size: f32) -> f32 {
         font: iced::Font::DEFAULT,
         align_x: iced::advanced::text::Alignment::Left,
         align_y: iced::alignment::Vertical::Top,
-        shaping: iced::widget::text::Shaping::Basic,
+        shaping,
         wrapping: iced::widget::text::Wrapping::None,
     };
     Paragraph::with_text(t).min_bounds().width
