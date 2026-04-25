@@ -1,0 +1,14 @@
+---
+source: crates/duckpond/tests/parse_step.rs
+expression: step
+---
+STEP: Wire up OAuth callback (slug: wire-up-oauth-callback)
+  SUMMARY: Connect the Google OAuth callback handler into the existing session
+    middleware once the prerequisite steps land.
+  PREREQUISITES:
+    [x] @step add-oauth-endpoints
+    [ ] @step add-oauth-identities-table
+    [ ] Google OAuth credentials are provisioned in staging
+  TASKS:
+    [ ] Implement `/auth/google/callback` handler
+    [ ] Exchange authorization code for tokens

@@ -1,0 +1,18 @@
+---
+source: crates/duckpond/tests/parse_spec.rs
+expression: errors
+---
+[
+    MissingWhen {
+        name: "Only given",
+        span: 66..91,
+    },
+    MissingThen {
+        name: "Only given",
+        span: 66..91,
+    },
+    MissingThen {
+        name: "Given and when",
+        span: 127..156,
+    },
+]

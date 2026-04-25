@@ -1,0 +1,9 @@
+---
+source: crates/duckpond/tests/parse_spec.rs
+expression: errors
+---
+[
+    UnexpectedScenarioContent {
+        span: 96..152,
+    },
+]

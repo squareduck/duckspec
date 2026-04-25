@@ -1,0 +1,9 @@
+---
+source: crates/duckpond/tests/parse_spec.rs
+expression: errors
+---
+[
+    InvalidRequirementPrefix {
+        span: 29..47,
+    },
+]

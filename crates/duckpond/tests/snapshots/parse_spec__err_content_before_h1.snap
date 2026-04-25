@@ -1,0 +1,9 @@
+---
+source: crates/duckpond/tests/parse_spec.rs
+expression: errors
+---
+[
+    ContentBeforeH1 {
+        span: 0..34,
+    },
+]

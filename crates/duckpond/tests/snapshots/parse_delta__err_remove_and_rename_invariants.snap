@@ -1,0 +1,12 @@
+---
+source: crates/duckpond/tests/parse_delta.rs
+expression: errors
+---
+[
+    NonEmptyRemoveBody {
+        span: 51..131,
+    },
+    InvalidRenameEntry {
+        span: 132..156,
+    },
+]

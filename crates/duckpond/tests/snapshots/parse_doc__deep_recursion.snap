@@ -1,0 +1,15 @@
+---
+source: crates/duckpond/tests/parse_doc.rs
+expression: doc
+---
+DOCUMENT: Deeply nested document
+  SUMMARY: Exercises the recursive section tree by chaining headings four levels deep
+    under a single top-level section.
+    SECTION: Top section
+      Body of the H2 section.
+      SECTION: Mid section
+        Body of the H3 section.
+        SECTION: Inner section
+          Body of the H4 section.
+          SECTION: Deepest section
+            Body of the H5 section.

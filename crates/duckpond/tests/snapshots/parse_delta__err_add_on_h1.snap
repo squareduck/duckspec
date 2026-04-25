@@ -1,0 +1,9 @@
+---
+source: crates/duckpond/tests/parse_delta.rs
+expression: errors
+---
+[
+    AddOnH1 {
+        span: 0..19,
+    },
+]

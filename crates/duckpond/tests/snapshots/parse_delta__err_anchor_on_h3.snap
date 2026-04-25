@@ -1,0 +1,9 @@
+---
+source: crates/duckpond/tests/parse_delta.rs
+expression: errors
+---
+[
+    AnchorOnH3 {
+        span: 60..94,
+    },
+]

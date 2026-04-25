@@ -1,0 +1,10 @@
+---
+source: crates/duckpond/tests/parse_spec.rs
+expression: errors
+---
+[
+    EmptyRequirement {
+        name: "Empty",
+        span: 29..51,
+    },
+]

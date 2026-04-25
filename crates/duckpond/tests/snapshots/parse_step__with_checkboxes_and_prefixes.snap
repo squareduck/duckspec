@@ -1,0 +1,17 @@
+---
+source: crates/duckpond/tests/parse_step.rs
+expression: step
+---
+STEP: Mixed checkbox and prefix forms (slug: mixed-checkbox-and-prefix-forms)
+  SUMMARY: Exercises every recognized checkbox state and numeric-prefix shape so the
+    parser's checkbox recognition and prefix-stripping logic are pinned end to
+    end.
+  TASKS:
+    [x] Lowercase checked task with simple numeric prefix
+    [x] Uppercase checked task with simple numeric prefix
+    [ ] Unchecked task with simple numeric prefix
+      [x] Subtask with dotted numeric prefix
+      [ ] Unchecked subtask
+    [ ] Double-digit numeric prefix
+    [ ] Task without numeric prefix
+    [ ] Task without checkbox or prefix

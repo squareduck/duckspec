@@ -1,0 +1,9 @@
+---
+source: crates/duckpond/tests/parse_spec.rs
+expression: errors
+---
+[
+    HeadingTooDeep {
+        span: 193..222,
+    },
+]

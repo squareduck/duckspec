@@ -1,0 +1,15 @@
+---
+source: crates/duckpond/tests/parse_spec.rs
+expression: errors
+---
+[
+    GwtClauseOutOfOrder {
+        span: 110..130,
+    },
+    GwtClauseOutOfOrder {
+        span: 238..269,
+    },
+    GwtClauseOutOfOrder {
+        span: 419..449,
+    },
+]

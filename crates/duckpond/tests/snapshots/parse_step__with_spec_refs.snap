@@ -1,0 +1,11 @@
+---
+source: crates/duckpond/tests/parse_step.rs
+expression: step
+---
+STEP: Cover login scenarios (slug: cover-login-scenarios)
+  SUMMARY: Add tests for the email/password login flow that pin the auth spec
+    scenarios to executable Rust tests.
+  TASKS:
+    [ ] @spec auth Email-password login: Valid credentials
+    [ ] @spec auth Email-password login: Invalid password
+    [ ] @spec auth/oauth OAuth callback: Valid callback

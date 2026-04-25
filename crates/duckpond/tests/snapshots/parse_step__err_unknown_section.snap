@@ -1,0 +1,10 @@
+---
+source: crates/duckpond/tests/parse_step.rs
+expression: errors
+---
+[
+    UnknownStepSection {
+        name: "Notes",
+        span: 87..96,
+    },
+]

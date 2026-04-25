@@ -1,0 +1,9 @@
+---
+source: crates/duckpond/tests/parse_spec.rs
+expression: errors
+---
+[
+    MissingH1 {
+        span: 0..0,
+    },
+]

@@ -1,0 +1,9 @@
+---
+source: crates/duckpond/tests/parse_delta.rs
+expression: errors
+---
+[
+    MarkerOnContentChild {
+        span: 107..134,
+    },
+]

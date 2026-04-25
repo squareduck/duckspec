@@ -1,0 +1,9 @@
+---
+source: crates/duckpond/tests/parse_step.rs
+expression: errors
+---
+[
+    SubtaskTooDeep {
+        span: 166..204,
+    },
+]

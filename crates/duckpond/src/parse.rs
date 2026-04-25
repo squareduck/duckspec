@@ -507,6 +507,7 @@ mod tests {
         parse_elements(source)
     }
 
+    // @spec parse/elements Element model and source spans: Empty input produces no elements
     #[test]
     fn empty_input() {
         assert!(elements("").is_empty());
@@ -521,6 +522,7 @@ mod tests {
         );
     }
 
+    // @spec parse/elements ATX heading classification: ATX headings at levels 1 through 6
     #[test]
     fn heading_levels() {
         let src = "# H1\n## H2\n### H3\n#### H4";
@@ -541,6 +543,7 @@ mod tests {
         );
     }
 
+    // @spec parse/elements Paragraph aggregation: Multi-line paragraph stays a single block
     #[test]
     fn paragraph_multi_line() {
         let src = "Line one\nLine two\nLine three";
@@ -551,6 +554,7 @@ mod tests {
         );
     }
 
+    // @spec parse/elements Paragraph aggregation: Blank line separates paragraphs
     #[test]
     fn paragraphs_separated_by_blank_line() {
         let src = "First paragraph\n\nSecond paragraph";
@@ -564,6 +568,7 @@ mod tests {
         );
     }
 
+    // @spec parse/elements Fenced code blocks: Code block preserves content verbatim
     #[test]
     fn code_block() {
         let src = "```rust\nfn main() {}\n```";
@@ -600,6 +605,7 @@ mod tests {
         );
     }
 
+    // @spec parse/elements List item recognition: Indent records nesting level
     #[test]
     fn nested_list_items() {
         let src = "- Outer\n  - Inner";
@@ -613,6 +619,7 @@ mod tests {
         );
     }
 
+    // @spec parse/elements List item recognition: Continuation lines aligned with content are absorbed
     #[test]
     fn list_item_with_continuation() {
         let src = "- First line\n  continuation line";
@@ -623,6 +630,7 @@ mod tests {
         );
     }
 
+    // @spec parse/elements Block quote recognition: Each block quote line produces its own element
     #[test]
     fn block_quote_items() {
         let src = "> First line\n> Second line";
@@ -636,6 +644,7 @@ mod tests {
         );
     }
 
+    // @spec parse/elements Block quote recognition: Block-quote-formatted list-like content stays a block quote
     #[test]
     fn block_quote_with_list() {
         let src = "> test: code\n> - crates/foo.rs:42";
@@ -649,6 +658,7 @@ mod tests {
         );
     }
 
+    // @spec parse/elements Element model and source spans: Mixed content produces an ordered sequence of distinct kinds
     #[test]
     fn mixed_content() {
         let src = "\
@@ -689,6 +699,7 @@ Some prose";
         ));
     }
 
+    // @spec parse/elements ATX heading classification: A heading terminates the preceding paragraph
     #[test]
     fn heading_terminates_paragraph() {
         let src = "Some text\n## Heading";
@@ -704,6 +715,7 @@ Some prose";
         assert!(matches!(&elems[1], Element::Heading { level: 2, .. }));
     }
 
+    // @spec parse/elements Element model and source spans: Element spans match byte offsets in the source
     #[test]
     fn span_offsets() {
         let src = "# Title\n\nBody";
@@ -719,6 +731,7 @@ Some prose";
         assert_eq!(elems[1].span().offset, 9);
     }
 
+    // @spec parse/elements ATX heading classification: Hashes without a following space become paragraphs
     #[test]
     fn not_a_heading() {
         // No space after # is not a heading.
@@ -748,6 +761,7 @@ Some prose";
         ));
     }
 
+    // @spec parse/elements List item recognition: Loose lists produce one ListItem per item
     #[test]
     fn loose_list_with_blank_line_separators() {
         // Items separated by blank lines parse as the same number of
@@ -804,6 +818,7 @@ Some prose";
         ));
     }
 
+    // @spec parse/elements List item recognition: Double-digit numbered markers are recognized
     #[test]
     fn double_digit_numbered_marker_works() {
         let src = "10. Tenth\n11. Eleventh";
@@ -818,6 +833,7 @@ Some prose";
         ));
     }
 
+    // @spec parse/elements List item recognition: List look-alikes fall back to paragraphs
     #[test]
     fn bare_digit_dot_no_space_is_not_a_list() {
         // "1.no space" is just a paragraph.
@@ -848,6 +864,7 @@ Some prose";
         ));
     }
 
+    // @spec parse/elements List item recognition: Bullet and numbered markers are distinguished
     #[test]
     fn bullet_marker_recorded() {
         let src = "- one";
@@ -859,5 +876,37 @@ Some prose";
                 ..
             }
         ));
+    }
+
+    // @spec parse/elements Element model and source spans: Unclosed code block is flushed at end of input
+    #[test]
+    fn unclosed_code_block_flushes_at_eof() {
+        let elems = elements("```rust\nfoo");
+        assert_eq!(elems.len(), 1);
+        assert!(matches!(
+            &elems[0],
+            Element::Block { kind: BlockKind::CodeBlock, content, .. }
+            if content.starts_with("```rust") && content.ends_with("foo")
+        ));
+    }
+
+    // @spec parse/elements Fenced code blocks: Code block preserves blank lines and info strings
+    #[test]
+    fn code_fence_with_info_string() {
+        let elems = elements("```rust\nfn main() {}\n```");
+        assert!(matches!(
+            &elems[0],
+            Element::Block { kind: BlockKind::CodeBlock, content, .. }
+            if content.starts_with("```rust") && content.ends_with("```")
+        ));
+    }
+
+    // @spec parse/elements Block quote recognition: A block quote terminates a list item
+    #[test]
+    fn block_quote_terminates_list_item() {
+        let elems = elements("- item\n> quote");
+        assert_eq!(elems.len(), 2);
+        assert!(matches!(&elems[0], Element::ListItem { .. }));
+        assert!(matches!(&elems[1], Element::BlockQuoteItem { .. }));
     }
 }
