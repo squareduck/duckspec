@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
@@ -25,10 +26,11 @@ pub struct TurnRequest {
     pub reasoning: Option<ReasoningMode>,
     /// Tool-call permission policy.
     pub tools: ToolPolicy,
-    /// Caller-supplied file or text attachments. Reserved; no current
-    /// provider uses this yet.
-    #[allow(dead_code)]
-    pub attachments: Vec<Attachment>,
+    /// Caller-supplied attachments keyed by id. The `prompt` text may embed
+    /// `[label](attach:<id>)` markdown links referring to entries here; the
+    /// provider walks the text and interleaves the attachment payloads into
+    /// the wire-format message.
+    pub attachments: HashMap<String, Attachment>,
 }
 
 impl TurnRequest {
@@ -41,7 +43,7 @@ impl TurnRequest {
             model: None,
             reasoning: None,
             tools: ToolPolicy::default(),
-            attachments: Vec::new(),
+            attachments: HashMap::new(),
         }
     }
 }
@@ -64,10 +66,14 @@ pub enum ToolPolicy {
     Interactive,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct Attachment {
+    /// Human-readable label (e.g. clipboard timestamp filename).
     pub label: String,
-    pub content: String,
+    /// IANA media type, e.g. `image/png`.
+    pub media_type: String,
+    /// Raw payload bytes.
+    pub bytes: Vec<u8>,
 }
 
 /// Result of a completed turn.

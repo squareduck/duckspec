@@ -540,7 +540,9 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for TextEdit<'a, M> {
                         }
                     }
                     keyboard::Key::Character(c) if cmd && c.as_str() == "v" && !self.read_only => {
-                        if let Some(text) =
+                        if let Some(action) = read_paste_action() {
+                            shell.publish((self.on_action)(action));
+                        } else if let Some(text) =
                             clipboard.read(iced::advanced::clipboard::Kind::Standard)
                         {
                             shell.publish((self.on_action)(EditorAction::Paste(text)));
@@ -1317,4 +1319,47 @@ pub fn view<'a, M: Clone + 'a>(
     on_action: impl Fn(EditorAction) -> M + 'a,
 ) -> Element<'a, M> {
     TextEdit::new(state, on_action).into()
+}
+
+/// Try to read an image off the system clipboard, encode it as PNG, and
+/// return an `AttachImage` action for the host to register and link into
+/// the editor. Returns `None` when the clipboard has no image (or any
+/// other failure) — the caller should then fall through to plain-text
+/// paste.
+fn read_paste_action() -> Option<EditorAction> {
+    let mut clip = arboard::Clipboard::new().ok()?;
+    let img = clip.get_image().ok()?;
+
+    let mut bytes: Vec<u8> = Vec::new();
+    {
+        let mut enc = png::Encoder::new(&mut bytes, img.width as u32, img.height as u32);
+        enc.set_color(png::ColorType::Rgba);
+        enc.set_depth(png::BitDepth::Eight);
+        let mut writer = enc.write_header().ok()?;
+        writer.write_image_data(&img.bytes).ok()?;
+    }
+
+    let now = time::OffsetDateTime::now_local()
+        .unwrap_or_else(|_| time::OffsetDateTime::now_utc());
+    let label = format!(
+        "clip-{:04}-{:02}-{:02}-{:02}-{:02}-{:02}.png",
+        now.year(),
+        now.month() as u8,
+        now.day(),
+        now.hour(),
+        now.minute(),
+        now.second(),
+    );
+
+    let id = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| format!("{:x}", d.as_nanos()))
+        .unwrap_or_else(|_| "00000000".to_string());
+
+    Some(EditorAction::AttachImage {
+        id,
+        label,
+        media_type: "image/png".to_string(),
+        bytes,
+    })
 }

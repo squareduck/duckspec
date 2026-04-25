@@ -38,3 +38,5 @@ syntect = { version = "5", default-features = false, features = ["default-syntax
 dark-light = "2"
 linkify = "0.11"
 opener = "0.8"
+arboard = "3.6"
+png = "0.18"

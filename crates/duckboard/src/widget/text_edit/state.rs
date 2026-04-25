@@ -321,6 +321,11 @@ impl EditorState {
                 // Handled upstream — see `handle_editor_action` and chat input
                 // handlers, which dispatch to the system opener.
             }
+            EditorAction::AttachImage { .. } => {
+                // Handled upstream — see chat input handler, which stores the
+                // bytes in the per-session attachment side table and then
+                // dispatches a `Paste` of the markdown link.
+            }
         }
 
         mutates
@@ -785,6 +790,17 @@ pub enum EditorAction {
     /// User cmd-clicked a hyperlink in the editor. Handled by the caller;
     /// `apply_action` is a no-op for this variant.
     OpenUrl(String),
+    /// Image-bearing paste. The host registers `bytes` under `id` in its
+    /// per-input attachment side table and then dispatches a regular
+    /// `Paste` of `[label](attach:<id>)` to insert the markdown link at the
+    /// cursor. `apply_action` is a no-op for this variant — the widget has
+    /// no place to put the bytes.
+    AttachImage {
+        id: String,
+        label: String,
+        media_type: String,
+        bytes: Vec<u8>,
+    },
 }
 
 impl EditorAction {
