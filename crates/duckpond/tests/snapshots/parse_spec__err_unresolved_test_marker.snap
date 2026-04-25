@@ -1,0 +1,10 @@
+---
+source: crates/duckpond/tests/parse_spec.rs
+expression: errors
+---
+[
+    UnresolvedTestMarker {
+        name: "Valid credentials",
+        span: 111..143,
+    },
+]

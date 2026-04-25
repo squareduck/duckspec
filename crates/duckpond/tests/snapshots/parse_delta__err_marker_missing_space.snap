@@ -1,0 +1,9 @@
+---
+source: crates/duckpond/tests/parse_delta.rs
+expression: errors
+---
+[
+    MarkerMissingSpace {
+        span: 0..18,
+    },
+]

@@ -388,13 +388,19 @@ fn parse_marked_heading(
     let mut chars = trimmed.chars();
     let first = chars.next()?;
 
-    if let Some(marker) = DeltaMarker::from_char(first) {
-        let rest = chars.as_str().trim();
-        Some((marker, rest.to_string()))
-    } else {
+    let Some(marker) = DeltaMarker::from_char(first) else {
         errors.push(ParseError::MissingDeltaMarker { span });
-        None
+        return None;
+    };
+
+    let rest = chars.as_str();
+    if !rest.starts_with(' ') {
+        errors.push(ParseError::MarkerMissingSpace { span });
+        return None;
     }
+
+    let title = rest.trim().to_string();
+    Some((marker, title))
 }
 
 fn is_heading_next_or_end(elements: &[Element], after_cursor: usize) -> bool {

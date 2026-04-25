@@ -127,6 +127,12 @@ pub enum ParseError {
         span: Span,
     },
 
+    #[error("delta marker must be followed by a space")]
+    MarkerMissingSpace {
+        #[label("missing space after marker")]
+        span: Span,
+    },
+
     #[error("unrecognized delta marker character")]
     InvalidDeltaMarker {
         #[label("unrecognized marker")]
@@ -240,6 +246,7 @@ impl ParseError {
             | ParseError::InvalidTestMarker { span }
             | ParseError::UnexpectedScenarioContent { span }
             | ParseError::MissingDeltaMarker { span }
+            | ParseError::MarkerMissingSpace { span }
             | ParseError::InvalidDeltaMarker { span }
             | ParseError::NonEmptyRemoveBody { span }
             | ParseError::InvalidRenameEntry { span }

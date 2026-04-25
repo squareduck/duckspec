@@ -1,0 +1,9 @@
+---
+source: crates/duckpond/tests/parse_spec.rs
+expression: errors
+---
+[
+    InvalidGwtKeyword {
+        span: 93..129,
+    },
+]

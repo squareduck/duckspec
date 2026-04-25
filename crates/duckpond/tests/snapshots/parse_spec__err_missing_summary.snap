@@ -1,0 +1,9 @@
+---
+source: crates/duckpond/tests/parse_spec.rs
+expression: errors
+---
+[
+    MissingSummary {
+        span: 0..13,
+    },
+]

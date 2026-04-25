@@ -1,0 +1,9 @@
+---
+source: crates/duckpond/tests/parse_spec.rs
+expression: errors
+---
+[
+    InvalidScenarioPrefix {
+        span: 66..85,
+    },
+]

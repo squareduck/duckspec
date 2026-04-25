@@ -1,0 +1,16 @@
+---
+source: crates/duckpond/tests/parse_step.rs
+expression: "(missing, empty)"
+---
+(
+    [
+        MissingTasksSection {
+            span: 0..21,
+        },
+    ],
+    [
+        EmptyTasksSection {
+            span: 89..98,
+        },
+    ],
+)

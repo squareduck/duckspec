@@ -1,0 +1,9 @@
+---
+source: crates/duckpond/tests/parse_spec.rs
+expression: errors
+---
+[
+    InvalidTestMarker {
+        span: 52..78,
+    },
+]
