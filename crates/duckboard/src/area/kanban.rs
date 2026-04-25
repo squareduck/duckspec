@@ -156,7 +156,7 @@ pub enum Message {
     #[allow(dead_code)]
     ModalFocusChanged(bool),
     DescriptionAction(EditorAction),
-    DiscardCard(String),
+    ArchiveCard(String),
     UnarchiveCard(String),
     /// Hard delete. Main loop intercepts and cascades to the attached
     /// exploration (if any) before kanban::update removes the card.
@@ -363,7 +363,7 @@ pub fn update(
             state.modal_open = false;
             state.modal_focused = false;
         }
-        Message::DiscardCard(id) => {
+        Message::ArchiveCard(id) => {
             state.modal_focused = true;
             let nanos = OffsetDateTime::now_local()
                 .unwrap_or_else(|_| OffsetDateTime::now_utc())
@@ -452,8 +452,11 @@ fn open_card(
 
 // ── Classifier ───────────────────────────────────────────────────────────────
 
-/// Every possible column state for a card. The three `Archived*` variants
-/// all render under one visual "Archived" column with a distinguishing mark.
+/// Every possible column state for a card. `ArchivedByChange`,
+/// `ArchivedManually`, and `Orphaned` all render under one visual
+/// "Archived" column with a distinguishing mark. `Orphaned` lives there
+/// because the card has lost its change folder — surfacing it elsewhere
+/// would hide a degenerate state behind a healthy column.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Column {
     Inbox,
@@ -461,16 +464,16 @@ pub enum Column {
     Ready,
     InProgress,
     Completed,
-    ArchivedDone,
-    ArchivedAbandoned,
-    ArchivedDiscarded,
+    ArchivedByChange,
+    ArchivedManually,
+    Orphaned,
 }
 
 impl Column {
     fn is_archived(self) -> bool {
         matches!(
             self,
-            Column::ArchivedDone | Column::ArchivedAbandoned | Column::ArchivedDiscarded
+            Column::ArchivedByChange | Column::ArchivedManually | Column::Orphaned
         )
     }
 }
@@ -479,7 +482,7 @@ impl Column {
 /// state. Precedence is significant — first match wins.
 pub fn classify(card: &Card, project: &ProjectData, explorations: &[Exploration]) -> Column {
     if card.archived_at_nanos.is_some() {
-        return Column::ArchivedDiscarded;
+        return Column::ArchivedManually;
     }
 
     if let Some(change_name) = card.change_name.as_deref() {
@@ -488,12 +491,12 @@ pub fn classify(card: &Card, project: &ProjectData, explorations: &[Exploration]
             .iter()
             .find(|c| data::strip_archive_prefix(&c.name) == Some(change_name));
         if archived.is_some() {
-            return Column::ArchivedDone;
+            return Column::ArchivedByChange;
         }
 
         let active = project.active_changes.iter().find(|c| c.name == change_name);
         let Some(active) = active else {
-            return Column::ArchivedAbandoned;
+            return Column::Orphaned;
         };
 
         if !active.steps.is_empty()
@@ -635,7 +638,7 @@ const COLUMN_ORDER: [(Column, &str); 6] = [
     (Column::Ready, "Ready"),
     (Column::InProgress, "In Progress"),
     (Column::Completed, "Completed"),
-    (Column::ArchivedDone, "Archived"),
+    (Column::ArchivedByChange, "Archived"),
 ];
 
 pub fn view<'a>(
@@ -908,9 +911,9 @@ fn step_progress_subtitle(
 
 fn archived_mark(col: Column) -> Option<&'static str> {
     match col {
-        Column::ArchivedDone => Some("done"),
-        Column::ArchivedAbandoned => Some("abandoned"),
-        Column::ArchivedDiscarded => Some("discarded"),
+        Column::ArchivedByChange => Some("via change"),
+        Column::ArchivedManually => Some("manual"),
+        Column::Orphaned => Some("orphaned"),
         _ => None,
     }
 }
@@ -1084,11 +1087,11 @@ fn view_action_row<'a>(card: &'a Card, col: Column) -> Element<'a, Message> {
         .into()
     } else {
         button(
-            text("Abandon")
+            text("Archive")
                 .size(theme::font_md())
                 .color(theme::text_primary()),
         )
-        .on_press(Message::DiscardCard(card.id.clone()))
+        .on_press(Message::ArchiveCard(card.id.clone()))
         .padding([theme::SPACING_SM, theme::SPACING_LG])
         .style(action_btn)
         .into()
@@ -1376,21 +1379,21 @@ mod tests {
     }
 
     #[test]
-    fn archived_done_when_change_archived() {
+    fn archived_by_change_when_change_archived() {
         let mut c = card();
         c.change_name = Some("ch".into());
         let mut archived = change("2026-04-24-01-ch");
         archived.prefix = "2026-04-24-01-".into();
         let p = project(vec![], vec![archived]);
-        assert_eq!(classify(&c, &p, &[]), Column::ArchivedDone);
+        assert_eq!(classify(&c, &p, &[]), Column::ArchivedByChange);
     }
 
     #[test]
-    fn archived_abandoned_when_change_missing() {
+    fn orphaned_when_change_missing() {
         let mut c = card();
         c.change_name = Some("gone".into());
         let p = project(vec![], vec![]);
-        assert_eq!(classify(&c, &p, &[]), Column::ArchivedAbandoned);
+        assert_eq!(classify(&c, &p, &[]), Column::Orphaned);
     }
 
     #[test]
@@ -1431,12 +1434,12 @@ mod tests {
     }
 
     #[test]
-    fn archived_discarded_takes_priority() {
+    fn archived_manually_takes_priority() {
         let mut c = card();
         c.archived_at_nanos = Some(1);
         c.exploration_id = Some("e1".into());
         c.change_name = Some("ch".into());
         let p = project(vec![change("ch")], vec![]);
-        assert_eq!(classify(&c, &p, &[exp("e1")]), Column::ArchivedDiscarded);
+        assert_eq!(classify(&c, &p, &[exp("e1")]), Column::ArchivedManually);
     }
 }
