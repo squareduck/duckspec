@@ -23,6 +23,10 @@ use crate::scope::ScopeKind;
 use crate::theme;
 use crate::widget::text_edit::{self, EditorAction, EditorState};
 
+/// Widget id for the modal's description editor. Used by `main::update` to
+/// focus the editor after `AddCard` opens a fresh card modal.
+pub const DESCRIPTION_EDITOR_ID: &str = "kanban-description-editor";
+
 // ── State ────────────────────────────────────────────────────────────────────
 
 pub struct State {
@@ -1041,6 +1045,7 @@ fn view_modal_metadata<'a>(
         &state.description_editor,
         Message::DescriptionAction,
     )
+    .id(DESCRIPTION_EDITOR_ID)
     .show_gutter(false)
     .word_wrap(true)
     .placeholder("Description (markdown)")
