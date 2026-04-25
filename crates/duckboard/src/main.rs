@@ -1083,9 +1083,11 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                 ..
             } = state;
             let ax = resolve_session_mut(change, caps, codex, kanban, &key);
+            let mut should_snap_to_bottom = false;
             if let Some(ax) = ax {
                 let is_streaming = ax.session.is_streaming;
                 interaction::rebuild_chat_editor(ax, highlighter);
+                should_snap_to_bottom = ax.stick_to_bottom;
                 if !is_streaming {
                     ax.esc_count = 0;
                     // Auto-flush a queued message once the current turn is
@@ -1103,6 +1105,12 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                 }
             }
 
+            let snap_task = if should_snap_to_bottom {
+                iced::widget::operation::snap_to_end(widget::agent_chat::CHAT_SCROLLABLE_ID)
+            } else {
+                Task::none()
+            };
+
             if let Some((working_dir, scope_key, user, assistant)) = title_task_input {
                 let mut hints = Vec::new();
                 if let Some(hint) = title_hints::build_hint(&user, &scope_key, &state.project) {
@@ -1119,11 +1127,13 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                         .await
                         .map_err(|e| e.to_string())
                 };
-                return Task::perform(work, move |result| Message::SessionTitleReady {
+                let title_task = Task::perform(work, move |result| Message::SessionTitleReady {
                     key: route_key.clone(),
                     result,
                 });
+                return Task::batch([snap_task, title_task]);
             }
+            return snap_task;
         }
         Message::SessionTitleReady { key, result } => {
             let title = match result {
@@ -1451,7 +1461,43 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
             }
         }
     }
-    Task::none()
+    take_pending_chat_snap(state)
+}
+
+/// Drain the `pending_snap_to_bottom` flag from any agent session and emit a
+/// one-shot `snap_to_end` task. The flag is set in `send_prompt_text` when
+/// the user submits while sticking to the bottom — without this, the user's
+/// own message lands in the transcript before the first `AgentEvent` and
+/// they don't see it auto-scroll.
+fn take_pending_chat_snap(state: &mut State) -> Task<Message> {
+    let mut should_snap = false;
+    let mut clear = |ax: &mut interaction::AgentSession| {
+        if ax.pending_snap_to_bottom {
+            ax.pending_snap_to_bottom = false;
+            should_snap = true;
+        }
+    };
+    for ax in &mut state.caps.interaction.sessions {
+        clear(ax);
+    }
+    for ax in &mut state.codex.interaction.sessions {
+        clear(ax);
+    }
+    for ix in state.change.interactions.values_mut() {
+        for ax in &mut ix.sessions {
+            clear(ax);
+        }
+    }
+    for ix in state.kanban.interactions.values_mut() {
+        for ax in &mut ix.sessions {
+            clear(ax);
+        }
+    }
+    if should_snap {
+        iced::widget::operation::snap_to_end(widget::agent_chat::CHAT_SCROLLABLE_ID)
+    } else {
+        Task::none()
+    }
 }
 
 /// Resolve a composite routing key `<instance_id>/<session_id>` to its AgentSession
