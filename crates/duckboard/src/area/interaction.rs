@@ -1,8 +1,11 @@
 //! Shared interaction state — terminal + agent chat — used by Change, Caps, and Codex areas.
 
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use iced::Element;
+
+use duckchat::Attachment;
 
 use crate::agent::{AgentHandle, SlashCommand};
 use crate::chat_store::ChatSession;
@@ -63,6 +66,10 @@ pub struct AgentSession {
     pub scope_kind: ScopeKind,
     pub agent_handle: Option<AgentHandle>,
     pub chat_input: EditorState,
+    /// Transient per-input attachment side table: id → bytes/media_type/label.
+    /// Populated by `AttachImage` paste actions, drained into the
+    /// `TurnRequest` on send.
+    pub input_attachments: HashMap<String, Attachment>,
     pub chat_commands: Vec<SlashCommand>,
     pub chat_completion: agent_chat::CompletionState,
     pub chat_blocks: Vec<Block>,
@@ -119,6 +126,7 @@ impl AgentSession {
             scope_kind,
             agent_handle: None,
             chat_input: EditorState::new(""),
+            input_attachments: HashMap::new(),
             chat_commands: Vec::new(),
             chat_completion: agent_chat::CompletionState::default(),
             chat_blocks: Vec::new(),
@@ -317,6 +325,20 @@ fn handle_agent_chat(
                 if let Err(err) = opener::open(url) {
                     tracing::warn!(%url, %err, "failed to open chat URL");
                 }
+                return;
+            }
+            if let text_edit::EditorAction::AttachImage { id, label, media_type, bytes } = action {
+                let link = format!("[{label}](attach:{id})");
+                ax.input_attachments.insert(
+                    id,
+                    Attachment {
+                        label,
+                        media_type,
+                        bytes,
+                    },
+                );
+                ax.chat_input.apply_action(text_edit::EditorAction::Paste(link));
+                rehighlight_input(&mut ax.chat_input, highlighter);
                 return;
             }
             if ax.chat_completion.visible {
@@ -542,6 +564,7 @@ pub fn send_prompt_text(ax: &mut AgentSession, text: String, highlighter: &Synta
 
     let mut req = TurnRequest::new(prompt, handle.working_dir().to_path_buf());
     req.system_additions = system_additions;
+    req.attachments = std::mem::take(&mut ax.input_attachments);
     handle.send_turn(req);
 
     ax.chat_input = EditorState::new("");
