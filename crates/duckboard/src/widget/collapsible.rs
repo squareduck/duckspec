@@ -39,7 +39,19 @@ pub fn view<'a, M: Clone + 'a>(
     on_toggle: M,
     content: Element<'a, M>,
 ) -> Element<'a, M> {
-    let header = button(
+    view_with_add(title, expanded, on_toggle, None, content)
+}
+
+/// Same as `view` but with an optional `+` button rendered flush right in the
+/// header row. When `add` is `None`, the rendering is identical to `view`.
+pub fn view_with_add<'a, M: Clone + 'a>(
+    title: &'a str,
+    expanded: bool,
+    on_toggle: M,
+    add: Option<Element<'a, M>>,
+    content: Element<'a, M>,
+) -> Element<'a, M> {
+    let header_button = button(
         row![
             chevron(expanded),
             text(title.to_uppercase())
@@ -54,6 +66,51 @@ pub fn view<'a, M: Clone + 'a>(
     .width(Length::Fill)
     .style(theme::section_header)
     .padding([theme::SPACING_XS, theme::SPACING_SM]);
+
+    let header: Element<'a, M> = match add {
+        Some(add) => row![container(header_button).width(Length::Fill), add].into(),
+        None => header_button.into(),
+    };
+
+    let mut col = column![top_divider(), header].spacing(0.0);
+
+    if expanded {
+        col = col.push(top_divider());
+        col = col.push(content);
+    }
+
+    col.into()
+}
+
+/// Owned-string variant of `view_with_add` for callers that build their
+/// section title from formatted state (e.g. `"Inbox  (3)"`).
+pub fn view_with_add_owned<'a, M: Clone + 'a>(
+    title: String,
+    expanded: bool,
+    on_toggle: M,
+    add: Option<Element<'a, M>>,
+    content: Element<'a, M>,
+) -> Element<'a, M> {
+    let header_button = button(
+        row![
+            chevron(expanded),
+            text(title.to_uppercase())
+                .size(theme::font_sm())
+                .color(theme::text_secondary()),
+        ]
+        .spacing(theme::SPACING_XS)
+        .align_y(iced::Center)
+        .width(Length::Fill),
+    )
+    .on_press(on_toggle)
+    .width(Length::Fill)
+    .style(theme::section_header)
+    .padding([theme::SPACING_XS, theme::SPACING_SM]);
+
+    let header: Element<'a, M> = match add {
+        Some(add) => row![container(header_button).width(Length::Fill), add].into(),
+        None => header_button.into(),
+    };
 
     let mut col = column![top_divider(), header].spacing(0.0);
 

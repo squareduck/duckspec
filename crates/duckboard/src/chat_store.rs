@@ -59,10 +59,9 @@ pub struct ChatSession {
     /// sessions — explorations store their title on the Exploration itself,
     /// caps/codex don't summarise). Also used as a "don't resummarise" flag.
     pub title: Option<String>,
-    /// The kanban card description most recently injected into this chat's
-    /// system context. Persisted so we only re-inject when the card
-    /// description actually changes between turns (first turn always injects
-    /// when non-empty).
+    /// The idea body most recently injected into this chat's system context.
+    /// Persisted so we only re-inject when the idea body actually changes
+    /// between turns (first turn always injects when non-empty).
     pub last_seeded_description: Option<String>,
 }
 
@@ -308,15 +307,15 @@ pub fn rename_scope(old: &str, new: &str, project_root: Option<&Path>) {
 /// An exploration tracks a free-form chat scope that may eventually be promoted
 /// to a real change. `id` is the stable directory key for `chats/<id>/`;
 /// `display_name` is what the UI shows and can be updated by the title
-/// summariser without moving the chat directory. `card_id` backlinks to a
-/// kanban card when the exploration was started from one — card-owned
+/// summariser without moving the chat directory. `idea_path` backlinks to
+/// the idea file when the exploration was started from one — idea-owned
 /// explorations are hidden from the Changes area list.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Exploration {
     pub id: String,
     pub display_name: String,
-    #[serde(default)]
-    pub card_id: Option<String>,
+    #[serde(default, alias = "card_id")]
+    pub idea_path: Option<String>,
 }
 
 impl Exploration {
@@ -328,7 +327,7 @@ impl Exploration {
         Self {
             id: format!("exploration-{nanos}"),
             display_name: format!("Exploration {counter}"),
-            card_id: None,
+            idea_path: None,
         }
     }
 }

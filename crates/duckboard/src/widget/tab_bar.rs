@@ -503,53 +503,66 @@ pub fn view_content(state: &TabState) -> Element<'_, TabContentMsg> {
             view_search_stack(tab)
         }
         Some(tab) => {
-            // Both diff and non-diff path bars render the same shape: an SVG
-            // file-type icon followed by the path. Diff tabs differ only by
-            // the icon's tint (status color) — keeping the row construction
-            // identical guarantees both bars render at the same height.
-            let (icon_bytes, icon_color, path_text) = match &tab.view {
-                TabView::Diff { path, status, .. } => (
-                    icon_for_title(&tab.title),
-                    theme::vcs_status_color(status),
-                    path.display().to_string(),
-                ),
-                _ => {
-                    let display = tab.id.strip_prefix("file:").unwrap_or(&tab.id).to_string();
-                    (icon_for_title(&tab.title), theme::text_muted(), display)
-                }
-            };
-            let leading: Element<'_, TabContentMsg> = svg(svg::Handle::from_memory(icon_bytes))
-                .width(theme::font_sm())
-                .height(theme::font_sm())
-                .style(theme::svg_tint(icon_color))
-                .into();
-            let mut path_items = row![
-                leading,
-                text(path_text)
-                    .size(theme::font_sm())
-                    .color(theme::text_secondary()),
-            ]
-            .spacing(theme::SPACING_XS)
-            .align_y(Center)
-            .width(Length::Fill);
-            if let TabView::Diff { path, .. } = &tab.view {
-                path_items = path_items
-                    .push(Space::new().width(Length::Fill))
-                    .push(
-                        button(text("Open in tab").size(theme::font_sm()))
-                            .on_press(TabContentMsg::OpenInNewTab(path.clone()))
-                            .padding(0.0)
-                            .style(theme::icon_button),
-                    );
-            }
-            let path_row = container(path_items)
-                .padding([theme::SPACING_XS, theme::SPACING_SM])
+            // Idea pinned tabs render their own header (tag chips + actions)
+            // via `area::ideas::view_pinned_toolbar`; the file-path bar is
+            // suppressed because an idea's storage path isn't user-facing.
+            let show_path_header = !tab.id.starts_with("idea:");
+
+            let header: Element<'_, TabContentMsg> = if show_path_header {
+                // Both diff and non-diff path bars render the same shape: an
+                // SVG file-type icon followed by the path. Diff tabs differ
+                // only by the icon's tint (status color) — keeping the row
+                // construction identical guarantees both bars render at the
+                // same height.
+                let (icon_bytes, icon_color, path_text) = match &tab.view {
+                    TabView::Diff { path, status, .. } => (
+                        icon_for_title(&tab.title),
+                        theme::vcs_status_color(status),
+                        path.display().to_string(),
+                    ),
+                    _ => {
+                        let display =
+                            tab.id.strip_prefix("file:").unwrap_or(&tab.id).to_string();
+                        (icon_for_title(&tab.title), theme::text_muted(), display)
+                    }
+                };
+                let leading: Element<'_, TabContentMsg> =
+                    svg(svg::Handle::from_memory(icon_bytes))
+                        .width(theme::font_sm())
+                        .height(theme::font_sm())
+                        .style(theme::svg_tint(icon_color))
+                        .into();
+                let mut path_items = row![
+                    leading,
+                    text(path_text)
+                        .size(theme::font_sm())
+                        .color(theme::text_secondary()),
+                ]
+                .spacing(theme::SPACING_XS)
+                .align_y(Center)
                 .width(Length::Fill);
-            let header: Element<'_, TabContentMsg> = column![
-                path_row,
-                container(Space::new().width(Length::Fill).height(1.0)).style(theme::divider),
-            ]
-            .into();
+                if let TabView::Diff { path, .. } = &tab.view {
+                    path_items = path_items
+                        .push(Space::new().width(Length::Fill))
+                        .push(
+                            button(text("Open in tab").size(theme::font_sm()))
+                                .on_press(TabContentMsg::OpenInNewTab(path.clone()))
+                                .padding(0.0)
+                                .style(theme::icon_button),
+                        );
+                }
+                let path_row = container(path_items)
+                    .padding([theme::SPACING_XS, theme::SPACING_SM])
+                    .width(Length::Fill);
+                column![
+                    path_row,
+                    container(Space::new().width(Length::Fill).height(1.0))
+                        .style(theme::divider),
+                ]
+                .into()
+            } else {
+                Space::new().into()
+            };
 
             let body: Element<'_, TabContentMsg> = match &tab.view {
                 TabView::Editor { editor, .. } => {

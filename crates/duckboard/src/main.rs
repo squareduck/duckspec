@@ -1,6 +1,7 @@
 //! duckboard — GUI for the duckspec framework, built with Iced 0.14.
 
-use std::path::PathBuf;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use iced::event;
@@ -14,7 +15,7 @@ mod chat_store;
 pub mod config;
 mod data;
 pub mod highlight;
-mod kanban_store;
+mod idea_store;
 mod path_env;
 mod scope;
 mod theme;
@@ -40,7 +41,7 @@ struct State {
     project: ProjectData,
     config: config::Config,
     dashboard: area::dashboard::State,
-    kanban: area::kanban::State,
+    ideas: area::ideas::State,
     change: area::change::State,
     caps: area::caps::State,
     codex: area::codex::State,
@@ -51,6 +52,17 @@ struct State {
     /// Shared via `Arc` so background tasks (e.g. search-stack highlighting)
     /// can hold a handle without blocking the UI on syntax-set ownership.
     highlighter: Arc<highlight::SyntaxHighlighter>,
+    /// Single tab stack shared across Change/Caps/Codex/Ideas. The active
+    /// area drives the `preview` (pinned) slot via its list selection;
+    /// `file_tabs` (closable) persist across area switches.
+    tabs: tab_bar::TabState,
+    /// Cached pinned tab per area, swapped in/out of `tabs.preview` on area
+    /// switch so editor cursor + dirty state survive the round-trip.
+    cached_previews: HashMap<Area, Option<tab_bar::Tab>>,
+    /// Single interaction registry keyed by scope. One entry per
+    /// (Caps | Codex | Change(name) | Exploration(id)). Survives area
+    /// switches; the visible column reads from the active area's scope.
+    interactions: HashMap<scope::Scope, interaction::InteractionState>,
 }
 
 impl State {
@@ -70,12 +82,15 @@ impl State {
             recent = config.projects.recent.len(),
             "duckboard started with no project"
         );
+        let mut interactions = HashMap::new();
+        interactions.insert(scope::Scope::Caps, interaction::InteractionState::default());
+        interactions.insert(scope::Scope::Codex, interaction::InteractionState::default());
         Self {
             active_area: Area::Dashboard,
             project,
             config,
             dashboard: area::dashboard::State::default(),
-            kanban: area::kanban::State::default(),
+            ideas: area::ideas::State::default(),
             change,
             caps: caps_state,
             codex: area::codex::State::default(),
@@ -84,6 +99,9 @@ impl State {
             text_search: widget::text_search::TextSearchState::default(),
             project_picker: widget::project_picker::ProjectPickerState::default(),
             highlighter: Arc::new(highlight::SyntaxHighlighter::new()),
+            tabs: tab_bar::TabState::default(),
+            cached_previews: HashMap::new(),
+            interactions,
         }
     }
 
@@ -107,7 +125,16 @@ impl State {
             ..Default::default()
         };
         self.codex = area::codex::State::default();
-        self.kanban = area::kanban::State::for_project(self.project.project_root.as_deref());
+        self.ideas = area::ideas::State::for_project(self.project.project_root.as_deref());
+        idea_store::reconcile(&mut self.ideas.ideas, &self.project);
+        // Drop interactions / tabs from the prior project; reseed singletons.
+        self.tabs = tab_bar::TabState::default();
+        self.cached_previews.clear();
+        self.interactions.clear();
+        self.interactions
+            .insert(scope::Scope::Caps, interaction::InteractionState::default());
+        self.interactions
+            .insert(scope::Scope::Codex, interaction::InteractionState::default());
         self.project.revalidate();
         self.active_area = Area::Dashboard;
 
@@ -117,58 +144,30 @@ impl State {
         }
     }
 
-    /// Resolve a scope (bare change name / "caps" / "codex") to its interaction state.
+    /// Resolve a scope key (bare change name / exploration id / "caps" / "codex")
+    /// to its interaction state. Routes via the active area when the scope key
+    /// alone is ambiguous between Change(name) and Exploration(id).
     fn interaction_mut(&mut self, scope: &str) -> Option<&mut interaction::InteractionState> {
+        let key = self.scope_for_key(scope);
+        self.interactions.get_mut(&key)
+    }
+
+    /// Build the appropriate `Scope` for a raw scope key, classifying via
+    /// the change area's exploration list when the key is not a singleton.
+    fn scope_for_key(&self, scope: &str) -> scope::Scope {
         match scope {
-            KEY_CAPS => return Some(&mut self.caps.interaction),
-            KEY_CODEX => return Some(&mut self.codex.interaction),
-            _ => {}
+            KEY_CAPS => scope::Scope::Caps,
+            KEY_CODEX => scope::Scope::Codex,
+            _ => self.change.scope_for(scope),
         }
-        // When the user is on the Kanban area, kanban owns the interaction —
-        // even if the scope key (change name) collides with an entry in
-        // `change.interactions` left over from a prior visit to the Change
-        // area for this same change (possible after exploration→change
-        // promotion). Without this preference, keyboard routing reads the
-        // wrong state and shortcuts like Tab-to-complete silently no-op.
-        if self.active_area == Area::Kanban
-            && let Some(card_id) = self.kanban.card_id_for_scope(scope)
-            && self.kanban.interactions.contains_key(&card_id)
-        {
-            return self.kanban.interactions.get_mut(&card_id);
-        }
-        if self.change.interactions.contains_key(scope) {
-            return self.change.interactions.get_mut(scope);
-        }
-        // Kanban fallback for non-kanban areas (subscription events, etc.):
-        // interaction state is keyed by card id, so resolve scope → card id
-        // first (immutable pass), then look up by that id.
-        let card_id = self.kanban.card_id_for_scope(scope)?;
-        self.kanban.interactions.get_mut(&card_id)
     }
 
     /// Resolve a stable `InteractionState::instance_id` to its state.
-    /// Used for routing long-lived subscription events (PTY, agent) that must
-    /// survive scope renames like exploration→change promotion.
     fn interaction_mut_by_ix_id(
         &mut self,
         ix_id: u64,
     ) -> Option<&mut interaction::InteractionState> {
-        if self.caps.interaction.instance_id == ix_id {
-            return Some(&mut self.caps.interaction);
-        }
-        if self.codex.interaction.instance_id == ix_id {
-            return Some(&mut self.codex.interaction);
-        }
-        if let Some(ix) = self
-            .change
-            .interactions
-            .values_mut()
-            .find(|ix| ix.instance_id == ix_id)
-        {
-            return Some(ix);
-        }
-        self.kanban
-            .interactions
+        self.interactions
             .values_mut()
             .find(|ix| ix.instance_id == ix_id)
     }
@@ -181,51 +180,35 @@ impl State {
         ix.find_session_mut(session_id)
     }
 
-    /// Get the active area's interaction state and its scope.
-    fn active_interaction(&self) -> Option<(&interaction::InteractionState, &str)> {
+    /// Compute the active scope from `active_area` and that area's selection.
+    fn active_scope(&self) -> Option<scope::Scope> {
         match self.active_area {
+            Area::Caps => Some(scope::Scope::Caps),
+            Area::Codex => Some(scope::Scope::Codex),
             Area::Change => {
                 let name = self.change.selected_change.as_deref()?;
-                let ix = self.change.interactions.get(name)?;
-                Some((ix, name))
+                Some(self.change.scope_for(name))
             }
-            Area::Caps => Some((&self.caps.interaction, KEY_CAPS)),
-            Area::Codex => Some((&self.codex.interaction, KEY_CODEX)),
-            Area::Kanban => {
-                if !self.kanban.modal_open {
-                    return None;
-                }
-                let card_id = self.kanban.selected_card.as_deref()?;
-                let card = self.kanban.cards.iter().find(|c| c.id == card_id)?;
-                let scope = area::kanban::card_scope_key(card)?;
-                // Post-promotion the card's chat lives in `change.interactions`
-                // under the change name; pre-promotion on the kanban side.
-                let ix = match card.change_name.as_deref() {
-                    Some(name) => self.change.interactions.get(name)?,
-                    None => self.kanban.interactions.get(card_id)?,
-                };
-                Some((ix, scope))
+            Area::Ideas => {
+                let path = self.ideas.selected.as_deref()?;
+                self.ideas.scope_for_path(path)
             }
             Area::Dashboard | Area::Settings => None,
         }
     }
 
-    /// Get the active area's scope (for looking up the interaction state).
+    /// Active area's interaction (read-only) plus the scope-key string used by
+    /// title-hint refreshers etc.
+    fn active_interaction(&self) -> Option<(&interaction::InteractionState, String)> {
+        let scope = self.active_scope()?;
+        let key = scope.key().to_string();
+        let ix = self.interactions.get(&scope)?;
+        Some((ix, key))
+    }
+
+    /// Active scope's key as a `String`, when one exists.
     fn active_interaction_key(&self) -> Option<String> {
-        match self.active_area {
-            Area::Change => self.change.selected_change.clone(),
-            Area::Caps => Some(KEY_CAPS.to_string()),
-            Area::Codex => Some(KEY_CODEX.to_string()),
-            Area::Kanban => {
-                if !self.kanban.modal_open {
-                    return None;
-                }
-                let card_id = self.kanban.selected_card.as_deref()?;
-                let card = self.kanban.cards.iter().find(|c| c.id == card_id)?;
-                area::kanban::card_scope_key(card).map(str::to_string)
-            }
-            Area::Dashboard | Area::Settings => None,
-        }
+        Some(self.active_scope()?.key().to_string())
     }
 }
 
@@ -236,10 +219,20 @@ enum Message {
     AreaSelected(Area),
     Refresh,
     Dashboard(area::dashboard::Message),
-    Kanban(area::kanban::Message),
+    Ideas(area::ideas::Message),
     Change(area::change::Message),
     Caps(area::caps::Message),
     Codex(area::codex::Message),
+    /// Shared content column tab interactions (select / close / editor /
+    /// search-slice / open-in-tab). Wraps the tab_bar widget's child message
+    /// kinds since the content column lives at the top level after the
+    /// shared-tabs refactor.
+    TabSelect(usize),
+    TabClose(usize),
+    TabContent(tab_bar::TabContentMsg),
+    /// Shared interaction-column messages (sessions, terminals, agent input).
+    /// Routed to `state.interactions[active_scope]`.
+    Interaction(interaction::Msg),
     // File finder
     FileFinder(widget::file_finder::Msg),
     // Project-wide text search
@@ -253,7 +246,6 @@ enum Message {
     // `Arc` so the message is cheap to clone; the handler clones the inner
     // `Vec` into each slice sharing `abs_path`.
     SearchStackHighlighted {
-        area: Area,
         tab_id: String,
         abs_path: std::path::PathBuf,
         spans: Arc<Vec<Vec<highlight::HighlightSpan>>>,
@@ -306,9 +298,19 @@ enum Message {
 // ── Update ───────────────────────────────────────────────────────────────────
 
 fn update(state: &mut State, message: Message) -> Task<Message> {
+    // The inline tag editor in the Ideas pinned toolbar dismisses itself
+    // when the user clicks anywhere that would naturally pull focus from
+    // the text_input — clicking the editor body, switching areas, or
+    // running an idea-level action. Tag-related messages (chip clicks, +
+    // Tag, the input's own keystrokes) keep it alive; everything else in
+    // the explicit list below clears it before the action proceeds.
+    if state.ideas.tag_input.is_some() && tag_input_loses_focus_on(&message) {
+        state.ideas.tag_input = None;
+        state.ideas.tag_input_editing = None;
+    }
     match message {
         Message::AreaSelected(area) => {
-            state.active_area = area;
+            switch_area(state, area);
             if area == Area::Settings {
                 area::settings::update(
                     &mut state.settings,
@@ -332,12 +334,9 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                 Msg::Open => {
                     if let Some(root) = &state.project.project_root {
                         state.file_finder.open(root);
-                        // Unfocus terminal in all areas.
-                        for ix in state.change.interactions.values_mut() {
+                        for ix in state.interactions.values_mut() {
                             ix.terminal_focused = false;
                         }
-                        state.caps.interaction.terminal_focused = false;
-                        state.codex.interaction.terminal_focused = false;
                         return iced::widget::operation::focus("file-finder-input");
                     }
                 }
@@ -365,20 +364,15 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                                     .map(|n| n.to_string_lossy().to_string())
                                     .unwrap_or_else(|| rel_path.display().to_string());
                                 let area = match state.active_area {
-                                    Area::Dashboard | Area::Kanban | Area::Settings => {
-                                        Area::Change
-                                    }
+                                    Area::Dashboard | Area::Settings => Area::Change,
                                     other => other,
                                 };
-                                state.active_area = area;
-                                let tabs = tabs_for_area(
-                                    area,
-                                    &mut state.change,
-                                    &mut state.caps,
-                                    &mut state.codex,
-                                );
-                                tabs.open_file(id.clone(), title, content, Some(abs.clone()));
-                                if let Some(tab) = tabs.file_tabs.iter_mut().find(|t| t.id == id)
+                                switch_area(state, area);
+                                state
+                                    .tabs
+                                    .open_file(id.clone(), title, content, Some(abs.clone()));
+                                if let Some(tab) =
+                                    state.tabs.file_tabs.iter_mut().find(|t| t.id == id)
                                     && let tab_bar::TabView::Editor { editor, .. } = &mut tab.view
                                 {
                                     task = spawn_file_tab_highlight(
@@ -402,11 +396,9 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
             match msg {
                 Msg::Open => {
                     state.text_search.open();
-                    for ix in state.change.interactions.values_mut() {
+                    for ix in state.interactions.values_mut() {
                         ix.terminal_focused = false;
                     }
-                    state.caps.interaction.terminal_focused = false;
-                    state.codex.interaction.terminal_focused = false;
                     return iced::widget::operation::focus(
                         widget::text_search::SEARCH_INPUT_ID,
                     );
@@ -476,11 +468,9 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
             match msg {
                 Msg::Open => {
                     state.project_picker.open();
-                    for ix in state.change.interactions.values_mut() {
+                    for ix in state.interactions.values_mut() {
                         ix.terminal_focused = false;
                     }
-                    state.caps.interaction.terminal_focused = false;
-                    state.codex.interaction.terminal_focused = false;
                     return Task::batch([
                         iced::widget::operation::focus(widget::project_picker::INPUT_ID),
                         iced::widget::operation::move_cursor_to_end(
@@ -532,27 +522,19 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
             state.open_project(path);
         }
         Message::SearchStackHighlighted {
-            area,
             tab_id,
             abs_path,
             spans,
         } => {
-            let State {
-                change, caps, codex, ..
-            } = state;
-            let tabs = tabs_for_area(area, change, caps, codex);
-            if let Some(tab) = tabs.file_tabs.iter_mut().find(|t| t.id == tab_id)
+            if let Some(tab) = state.tabs.file_tabs.iter_mut().find(|t| t.id == tab_id)
                 && let tab_bar::TabView::SearchStack { slices, .. } = &mut tab.view
             {
                 for slice in slices.iter_mut() {
                     if slice.abs_path == abs_path {
-                        // Clone inner Vec per slice — cheap relative to the
-                        // syntect parse that produced it.
                         slice.editor.highlight_spans = Some((*spans).clone());
                     }
                 }
             }
-            // Tab may have been evicted (MAX_FILE_TABS) or closed — drop silently.
         }
         Message::FileTabHighlighted {
             area,
@@ -560,17 +542,12 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
             version,
             spans,
         } => {
-            let State {
-                change, caps, codex, ..
-            } = state;
-            let tabs = tabs_for_area(area, change, caps, codex);
-            if let Some(editor) = find_editor_mut(tabs, &tab_id)
+            let _ = area;
+            if let Some(editor) = find_editor_mut(&mut state.tabs, &tab_id)
                 && editor.highlight_version == version
             {
                 editor.highlight_spans = Some((*spans).clone());
             }
-            // Version mismatch → user edited since spawn; drop the stale spans.
-            // Tab missing → closed or evicted; drop silently.
         }
         Message::DiffTabHighlighted {
             area,
@@ -578,11 +555,8 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
             version,
             highlight,
         } => {
-            let State {
-                change, caps, codex, ..
-            } = state;
-            let tabs = tabs_for_area(area, change, caps, codex);
-            if let Some((editor, diff_data)) = find_diff_tab_mut(tabs, &tab_id)
+            let _ = area;
+            if let Some((editor, diff_data)) = find_diff_tab_mut(&mut state.tabs, &tab_id)
                 && editor.highlight_version == version
             {
                 editor.highlight_spans = Some(widget::diff_view::build_diff_spans(
@@ -637,9 +611,8 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                         if let Some(root) = duckspec_root.as_deref() {
                             if let Ok(rel) = path.strip_prefix(root) {
                                 let id = rel.to_string_lossy().to_string();
-                                state.change.tabs.close_by_id(&id);
-                                state.caps.tabs.close_by_id(&id);
-                                state.codex.tabs.close_by_id(&id);
+                                state.tabs.close_by_id(&id);
+                                close_cached_tabs(state, &id);
                             }
                             if path.starts_with(root) {
                                 tree_changed = true;
@@ -649,9 +622,8 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                             && let Ok(rel) = path.strip_prefix(root)
                         {
                             let diff_id = format!("vcs:{}", rel.display());
-                            state.change.tabs.close_by_id(&diff_id);
-                            state.caps.tabs.close_by_id(&diff_id);
-                            state.codex.tabs.close_by_id(&diff_id);
+                            state.tabs.close_by_id(&diff_id);
+                            close_cached_tabs(state, &diff_id);
                         }
                     }
                     watcher::FileEvent::VcsStateChanged(path) => {
@@ -689,31 +661,36 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                 area::dashboard::Message::ChangeClicked(name)
                 | area::dashboard::Message::ArchivedChangeClicked(name)
                 | area::dashboard::Message::ExplorationClicked(name) => {
-                    state.active_area = Area::Change;
+                    switch_area(state, Area::Change);
                     area::change::update(
                         &mut state.change,
+                        &mut state.tabs,
+                        &mut state.interactions,
                         area::change::Message::SelectChange(name.clone()),
                         &state.project,
                         &state.highlighter,
                     );
                 }
                 area::dashboard::Message::AddExploration => {
-                    // Delegate to the change area's exploration logic, then switch.
+                    switch_area(state, Area::Change);
                     area::change::update(
                         &mut state.change,
+                        &mut state.tabs,
+                        &mut state.interactions,
                         area::change::Message::AddExploration,
                         &state.project,
                         &state.highlighter,
                     );
-                    state.active_area = Area::Change;
                 }
                 area::dashboard::Message::SelectAuditError {
                     change,
                     artifact_id,
                 } => {
-                    state.active_area = Area::Change;
+                    switch_area(state, Area::Change);
                     area::change::update(
                         &mut state.change,
+                        &mut state.tabs,
+                        &mut state.interactions,
                         area::change::Message::OpenArtifact {
                             change: change.clone(),
                             artifact_id: artifact_id.clone(),
@@ -726,42 +703,21 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
             area::dashboard::update(&mut state.dashboard, msg);
         }
         Message::Change(msg) => {
-            // Intercept messages that need to return a `Task` to the
-            // runtime. area::change::update otherwise swallows all side
-            // effects and returns `()`.
             match msg {
-                area::change::Message::TabContent(
-                    tab_bar::TabContentMsg::EditorAction(action),
-                ) => {
-                    return handle_editor_action(
-                        &mut state.change.tabs,
-                        Area::Change,
-                        action,
-                        state.highlighter.clone(),
-                    );
-                }
                 area::change::Message::SelectChangedFile(path) => {
                     return open_diff_preview(state, Area::Change, &path);
                 }
-                area::change::Message::OpenKanbanCardForChange(change_name) => {
-                    if let Some(card_id) = state
-                        .kanban
-                        .card_id_for_change(&change_name)
-                        .map(str::to_string)
-                    {
-                        state.active_area = Area::Kanban;
-                        area::kanban::update(
-                            &mut state.kanban,
-                            area::kanban::Message::SelectCard(card_id),
+                area::change::Message::OpenIdeaForChange(change_name) => {
+                    if let Some(idea_path) = state.ideas.idea_path_for_change(&change_name) {
+                        switch_area(state, Area::Ideas);
+                        area::ideas::update(
+                            &mut state.ideas,
+                            &mut state.tabs,
+                            &mut state.interactions,
+                            area::ideas::Message::SelectIdea(idea_path),
                             &state.project,
                             &state.highlighter,
-                            &mut state.change.interactions,
                         );
-                        if state.kanban.modal_open {
-                            return iced::widget::operation::focus(
-                                area::kanban::DESCRIPTION_EDITOR_ID,
-                            );
-                        }
                     }
                 }
                 msg => {
@@ -769,6 +725,8 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                         is_chat_focus_msg(extract_change_interaction_msg(&msg));
                     area::change::update(
                         &mut state.change,
+                        &mut state.tabs,
+                        &mut state.interactions,
                         msg,
                         &state.project,
                         &state.highlighter,
@@ -780,56 +738,57 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
             }
         }
         Message::Caps(msg) => {
-            if let area::caps::Message::TabContent(
-                tab_bar::TabContentMsg::EditorAction(action),
-            ) = msg
-            {
-                return handle_editor_action(
-                    &mut state.caps.tabs,
-                    Area::Caps,
-                    action,
-                    state.highlighter.clone(),
-                );
-            }
             let needs_focus = is_chat_focus_msg(extract_caps_interaction_msg(&msg));
-            area::caps::update(&mut state.caps, msg, &state.project, &state.highlighter);
+            let ix = state
+                .interactions
+                .entry(scope::Scope::Caps)
+                .or_default();
+            area::caps::update(
+                &mut state.caps,
+                &mut state.tabs,
+                ix,
+                msg,
+                &state.project,
+                &state.highlighter,
+            );
             if needs_focus {
                 return focus_chat_input();
             }
         }
         Message::Codex(msg) => {
-            if let area::codex::Message::TabContent(
-                tab_bar::TabContentMsg::EditorAction(action),
-            ) = msg
-            {
-                return handle_editor_action(
-                    &mut state.codex.tabs,
-                    Area::Codex,
-                    action,
-                    state.highlighter.clone(),
-                );
-            }
             let needs_focus = is_chat_focus_msg(extract_codex_interaction_msg(&msg));
-            area::codex::update(&mut state.codex, msg, &state.project, &state.highlighter);
+            let ix = state
+                .interactions
+                .entry(scope::Scope::Codex)
+                .or_default();
+            area::codex::update(
+                &mut state.codex,
+                &mut state.tabs,
+                ix,
+                msg,
+                &state.project,
+                &state.highlighter,
+            );
             if needs_focus {
                 return focus_chat_input();
             }
         }
-        Message::Kanban(msg) => {
+        Message::Ideas(msg) => {
             // Hard delete cascades to the attached exploration (if any). Run
-            // the cascade BEFORE kanban::update so we can still look up the
-            // card's exploration_id. Matches the pattern used for cross-
-            // module teardown elsewhere in this file.
-            if let area::kanban::Message::DeleteCard(ref card_id) = msg {
+            // the cascade BEFORE ideas::update so we can still look up the
+            // idea's exploration id from frontmatter.
+            if let area::ideas::Message::DeleteIdea(ref path) = msg {
                 let exp_id = state
-                    .kanban
-                    .cards
+                    .ideas
+                    .ideas
                     .iter()
-                    .find(|c| &c.id == card_id)
-                    .and_then(|c| c.exploration_id.clone());
+                    .find(|i| &i.abs_path == path)
+                    .and_then(|i| i.frontmatter.exploration.clone());
                 if let Some(exp_id) = exp_id {
                     state.change.explorations.retain(|e| e.id != exp_id);
-                    state.change.interactions.remove(&exp_id);
+                    state
+                        .interactions
+                        .remove(&scope::Scope::Exploration(exp_id.clone()));
                     if state.change.selected_change.as_deref() == Some(&exp_id) {
                         state.change.selected_change = None;
                     }
@@ -841,79 +800,83 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                     );
                 }
             }
-            // StartExploration: mint the Exploration on state.change.explorations
-            // with the backlink, stamp card.exploration_id, then reopen the
-            // card so kanban::open_card seeds the InteractionState from disk.
-            if let area::kanban::Message::StartExploration(ref card_id) = msg {
+            if let area::ideas::Message::StartExploration(ref path) = msg {
                 state.change.exploration_counter += 1;
                 let mut exp = chat_store::Exploration::new(state.change.exploration_counter);
-                exp.card_id = Some(card_id.clone());
                 let exp_id = exp.id.clone();
+                let old_path = path.clone();
+                let mut new_path = old_path.clone();
+                if let Some(idea) =
+                    state.ideas.ideas.iter_mut().find(|i| i.abs_path == old_path)
+                {
+                    idea.frontmatter.exploration = Some(exp_id.clone());
+                    idea.state = idea_store::IdeaState::Exploration;
+                    let body = idea_store::read_body(&idea.abs_path).unwrap_or_default();
+                    if let Err(e) = idea_store::save_idea(
+                        idea,
+                        &body,
+                        state.project.project_root.as_deref(),
+                    ) {
+                        tracing::warn!("failed to save idea on Explore: {e}");
+                    }
+                    new_path = idea.abs_path.clone();
+                }
+                exp.idea_path = Some(new_path.display().to_string());
                 state.change.explorations.push(exp);
                 chat_store::save_explorations(
                     &state.change.explorations,
                     state.change.exploration_counter,
                     state.project.project_root.as_deref(),
                 );
-                if let Some(card) = state.kanban.cards.iter_mut().find(|c| &c.id == card_id) {
-                    card.exploration_id = Some(exp_id);
-                }
-                kanban_store::save(
-                    &state.kanban.cards,
-                    state.project.project_root.as_deref(),
-                );
-                // Re-open via the SelectCard path so the interaction state is
-                // freshly seeded for the new scope. `open_card` stashes the
-                // card description onto the fresh session so the first turn
-                // will inject it as system context.
-                area::kanban::update(
-                    &mut state.kanban,
-                    area::kanban::Message::SelectCard(card_id.clone()),
+                area::ideas::update(
+                    &mut state.ideas,
+                    &mut state.tabs,
+                    &mut state.interactions,
+                    area::ideas::Message::SelectIdea(new_path),
                     &state.project,
                     &state.highlighter,
-                    &mut state.change.interactions,
                 );
                 return focus_chat_input();
             }
-            // Kanban → Change selection: switch area + select the change.
-            if let area::kanban::Message::OpenChange(ref change_name) = msg {
+            if let area::ideas::Message::OpenChange(ref change_name) = msg {
                 let change_name = change_name.clone();
-                area::kanban::update(
-                    &mut state.kanban,
-                    msg,
-                    &state.project,
-                    &state.highlighter,
-                    &mut state.change.interactions,
-                );
-                state.active_area = Area::Change;
+                switch_area(state, Area::Change);
                 area::change::update(
                     &mut state.change,
+                    &mut state.tabs,
+                    &mut state.interactions,
                     area::change::Message::SelectChange(change_name),
                     &state.project,
                     &state.highlighter,
                 );
                 return Task::none();
             }
-            let needs_focus =
-                is_chat_focus_msg(extract_kanban_interaction_msg(&msg));
-            // Opening a card modal (fresh or existing) auto-focuses the
-            // description editor — it's the only interactable element on
-            // the card frame itself.
-            let opens_modal = matches!(
+            // Chip click: shift held → promote to primary; otherwise open
+            // the input pre-filled for rename. Modifier state lives in a
+            // process-wide cell maintained by the global key event handler.
+            if let area::ideas::Message::ChipClick(idx) = msg {
+                let resolved = if widget::terminal::current_modifiers().shift() {
+                    area::ideas::Message::PromoteTag(idx)
+                } else {
+                    area::ideas::Message::EditTag(idx)
+                };
+                return update(state, Message::Ideas(resolved));
+            }
+            let needs_focus = is_chat_focus_msg(extract_ideas_interaction_msg(&msg));
+            let focus_tag_input = matches!(
                 msg,
-                area::kanban::Message::AddCard | area::kanban::Message::SelectCard(_)
+                area::ideas::Message::OpenTagInput | area::ideas::Message::EditTag(_)
             );
-            area::kanban::update(
-                &mut state.kanban,
+            area::ideas::update(
+                &mut state.ideas,
+                &mut state.tabs,
+                &mut state.interactions,
                 msg,
                 &state.project,
                 &state.highlighter,
-                &mut state.change.interactions,
             );
-            if opens_modal && state.kanban.modal_open {
-                return iced::widget::operation::focus(
-                    area::kanban::DESCRIPTION_EDITOR_ID,
-                );
+            if focus_tag_input {
+                return iced::widget::operation::focus(area::ideas::TAG_INPUT_ID);
             }
             if needs_focus {
                 return focus_chat_input();
@@ -922,6 +885,63 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
         Message::Settings(msg) => {
             area::settings::update(&mut state.settings, &mut state.config, msg);
             theme::set_fonts(&state.config);
+        }
+        Message::TabSelect(idx) => state.tabs.select(idx),
+        Message::TabClose(idx) => state.tabs.close(idx),
+        Message::TabContent(tab_bar::TabContentMsg::EditorAction(action)) => {
+            // Cmd-S on the ideas pinned tab routes through ideas::SaveBody so
+            // frontmatter is rederived and the file moves on title/tag change.
+            // The generic save path treats the editor `path` as the truth and
+            // skips this tab (which has `path: None`).
+            if matches!(action, widget::text_edit::EditorAction::SaveRequested)
+                && state.active_area == Area::Ideas
+                && state
+                    .tabs
+                    .active_tab()
+                    .is_some_and(|t| t.id.starts_with(area::ideas::PINNED_TAB_PREFIX))
+            {
+                return update(state, Message::Ideas(area::ideas::Message::SaveBody));
+            }
+            return handle_editor_action(
+                &mut state.tabs,
+                state.active_area,
+                action,
+                state.highlighter.clone(),
+            );
+        }
+        Message::TabContent(tab_bar::TabContentMsg::OpenInNewTab(rel_path)) => {
+            // Only meaningful in Change area (diff tabs surface `OpenInNewTab`);
+            // open the file as a new file tab and rehighlight inline.
+            if let Some(root) = &state.project.project_root {
+                let abs = root.join(&rel_path);
+                if let Ok(content) = std::fs::read_to_string(&abs) {
+                    let id = format!("file:{}", rel_path.display());
+                    let title = rel_path
+                        .file_name()
+                        .map(|n| n.to_string_lossy().to_string())
+                        .unwrap_or_else(|| rel_path.display().to_string());
+                    state
+                        .tabs
+                        .open_file(id.clone(), title, content, Some(abs.clone()));
+                    if let Some(tab) = state.tabs.file_tabs.iter_mut().find(|t| t.id == id)
+                        && let tab_bar::TabView::Editor { editor, .. } = &mut tab.view
+                    {
+                        rehighlight(editor, &id, &state.highlighter);
+                    }
+                }
+            }
+        }
+        Message::TabContent(tab_bar::TabContentMsg::SearchSliceAction(idx, action)) => {
+            handle_search_slice_action(&mut state.tabs, idx, action);
+        }
+        Message::TabContent(tab_bar::TabContentMsg::OpenSearchSlice(idx)) => {
+            handle_open_search_slice(&mut state.tabs, idx, &state.highlighter);
+        }
+        Message::Interaction(msg) => {
+            // Route the interaction message to the active area's update fn so
+            // its scope-specific handling (Change multi-session vs Caps single
+            // vs Ideas pre/post-promotion) runs.
+            return route_interaction(state, msg);
         }
         // Clipboard → PTY paste.
         Message::TerminalPaste(key, Some(text)) => {
@@ -1081,14 +1101,11 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                 }
             }
             let State {
-                change,
-                caps,
-                codex,
-                kanban,
+                interactions,
                 highlighter,
                 ..
             } = state;
-            let ax = resolve_session_mut(change, caps, codex, kanban, &key);
+            let ax = resolve_session_mut(interactions, &key);
             let mut should_snap_to_bottom = false;
             if let Some(ax) = ax {
                 let is_streaming = ax.session.is_streaming;
@@ -1132,8 +1149,8 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                 if let Some(out) = scope::CurrentScopeHook.compute(&scope_input) {
                     hints.push(out.text);
                 }
-                if let Some(card_hint) = title_hints::build_card_hint(card_description.as_deref()) {
-                    hints.push(card_hint);
+                if let Some(idea_hint) = title_hints::build_idea_hint(card_description.as_deref()) {
+                    hints.push(idea_hint);
                 }
                 let mut req = duckchat::TitleRequest::new(user);
                 req.context_hints = hints;
@@ -1204,16 +1221,33 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                 return Task::none();
             }
 
-            // Cmd+N in the Kanban area: add a new card and open its modal.
-            // Area-scoped so it doesn't fight the Change area's Cmd+N
-            // (which spawns a chat session or exploration and is handled
-            // inside the chat-focus block further down).
+            // Cmd+N in the Ideas area: add a new idea and open it. Area-scoped
+            // so it doesn't fight the Change area's Cmd+N (which spawns a
+            // chat session or exploration and is handled inside the
+            // chat-focus block further down).
             if mods.command()
                 && key == keyboard::Key::Character("n".into())
-                && state.active_area == Area::Kanban
+                && state.active_area == Area::Ideas
                 && state.project.project_root.is_some()
             {
-                return update(state, Message::Kanban(area::kanban::Message::AddCard));
+                return update(state, Message::Ideas(area::ideas::Message::AddIdea));
+            }
+
+            // Cmd+S in the Ideas area with the pinned tab active → save the
+            // idea body (frontmatter is rederived from H1). Routed through
+            // the ideas update so it picks up filename moves on title/tag
+            // changes; the generic file-save path doesn't know about
+            // frontmatter.
+            if mods.command()
+                && matches!(&key, keyboard::Key::Character(c) if c.eq_ignore_ascii_case("s"))
+                && state.active_area == Area::Ideas
+                && matches!(state.tabs.active, tab_bar::ActiveTab::Preview)
+                && state
+                    .tabs
+                    .active_tab()
+                    .is_some_and(|t| t.id.starts_with(area::ideas::PINNED_TAB_PREFIX))
+            {
+                return update(state, Message::Ideas(area::ideas::Message::SaveBody));
             }
 
             // Cmd+Shift+F: open project-wide text search.
@@ -1329,6 +1363,20 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                 return Task::none();
             }
 
+            // Esc closes the inline tag-add/edit input when it's open. Handled
+            // ahead of the file finder block because the input is a
+            // text_input — iced captures Escape to clear focus, but we want
+            // it to also dismiss the input.
+            if state.active_area == Area::Ideas
+                && state.ideas.tag_input.is_some()
+                && matches!(&key, keyboard::Key::Named(keyboard::key::Named::Escape))
+            {
+                return update(
+                    state,
+                    Message::Ideas(area::ideas::Message::CancelTagInput),
+                );
+            }
+
             // When file finder is visible, route navigation keys.
             if state.file_finder.visible {
                 use keyboard::key::Named;
@@ -1372,18 +1420,6 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                     _ => {}
                 }
                 return Task::none();
-            }
-
-            // Kanban modal: ESC closes only when the modal itself holds focus.
-            // `modal_focused` is flipped off when an embedded chat/terminal
-            // grabs focus (step 4), so ESC there goes to the agent chat
-            // instead of dismissing the card.
-            if state.active_area == Area::Kanban
-                && state.kanban.modal_open
-                && state.kanban.modal_focused
-                && matches!(&key, keyboard::Key::Named(keyboard::key::Named::Escape))
-            {
-                return update(state, Message::Kanban(area::kanban::Message::CloseModal));
             }
 
             // Get the active area's interaction state for keyboard routing.
@@ -1496,18 +1532,7 @@ fn take_pending_chat_snap(state: &mut State) -> Task<Message> {
             should_snap = true;
         }
     };
-    for ax in &mut state.caps.interaction.sessions {
-        clear(ax);
-    }
-    for ax in &mut state.codex.interaction.sessions {
-        clear(ax);
-    }
-    for ix in state.change.interactions.values_mut() {
-        for ax in &mut ix.sessions {
-            clear(ax);
-        }
-    }
-    for ix in state.kanban.interactions.values_mut() {
+    for ix in state.interactions.values_mut() {
         for ax in &mut ix.sessions {
             clear(ax);
         }
@@ -1519,34 +1544,18 @@ fn take_pending_chat_snap(state: &mut State) -> Task<Message> {
     }
 }
 
-/// Resolve a composite routing key `<instance_id>/<session_id>` to its AgentSession
-/// by borrowing only the three area substates. Useful when the caller needs
-/// to also hold a borrow on other fields (e.g. `highlighter`) of `State`.
+/// Resolve a composite routing key `<instance_id>/<session_id>` to its
+/// AgentSession from the shared `interactions` map. Borrows only the map
+/// so callers can keep parallel borrows on other `State` fields.
 fn resolve_session_mut<'a>(
-    change: &'a mut area::change::State,
-    caps: &'a mut area::caps::State,
-    codex: &'a mut area::codex::State,
-    kanban: &'a mut area::kanban::State,
+    interactions: &'a mut HashMap<scope::Scope, interaction::InteractionState>,
     key: &str,
 ) -> Option<&'a mut interaction::AgentSession> {
     let (ix_id_str, session_id) = key.split_once('/')?;
     let ix_id: u64 = ix_id_str.parse().ok()?;
-    let ix = if caps.interaction.instance_id == ix_id {
-        &mut caps.interaction
-    } else if codex.interaction.instance_id == ix_id {
-        &mut codex.interaction
-    } else if let Some(ix) = change
-        .interactions
+    let ix = interactions
         .values_mut()
-        .find(|ix| ix.instance_id == ix_id)
-    {
-        ix
-    } else {
-        kanban
-            .interactions
-            .values_mut()
-            .find(|ix| ix.instance_id == ix_id)?
-    };
+        .find(|ix| ix.instance_id == ix_id)?;
     ix.find_session_mut(session_id)
 }
 
@@ -1559,13 +1568,10 @@ fn dispatch_interaction_msg(state: &mut State, key: &str, msg: interaction::Msg)
             Message::Codex(area::codex::Message::Interaction(msg)),
         ),
         _ => {
-            // Kanban-owned scope (exploration_id or change_name of a card).
-            // For non-kanban scopes fall through to the change area.
-            if state.kanban.card_id_for_scope(key).is_some() {
-                update(
-                    state,
-                    Message::Kanban(area::kanban::Message::Interaction(msg)),
-                )
+            // Ideas-owned scope (exploration id; post-promotion the change
+            // area takes over). For non-ideas scopes fall through to change.
+            if state.ideas.idea_for_scope(key).is_some() {
+                update(state, Message::Ideas(area::ideas::Message::Interaction(msg)))
             } else {
                 update(
                     state,
@@ -1580,6 +1586,37 @@ fn dispatch_interaction_msg(state: &mut State, key: &str, msg: interaction::Msg)
 /// session so the user can immediately type — no extra click required.
 fn focus_chat_input() -> Task<Message> {
     iced::widget::operation::focus(widget::agent_chat::CHAT_INPUT_ID)
+}
+
+/// True when `message` represents a user action that pulls focus away from
+/// the inline tag-add/edit input — clicking the editor, switching areas,
+/// triggering a lifecycle action on the idea, or selecting another idea.
+/// Tag-related messages (the input's own keystrokes, chip clicks, + Tag,
+/// etc.) explicitly keep the input alive.
+fn tag_input_loses_focus_on(message: &Message) -> bool {
+    use area::ideas::Message as IM;
+    match message {
+        Message::TabContent(_) => true,
+        Message::AreaSelected(_) => true,
+        Message::FileFinder(_) => true,
+        Message::ProjectPicker(_) => true,
+        Message::TextSearch(_) => true,
+        Message::Ideas(im) => matches!(
+            im,
+            IM::SelectIdea(_)
+                | IM::AddIdea
+                | IM::DeleteIdea(_)
+                | IM::ArchiveIdea(_)
+                | IM::UnarchiveIdea(_)
+                | IM::StartExploration(_)
+                | IM::OpenChange(_)
+                | IM::ToggleSection(_)
+                | IM::ToggleTagNode(_)
+                | IM::SaveBody
+                | IM::Interaction(_)
+        ),
+        _ => false,
+    }
 }
 
 /// True when an interaction message changes the active session in a way that
@@ -1615,8 +1652,8 @@ fn extract_codex_interaction_msg(msg: &area::codex::Message) -> Option<&interact
     }
 }
 
-fn extract_kanban_interaction_msg(msg: &area::kanban::Message) -> Option<&interaction::Msg> {
-    if let area::kanban::Message::Interaction(m) = msg {
+fn extract_ideas_interaction_msg(msg: &area::ideas::Message) -> Option<&interaction::Msg> {
+    if let area::ideas::Message::Interaction(m) = msg {
         Some(m)
     } else {
         None
@@ -1635,92 +1672,76 @@ fn extract_kanban_interaction_msg(msg: &area::kanban::Message) -> Option<&intera
 fn rehighlight_all(state: &mut State) -> Task<Message> {
     let mut tasks: Vec<Task<Message>> = Vec::new();
 
-    for (area, tabs) in [
-        (Area::Change, &mut state.change.tabs),
-        (Area::Caps, &mut state.caps.tabs),
-        (Area::Codex, &mut state.codex.tabs),
-    ] {
-        let all_tabs = tabs.preview.iter_mut().chain(tabs.file_tabs.iter_mut());
-        for tab in all_tabs {
-            let tab_id = tab.id.clone();
-            match &mut tab.view {
-                tab_bar::TabView::Editor { editor, .. } => {
-                    tasks.push(spawn_file_tab_highlight(
-                        area,
-                        tab_id,
-                        editor,
-                        state.highlighter.clone(),
-                        false,
-                    ));
-                }
-                tab_bar::TabView::Diff {
+    let area = state.active_area;
+    let tabs = &mut state.tabs;
+    let all_tabs = tabs.preview.iter_mut().chain(tabs.file_tabs.iter_mut());
+    for tab in all_tabs {
+        let tab_id = tab.id.clone();
+        match &mut tab.view {
+            tab_bar::TabView::Editor { editor, .. } => {
+                tasks.push(spawn_file_tab_highlight(
+                    area,
+                    tab_id,
                     editor,
+                    state.highlighter.clone(),
+                    false,
+                ));
+            }
+            tab_bar::TabView::Diff {
+                editor,
+                path,
+                diff_data,
+                ..
+            } => {
+                editor.highlight_version = editor.highlight_version.wrapping_add(1);
+                editor.highlight_spans =
+                    Some(widget::diff_view::build_diff_spans(diff_data, None));
+                tasks.push(spawn_diff_highlight(
+                    area,
+                    tab_id,
+                    editor.highlight_version,
                     path,
-                    diff_data,
-                    ..
-                } => {
-                    // Bump the version so any in-flight job from a previous
-                    // spawn (e.g. opened a second before this toggle) is
-                    // dropped when its result arrives. Clear stale spans so
-                    // the tab falls back to muted colors until the new
-                    // syntect job lands.
-                    editor.highlight_version = editor.highlight_version.wrapping_add(1);
-                    editor.highlight_spans = Some(
-                        widget::diff_view::build_diff_spans(diff_data, None),
-                    );
-                    tasks.push(spawn_diff_highlight(
-                        area,
-                        tab_id,
-                        editor.highlight_version,
-                        path,
-                        diff_data.clone(),
-                        state.highlighter.clone(),
-                    ));
-                }
-                tab_bar::TabView::SearchStack { slices, .. } => {
-                    for slice in slices.iter_mut() {
-                        let id = format!("file:{}", slice.rel_path);
-                        rehighlight(&mut slice.editor, &id, &state.highlighter);
-                    }
+                    diff_data.clone(),
+                    state.highlighter.clone(),
+                ));
+            }
+            tab_bar::TabView::SearchStack { slices, .. } => {
+                for slice in slices.iter_mut() {
+                    let id = format!("file:{}", slice.rel_path);
+                    rehighlight(&mut slice.editor, &id, &state.highlighter);
                 }
             }
         }
     }
 
+    // Cached previews from other areas don't render right now, but their
+    // editor state survives the area switch and should also be refreshed.
+    for slot in state.cached_previews.values_mut() {
+        if let Some(tab) = slot.as_mut()
+            && let tab_bar::TabView::Editor { editor, .. } = &mut tab.view
+        {
+            editor.highlight_version = editor.highlight_version.wrapping_add(1);
+            rehighlight(editor, &tab.id, &state.highlighter);
+        }
+    }
+
     let md_syntax = state.highlighter.find_syntax("md");
-    let rehighlight_session =
-        |ax: &mut interaction::AgentSession, highlighter: &highlight::SyntaxHighlighter| {
-            ax.chat_input.highlight_spans =
-                Some(highlighter.highlight_lines(&ax.chat_input.lines, md_syntax));
+    for ix in state.interactions.values_mut() {
+        for ax in ix.sessions.iter_mut() {
+            ax.chat_input.highlight_spans = Some(
+                state
+                    .highlighter
+                    .highlight_lines(&ax.chat_input.lines, md_syntax),
+            );
             for editor in ax.chat_editors.iter_mut() {
-                editor.highlight_spans =
-                    Some(highlighter.highlight_lines(&editor.lines, md_syntax));
+                editor.highlight_spans = Some(
+                    state
+                        .highlighter
+                        .highlight_lines(&editor.lines, md_syntax),
+                );
             }
-        };
-    for ix in state.change.interactions.values_mut() {
-        for ax in ix.sessions.iter_mut() {
-            rehighlight_session(ax, &state.highlighter);
         }
     }
-    for ax in state.caps.interaction.sessions.iter_mut() {
-        rehighlight_session(ax, &state.highlighter);
-    }
-    for ax in state.codex.interaction.sessions.iter_mut() {
-        rehighlight_session(ax, &state.highlighter);
-    }
-    for ix in state.kanban.interactions.values_mut() {
-        for ax in ix.sessions.iter_mut() {
-            rehighlight_session(ax, &state.highlighter);
-        }
-    }
-    // Kanban description editor — markdown, rendered only when the modal is
-    // open but re-highlight eagerly so a theme toggle doesn't flash stale
-    // colors next time the user opens a card.
-    state.kanban.description_editor.highlight_spans = Some(
-        state
-            .highlighter
-            .highlight_lines(&state.kanban.description_editor.lines, md_syntax),
-    );
 
     Task::batch(tasks)
 }
@@ -1765,24 +1786,26 @@ fn reload_and_reconcile(state: &mut State) -> bool {
                 to = new_name.as_str(),
                 "promoting exploration to real change"
             );
-            state.change.promote_exploration(
+            area::change::promote_exploration(
+                &mut state.change,
+                &mut state.interactions,
                 &exploration_id,
                 &new_name,
                 state.project.project_root.as_deref(),
             );
         }
-    } else if let Some(card_id) = state.kanban.selected_card.clone() {
-        // Kanban-owned exploration promotion. Uses the same heuristic as
-        // the Changes area: if the selected card has an unpromoted
-        // exploration and a new change directory just appeared, bind it.
-        let card_needs_change = state
-            .kanban
-            .cards
+    } else if let Some(idea_path) = state.ideas.selected.clone() {
+        // Idea-owned exploration promotion. Same heuristic as the Changes
+        // area: if the selected idea has an unpromoted exploration and a
+        // new change directory appeared, bind it.
+        let idea_needs_change = state
+            .ideas
+            .ideas
             .iter()
-            .find(|c| c.id == card_id)
-            .map(|c| c.exploration_id.is_some() && c.change_name.is_none())
+            .find(|i| i.abs_path == idea_path)
+            .map(|i| i.frontmatter.exploration.is_some() && i.frontmatter.change.is_none())
             .unwrap_or(false);
-        if card_needs_change
+        if idea_needs_change
             && let Some(new_name) = state
                 .project
                 .active_changes
@@ -1791,37 +1814,18 @@ fn reload_and_reconcile(state: &mut State) -> bool {
                 .map(|c| c.name.clone())
         {
             let exploration_id = state
-                .kanban
-                .cards
+                .ideas
+                .ideas
                 .iter()
-                .find(|c| c.id == card_id)
-                .and_then(|c| c.exploration_id.clone());
+                .find(|i| i.abs_path == idea_path)
+                .and_then(|i| i.frontmatter.exploration.clone());
             tracing::info!(
-                card = card_id.as_str(),
+                idea = %idea_path.display(),
                 to = new_name.as_str(),
-                "promoting kanban-card exploration to real change"
+                "promoting idea-owned exploration to real change"
             );
-            let migrated_ix = state.kanban.promote_exploration(
-                &card_id,
-                &new_name,
-                state.project.project_root.as_deref(),
-            );
-            // Card-owned exploration is now the change: move the live
-            // InteractionState into `change.interactions`. Invariant: the
-            // change was just created by this exploration, so no prior
-            // entry should exist — warn and overwrite if one somehow does.
-            if let Some(ix) = migrated_ix {
-                if state.change.interactions.contains_key(&new_name) {
-                    tracing::warn!(
-                        change = new_name.as_str(),
-                        "unexpected existing change.interactions entry at promotion; overwriting",
-                    );
-                }
-                state.change.interactions.insert(new_name.clone(), ix);
-            }
+            promote_idea_exploration(state, &idea_path, &new_name);
             if let Some(exp_id) = exploration_id {
-                // Exploration record now shadowed by the change — drop it so
-                // the bare-exploration list stays clean for both areas.
                 state.change.explorations.retain(|e| e.id != exp_id);
                 chat_store::save_explorations(
                     &state.change.explorations,
@@ -1829,10 +1833,6 @@ fn reload_and_reconcile(state: &mut State) -> bool {
                     state.project.project_root.as_deref(),
                 );
             }
-            kanban_store::save(
-                &state.kanban.cards,
-                state.project.project_root.as_deref(),
-            );
         }
     }
 
@@ -1851,13 +1851,19 @@ fn reload_and_reconcile(state: &mut State) -> bool {
         let Some(base_name) = data::strip_archive_prefix(&archived_name) else {
             continue;
         };
-        if state.change.interactions.contains_key(base_name) {
+        if state
+            .interactions
+            .contains_key(&scope::Scope::Change(base_name.to_string()))
+        {
             tracing::info!(
                 from = base_name,
                 to = archived_name.as_str(),
                 "migrating subscriptions to archived change"
             );
-            state.change.archive_change(
+            area::change::archive_change(
+                &mut state.change,
+                &mut state.interactions,
+                &mut state.tabs,
                 base_name,
                 &archived_name,
                 state.project.project_root.as_deref(),
@@ -1866,35 +1872,104 @@ fn reload_and_reconcile(state: &mut State) -> bool {
         }
     }
 
-    area::change::refresh_obvious_command(&mut state.change, &state.project);
+    area::change::refresh_obvious_command(
+        &state.change,
+        &mut state.interactions,
+        &state.project,
+    );
     archived_any
+}
+
+/// Migrate an idea-owned exploration's interaction state from
+/// `Scope::Exploration(exp_id)` to `Scope::Change(new_name)`. Stamps the
+/// idea's frontmatter, transitions its file into the Change subtree, and
+/// renames the on-disk chats directory.
+fn promote_idea_exploration(state: &mut State, idea_path: &Path, change_name: &str) {
+    let project_root = state.project.project_root.clone();
+    let (exploration_id, moved) = {
+        let Some(idea) = state
+            .ideas
+            .ideas
+            .iter_mut()
+            .find(|i| i.abs_path == idea_path)
+        else {
+            return;
+        };
+        let Some(exp_id) = idea.frontmatter.exploration.clone() else {
+            return;
+        };
+        idea.frontmatter.change = Some(change_name.to_string());
+        idea.state = idea_store::IdeaState::Change;
+        let body = idea_store::read_body(&idea.abs_path).unwrap_or_default();
+        if let Err(e) = idea_store::save_idea(idea, &body, project_root.as_deref()) {
+            tracing::warn!("failed to persist idea on promotion: {e}");
+        }
+        (exp_id, (idea.abs_path.clone(), idea.display_title()))
+    };
+
+    let (new_path, new_title) = moved;
+    area::ideas::refresh_after_move(
+        &mut state.ideas,
+        &mut state.tabs,
+        idea_path,
+        &new_path,
+        &new_title,
+    );
+
+    if let Some(mut ix) = state
+        .interactions
+        .remove(&scope::Scope::Exploration(exploration_id.clone()))
+    {
+        for ax in ix.sessions.iter_mut() {
+            ax.session.scope = change_name.to_string();
+            ax.scope_kind = scope::ScopeKind::Change;
+        }
+        interaction::reconcile_display_names(&mut ix.sessions, change_name);
+        state
+            .interactions
+            .insert(scope::Scope::Change(change_name.to_string()), ix);
+    }
+    chat_store::rename_scope(&exploration_id, change_name, project_root.as_deref());
 }
 
 /// Re-read content for all open text tabs from disk and enqueue async
 /// highlight jobs so the refresh doesn't block the UI.
 fn refresh_open_tabs(state: &mut State, tasks: &mut Vec<Task<Message>>) {
-    for (area, tabs) in [
-        (Area::Change, &mut state.change.tabs),
-        (Area::Caps, &mut state.caps.tabs),
-        (Area::Codex, &mut state.codex.tabs),
-    ] {
-        let all_tabs = tabs.preview.iter_mut().chain(tabs.file_tabs.iter_mut());
-        for tab in all_tabs {
-            let tab_id = tab.id.clone();
-            if let tab_bar::TabView::Editor { editor, .. } = &mut tab.view
-                && let Some(content) = state.project.read_artifact(&tab_id)
-            {
-                let mut next = widget::text_edit::EditorState::new(&content);
-                next.highlight_version = editor.highlight_version.wrapping_add(1);
-                *editor = next;
-                tasks.push(spawn_file_tab_highlight(
-                    area,
-                    tab_id,
-                    editor,
-                    state.highlighter.clone(),
-                    false,
-                ));
-            }
+    let area = state.active_area;
+    let refresh_tab = |tab: &mut tab_bar::Tab,
+                       project: &ProjectData,
+                       highlighter: &Arc<highlight::SyntaxHighlighter>,
+                       tasks: &mut Vec<Task<Message>>| {
+        let tab_id = tab.id.clone();
+        if let tab_bar::TabView::Editor { editor, .. } = &mut tab.view
+            && let Some(content) = project.read_artifact(&tab_id)
+        {
+            let mut next = widget::text_edit::EditorState::new(&content);
+            next.highlight_version = editor.highlight_version.wrapping_add(1);
+            *editor = next;
+            tasks.push(spawn_file_tab_highlight(
+                area,
+                tab_id,
+                editor,
+                highlighter.clone(),
+                false,
+            ));
+        }
+    };
+
+    let project = &state.project;
+    let highlighter = &state.highlighter;
+    let all_tabs = state
+        .tabs
+        .preview
+        .iter_mut()
+        .chain(state.tabs.file_tabs.iter_mut());
+    for tab in all_tabs {
+        refresh_tab(tab, project, highlighter, tasks);
+    }
+    for slot in state.cached_previews.values_mut() {
+        if let Some(tab) = slot.as_mut() {
+            refresh_tab(tab, project, highlighter, tasks);
         }
     }
 }
@@ -2081,8 +2156,7 @@ fn open_diff_preview(state: &mut State, area: Area, rel_path: &std::path::Path) 
     let diff_data = content.diff_data.clone();
     let path_for_task = rel_path.to_path_buf();
 
-    let tabs = tabs_for_area(area, &mut state.change, &mut state.caps, &mut state.codex);
-    tabs.open_diff(
+    state.tabs.open_diff(
         id.clone(),
         title,
         content.editor,
@@ -2091,9 +2165,8 @@ fn open_diff_preview(state: &mut State, area: Area, rel_path: &std::path::Path) 
         content.diff_data,
     );
 
-    // Snapshot the version we spawned against; the handler drops stale
-    // spans if the tab was refreshed out from under the job.
-    let version = tabs
+    let version = state
+        .tabs
         .preview
         .as_ref()
         .and_then(|t| {
@@ -2172,19 +2245,29 @@ fn refresh_artifact_tabs(
     content: String,
     tasks: &mut Vec<Task<Message>>,
 ) {
-    for (area, tabs) in [
-        (Area::Change, &mut state.change.tabs),
-        (Area::Caps, &mut state.caps.tabs),
-        (Area::Codex, &mut state.codex.tabs),
-    ] {
-        if let Some(editor) = tabs.refresh_content(id, content.clone()) {
-            tasks.push(spawn_file_tab_highlight(
-                area,
-                id.to_string(),
-                editor,
-                state.highlighter.clone(),
-                false,
-            ));
+    let area = state.active_area;
+    if let Some(editor) = state.tabs.refresh_content(id, content.clone()) {
+        tasks.push(spawn_file_tab_highlight(
+            area,
+            id.to_string(),
+            editor,
+            state.highlighter.clone(),
+            false,
+        ));
+    }
+    refresh_cached_artifact_tabs(state, id, &content);
+}
+
+/// Replace cached preview content for tabs that match `id` in any non-active
+/// area's stashed slot. Reuses `EditorState::new` so cursor/dirty don't
+/// outlive the file rewrite.
+fn refresh_cached_artifact_tabs(state: &mut State, id: &str, content: &str) {
+    for slot in state.cached_previews.values_mut() {
+        if let Some(tab) = slot.as_mut()
+            && tab.id == id
+            && let tab_bar::TabView::Editor { editor, .. } = &mut tab.view
+        {
+            *editor = widget::text_edit::EditorState::new(content);
         }
     }
 }
@@ -2202,21 +2285,17 @@ fn refresh_file_tabs_for_path(
     let Ok(content) = std::fs::read_to_string(changed_path) else {
         return;
     };
-    for (area, tabs) in [
-        (Area::Change, &mut state.change.tabs),
-        (Area::Caps, &mut state.caps.tabs),
-        (Area::Codex, &mut state.codex.tabs),
-    ] {
-        if let Some(editor) = tabs.refresh_content(&id, content.clone()) {
-            tasks.push(spawn_file_tab_highlight(
-                area,
-                id.clone(),
-                editor,
-                state.highlighter.clone(),
-                false,
-            ));
-        }
+    let area = state.active_area;
+    if let Some(editor) = state.tabs.refresh_content(&id, content.clone()) {
+        tasks.push(spawn_file_tab_highlight(
+            area,
+            id.clone(),
+            editor,
+            state.highlighter.clone(),
+            false,
+        ));
     }
+    refresh_cached_artifact_tabs(state, &id, &content);
 }
 
 /// Rebuild any open `vcs:`-prefixed tabs whose underlying path matches
@@ -2234,28 +2313,21 @@ fn refresh_diff_tabs_for_path(
     rebuild_diff_tab(state, project_root, &id, rel, tasks);
 }
 
-/// Rebuild every open diff tab — used on VCS state changes (HEAD/index/refs)
-/// where the diff baseline shifts for all open diffs at once.
+/// Rebuild every open diff tab — used on VCS state changes.
 fn refresh_all_diff_tabs(
     state: &mut State,
     project_root: &std::path::Path,
     tasks: &mut Vec<Task<Message>>,
 ) {
-    let ids: Vec<String> = [&state.change.tabs, &state.caps.tabs, &state.codex.tabs]
-        .into_iter()
-        .flat_map(|tabs| {
-            tabs.preview
-                .iter()
-                .chain(tabs.file_tabs.iter())
-                .filter(|t| matches!(t.view, tab_bar::TabView::Diff { .. }))
-                .map(|t| t.id.clone())
-        })
+    let ids: Vec<String> = state
+        .tabs
+        .preview
+        .iter()
+        .chain(state.tabs.file_tabs.iter())
+        .filter(|t| matches!(t.view, tab_bar::TabView::Diff { .. }))
+        .map(|t| t.id.clone())
         .collect();
-    let mut seen = std::collections::HashSet::new();
     for id in ids {
-        if !seen.insert(id.clone()) {
-            continue;
-        }
         let Some(rel_str) = id.strip_prefix("vcs:") else {
             continue;
         };
@@ -2273,44 +2345,30 @@ fn rebuild_diff_tab(
 ) {
     match widget::diff_view::build_diff_tab(project_root, rel) {
         Some(content) => {
-            for (area, tabs) in [
-                (Area::Change, &mut state.change.tabs),
-                (Area::Caps, &mut state.caps.tabs),
-                (Area::Codex, &mut state.codex.tabs),
-            ] {
-                tabs.refresh_diff(
-                    id,
-                    content.editor.clone(),
-                    content.path.clone(),
-                    content.status,
+            let area = state.active_area;
+            state.tabs.refresh_diff(
+                id,
+                content.editor.clone(),
+                content.path.clone(),
+                content.status,
+                content.diff_data.clone(),
+            );
+            if let Some((editor, _)) = find_diff_tab_mut(&mut state.tabs, id) {
+                editor.highlight_version = editor.highlight_version.wrapping_add(1);
+                let version = editor.highlight_version;
+                tasks.push(spawn_diff_highlight(
+                    area,
+                    id.to_string(),
+                    version,
+                    rel,
                     content.diff_data.clone(),
-                );
-                // After `refresh_diff`, the editor's `highlight_version` has
-                // inherited from the prior one (via `carry_view_state`); bump
-                // it so any in-flight previous-generation highlight is
-                // discarded when it arrives.
-                if let Some((editor, _)) = find_diff_tab_mut(tabs, id) {
-                    editor.highlight_version = editor.highlight_version.wrapping_add(1);
-                    let version = editor.highlight_version;
-                    tasks.push(spawn_diff_highlight(
-                        area,
-                        id.to_string(),
-                        version,
-                        rel,
-                        content.diff_data.clone(),
-                        state.highlighter.clone(),
-                    ));
-                }
+                    state.highlighter.clone(),
+                ));
             }
         }
         None => {
-            for tabs in [
-                &mut state.change.tabs,
-                &mut state.caps.tabs,
-                &mut state.codex.tabs,
-            ] {
-                tabs.close_by_id(id);
-            }
+            state.tabs.close_by_id(id);
+            close_cached_tabs(state, id);
         }
     }
 }
@@ -2340,30 +2398,106 @@ fn spawn_text_search(state: &mut State, query: String) -> Task<Message> {
     )
 }
 
-/// Choose which tab stack receives a newly-opened file tab based on the
-/// current area. Inlined at each call site so borrow-splitting lets callers
-/// keep a parallel `&state.highlighter`.
+/// Force the active area to Change when a file is opened from a non-area
+/// context (Dashboard, Settings) — those areas don't render tabs themselves.
 fn ensure_active_area(active_area: &mut Area) {
-    if matches!(
-        *active_area,
-        Area::Dashboard | Area::Kanban | Area::Settings
-    ) {
+    if matches!(*active_area, Area::Dashboard | Area::Settings) {
         *active_area = Area::Change;
     }
 }
 
-fn tabs_for_area<'a>(
-    area: Area,
-    change: &'a mut area::change::State,
-    caps: &'a mut area::caps::State,
-    codex: &'a mut area::codex::State,
-) -> &'a mut tab_bar::TabState {
-    match area {
-        Area::Change => &mut change.tabs,
-        Area::Caps => &mut caps.tabs,
-        Area::Codex => &mut codex.tabs,
-        Area::Dashboard | Area::Kanban | Area::Settings => &mut change.tabs,
+/// Close a tab id from every cached per-area preview slot. Only the active
+/// area's preview lives in `state.tabs.preview`; the others are stashed in
+/// `state.cached_previews`. When a file disappears from disk we need to
+/// evict matching previews from both.
+fn close_cached_tabs(state: &mut State, id: &str) {
+    for slot in state.cached_previews.values_mut() {
+        if let Some(tab) = slot.as_ref()
+            && tab.id == id
+        {
+            *slot = None;
+        }
     }
+}
+
+/// Switch areas, snapshotting the current pinned tab into the per-area
+/// cache and restoring the new area's cached preview (if any). File tabs
+/// stay in `state.tabs` and persist across the swap.
+fn switch_area(state: &mut State, target: Area) {
+    if state.active_area == target {
+        return;
+    }
+    let prev = state.active_area;
+    state
+        .cached_previews
+        .insert(prev, state.tabs.preview.take());
+    state.tabs.preview = state
+        .cached_previews
+        .remove(&target)
+        .unwrap_or(None);
+    if state.tabs.preview.is_none() && matches!(state.tabs.active, tab_bar::ActiveTab::Preview) {
+        state.tabs.active = tab_bar::ActiveTab::File(0);
+    }
+    state.active_area = target;
+}
+
+/// Route a top-level `Message::Interaction` to the active area's update fn.
+/// Single source of truth so chat/terminal events fall into the right
+/// per-area session-management semantics (multi-session for Change, etc).
+fn route_interaction(state: &mut State, msg: interaction::Msg) -> Task<Message> {
+    let needs_focus = is_chat_focus_msg(Some(&msg));
+    match state.active_area {
+        Area::Change => {
+            area::change::update(
+                &mut state.change,
+                &mut state.tabs,
+                &mut state.interactions,
+                area::change::Message::Interaction(msg),
+                &state.project,
+                &state.highlighter,
+            );
+        }
+        Area::Caps => {
+            let ix = state
+                .interactions
+                .entry(scope::Scope::Caps)
+                .or_default();
+            area::caps::update(
+                &mut state.caps,
+                &mut state.tabs,
+                ix,
+                area::caps::Message::Interaction(msg),
+                &state.project,
+                &state.highlighter,
+            );
+        }
+        Area::Codex => {
+            let ix = state
+                .interactions
+                .entry(scope::Scope::Codex)
+                .or_default();
+            area::codex::update(
+                &mut state.codex,
+                &mut state.tabs,
+                ix,
+                area::codex::Message::Interaction(msg),
+                &state.project,
+                &state.highlighter,
+            );
+        }
+        Area::Ideas => {
+            area::ideas::update(
+                &mut state.ideas,
+                &mut state.tabs,
+                &mut state.interactions,
+                area::ideas::Message::Interaction(msg),
+                &state.project,
+                &state.highlighter,
+            );
+        }
+        Area::Dashboard | Area::Settings => {}
+    }
+    if needs_focus { focus_chat_input() } else { Task::none() }
 }
 
 /// Tag a set of line indices with `LineBgKind::Match` so they stand out
@@ -2408,20 +2542,13 @@ fn open_search_hit_as_file(
     ensure_active_area(&mut state.active_area);
     let area = state.active_area;
     let highlighter = state.highlighter.clone();
-    let State {
-        active_area,
-        change,
-        caps,
-        codex,
-        ..
-    } = state;
-    let tabs = tabs_for_area(*active_area, change, caps, codex);
-    tabs.open_file(id.clone(), title, content, Some(hit.abs_path.clone()));
-    if let Some(tab) = tabs.file_tabs.iter_mut().find(|t| t.id == id)
+    state
+        .tabs
+        .open_file(id.clone(), title, content, Some(hit.abs_path.clone()));
+    if let Some(tab) = state.tabs.file_tabs.iter_mut().find(|t| t.id == id)
         && let tab_bar::TabView::Editor { editor, .. } = &mut tab.view
     {
         set_match_line_highlights(editor, &match_lines);
-        // Approximate viewport = 600px. LINE_HEIGHT is 20px in text_edit.
         let target_y = line as f32 * 20.0 - 300.0;
         editor.scroll_y = target_y.max(0.0);
         editor.cursor = widget::text_edit::Pos::new(line, 0);
@@ -2520,17 +2647,10 @@ fn open_search_stack_tab(
     };
 
     ensure_active_area(&mut state.active_area);
-    let area = state.active_area;
     let highlighter = state.highlighter.clone();
-    let State {
-        active_area,
-        change,
-        caps,
-        codex,
-        ..
-    } = state;
-    let tabs = tabs_for_area(*active_area, change, caps, codex);
-    tabs.open_search_stack(tab_id.clone(), title, query.to_string(), slices);
+    state
+        .tabs
+        .open_search_stack(tab_id.clone(), title, query.to_string(), slices);
 
     // Kick off one parallel highlight job per unique file. Each job emits a
     // `SearchStackHighlighted` message; the handler fans the spans out to
@@ -2560,7 +2680,6 @@ fn open_search_stack_tab(
                 .unwrap_or_default()
             },
             move |spans| Message::SearchStackHighlighted {
-                area,
                 tab_id: tab_id_msg.clone(),
                 abs_path: abs_path_msg.clone(),
                 spans: Arc::new(spans),
@@ -2715,6 +2834,140 @@ fn apply_session_title(state: &mut State, key: &str, title: &str) {
 
 // ── View ─────────────────────────────────────────────────────────────────────
 
+/// Compose the shared three-column layout for any non-dashboard, non-settings
+/// area: list (per-area) | content (global tabs) | optional interaction.
+fn view_area_three_column(state: &State) -> Element<'_, Message> {
+    let list: Element<'_, Message> = match state.active_area {
+        Area::Change => area::change::view_list(
+            &state.change,
+            &state.project,
+            &state.ideas,
+            &state.tabs,
+        )
+        .map(Message::Change),
+        Area::Caps => area::caps::view_list(&state.caps, &state.project, &state.tabs)
+            .map(Message::Caps),
+        Area::Codex => area::codex::view_list(&state.codex, &state.project, &state.tabs)
+            .map(Message::Codex),
+        Area::Ideas => area::ideas::view_list(&state.ideas, &state.tabs).map(Message::Ideas),
+        _ => unreachable!("view_area_three_column called for area without three-column layout"),
+    };
+
+    let content = view_global_content(state);
+    let scope = state.active_scope();
+    let ix = scope.as_ref().and_then(|s| state.interactions.get(s));
+    let controls = match scope {
+        Some(scope::Scope::Change(_)) => interaction::SessionControls::Multi,
+        _ => interaction::SessionControls::Single,
+    };
+
+    let divider = container(Space::new().height(Length::Fill))
+        .width(1.0)
+        .style(theme::divider);
+
+    // Change area exploration mode: skip the content column when there are no
+    // tabs open, so the empty state instructions are visible without an empty
+    // editor consuming the middle of the screen.
+    let is_exploration =
+        state.active_area == Area::Change && state.change.is_exploration_selected();
+    let has_tabs = state.tabs.preview.is_some() || !state.tabs.file_tabs.is_empty();
+
+    let mut row_items = row![
+        container(list)
+            .width(theme::LIST_COLUMN_WIDTH)
+            .height(Length::Fill)
+            .style(theme::surface),
+        divider,
+    ];
+
+    if !is_exploration || has_tabs {
+        row_items = row_items.push(
+            container(content)
+                .width(Length::Fill)
+                .height(Length::Fill),
+        );
+    }
+
+    let visible = ix.is_some_and(|i| i.visible);
+    let width = ix.map_or(theme::INTERACTION_COLUMN_WIDTH, |i| i.width);
+
+    if !is_exploration || has_tabs {
+        let toggle = widget::interaction_toggle::view(visible, width, |m| {
+            Message::Interaction(interaction::Msg::Handle(m))
+        });
+        row_items = row_items.push(toggle);
+    }
+
+    if let Some(ix) = ix
+        && ix.visible
+    {
+        let interaction_col =
+            interaction::view_column(ix, Message::Interaction, controls);
+        let col = container(interaction_col)
+            .height(Length::Fill)
+            .style(theme::surface);
+        let col = if !is_exploration || has_tabs {
+            col.width(ix.width)
+        } else {
+            col.width(Length::Fill)
+        };
+        row_items = row_items.push(col);
+    }
+
+    row_items.height(Length::Fill).into()
+}
+
+/// Render the shared content column: tab bar + (optional) area-specific
+/// toolbar + tab content + (Change-only) error panel.
+fn view_global_content(state: &State) -> Element<'_, Message> {
+    let bar = tab_bar::view_bar(&state.tabs, Message::TabSelect, Message::TabClose);
+    let body = tab_bar::view_content(&state.tabs).map(Message::TabContent);
+
+    let mut col = column![bar];
+
+    // Idea pinned-tab toolbar (Explore / Open Change / Archive / Delete).
+    if state.active_area == Area::Ideas
+        && let Some(toolbar) = area::ideas::view_pinned_toolbar(&state.ideas, &state.tabs)
+    {
+        col = col.push(toolbar.map(Message::Ideas));
+    }
+
+    col = col.push(body);
+
+    // Change area: error panel for the active artifact.
+    if state.active_area == Area::Change
+        && let Some(errors) = area::change::error_panel_for(&state.change, &state.project, &state.tabs)
+    {
+        let divider = container(Space::new().width(Length::Fill))
+            .height(1.0)
+            .style(theme::divider);
+        let mut error_list = column![].spacing(theme::SPACING_XS);
+        for err in errors {
+            error_list = error_list.push(
+                iced::widget::text(err.as_str())
+                    .size(theme::font_md())
+                    .color(theme::error()),
+            );
+        }
+        let panel = container(
+            column![
+                iced::widget::text("Errors")
+                    .size(theme::font_sm())
+                    .color(theme::text_secondary()),
+                error_list,
+            ]
+            .spacing(theme::SPACING_SM),
+        )
+        .padding(theme::SPACING_SM)
+        .width(Length::Fill)
+        .style(theme::surface);
+        col = col.push(divider);
+        col = col.push(panel);
+    }
+
+    col.height(Length::Fill).into()
+}
+
 fn view(state: &State) -> Element<'_, Message> {
     let next_mode = match theme::mode() {
         theme::ColorMode::Dark => theme::ColorMode::Light,
@@ -2736,23 +2989,18 @@ fn view(state: &State) -> Element<'_, Message> {
             &state.config.projects.recent,
         )
         .map(Message::Dashboard),
-        Area::Kanban => area::kanban::view(&state.kanban, &state.project, &state.change.explorations, &state.change.interactions)
-            .map(Message::Kanban),
-        Area::Change => area::change::view(&state.change, &state.project, &state.kanban)
-            .map(Message::Change),
-        Area::Caps => area::caps::view(&state.caps, &state.project).map(Message::Caps),
-        Area::Codex => area::codex::view(&state.codex, &state.project).map(Message::Codex),
         Area::Settings => {
             area::settings::view(&state.settings, &state.config).map(Message::Settings)
         }
+        _ => view_area_three_column(state),
     };
 
     let segments = match state.active_area {
         Area::Dashboard => area::dashboard::breadcrumbs(),
-        Area::Kanban => area::kanban::breadcrumbs(),
-        Area::Change => area::change::breadcrumbs(&state.change, &state.project),
-        Area::Caps => area::caps::breadcrumbs(&state.caps),
-        Area::Codex => area::codex::breadcrumbs(&state.codex),
+        Area::Ideas => area::ideas::breadcrumbs(&state.ideas),
+        Area::Change => area::change::breadcrumbs(&state.change, &state.project, &state.tabs),
+        Area::Caps => area::caps::breadcrumbs(&state.tabs),
+        Area::Codex => area::codex::breadcrumbs(&state.tabs),
         Area::Settings => area::settings::breadcrumbs(),
     };
     let project_label = state
@@ -2824,12 +3072,7 @@ fn subscription(state: &State) -> Subscription<Message> {
             subs.push(widget::terminal::pty_subscription(key, pty_cwd.clone()).map(tagged_pty));
         }
     };
-    for ix in state.change.interactions.values() {
-        push_pty(ix, &mut subs);
-    }
-    push_pty(&state.caps.interaction, &mut subs);
-    push_pty(&state.codex.interaction, &mut subs);
-    for ix in state.kanban.interactions.values() {
+    for ix in state.interactions.values() {
         push_pty(ix, &mut subs);
     }
 
@@ -2843,12 +3086,7 @@ fn subscription(state: &State) -> Subscription<Message> {
                 subs.push(agent::agent_subscription(key, root.clone()).map(tagged_agent));
             }
         };
-        for ix in state.change.interactions.values() {
-            push_scope(ix, &mut subs);
-        }
-        push_scope(&state.caps.interaction, &mut subs);
-        push_scope(&state.codex.interaction, &mut subs);
-        for ix in state.kanban.interactions.values() {
+        for ix in state.interactions.values() {
             push_scope(ix, &mut subs);
         }
     }
@@ -2878,12 +3116,10 @@ fn subscription(state: &State) -> Subscription<Message> {
 
 /// True if any session across all interaction panels is actively streaming.
 fn any_session_streaming(state: &State) -> bool {
-    let check =
-        |ix: &interaction::InteractionState| ix.sessions.iter().any(|s| s.session.is_streaming);
-    check(&state.caps.interaction)
-        || check(&state.codex.interaction)
-        || state.change.interactions.values().any(check)
-        || state.kanban.interactions.values().any(check)
+    state
+        .interactions
+        .values()
+        .any(|ix| ix.sessions.iter().any(|s| s.session.is_streaming))
 }
 
 fn theme_subscription() -> Subscription<Message> {

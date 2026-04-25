@@ -2,14 +2,14 @@ pub mod caps;
 pub mod change;
 pub mod codex;
 pub mod dashboard;
+pub mod ideas;
 pub mod interaction;
-pub mod kanban;
 pub mod settings;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Area {
     Dashboard,
-    Kanban,
+    Ideas,
     Change,
     Caps,
     Codex,
@@ -20,7 +20,7 @@ impl Area {
     pub const NAV: [Area; 5] = [
         Area::Dashboard,
         Area::Change,
-        Area::Kanban,
+        Area::Ideas,
         Area::Caps,
         Area::Codex,
     ];
