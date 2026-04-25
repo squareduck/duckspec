@@ -4,6 +4,10 @@ use iced::widget::{Space, button, column, container, row, rule, scrollable, stac
 
 pub const CHAT_SCROLLABLE_ID: &str = "agent-chat-scroll";
 pub const CHAT_INPUT_ID: &str = "agent-chat-input";
+/// Pixels of slack at the bottom edge that still count as "stuck to bottom".
+/// Small enough that one wheel notch unsticks the view, large enough to
+/// absorb sub-pixel layout rounding during streaming rebuilds.
+pub const STICK_TO_BOTTOM_THRESHOLD: f32 = 16.0;
 use iced::{Element, Length};
 
 use crate::agent::SlashCommand;
@@ -33,6 +37,10 @@ pub enum Msg {
     QueueAction(text_edit::EditorAction),
     /// Discard the queued message (from the pill's ✕ button).
     DiscardQueue,
+    /// User scrolled the chat transcript. Drives the per-session
+    /// `stick_to_bottom` flag — true while the viewport is within
+    /// `STICK_TO_BOTTOM_THRESHOLD` pixels of the bottom.
+    ChatScrolled(scrollable::Viewport),
 }
 
 // ── Status bar info ────────────────────────────────────────────────────────
@@ -310,7 +318,7 @@ pub fn view<'a>(
         .style(theme::thin_scrollbar)
         .width(Length::Fill)
         .height(Length::Fill)
-        .anchor_bottom()
+        .on_scroll(Msg::ChatScrolled)
         .id(CHAT_SCROLLABLE_ID);
     let chat_area = container(chat_scroll)
         .width(Length::Fill)

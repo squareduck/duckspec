@@ -87,6 +87,23 @@ pub struct AgentSession {
     /// `session.last_seeded_description` to decide whether to inject the
     /// description as system context on the upcoming turn.
     pub card_description: Option<String>,
+    /// True when the chat transcript is at (or near) the bottom — driven by
+    /// the scrollable's `on_scroll` callback. Streaming events use this to
+    /// decide whether to auto-scroll the view: stays put while the user is
+    /// reading history, snaps to bottom when they're already there.
+    pub stick_to_bottom: bool,
+    /// Last `absolute_offset.y` we saw from the chat scrollable. Used by the
+    /// `ChatScrolled` handler to tell user-driven scroll-ups (offset
+    /// decreased) apart from content-grew-under-viewport notifications
+    /// (offset unchanged but content bounds grew). Without this distinction
+    /// the latter would race the auto-snap task and unstick us.
+    pub last_chat_offset_y: Option<f32>,
+    /// Set by `send_prompt_text` when the user submits while sticking to the
+    /// bottom: the user's message lands in the transcript immediately but the
+    /// agent's first event may take a moment, so the auto-snap path keyed on
+    /// `AgentEvent` can't help. Drained by `main` after the dispatch returns
+    /// to issue a one-shot `snap_to_end` task.
+    pub pending_snap_to_bottom: bool,
 }
 
 impl AgentSession {
@@ -115,6 +132,9 @@ impl AgentSession {
             obvious_command: None,
             queue_editor: None,
             card_description: None,
+            stick_to_bottom: true,
+            last_chat_offset_y: None,
+            pending_snap_to_bottom: false,
         }
     }
 }
@@ -417,6 +437,32 @@ fn handle_agent_chat(
         agent_chat::Msg::DiscardQueue => {
             ax.queue_editor = None;
         }
+        agent_chat::Msg::ChatScrolled(viewport) => {
+            let bounds = viewport.bounds();
+            let content = viewport.content_bounds();
+            let offset_y = viewport.absolute_offset().y;
+            let max_scroll = (content.height - bounds.height).max(0.0);
+            let distance_from_bottom = (max_scroll - offset_y).max(0.0);
+            let at_bottom =
+                distance_from_bottom <= agent_chat::STICK_TO_BOTTOM_THRESHOLD;
+
+            // The scrollable publishes viewport notifications for both
+            // user-driven scrolls *and* content-size changes (via
+            // `RedrawRequested`). To avoid racing the auto-snap task, only
+            // disengage stick on a clear user scroll-up (offset decreased);
+            // only engage when actually within threshold of the bottom.
+            // Same-offset events caused by content growing underneath are
+            // preserved.
+            let prev_offset = ax.last_chat_offset_y;
+            ax.last_chat_offset_y = Some(offset_y);
+            if at_bottom {
+                ax.stick_to_bottom = true;
+            } else if let Some(prev) = prev_offset
+                && offset_y + f32::EPSILON < prev
+            {
+                ax.stick_to_bottom = false;
+            }
+        }
     }
 }
 
@@ -487,6 +533,12 @@ pub fn send_prompt_text(ax: &mut AgentSession, text: String, highlighter: &Synta
     });
     ax.session.is_streaming = true;
     ax.session.pending_text.clear();
+    // The user's message just grew the transcript. If they were stuck to the
+    // bottom we want them to see it land there immediately — without this
+    // flag the next auto-snap waits for the first `AgentEvent`.
+    if ax.stick_to_bottom {
+        ax.pending_snap_to_bottom = true;
+    }
 
     let mut req = TurnRequest::new(prompt, handle.working_dir().to_path_buf());
     req.system_additions = system_additions;
