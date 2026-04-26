@@ -21,7 +21,7 @@ use crate::idea_store::{self, ArchiveKind, Idea, IdeaState};
 use crate::scope::Scope;
 use crate::theme;
 use crate::widget::list_view::ListRow;
-use crate::widget::text_edit::EditorState;
+use crate::widget::text_edit::{EditorState, Pos};
 use crate::widget::{collapsible, list_view, tab_bar, vertical_scroll};
 
 /// Tab id prefix for the pinned idea body tab. Matches the
@@ -60,6 +60,10 @@ pub struct State {
     /// (chip click). On submit, the tag is replaced (or removed if empty)
     /// instead of appended.
     pub tag_input_editing: Option<usize>,
+    /// Per-idea format errors from the most recent save attempt. Cleared on
+    /// the next successful format of that idea. Surfaced in the dashboard
+    /// using the same UI as `ProjectAudit::artifact_errors`.
+    pub format_errors: HashMap<PathBuf, Vec<String>>,
 }
 
 impl Default for State {
@@ -72,6 +76,7 @@ impl Default for State {
             list_scroll: 0.0,
             tag_input: None,
             tag_input_editing: None,
+            format_errors: HashMap::new(),
         }
     }
 }
@@ -274,7 +279,7 @@ pub fn update(
             state.list_scroll = offset;
         }
         Message::SaveBody => {
-            save_pinned_tab(state, tabs, interactions, project);
+            save_pinned_tab(state, tabs, interactions, project, highlighter);
         }
         Message::OpenTagInput => {
             state.tag_input = Some(String::new());
@@ -575,6 +580,7 @@ fn save_pinned_tab(
     tabs: &mut tab_bar::TabState,
     interactions: &mut HashMap<Scope, InteractionState>,
     project: &ProjectData,
+    highlighter: &SyntaxHighlighter,
 ) {
     let Some(path) = state.selected.clone() else {
         return;
@@ -586,11 +592,17 @@ fn save_pinned_tab(
         },
         None => return,
     };
+    let format_result =
+        crate::idea_format::format_body(&body, project.duckspec_root.as_deref());
+    let body_to_save: String = match &format_result {
+        Ok(formatted) => formatted.clone(),
+        Err(_) => body.clone(),
+    };
     let Some(idea) = state.ideas.iter_mut().find(|i| i.abs_path == path) else {
         return;
     };
     let prev_path = idea.abs_path.clone();
-    if let Err(e) = idea_store::save_idea(idea, &body, project.project_root.as_deref()) {
+    if let Err(e) = idea_store::save_idea(idea, &body_to_save, project.project_root.as_deref()) {
         tracing::warn!("failed to save idea body: {e}");
         return;
     }
@@ -600,11 +612,32 @@ fn save_pinned_tab(
     if new_path != prev_path {
         state.selected = Some(new_path.clone());
     }
+    state.format_errors.remove(&prev_path);
+    state.format_errors.remove(&new_path);
+    match &format_result {
+        Ok(_) => {}
+        Err(errors) => {
+            state.format_errors.insert(new_path.clone(), errors.clone());
+        }
+    }
     if let Some(tab) = tabs.preview.as_mut() {
         tab.id = pinned_tab_id(&new_path);
         tab.title = new_title.clone();
         if let tab_bar::TabView::Editor { editor, .. } = &mut tab.view {
-            editor.dirty = false;
+            if let Ok(formatted) = &format_result {
+                let mut next = EditorState::new(formatted);
+                let last_line_idx = next.lines.len().saturating_sub(1);
+                let row = editor.cursor.line.min(last_line_idx);
+                let col = editor.cursor.col.min(next.lines[row].len());
+                next.cursor = Pos::new(row, col);
+                next.scroll_y = editor.scroll_y;
+                let syntax = highlighter.find_syntax("md");
+                next.highlight_spans =
+                    Some(highlighter.highlight_lines(&next.lines, syntax));
+                *editor = next;
+            } else {
+                editor.dirty = false;
+            }
         }
     }
     state

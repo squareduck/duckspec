@@ -15,6 +15,7 @@ mod chat_store;
 pub mod config;
 mod data;
 pub mod highlight;
+mod idea_format;
 mod idea_store;
 mod path_env;
 mod scope;
@@ -575,7 +576,13 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                         return Task::none();
                     }
                     let project_root = state.project.project_root.clone();
-                    save_quick_idea(state, payload, project_root.as_deref());
+                    let duckspec_root = state.project.duckspec_root.clone();
+                    save_quick_idea(
+                        state,
+                        payload,
+                        project_root.as_deref(),
+                        duckspec_root.as_deref(),
+                    );
                     state.quick_idea.close();
                 }
                 Msg::SelectNext => {
@@ -1872,6 +1879,7 @@ fn save_quick_idea(
     state: &mut State,
     payload: widget::quick_idea::SavePayload,
     project_root: Option<&Path>,
+    duckspec_root: Option<&Path>,
 ) {
     if let Some(loaded_path) = payload.loaded_path {
         let Some(idx) = state
@@ -1885,12 +1893,25 @@ fn save_quick_idea(
         };
         let mut idea = state.ideas.ideas[idx].clone();
         idea.frontmatter.tags = payload.tags;
-        if let Err(e) = idea_store::save_idea(&mut idea, &payload.body, project_root) {
+        let format_result = idea_format::format_body(&payload.body, duckspec_root);
+        let body_to_save: String = match &format_result {
+            Ok(formatted) => formatted.clone(),
+            Err(_) => payload.body.clone(),
+        };
+        if let Err(e) = idea_store::save_idea(&mut idea, &body_to_save, project_root) {
             tracing::warn!("quick idea save failed: {e}");
             return;
         }
         let new_path = idea.abs_path.clone();
         let new_title = idea.display_title();
+        state.ideas.format_errors.remove(&loaded_path);
+        state.ideas.format_errors.remove(&new_path);
+        if let Err(errors) = &format_result {
+            state
+                .ideas
+                .format_errors
+                .insert(new_path.clone(), errors.clone());
+        }
         state.ideas.ideas[idx] = idea;
         state
             .ideas
@@ -1912,9 +1933,20 @@ fn save_quick_idea(
         // it so `derive_title_from_body` lifts a real title and the file
         // doesn't land as `idea.md`.
         let body = ensure_h1_prefix(&payload.body);
-        if let Err(e) = idea_store::save_idea(&mut idea, &body, project_root) {
+        let format_result = idea_format::format_body(&body, duckspec_root);
+        let body_to_save: String = match &format_result {
+            Ok(formatted) => formatted.clone(),
+            Err(_) => body.clone(),
+        };
+        if let Err(e) = idea_store::save_idea(&mut idea, &body_to_save, project_root) {
             tracing::warn!("quick idea save failed: {e}");
             return;
+        }
+        if let Err(errors) = &format_result {
+            state
+                .ideas
+                .format_errors
+                .insert(idea.abs_path.clone(), errors.clone());
         }
         state.ideas.ideas.push(idea);
         state
@@ -3400,6 +3432,7 @@ fn view(state: &State) -> Element<'_, Message> {
             &state.project,
             &state.change.explorations,
             &state.config.projects.recent,
+            &state.ideas.format_errors,
         )
         .map(Message::Dashboard),
         Area::Settings => {
