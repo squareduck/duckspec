@@ -11,7 +11,11 @@ use iced::{Element, Length};
 
 use crate::theme;
 
-pub fn view<'a, Msg: 'a>(segments: Vec<String>, trailing: Option<String>) -> Element<'a, Msg> {
+pub fn view<'a, Msg: 'a>(
+    segments: Vec<String>,
+    trailing: Option<String>,
+    hint: Option<String>,
+) -> Element<'a, Msg> {
     let mut bar = row![].spacing(theme::SPACING_XS);
     let last = segments.len().saturating_sub(1);
     for (i, seg) in segments.into_iter().enumerate() {
@@ -34,8 +38,19 @@ pub fn view<'a, Msg: 'a>(segments: Vec<String>, trailing: Option<String>) -> Ele
                 .color(color),
         );
     }
-    if let Some(label) = trailing {
+    let has_trailing = trailing.is_some() || hint.is_some();
+    if has_trailing {
         bar = bar.push(Space::new().width(Length::Fill));
+    }
+    if let Some(h) = hint {
+        bar = bar.push(
+            text(h)
+                .size(theme::font_sm())
+                .wrapping(Wrapping::None)
+                .color(theme::text_muted()),
+        );
+    }
+    if let Some(label) = trailing {
         bar = bar.push(
             text(label)
                 .size(theme::font_sm())

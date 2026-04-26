@@ -11,6 +11,7 @@ pub const STICK_TO_BOTTOM_THRESHOLD: f32 = 16.0;
 use iced::{Element, Length};
 
 use crate::agent::SlashCommand;
+use crate::area::interaction::{self, SelectionContext};
 use crate::chat_store::{ChatSession, ContentBlock, Role};
 use crate::theme;
 use crate::widget::collapsible;
@@ -288,6 +289,8 @@ pub fn view<'a>(
     completion: &CompletionState,
     status: StatusInfo,
     obvious_command: Option<&str>,
+    pinned_selections: &'a [SelectionContext],
+    tentative_selection: Option<&'a SelectionContext>,
 ) -> Element<'a, Msg> {
     // Chat content — scrollable column of full-width sections.
     let mut chat_col = column![]
@@ -403,12 +406,24 @@ pub fn view<'a>(
     } else {
         theme::text_muted()
     };
-    let meta_row = container(
-        row![
-            Space::new().width(Length::Fill),
+    let has_attachments =
+        !pinned_selections.is_empty() || tentative_selection.is_some();
+    let mut meta_inner = row![].spacing(theme::SPACING_SM).align_y(iced::Alignment::Center);
+    if has_attachments {
+        meta_inner = meta_inner.push(
+            text("⌘R reset")
+                .size(theme::font_sm())
+                .color(theme::text_muted()),
+        );
+    }
+    meta_inner = meta_inner
+        .push(Space::new().width(Length::Fill))
+        .push(
             text(status.model)
                 .size(theme::font_sm())
                 .color(theme::text_muted()),
+        )
+        .push(
             text(format!(
                 "{} / {} ({}%)",
                 format_number(status.context_tokens),
@@ -417,12 +432,10 @@ pub fn view<'a>(
             ))
             .size(theme::font_sm())
             .color(ctx_color),
-        ]
-        .spacing(theme::SPACING_SM)
-        .align_y(iced::Alignment::Center),
-    )
-    .padding([0.0, theme::SPACING_SM])
-    .width(Length::Fill);
+        );
+    let meta_row = container(meta_inner)
+        .padding([0.0, theme::SPACING_SM])
+        .width(Length::Fill);
 
     // Queue pill — renders above the input when a message is staged while the
     // agent is still streaming. Uses a read-only TextEdit so it matches the
@@ -466,13 +479,46 @@ pub fn view<'a>(
         None => Space::new().into(),
     };
 
+    // Selection-context chips: pinned first, then the live tentative slot.
+    // Iced 0.14's `Row::wrap()` lays children out across multiple lines
+    // when they overflow horizontally, so a long chip set grows upward
+    // above the input rather than forcing a horizontal scroll. Tab-source
+    // labels are abbreviated to filename + minimal disambiguating
+    // parents — long paths would otherwise get truncated by ellipsis.
+    let attachments_el: Element<'a, Msg> = if has_attachments {
+        let mut all: Vec<&SelectionContext> = pinned_selections.iter().collect();
+        if let Some(t) = tentative_selection {
+            all.push(t);
+        }
+        let labels = interaction::chip_labels_abbreviated(&all);
+        let pinned_count = pinned_selections.len();
+        let mut chips: Vec<Element<'a, Msg>> = Vec::with_capacity(all.len());
+        for (i, label) in labels.into_iter().enumerate() {
+            let tentative = i >= pinned_count;
+            chips.push(view_selection_chip(label, tentative));
+        }
+        let wrapped = iced::widget::Row::with_children(chips)
+            .spacing(theme::SPACING_XS)
+            .align_y(iced::Alignment::Center)
+            .wrap()
+            .vertical_spacing(theme::SPACING_XS);
+        container(wrapped)
+            .padding([0.0, theme::SPACING_SM])
+            .width(Length::Fill)
+            .into()
+    } else {
+        Space::new().into()
+    };
+
     // Horizontal padding here sums with TextEdit's internal CONTENT_PAD (8px)
     // to land the input's text at the same 12px the chat headers and the
     // completion rows use.
-    let input_row = container(column![queue_el, input, meta_row].spacing(theme::SPACING_XS))
-        .padding([theme::SPACING_SM, theme::SPACING_XS])
-        .width(Length::Fill)
-        .style(theme::chat_input);
+    let input_row = container(
+        column![queue_el, attachments_el, input, meta_row].spacing(theme::SPACING_XS),
+    )
+    .padding([theme::SPACING_SM, theme::SPACING_XS])
+    .width(Length::Fill)
+    .style(theme::chat_input);
 
     column![chat_area, completion_el, input_divider, input_row]
         .height(Length::Fill)
@@ -607,6 +653,31 @@ fn view_tool_block<'a>(
         .padding([0.0, theme::SPACING_SM])
         .width(Length::Fill)
         .into()
+}
+
+/// One selection-context chip — a small bordered label sitting above the
+/// chat input. `tentative` chips use a muted border to signal "not yet
+/// pinned (Cmd-K to keep)"; pinned chips use the primary border color.
+fn view_selection_chip<'a>(label: String, tentative: bool) -> Element<'a, Msg> {
+    let style = if tentative {
+        theme::selection_chip_tentative
+    } else {
+        theme::selection_chip_pinned
+    };
+    let color = if tentative {
+        theme::text_secondary()
+    } else {
+        theme::text_primary()
+    };
+    container(
+        text(label)
+            .size(theme::font_sm())
+            .color(color)
+            .wrapping(iced::widget::text::Wrapping::None),
+    )
+    .padding([2.0, theme::SPACING_SM])
+    .style(style)
+    .into()
 }
 
 /// Header label color for a block kind (re-exported from text_edit for convenience).

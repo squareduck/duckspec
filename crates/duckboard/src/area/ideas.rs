@@ -690,10 +690,6 @@ fn collect_section_rows<'a>(
         .collect();
     direct.sort_by(|a, b| b.frontmatter.created.cmp(&a.frontmatter.created));
 
-    for idea in &direct {
-        out.push(idea_list_row(idea, depth, selected));
-    }
-
     let mut children: Vec<&'a str> = state
         .ideas
         .iter()
@@ -702,6 +698,13 @@ fn collect_section_rows<'a>(
         .collect();
     children.sort();
     children.dedup();
+
+    // Reserve a chevron-width gutter on idea rows only when sibling tag groups
+    // render at the same depth — otherwise the gutter is phantom indent.
+    let has_tag_siblings = !children.is_empty();
+    for idea in &direct {
+        out.push(idea_list_row(idea, depth, selected, has_tag_siblings));
+    }
 
     for child in children {
         let mut next_prefix = prefix.to_vec();
@@ -726,6 +729,7 @@ fn idea_list_row<'a>(
     idea: &'a Idea,
     depth: usize,
     selected: Option<&Path>,
+    has_tag_siblings: bool,
 ) -> ListRow<'a, Message> {
     let is_selected = selected == Some(idea.abs_path.as_path());
     let icon_bytes: &'static [u8] = if idea.frontmatter.change.is_some() {
@@ -739,15 +743,18 @@ fn idea_list_row<'a>(
     if let Some(kind) = idea.frontmatter.archived {
         label = format!("{label} ({})", kind.label());
     }
-    // Spacer-leading keeps the icon column aligned with chevron-leading rows
-    // at the same depth — same trick `tree_view` uses for leaf nodes.
-    let leading: Element<'a, Message> = row![Space::new().width(theme::font_sm())].into();
-    ListRow::new(label)
-        .leading(leading)
+    let mut row = ListRow::new(label)
         .icon(icon_bytes)
         .indent(depth)
         .selected(is_selected)
-        .on_press(Message::SelectIdea(idea.abs_path.clone()))
+        .on_press(Message::SelectIdea(idea.abs_path.clone()));
+    // Spacer-leading keeps the icon column aligned with chevron-leading rows
+    // at the same depth — only meaningful when tag groups render alongside.
+    if has_tag_siblings {
+        let leading: Element<'a, Message> = row![Space::new().width(theme::font_sm())].into();
+        row = row.leading(leading);
+    }
+    row
 }
 
 // ── Pinned-tab toolbar (shown by main.rs above the tab content) ──────────────

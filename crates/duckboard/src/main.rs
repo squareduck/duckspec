@@ -329,6 +329,7 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                     area::settings::Message::LoadFonts,
                 );
             }
+            return restore_chat_scroll(state);
         }
         Message::Refresh => {
             reload_and_reconcile(state);
@@ -365,6 +366,7 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                 }
                 Msg::Confirm => {
                     let mut task = Task::none();
+                    let mut switched = false;
                     if let Some(rel_path) = state.file_finder.selected_path() {
                         if let Some(root) = &state.project.project_root {
                             let abs = root.join(&rel_path);
@@ -378,6 +380,9 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                                     Area::Dashboard | Area::Settings => Area::Change,
                                     other => other,
                                 };
+                                if state.active_area != area {
+                                    switched = true;
+                                }
                                 switch_area(state, area);
                                 state
                                     .tabs
@@ -397,6 +402,9 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                             }
                         }
                         state.file_finder.close();
+                    }
+                    if switched {
+                        return Task::batch([task, restore_chat_scroll(state)]);
                     }
                     return task;
                 }
@@ -753,6 +761,7 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                         &state.project,
                         &state.highlighter,
                     );
+                    return restore_chat_scroll(state);
                 }
                 area::dashboard::Message::AddExploration => {
                     switch_area(state, Area::Change);
@@ -764,6 +773,7 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                         &state.project,
                         &state.highlighter,
                     );
+                    return restore_chat_scroll(state);
                 }
                 area::dashboard::Message::SelectAuditError {
                     change,
@@ -781,9 +791,9 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                         &state.project,
                         &state.highlighter,
                     );
+                    return restore_chat_scroll(state);
                 }
             }
-            area::dashboard::update(&mut state.dashboard, msg);
         }
         Message::Change(msg) => {
             match msg {
@@ -801,6 +811,7 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                             &state.project,
                             &state.highlighter,
                         );
+                        return restore_chat_scroll(state);
                     }
                 }
                 msg => {
@@ -932,7 +943,7 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                     &state.project,
                     &state.highlighter,
                 );
-                return Task::none();
+                return restore_chat_scroll(state);
             }
             // Chip click: shift held → promote to primary; otherwise open
             // the input pre-filled for rename. Modifier state lives in a
@@ -985,12 +996,22 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
             {
                 return update(state, Message::Ideas(area::ideas::Message::SaveBody));
             }
-            return handle_editor_action(
+            // Suppress tentative refresh for in-flight drags: the chip
+            // appearing in the chat panel mid-drag reflows layout and can
+            // shift the chat content under the user's cursor. `DragEnd`
+            // (published by the editor on mouse release) is the signal
+            // that selection is stable and the chip can land safely.
+            let should_sync = !matches!(&action, widget::text_edit::EditorAction::Drag(_));
+            let task = handle_editor_action(
                 &mut state.tabs,
                 state.active_area,
                 action,
                 state.highlighter.clone(),
             );
+            if should_sync {
+                sync_tentative_from_active_tab(state);
+            }
+            return task;
         }
         Message::TabContent(tab_bar::TabContentMsg::OpenInNewTab(rel_path)) => {
             // Only meaningful in Change area (diff tabs surface `OpenInNewTab`);
@@ -1549,6 +1570,55 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                 return Task::none();
             }
 
+            // Cmd-K: pin the tentative selection attachment so it persists
+            // across messages. Gated on chat being visible + a session
+            // loaded; the action is a no-op (and the global handler returns
+            // early) when there's no tentative to pin.
+            if mods.command()
+                && !mods.shift()
+                && matches!(&key, keyboard::Key::Character(c) if c.eq_ignore_ascii_case("k"))
+                && let Some(scope) = state.active_scope()
+                && let Some(ix) = state.interactions.get_mut(&scope)
+                && ix.visible
+                && ix.active_tab == ActiveTab::Chat
+                && let Some(ax) = ix.active_mut()
+                && interaction::pin_tentative(ax)
+            {
+                // Pinning leaves the source editor's anchor untouched so
+                // the visual selection lingers; clear it on the active
+                // content tab too so the user gets a clean "next selection
+                // is a fresh tentative" gesture.
+                if let Some(tab) = state.tabs.active_tab_mut() {
+                    match &mut tab.view {
+                        tab_bar::TabView::Editor { editor, .. }
+                        | tab_bar::TabView::Diff { editor, .. } => {
+                            editor.anchor = None;
+                        }
+                        tab_bar::TabView::SearchStack { .. } => {}
+                    }
+                }
+                return Task::none();
+            }
+
+            // Cmd-R: clear all selection attachments on the active session.
+            // Gated on chat input being focused so the shortcut doesn't
+            // collide with editor refresh-style muscle memory while a
+            // content tab editor is the focus target.
+            if mods.command()
+                && !mods.shift()
+                && matches!(&key, keyboard::Key::Character(c) if c.eq_ignore_ascii_case("r"))
+                && let Some(scope) = state.active_scope()
+                && let Some(ix) = state.interactions.get_mut(&scope)
+                && ix.visible
+                && ix.active_tab == ActiveTab::Chat
+                && let Some(ax) = ix.active_mut()
+                && ax.chat_input_focused
+                && (!ax.selection_pinned.is_empty() || ax.selection_tentative.is_some())
+            {
+                interaction::clear_all_attachments(ax);
+                return Task::none();
+            }
+
             // Get the active area's interaction state for keyboard routing.
             let active_info = state.active_interaction().map(|(i, _key)| {
                 let agent_chat_active =
@@ -1644,6 +1714,85 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
         }
     }
     take_pending_chat_snap(state)
+}
+
+/// Mirror the active content tab's selection into the active chat session's
+/// tentative attachment. Called after every `TabContent` editor action so
+/// the chip above the chat input tracks the live selection.
+///
+/// Skipped (no-op) when there's no chat session, no content tab, or the
+/// active tab is a search stack (multiple editors, no single source).
+fn sync_tentative_from_active_tab(state: &mut State) {
+    let Some(scope) = state.active_scope() else {
+        return;
+    };
+    let Some(tab) = state.tabs.active_tab() else {
+        return;
+    };
+    let display_path = tab_display_path(tab, state.project.project_root.as_deref());
+    let editor = match &tab.view {
+        tab_bar::TabView::Editor { editor, .. } | tab_bar::TabView::Diff { editor, .. } => editor,
+        tab_bar::TabView::SearchStack { .. } => return,
+    };
+    // Snapshot the editor view once to avoid simultaneous &mut state.tabs and
+    // &mut state.interactions borrows.
+    let editor_clone = editor.clone();
+    if let Some(ix) = state.interactions.get_mut(&scope)
+        && let Some(ax) = ix.active_mut()
+    {
+        ax.chat_input_focused = false;
+        interaction::set_tentative_from_tab(ax, &editor_clone, display_path);
+    }
+}
+
+/// User-facing label for a content tab — used by selection-attachment chips
+/// and the agent's context payload. Resolves to a project-relative path
+/// when possible, falling back to the absolute path or the tab title for
+/// non-file tabs (ideas, etc.).
+fn tab_display_path(tab: &tab_bar::Tab, project_root: Option<&Path>) -> String {
+    let path = match &tab.view {
+        tab_bar::TabView::Editor { path, .. } => path.as_deref(),
+        tab_bar::TabView::Diff { path, .. } => Some(path.as_path()),
+        tab_bar::TabView::SearchStack { .. } => None,
+    };
+    if let Some(p) = path {
+        if let Some(root) = project_root
+            && let Ok(rel) = p.strip_prefix(root)
+        {
+            return rel.display().to_string();
+        }
+        return p.display().to_string();
+    }
+    if tab.id.starts_with("idea:") {
+        return format!("idea: {}", tab.title);
+    }
+    tab.title.clone()
+}
+
+/// Restore the chat scrollable's viewport for the area we just switched to.
+/// `AgentSession` survives area switches but the iced `Scrollable` widget
+/// is rebuilt fresh on each view, defaulting back to (0, 0). We replay the
+/// last seen `absolute_offset.y` (captured by the `ChatScrolled` handler),
+/// or snap to the end when the user was sticking to the bottom.
+fn restore_chat_scroll(state: &State) -> Task<Message> {
+    let Some(scope) = state.active_scope() else {
+        return Task::none();
+    };
+    let Some(ix) = state.interactions.get(&scope) else {
+        return Task::none();
+    };
+    let Some(ax) = ix.active() else {
+        return Task::none();
+    };
+    if ax.stick_to_bottom {
+        iced::widget::operation::snap_to_end(widget::agent_chat::CHAT_SCROLLABLE_ID)
+    } else {
+        let y = ax.last_chat_offset_y.unwrap_or(0.0);
+        iced::widget::operation::scroll_to(
+            widget::agent_chat::CHAT_SCROLLABLE_ID,
+            iced::widget::scrollable::AbsoluteOffset { x: 0.0, y },
+        )
+    }
 }
 
 /// Drain the `pending_snap_to_bottom` flag from any agent session and emit a
@@ -3272,7 +3421,17 @@ fn view(state: &State) -> Element<'_, Message> {
         .project_root
         .as_ref()
         .and_then(|p| p.file_name().map(|n| n.to_string_lossy().to_string()));
-    let status_bar = widget::status_bar::view(segments, project_label);
+    // Cmd-K hint surfaces in the status bar when there's a live selection
+    // attachment on the active session: tells the user the kept-around
+    // gesture is currently meaningful.
+    let cmd_k_hint = state
+        .active_scope()
+        .and_then(|scope| state.interactions.get(&scope))
+        .filter(|ix| ix.visible && ix.active_tab == ActiveTab::Chat)
+        .and_then(|ix| ix.active())
+        .filter(|ax| ax.selection_tentative.is_some())
+        .map(|_| "⌘K keep selection".to_string());
+    let status_bar = widget::status_bar::view(segments, project_label, cmd_k_hint);
     let status_divider = container(Space::new().width(Length::Fill))
         .height(1.0)
         .style(theme::divider);
