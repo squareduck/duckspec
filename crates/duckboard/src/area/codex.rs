@@ -17,6 +17,10 @@ pub struct State {
     pub expanded_nodes: HashSet<String>,
     pub section_expanded: bool,
     pub list_scroll: f32,
+    /// Artifact id of the currently selected codex entry. Drives list-row
+    /// highlighting independently of which tab is currently active, so the
+    /// selection survives switching to a file tab or another area.
+    pub selected: Option<String>,
 }
 
 impl Default for State {
@@ -25,6 +29,7 @@ impl Default for State {
             expanded_nodes: HashSet::new(),
             section_expanded: true,
             list_scroll: 0.0,
+            selected: None,
         }
     }
 }
@@ -60,6 +65,7 @@ pub fn update(
             }
         }
         Message::SelectItem(id) => {
+            state.selected = Some(id.clone());
             open_artifact(tabs, &id, project, highlighter);
         }
         Message::Interaction(msg) => match msg {
@@ -98,7 +104,7 @@ pub fn update(
 pub fn view_list<'a>(
     state: &'a State,
     project: &'a ProjectData,
-    tabs: &'a tab_bar::TabState,
+    _tabs: &'a tab_bar::TabState,
 ) -> Element<'a, Message> {
     let tree = if project.codex_entries.is_empty() {
         container(
@@ -112,7 +118,7 @@ pub fn view_list<'a>(
         tree_view::view(
             &project.codex_entries,
             &state.expanded_nodes,
-            tabs.active_tab().map(|t| t.id.as_str()),
+            state.selected.as_deref(),
             &HashSet::new(),
             Message::ToggleNode,
             Message::SelectItem,

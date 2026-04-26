@@ -622,20 +622,16 @@ fn save_pinned_tab(
 
 // ── List column ──────────────────────────────────────────────────────────────
 
-pub fn view_list<'a>(state: &'a State, tabs: &'a tab_bar::TabState) -> Element<'a, Message> {
+pub fn view_list<'a>(state: &'a State, _tabs: &'a tab_bar::TabState) -> Element<'a, Message> {
     let mut sections = column![].spacing(0.0);
     for s in IdeaState::ALL {
-        sections = sections.push(view_section(state, tabs, s));
+        sections = sections.push(view_section(state, s));
     }
 
     vertical_scroll::view(state.list_scroll, Message::ScrollList, sections)
 }
 
-fn view_section<'a>(
-    state: &'a State,
-    tabs: &'a tab_bar::TabState,
-    section: IdeaState,
-) -> Element<'a, Message> {
+fn view_section<'a>(state: &'a State, section: IdeaState) -> Element<'a, Message> {
     let label = match section {
         IdeaState::Inbox => "Inbox",
         IdeaState::Exploration => "Exploration",
@@ -653,8 +649,8 @@ fn view_section<'a>(
 
     let body: Element<'a, Message> = if expanded {
         let mut rows: Vec<ListRow<'a, Message>> = Vec::new();
-        let active_id = tabs.active_tab().map(|t| t.id.as_str());
-        collect_section_rows(state, section, &[], 0, active_id, &mut rows);
+        let selected = state.selected.as_deref();
+        collect_section_rows(state, section, &[], 0, selected, &mut rows);
         list_view::view(rows, None)
     } else {
         Space::new().into()
@@ -684,7 +680,7 @@ fn collect_section_rows<'a>(
     section: IdeaState,
     prefix: &[String],
     depth: usize,
-    active_id: Option<&str>,
+    selected: Option<&Path>,
     out: &mut Vec<ListRow<'a, Message>>,
 ) {
     let mut direct: Vec<&'a Idea> = state
@@ -695,7 +691,7 @@ fn collect_section_rows<'a>(
     direct.sort_by(|a, b| b.frontmatter.created.cmp(&a.frontmatter.created));
 
     for idea in &direct {
-        out.push(idea_list_row(idea, depth, active_id));
+        out.push(idea_list_row(idea, depth, selected));
     }
 
     let mut children: Vec<&'a str> = state
@@ -721,7 +717,7 @@ fn collect_section_rows<'a>(
                 .on_press(Message::ToggleTagNode(key)),
         );
         if expanded {
-            collect_section_rows(state, section, &next_prefix, depth + 1, active_id, out);
+            collect_section_rows(state, section, &next_prefix, depth + 1, selected, out);
         }
     }
 }
@@ -729,9 +725,9 @@ fn collect_section_rows<'a>(
 fn idea_list_row<'a>(
     idea: &'a Idea,
     depth: usize,
-    active_id: Option<&str>,
+    selected: Option<&Path>,
 ) -> ListRow<'a, Message> {
-    let is_selected = active_id == Some(pinned_tab_id(&idea.abs_path).as_str());
+    let is_selected = selected == Some(idea.abs_path.as_path());
     let icon_bytes: &'static [u8] = if idea.frontmatter.change.is_some() {
         ICON_BRANCH
     } else if idea.frontmatter.exploration.is_some() {
