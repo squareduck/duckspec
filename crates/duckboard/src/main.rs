@@ -49,6 +49,7 @@ struct State {
     file_finder: widget::file_finder::FileFinderState,
     text_search: widget::text_search::TextSearchState,
     project_picker: widget::project_picker::ProjectPickerState,
+    quick_idea: widget::quick_idea::QuickIdeaState,
     /// Shared via `Arc` so background tasks (e.g. search-stack highlighting)
     /// can hold a handle without blocking the UI on syntax-set ownership.
     highlighter: Arc<highlight::SyntaxHighlighter>,
@@ -103,6 +104,7 @@ impl State {
             file_finder: widget::file_finder::FileFinderState::default(),
             text_search: widget::text_search::TextSearchState::default(),
             project_picker: widget::project_picker::ProjectPickerState::default(),
+            quick_idea: widget::quick_idea::QuickIdeaState::default(),
             highlighter: Arc::new(highlight::SyntaxHighlighter::new()),
             tabs: tab_bar::TabState::default(),
             cached_previews: HashMap::new(),
@@ -246,6 +248,8 @@ enum Message {
     TextSearch(widget::text_search::Msg),
     // Project picker (choose a project root to open).
     ProjectPicker(widget::project_picker::Msg),
+    // Quick idea capture/jump modal (cmd-i).
+    QuickIdea(widget::quick_idea::Msg),
     /// Open a project rooted at this path (from picker confirm or recents).
     OpenProject(PathBuf),
     // Async search-stack highlighting: one message per unique file once the
@@ -527,6 +531,78 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
         }
         Message::OpenProject(path) => {
             state.open_project(path);
+        }
+        Message::QuickIdea(msg) => {
+            use widget::quick_idea::Msg;
+            match msg {
+                Msg::Open => {
+                    if state.project.project_root.is_none() {
+                        return Task::none();
+                    }
+                    state
+                        .quick_idea
+                        .open(&state.ideas.ideas, state.highlighter.as_ref());
+                    for ix in state.interactions.values_mut() {
+                        ix.terminal_focused = false;
+                    }
+                    return iced::widget::operation::focus(widget::quick_idea::INPUT_ID);
+                }
+                Msg::Close => {
+                    state.quick_idea.close();
+                }
+                Msg::EditorAction(action) => {
+                    state
+                        .quick_idea
+                        .apply_editor_action(action, state.highlighter.as_ref());
+                }
+                Msg::Submit => {
+                    if state.quick_idea.selected.is_some() {
+                        state
+                            .quick_idea
+                            .load_selected(state.highlighter.as_ref());
+                        return iced::widget::operation::focus(widget::quick_idea::INPUT_ID);
+                    }
+                    let payload = widget::quick_idea::build_save_payload(&state.quick_idea);
+                    if !widget::quick_idea::body_is_savable(&payload.body) {
+                        return Task::none();
+                    }
+                    let project_root = state.project.project_root.clone();
+                    save_quick_idea(state, payload, project_root.as_deref());
+                    state.quick_idea.close();
+                }
+                Msg::SelectNext => {
+                    state.quick_idea.select_next();
+                }
+                Msg::SelectPrev => {
+                    state.quick_idea.select_prev();
+                }
+                Msg::OpenTagInput => {
+                    state.quick_idea.open_tag_input();
+                    return iced::widget::operation::focus(widget::quick_idea::TAG_INPUT_ID);
+                }
+                Msg::CancelTagInput => {
+                    state.quick_idea.cancel_tag_input();
+                    return iced::widget::operation::focus(widget::quick_idea::INPUT_ID);
+                }
+                Msg::TagInputChanged(s) => {
+                    state.quick_idea.set_tag_input(s);
+                }
+                Msg::SubmitTagInput => {
+                    state.quick_idea.submit_tag_input();
+                    return iced::widget::operation::focus(widget::quick_idea::INPUT_ID);
+                }
+                Msg::RemoveTag(idx) => {
+                    state.quick_idea.remove_tag(idx);
+                }
+                Msg::ChipClick(idx) => {
+                    if widget::terminal::current_modifiers().shift() {
+                        state.quick_idea.promote_tag(idx);
+                    } else {
+                        state.quick_idea.edit_tag(idx);
+                        return iced::widget::operation::focus(widget::quick_idea::TAG_INPUT_ID);
+                    }
+                }
+            }
         }
         Message::SearchStackHighlighted {
             tab_id,
@@ -1217,6 +1293,16 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                 );
             }
 
+            // Cmd+I: open the Quick Idea modal. Capture or jump to an idea
+            // without leaving the current area; needs a project root because
+            // the modal reads/writes ideas under `<data>/ideas/`.
+            if mods.command()
+                && matches!(&key, keyboard::Key::Character(c) if c.eq_ignore_ascii_case("i"))
+                && state.project.project_root.is_some()
+            {
+                return update(state, Message::QuickIdea(widget::quick_idea::Msg::Open));
+            }
+
             // Cmd+Shift+N: spawn another duckboard process. Iced is single-window
             // per-process, so a new "window" is a new instance — independent state,
             // file watcher, PTYs. Config writes race last-write-wins on quit.
@@ -1382,6 +1468,40 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                     state,
                     Message::Ideas(area::ideas::Message::CancelTagInput),
                 );
+            }
+
+            // When the Quick Idea modal is visible, route Esc + ctrl-n/p.
+            // Enter is consumed by the embedded TextEdit's `on_submit` and
+            // never reaches this handler; cmd shortcuts and printable
+            // characters likewise fall to the editor while it is focused.
+            if state.quick_idea.visible {
+                use keyboard::key::Named;
+                match &key {
+                    keyboard::Key::Named(Named::Escape) => {
+                        // The inline tag-add input should swallow Esc itself
+                        // before the modal closes.
+                        let inner_msg = if state.quick_idea.tag_input.is_some() {
+                            widget::quick_idea::Msg::CancelTagInput
+                        } else {
+                            widget::quick_idea::Msg::Close
+                        };
+                        return update(state, Message::QuickIdea(inner_msg));
+                    }
+                    _ if mods.control() && key == keyboard::Key::Character("n".into()) => {
+                        let _ = update(
+                            state,
+                            Message::QuickIdea(widget::quick_idea::Msg::SelectNext),
+                        );
+                    }
+                    _ if mods.control() && key == keyboard::Key::Character("p".into()) => {
+                        let _ = update(
+                            state,
+                            Message::QuickIdea(widget::quick_idea::Msg::SelectPrev),
+                        );
+                    }
+                    _ => {}
+                }
+                return Task::none();
             }
 
             // When file finder is visible, route navigation keys.
@@ -1595,6 +1715,115 @@ fn focus_chat_input() -> Task<Message> {
     iced::widget::operation::focus(widget::agent_chat::CHAT_INPUT_ID)
 }
 
+/// Persist the Quick Idea modal's buffer + tags through the existing
+/// idea_store. Updates `state.ideas.ideas` and re-targets any open pinned
+/// tab if the loaded idea's path moved on disk (title or primary-tag rename
+/// triggers a `save_idea` rename).
+fn save_quick_idea(
+    state: &mut State,
+    payload: widget::quick_idea::SavePayload,
+    project_root: Option<&Path>,
+) {
+    if let Some(loaded_path) = payload.loaded_path {
+        let Some(idx) = state
+            .ideas
+            .ideas
+            .iter()
+            .position(|i| i.abs_path == loaded_path)
+        else {
+            tracing::warn!("quick idea: loaded path no longer in ideas list");
+            return;
+        };
+        let mut idea = state.ideas.ideas[idx].clone();
+        idea.frontmatter.tags = payload.tags;
+        if let Err(e) = idea_store::save_idea(&mut idea, &payload.body, project_root) {
+            tracing::warn!("quick idea save failed: {e}");
+            return;
+        }
+        let new_path = idea.abs_path.clone();
+        let new_title = idea.display_title();
+        state.ideas.ideas[idx] = idea;
+        state
+            .ideas
+            .ideas
+            .sort_by(|a, b| b.frontmatter.created.cmp(&a.frontmatter.created));
+        if loaded_path != new_path {
+            area::ideas::refresh_after_move(
+                &mut state.ideas,
+                &mut state.tabs,
+                &loaded_path,
+                &new_path,
+                &new_title,
+            );
+        }
+    } else {
+        let mut idea = idea_store::new_idea();
+        idea.frontmatter.tags = payload.tags;
+        // Quick-capture flow: if the user typed a bare line (no H1), promote
+        // it so `derive_title_from_body` lifts a real title and the file
+        // doesn't land as `idea.md`.
+        let body = ensure_h1_prefix(&payload.body);
+        if let Err(e) = idea_store::save_idea(&mut idea, &body, project_root) {
+            tracing::warn!("quick idea save failed: {e}");
+            return;
+        }
+        state.ideas.ideas.push(idea);
+        state
+            .ideas
+            .ideas
+            .sort_by(|a, b| b.frontmatter.created.cmp(&a.frontmatter.created));
+    }
+}
+
+/// Return `body` unchanged when it already opens with an H1. Otherwise:
+/// short first lines (<= TITLE_PROMOTE_MAX_WORDS) get promoted in place by
+/// prepending `# `; longer ones get a synthesized H1 from their first
+/// SYNTHETIC_TITLE_WORDS words tacked on above the original body, so the
+/// user's freeform paragraph still reads naturally below a usable title.
+/// All-blank input is left as-is — `save_idea` falls back to `fallback_title`.
+fn ensure_h1_prefix(body: &str) -> String {
+    const TITLE_PROMOTE_MAX_WORDS: usize = 8;
+    const SYNTHETIC_TITLE_WORDS: usize = 5;
+
+    if idea_store::derive_title_from_body(body).is_some() {
+        return body.to_string();
+    }
+    let first = body
+        .lines()
+        .find(|l| !l.trim().is_empty())
+        .map(str::trim)
+        .unwrap_or("");
+    if first.is_empty() {
+        return body.to_string();
+    }
+    let word_count = first.split_whitespace().count();
+    if word_count <= TITLE_PROMOTE_MAX_WORDS {
+        let mut promoted = false;
+        let mut out = String::with_capacity(body.len() + 2);
+        for line in body.split_inclusive('\n') {
+            if !promoted && !line.trim().is_empty() {
+                out.push_str("# ");
+                out.push_str(line.trim_start());
+                promoted = true;
+            } else {
+                out.push_str(line);
+            }
+        }
+        return out;
+    }
+    let title: String = first
+        .split_whitespace()
+        .take(SYNTHETIC_TITLE_WORDS)
+        .collect::<Vec<_>>()
+        .join(" ");
+    let mut out = String::with_capacity(body.len() + title.len() + 6);
+    out.push_str("# ");
+    out.push_str(&title);
+    out.push_str("\n\n");
+    out.push_str(body);
+    out
+}
+
 /// True when `message` represents a user action that pulls focus away from
 /// the inline tag-add/edit input — clicking the editor, switching areas,
 /// triggering a lifecycle action on the idea, or selecting another idea.
@@ -1608,6 +1837,7 @@ fn tag_input_loses_focus_on(message: &Message) -> bool {
         Message::FileFinder(_) => true,
         Message::ProjectPicker(_) => true,
         Message::TextSearch(_) => true,
+        Message::QuickIdea(_) => true,
         Message::Ideas(im) => matches!(
             im,
             IM::SelectIdea(_)
@@ -3077,6 +3307,9 @@ fn view(state: &State) -> Element<'_, Message> {
         stack![main_view, overlay].into()
     } else if state.text_search.visible {
         let overlay = widget::text_search::view(&state.text_search).map(Message::TextSearch);
+        stack![main_view, overlay].into()
+    } else if state.quick_idea.visible {
+        let overlay = widget::quick_idea::view(&state.quick_idea).map(Message::QuickIdea);
         stack![main_view, overlay].into()
     } else {
         main_view.into()

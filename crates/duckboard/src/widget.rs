@@ -7,6 +7,7 @@ pub mod interaction_toggle;
 pub mod list_view;
 pub mod pan_row;
 pub mod project_picker;
+pub mod quick_idea;
 pub mod sidebar;
 pub mod status_bar;
 pub mod streaming_indicator;
