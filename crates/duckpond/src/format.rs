@@ -111,6 +111,17 @@ pub fn format_artifact(
     }
 }
 
+/// Format free-form markdown using the doc parse path — the same one used
+/// internally by `Codex`, `Project`, `Proposal`, `Design`, and the doc-shaped
+/// cap/change artifacts. Use this when the source has no canonical path under
+/// `duckspec/` (e.g. duckboard ideas), so `format_artifact`'s path-based
+/// classification doesn't apply.
+pub fn format_doc(source: &str, config: &FormatConfig) -> Result<String, Vec<ParseError>> {
+    let elements = parse::parse_elements(source);
+    let doc = parse::doc::parse_document(&elements)?;
+    Ok(doc.render_with(config))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -222,6 +233,28 @@ The system SHALL allow registered users to sign in.
             format_artifact(&PathBuf::from("caps/auth/spec.md"), source, &cfg()).unwrap();
         let twice =
             format_artifact(&PathBuf::from("caps/auth/spec.md"), &once, &cfg()).unwrap();
+        assert_eq!(once, twice);
+    }
+
+    #[test]
+    fn format_doc_minimal() {
+        let source = "# Hello\n\nA short summary.\n";
+        let out = format_doc(source, &cfg()).unwrap();
+        assert!(out.starts_with("# Hello\n\nA short summary."));
+    }
+
+    #[test]
+    fn format_doc_parse_error() {
+        let source = "no heading\n";
+        let errors = format_doc(source, &cfg()).unwrap_err();
+        assert!(!errors.is_empty());
+    }
+
+    #[test]
+    fn format_doc_idempotent() {
+        let source = "# Idea\n\nA thought worth keeping. It has a few sentences and might wrap once the line width is reached.\n";
+        let once = format_doc(source, &cfg()).unwrap();
+        let twice = format_doc(&once, &cfg()).unwrap();
         assert_eq!(once, twice);
     }
 

@@ -1,5 +1,6 @@
 //! Dashboard area — sleek start screen with changes and audit overview.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use iced::widget::text::Wrapping;
@@ -44,6 +45,7 @@ pub fn view<'a>(
     project: &'a ProjectData,
     explorations: &'a [crate::chat_store::Exploration],
     recent_projects: &'a [PathBuf],
+    idea_format_errors: &'a HashMap<PathBuf, Vec<String>>,
 ) -> Element<'a, Message> {
     let header = view_header(project);
 
@@ -57,7 +59,7 @@ pub fn view<'a>(
         .into()
     } else {
         let items = view_items_panel(project, explorations);
-        let audit = view_audit_panel(project);
+        let audit = view_audit_panel(project, idea_format_errors);
 
         let divider = container(Space::new().height(Length::Fill))
             .width(1.0)
@@ -357,10 +359,14 @@ fn view_items_panel<'a>(
 
 // ── Audit panel (right) ────────────────────────────────────────────────────
 
-fn view_audit_panel<'a>(project: &'a ProjectData) -> Element<'a, Message> {
+fn view_audit_panel<'a>(
+    project: &'a ProjectData,
+    idea_format_errors: &'a HashMap<PathBuf, Vec<String>>,
+) -> Element<'a, Message> {
     let change_error_total: usize = project.validations.values().map(|v| v.total_count()).sum();
     let project_audit_total = project.project_audit.total_count();
-    let total_errors = change_error_total + project_audit_total;
+    let idea_format_total: usize = idea_format_errors.values().map(|v| v.len()).sum();
+    let total_errors = change_error_total + project_audit_total + idea_format_total;
     let change_count_with_errors = project
         .validations
         .values()
@@ -418,6 +424,11 @@ fn view_audit_panel<'a>(project: &'a ProjectData) -> Element<'a, Message> {
     // Project-level audit card (artifact errors, backlinks, coverage, etc.)
     if !project.project_audit.is_empty() {
         content = content.push(view_project_audit_card(&project.project_audit));
+    }
+
+    // Idea format errors (separate sink, same UI shape as artifact_errors).
+    if !idea_format_errors.is_empty() {
+        content = content.push(view_idea_format_errors_card(idea_format_errors));
     }
 
     // Per-change cards.
@@ -581,6 +592,71 @@ fn view_project_audit_card<'a>(audit: &'a ProjectAudit) -> Element<'a, Message> 
                 .padding([0.0, theme::SPACING_MD]),
             );
         }
+    }
+
+    container(card)
+        .padding(theme::SPACING_MD)
+        .width(Length::Fill)
+        .style(theme::audit_card)
+        .into()
+}
+
+/// Render the idea-format-errors card. Same visual shape as the per-file
+/// artifact errors section in `view_project_audit_card`, but the source is
+/// the `area::ideas::State::format_errors` sink populated on Cmd-S/Cmd-I save.
+fn view_idea_format_errors_card<'a>(
+    errors: &'a HashMap<PathBuf, Vec<String>>,
+) -> Element<'a, Message> {
+    let icon = svg(svg::Handle::from_memory(ICON_BRANCH))
+        .width(ICON_SIZE)
+        .height(ICON_SIZE)
+        .style(theme::svg_tint(theme::text_muted()));
+    let total: usize = errors.values().map(|v| v.len()).sum();
+    let header = row![
+        icon,
+        text("Ideas")
+            .size(theme::font_md())
+            .color(theme::text_primary())
+            .wrapping(Wrapping::None),
+        Space::new().width(Length::Fill),
+        text(format!(
+            "{} format error{}",
+            total,
+            if total == 1 { "" } else { "s" }
+        ))
+        .size(theme::font_sm())
+        .color(theme::text_muted()),
+    ]
+    .spacing(theme::SPACING_SM)
+    .align_y(Center);
+
+    let mut card = column![header].spacing(theme::SPACING_SM);
+    card = card.push(section_header("Format errors"));
+
+    let mut entries: Vec<(&PathBuf, &Vec<String>)> = errors.iter().collect();
+    entries.sort_by_key(|(p, _)| p.as_path());
+    for (path, errs) in entries {
+        let display = path
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or_else(|| path.to_str().unwrap_or(""));
+        let mut body = column![
+            text(display.to_string())
+                .size(theme::font_sm())
+                .color(theme::text_secondary()),
+        ]
+        .spacing(2.0);
+        for err in errs {
+            body = body.push(
+                container(
+                    text(err.clone())
+                        .size(theme::font_sm())
+                        .color(theme::error()),
+                )
+                .padding([0.0, theme::SPACING_MD]),
+            );
+        }
+        card = card.push(body);
     }
 
     container(card)
