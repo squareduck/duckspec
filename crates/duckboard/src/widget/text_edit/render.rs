@@ -274,7 +274,11 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for TextEdit<'a, M> {
         if self.fit_content {
             let row_count = if self.word_wrap {
                 let max_w = limits.max().width;
-                let cell_w = 7.8f32;
+                // Match the cosmic-text measurement used by draw/update so the
+                // height we report to iced equals the height actually painted.
+                // A hardcoded 7.8 px/char overestimates rows for wider fonts,
+                // leaving phantom empty space below long wrapped messages.
+                let cell_w = theme::content_cell_width();
                 let content_w = max_w - if self.show_gutter { 50.0 } else { 0.0 } - CONTENT_PAD;
                 let cpr = (content_w / cell_w).floor().max(1.0) as usize;
                 let wrap = WrapLayout::compute(&self.state.lines, cpr);
