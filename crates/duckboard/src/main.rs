@@ -780,7 +780,7 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                         &state.project,
                         &state.highlighter,
                     );
-                    return restore_chat_scroll(state);
+                    return Task::batch([restore_chat_scroll(state), focus_chat_input()]);
                 }
                 area::dashboard::Message::SelectAuditError {
                     change,
@@ -1624,6 +1624,34 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
             {
                 interaction::clear_all_attachments(ax);
                 return Task::none();
+            }
+
+            // Cmd-W: close the active file tab when focus is on the content
+            // area (i.e. neither the chat input nor the terminal pane is
+            // capturing keys). Preview tab is non-closeable, so the binding
+            // is a no-op when it's the active tab.
+            if mods.command()
+                && !mods.shift()
+                && matches!(&key, keyboard::Key::Character(c) if c.eq_ignore_ascii_case("w"))
+                && matches!(
+                    state.active_area,
+                    Area::Change | Area::Caps | Area::Codex | Area::Ideas
+                )
+                && let tab_bar::ActiveTab::File(fi) = state.tabs.active
+            {
+                let chat_focused = state
+                    .active_scope()
+                    .and_then(|scope| state.interactions.get(&scope))
+                    .and_then(|ix| ix.active())
+                    .is_some_and(|ax| ax.chat_input_focused);
+                let terminal_focused = state
+                    .active_scope()
+                    .and_then(|scope| state.interactions.get(&scope))
+                    .is_some_and(|ix| ix.terminal_focused);
+                if !chat_focused && !terminal_focused {
+                    let logical_idx = if state.tabs.preview.is_some() { fi + 1 } else { fi };
+                    return update(state, Message::TabClose(logical_idx));
+                }
             }
 
             // Get the active area's interaction state for keyboard routing.
