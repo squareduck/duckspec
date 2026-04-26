@@ -59,6 +59,11 @@ struct State {
     /// Cached pinned tab per area, swapped in/out of `tabs.preview` on area
     /// switch so editor cursor + dirty state survive the round-trip.
     cached_previews: HashMap<Area, Option<tab_bar::Tab>>,
+    /// Cached active-tab pointer per area. On `switch_area` we snapshot the
+    /// outgoing area's `tabs.active` and restore the incoming area's, so a
+    /// user looking at a file tab in one area returns to the same file tab
+    /// (rather than always landing back on the preview).
+    cached_active: HashMap<Area, tab_bar::ActiveTab>,
     /// Single interaction registry keyed by scope. One entry per
     /// (Caps | Codex | Change(name) | Exploration(id)). Survives area
     /// switches; the visible column reads from the active area's scope.
@@ -101,6 +106,7 @@ impl State {
             highlighter: Arc::new(highlight::SyntaxHighlighter::new()),
             tabs: tab_bar::TabState::default(),
             cached_previews: HashMap::new(),
+            cached_active: HashMap::new(),
             interactions,
         }
     }
@@ -130,6 +136,7 @@ impl State {
         // Drop interactions / tabs from the prior project; reseed singletons.
         self.tabs = tab_bar::TabState::default();
         self.cached_previews.clear();
+        self.cached_active.clear();
         self.interactions.clear();
         self.interactions
             .insert(scope::Scope::Caps, interaction::InteractionState::default());
@@ -2420,9 +2427,11 @@ fn close_cached_tabs(state: &mut State, id: &str) {
     }
 }
 
-/// Switch areas, snapshotting the current pinned tab into the per-area
-/// cache and restoring the new area's cached preview (if any). File tabs
-/// stay in `state.tabs` and persist across the swap.
+/// Switch areas, snapshotting the current pinned tab + active-tab pointer
+/// into the per-area cache and restoring the new area's cached values.
+/// File tabs stay in `state.tabs` and persist across the swap; per-area
+/// list selection is held by each area's own `selected` field, so list
+/// highlighting survives switching to a file tab and back.
 fn switch_area(state: &mut State, target: Area) {
     if state.active_area == target {
         return;
@@ -2431,12 +2440,37 @@ fn switch_area(state: &mut State, target: Area) {
     state
         .cached_previews
         .insert(prev, state.tabs.preview.take());
+    state.cached_active.insert(prev, state.tabs.active);
+
     state.tabs.preview = state
         .cached_previews
         .remove(&target)
         .unwrap_or(None);
-    if state.tabs.preview.is_none() && matches!(state.tabs.active, tab_bar::ActiveTab::Preview) {
-        state.tabs.active = tab_bar::ActiveTab::File(0);
+    state.tabs.active = state
+        .cached_active
+        .remove(&target)
+        .unwrap_or(tab_bar::ActiveTab::Preview);
+
+    // Clamp to a valid tab in case the cached pointer is stale (preview
+    // gone, or file tab index out of range).
+    match state.tabs.active {
+        tab_bar::ActiveTab::Preview if state.tabs.preview.is_none() => {
+            state.tabs.active = if state.tabs.file_tabs.is_empty() {
+                tab_bar::ActiveTab::Preview
+            } else {
+                tab_bar::ActiveTab::File(0)
+            };
+        }
+        tab_bar::ActiveTab::File(i) if i >= state.tabs.file_tabs.len() => {
+            state.tabs.active = if state.tabs.preview.is_some() {
+                tab_bar::ActiveTab::Preview
+            } else if state.tabs.file_tabs.is_empty() {
+                tab_bar::ActiveTab::Preview
+            } else {
+                tab_bar::ActiveTab::File(state.tabs.file_tabs.len() - 1)
+            };
+        }
+        _ => {}
     }
     state.active_area = target;
 }
