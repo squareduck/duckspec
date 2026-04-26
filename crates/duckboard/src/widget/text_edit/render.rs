@@ -443,7 +443,17 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for TextEdit<'a, M> {
                 }
             }
             Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) => {
+                let was_dragging = internal.dragging;
                 internal.dragging = false;
+                // Publish a final action so callers can distinguish "drag
+                // still extending" from "user released the mouse and the
+                // selection is now stable". Used by the agent-chat
+                // selection-attachment feature to defer chip rendering
+                // until the drag ends — chips appearing mid-drag would
+                // reflow the chat area under the user's cursor.
+                if was_dragging {
+                    shell.publish((self.on_action)(EditorAction::DragEnd));
+                }
             }
             Event::Mouse(mouse::Event::WheelScrolled { delta }) => {
                 // Skip when static_viewport is set so the parent scrollable

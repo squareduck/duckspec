@@ -29,12 +29,6 @@ pub enum Message {
     OpenRecent(PathBuf),
 }
 
-// ── Update ───────────────────────────────────────────────────────────────────
-
-pub fn update(_state: &mut State, _message: Message) {
-    // Navigation messages are handled by the parent (main.rs).
-}
-
 // ── Icons ───────────────────────────────────────────────────────────────────
 
 const ICON_BRANCH: &[u8] = include_bytes!("../../assets/icon_branch.svg");

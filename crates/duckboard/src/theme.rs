@@ -627,6 +627,35 @@ pub fn chat_queued_card(_theme: &Theme) -> container::Style {
     }
 }
 
+/// Chip for a pinned selection-context attachment. Solid 1px frame on the
+/// chat input's "paper" surface so it reads as a kept reference.
+pub fn selection_chip_pinned(_theme: &Theme) -> container::Style {
+    container::Style {
+        background: Some(bg_base().into()),
+        border: Border {
+            color: border_color(),
+            width: 1.0,
+            radius: BORDER_RADIUS.into(),
+        },
+        ..Default::default()
+    }
+}
+
+/// Chip for the tentative (live) selection-context attachment. Same shape
+/// as `selection_chip_pinned` but with a muted border so the user can tell
+/// it's not yet pinned (Cmd-K to keep it).
+pub fn selection_chip_tentative(_theme: &Theme) -> container::Style {
+    container::Style {
+        background: Some(bg_surface().into()),
+        border: Border {
+            color: text_muted(),
+            width: 1.0,
+            radius: BORDER_RADIUS.into(),
+        },
+        ..Default::default()
+    }
+}
+
 pub fn audit_card(_theme: &Theme) -> container::Style {
     container::Style {
         background: Some(bg_surface().into()),

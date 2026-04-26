@@ -14,8 +14,268 @@ use crate::scope::ScopeKind;
 use crate::theme;
 use crate::widget::{
     agent_chat, collapsible, interaction_toggle, list_view,
-    text_edit::{self, Block, EditorState},
+    text_edit::{self, Block, EditorState, Pos},
 };
+
+// ── Selection context attachments ───────────────────────────────────────────
+
+/// A captured selection from a content tab or chat history block, attached
+/// to a chat session so it's included in the next turn(s).
+#[derive(Debug, Clone)]
+pub struct SelectionContext {
+    pub source: SelectionSource,
+    pub range: SelectionRange,
+    /// Snapshot of the selected text at capture time. Pinned excerpts keep
+    /// the original snapshot even if the underlying file or chat block
+    /// changes later.
+    pub text: String,
+}
+
+#[derive(Debug, Clone)]
+pub enum SelectionSource {
+    /// Selection in a file/diff/idea content tab.
+    Tab {
+        /// User-facing path or label rendered in the chip and the agent
+        /// payload (e.g. `src/main.rs` or `idea: My title`).
+        display_path: String,
+    },
+    /// Selection in a chat history block.
+    ChatBlock {
+        /// Header label of the block (e.g. `User`, `Assistant`).
+        role_label: String,
+        /// Position of the block in the rebuilt blocks list at capture time.
+        block_idx: usize,
+    },
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct SelectionRange {
+    pub start_line: usize,
+    pub start_col: usize,
+    pub end_line: usize,
+    pub end_col: usize,
+}
+
+impl SelectionRange {
+    fn from_pos(start: Pos, end: Pos) -> Self {
+        Self {
+            start_line: start.line,
+            start_col: start.col,
+            end_line: end.line,
+            end_col: end.col,
+        }
+    }
+
+    /// `L12` for single-line, `L12-24` for multi-line. 1-based.
+    pub fn short_label(&self) -> String {
+        if self.start_line == self.end_line {
+            format!("L{}", self.start_line + 1)
+        } else {
+            format!("L{}-{}", self.start_line + 1, self.end_line + 1)
+        }
+    }
+}
+
+/// Compute compact labels for a slice of selections. File-sourced labels
+/// abbreviate to the filename, with just enough parent path components
+/// to keep each label unique within the slice. Chat-block labels are
+/// returned unchanged (they're already short).
+///
+/// Order is preserved: `out[i]` is the label for `items[i]`.
+pub fn chip_labels_abbreviated(items: &[&SelectionContext]) -> Vec<String> {
+    use std::collections::HashMap;
+
+    // Pre-split path components for tab-sourced items so the inner loop
+    // doesn't repeat the work for every k.
+    let splits: Vec<Option<Vec<&str>>> = items
+        .iter()
+        .map(|s| match &s.source {
+            SelectionSource::Tab { display_path } => Some(
+                display_path
+                    .split('/')
+                    .filter(|p| !p.is_empty())
+                    .collect::<Vec<_>>(),
+            ),
+            SelectionSource::ChatBlock { .. } => None,
+        })
+        .collect();
+
+    // Group indices by filename so each group gets its own disambiguation
+    // pass. Singleton groups always render as bare filename.
+    let mut by_filename: HashMap<&str, Vec<usize>> = HashMap::new();
+    for (i, parts) in splits.iter().enumerate() {
+        if let Some(parts) = parts
+            && let Some(name) = parts.last()
+        {
+            by_filename.entry(*name).or_default().push(i);
+        }
+    }
+
+    let mut abbrev: HashMap<usize, String> = HashMap::new();
+    for indices in by_filename.values() {
+        for &i in indices {
+            let parts = splits[i].as_ref().expect("tab-sourced index");
+            let mut k = 0usize;
+            loop {
+                let take = (k + 1).min(parts.len());
+                let suffix = &parts[parts.len() - take..];
+                let unique = indices.iter().all(|&j| {
+                    if j == i {
+                        return true;
+                    }
+                    let other = splits[j].as_ref().expect("tab-sourced index");
+                    // Pills with identical full paths can't disambiguate
+                    // by path — they're the same file with different
+                    // ranges. Skip them so the common abbreviation
+                    // collapses to the shortest unique form against
+                    // *other* paths in the group.
+                    if other == parts {
+                        return true;
+                    }
+                    let other_take = take.min(other.len());
+                    let other_suffix = &other[other.len() - other_take..];
+                    other_suffix != suffix
+                });
+                if unique || take == parts.len() {
+                    abbrev.insert(i, suffix.join("/"));
+                    break;
+                }
+                k += 1;
+            }
+        }
+    }
+
+    items
+        .iter()
+        .enumerate()
+        .map(|(i, sel)| {
+            let lines = sel.range.short_label();
+            match &sel.source {
+                SelectionSource::Tab { display_path } => {
+                    let abbr = abbrev
+                        .get(&i)
+                        .cloned()
+                        .unwrap_or_else(|| display_path.clone());
+                    format!("{abbr} {lines}")
+                }
+                SelectionSource::ChatBlock {
+                    role_label,
+                    block_idx,
+                } => format!("chat: {role_label} #{} {lines}", block_idx + 1),
+            }
+        })
+        .collect()
+}
+
+/// Render the pinned + tentative selection contexts as a single text blurb
+/// suitable for `TurnRequest::system_additions`. Returns `None` for an
+/// empty list so the caller can skip pushing.
+pub fn render_selection_attachments(items: &[SelectionContext]) -> Option<String> {
+    if items.is_empty() {
+        return None;
+    }
+    let mut out = String::from("Selected context attached by the user:\n\n");
+    for s in items {
+        // Coordinates are emitted as 1-based `line:col` pairs so the agent
+        // can map back to the file precisely if it wants to. Lines/cols are
+        // both useful: highlighting tools and "show me what comes after"
+        // questions both need column-level locations.
+        let coords = format!(
+            "{}:{}–{}:{}",
+            s.range.start_line + 1,
+            s.range.start_col + 1,
+            s.range.end_line + 1,
+            s.range.end_col + 1,
+        );
+        let header = match &s.source {
+            SelectionSource::Tab { display_path } => {
+                format!("File: {display_path} ({coords})")
+            }
+            SelectionSource::ChatBlock {
+                role_label,
+                block_idx,
+            } => format!(
+                "Chat excerpt: {role_label} message (block {}, {coords})",
+                block_idx + 1
+            ),
+        };
+        out.push_str(&header);
+        out.push_str("\n```\n");
+        out.push_str(&s.text);
+        if !s.text.ends_with('\n') {
+            out.push('\n');
+        }
+        out.push_str("```\n\n");
+    }
+    Some(out)
+}
+
+/// Build a `SelectionContext` from a chat block editor at `idx` in the
+/// session, if it has a non-empty selection. The block label drives the
+/// chip's role string.
+pub fn chat_block_selection(ax: &AgentSession, idx: usize) -> Option<SelectionContext> {
+    let editor = ax.chat_editors.get(idx)?;
+    let (start, end) = editor.selection_range()?;
+    if start == end {
+        return None;
+    }
+    let text = editor.selection_text()?;
+    let role_label = ax
+        .chat_blocks
+        .get(idx)
+        .map(|b| b.label.clone())
+        .unwrap_or_else(|| "?".to_string());
+    Some(SelectionContext {
+        source: SelectionSource::ChatBlock {
+            role_label,
+            block_idx: idx,
+        },
+        range: SelectionRange::from_pos(start, end),
+        text,
+    })
+}
+
+/// Build a `SelectionContext` from a content tab editor with the given
+/// `display_path`, if it has a non-empty selection.
+pub fn tab_editor_selection(
+    editor: &EditorState,
+    display_path: String,
+) -> Option<SelectionContext> {
+    let (start, end) = editor.selection_range()?;
+    if start == end {
+        return None;
+    }
+    let text = editor.selection_text()?;
+    Some(SelectionContext {
+        source: SelectionSource::Tab { display_path },
+        range: SelectionRange::from_pos(start, end),
+        text,
+    })
+}
+
+/// Pin the tentative attachment (if any) into `selection_pinned` and
+/// drop the live reference. After this, any visual selection in editors
+/// is also cleared so the next selection starts a fresh tentative slot.
+pub fn pin_tentative(ax: &mut AgentSession) -> bool {
+    let Some(sel) = ax.selection_tentative.take() else {
+        return false;
+    };
+    ax.selection_pinned.push(sel);
+    for editor in ax.chat_editors.iter_mut() {
+        editor.anchor = None;
+    }
+    true
+}
+
+/// Clear all attachments on the session and any in-chat selection state
+/// so the user starts clean.
+pub fn clear_all_attachments(ax: &mut AgentSession) {
+    ax.selection_pinned.clear();
+    ax.selection_tentative = None;
+    for editor in ax.chat_editors.iter_mut() {
+        editor.anchor = None;
+    }
+}
 
 /// Monotonic counter used to mint a stable `InteractionState::instance_id`.
 /// The ID keys long-lived subscriptions (PTY, agent) so they survive when the
@@ -111,6 +371,19 @@ pub struct AgentSession {
     /// `AgentEvent` can't help. Drained by `main` after the dispatch returns
     /// to issue a one-shot `snap_to_end` task.
     pub pending_snap_to_bottom: bool,
+    /// Selection-context attachments kept across messages. Built by Cmd-K
+    /// (pin tentative) and cleared by Cmd-R (reset).
+    pub selection_pinned: Vec<SelectionContext>,
+    /// The "live" attachment that mirrors the user's current selection in
+    /// the active content tab or a chat history block. Included on the next
+    /// turn alongside `selection_pinned` and dropped after send (Cmd-K is
+    /// the explicit gesture to keep it).
+    pub selection_tentative: Option<SelectionContext>,
+    /// Heuristic flag tracking whether the chat input is the focus target.
+    /// Set true on `InputAction`, false when focus moves to a chat block or
+    /// a content tab editor. Used to gate Cmd-R so it only fires when the
+    /// user is plausibly typing into the chat.
+    pub chat_input_focused: bool,
 }
 
 impl AgentSession {
@@ -143,6 +416,9 @@ impl AgentSession {
             stick_to_bottom: true,
             last_chat_offset_y: None,
             pending_snap_to_bottom: false,
+            selection_pinned: Vec::new(),
+            selection_tentative: None,
+            chat_input_focused: false,
         }
     }
 }
@@ -227,6 +503,181 @@ impl InteractionState {
 
     pub fn find_terminal_index(&self, id: u64) -> Option<usize> {
         self.terminals.iter().position(|t| t.id == id)
+    }
+}
+
+// ── Tests ──────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn render_skips_empty_list() {
+        assert!(render_selection_attachments(&[]).is_none());
+    }
+
+    #[test]
+    fn render_includes_path_coords_and_text() {
+        let sel = SelectionContext {
+            source: SelectionSource::Tab {
+                display_path: "src/main.rs".into(),
+            },
+            range: SelectionRange {
+                start_line: 11,
+                start_col: 4,
+                end_line: 23,
+                end_col: 0,
+            },
+            text: "let x = 1;\n".into(),
+        };
+        let out = render_selection_attachments(&[sel]).unwrap();
+        assert!(out.contains("File: src/main.rs (12:5–24:1)"), "header: {out}");
+        assert!(out.contains("```\nlet x = 1;\n```"), "body: {out}");
+    }
+
+    #[test]
+    fn render_chat_excerpt_uses_role_and_block() {
+        let sel = SelectionContext {
+            source: SelectionSource::ChatBlock {
+                role_label: "User".into(),
+                block_idx: 2,
+            },
+            range: SelectionRange {
+                start_line: 0,
+                start_col: 0,
+                end_line: 0,
+                end_col: 5,
+            },
+            text: "hello".into(),
+        };
+        let out = render_selection_attachments(&[sel]).unwrap();
+        assert!(out.contains("Chat excerpt: User message (block 3"), "header: {out}");
+        assert!(out.contains("```\nhello\n```"), "body: {out}");
+    }
+
+    fn tab_sel(path: &str, start: usize, end: usize) -> SelectionContext {
+        SelectionContext {
+            source: SelectionSource::Tab {
+                display_path: path.into(),
+            },
+            range: SelectionRange {
+                start_line: start,
+                start_col: 0,
+                end_line: end,
+                end_col: 0,
+            },
+            text: String::new(),
+        }
+    }
+
+    #[test]
+    fn chip_label_collapses_single_line_range() {
+        let sel = tab_sel("dir/a.rs", 4, 4);
+        let labels = chip_labels_abbreviated(&[&sel]);
+        assert_eq!(labels, vec!["a.rs L5".to_string()]);
+    }
+
+    #[test]
+    fn chip_label_uses_range_for_multi_line() {
+        let sel = tab_sel("dir/a.rs", 4, 9);
+        let labels = chip_labels_abbreviated(&[&sel]);
+        assert_eq!(labels, vec!["a.rs L5-10".to_string()]);
+    }
+
+    #[test]
+    fn chip_labels_abbreviate_single_pill_to_filename() {
+        let sel = tab_sel("crates/duckboard/src/main.rs", 0, 2);
+        let labels = chip_labels_abbreviated(&[&sel]);
+        assert_eq!(labels, vec!["main.rs L1-3".to_string()]);
+    }
+
+    #[test]
+    fn chip_labels_disambiguate_with_one_parent() {
+        let a = tab_sel("crates/foo/spec.delta.md", 0, 0);
+        let b = tab_sel("crates/bar/spec.delta.md", 0, 0);
+        let labels = chip_labels_abbreviated(&[&a, &b]);
+        assert_eq!(
+            labels,
+            vec![
+                "foo/spec.delta.md L1".to_string(),
+                "bar/spec.delta.md L1".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn chip_labels_collide_at_same_parent_walk_higher() {
+        let a = tab_sel("x/y/a/foo.md", 0, 0);
+        let b = tab_sel("x/y/b/foo.md", 0, 0);
+        let c = tab_sel("x/z/a/foo.md", 0, 0);
+        let labels = chip_labels_abbreviated(&[&a, &b, &c]);
+        // a vs c both share `a/foo.md`; need one more parent (`y/a/foo.md`
+        // vs `z/a/foo.md`). b's `b/foo.md` is already unique.
+        assert_eq!(
+            labels,
+            vec![
+                "y/a/foo.md L1".to_string(),
+                "b/foo.md L1".to_string(),
+                "z/a/foo.md L1".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn chip_labels_same_path_different_ranges_collapse_to_filename() {
+        // Two selections in the same file should both render as the
+        // shortest unique form against *other* files, not fight each
+        // other for disambiguation.
+        let a = tab_sel("a/b/c/file.md", 0, 0);
+        let b = tab_sel("a/b/c/file.md", 4, 6);
+        let labels = chip_labels_abbreviated(&[&a, &b]);
+        assert_eq!(
+            labels,
+            vec!["file.md L1".to_string(), "file.md L5-7".to_string()]
+        );
+    }
+
+    #[test]
+    fn chip_labels_one_unique_plus_two_duplicates_abbreviate_correctly() {
+        // Mirrors the user's bug report: one pill at `nonexistent/...`
+        // plus two identical pills at `auth/...`. Both auth pills should
+        // collapse to one parent (`auth/`), not the full path.
+        let a = tab_sel("crates/x/y/nonexistent/spec.delta.md", 4, 4);
+        let b = tab_sel("crates/x/y/auth/spec.delta.md", 6, 6);
+        let c = tab_sel("crates/x/y/auth/spec.delta.md", 10, 14);
+        let labels = chip_labels_abbreviated(&[&a, &b, &c]);
+        assert_eq!(
+            labels,
+            vec![
+                "nonexistent/spec.delta.md L5".to_string(),
+                "auth/spec.delta.md L7".to_string(),
+                "auth/spec.delta.md L11-15".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn chip_labels_mixed_sources_keep_chat_label_intact() {
+        let file = tab_sel("dir/a.rs", 0, 0);
+        let chat = SelectionContext {
+            source: SelectionSource::ChatBlock {
+                role_label: "User".into(),
+                block_idx: 4,
+            },
+            range: SelectionRange {
+                start_line: 0,
+                start_col: 0,
+                end_line: 1,
+                end_col: 0,
+            },
+            text: String::new(),
+        };
+        let labels = chip_labels_abbreviated(&[&file, &chat]);
+        assert_eq!(
+            labels,
+            vec!["a.rs L1".to_string(), "chat: User #5 L1-2".to_string()]
+        );
     }
 }
 
@@ -321,6 +772,9 @@ fn handle_agent_chat(
     let Some(ax) = state.active_mut() else { return };
     match msg {
         agent_chat::Msg::InputAction(action) => {
+            // Any keyboard/mouse activity in the chat input implies focus is
+            // on it — flip the heuristic so Cmd-R is allowed to clear.
+            ax.chat_input_focused = true;
             if let text_edit::EditorAction::OpenUrl(url) = &action {
                 if let Err(err) = opener::open(url) {
                     tracing::warn!(%url, %err, "failed to open chat URL");
@@ -383,13 +837,27 @@ fn handle_agent_chat(
             ax.chat_completion.visible = false;
         }
         agent_chat::Msg::ChatAction(idx, action) => {
+            // Focus moved off the chat input. Also enforce single-source
+            // selection: clear anchors in OTHER chat editors so the most
+            // recent gesture wins the tentative slot.
+            ax.chat_input_focused = false;
             for (i, editor) in ax.chat_editors.iter_mut().enumerate() {
                 if i != idx {
                     editor.anchor = None;
                 }
             }
+            // Whether the tentative attachment should be recomputed after
+            // this action. Skip for in-flight drags: the chip appearing
+            // mid-drag would reflow the chat panel under the user's
+            // cursor and the drag would target the wrong content. Click
+            // and DragEnd refresh; everything else (keyboard nav,
+            // copy, …) refreshes too.
+            let refresh = !matches!(&action, text_edit::EditorAction::Drag(_));
             if let Some(editor) = ax.chat_editors.get_mut(idx) {
                 handle_chat_action_on(editor, action);
+            }
+            if refresh {
+                refresh_tentative_from_chat(ax, idx);
             }
         }
         agent_chat::Msg::ToggleCollapse(idx) => {
@@ -488,6 +956,51 @@ fn handle_agent_chat(
     }
 }
 
+/// Recompute `selection_tentative` from a chat block at `idx`. If the
+/// block has a non-empty selection, the tentative becomes a `ChatBlock`
+/// source pointing at it (overriding any prior tentative). If selection
+/// was just cleared in this block (or it had none) and the existing
+/// tentative was a chat-sourced one — including from a *different* block,
+/// since `ChatAction` clears those — drop the tentative. File-sourced
+/// tentatives are left untouched.
+pub fn refresh_tentative_from_chat(ax: &mut AgentSession, idx: usize) {
+    if let Some(sel) = chat_block_selection(ax, idx) {
+        ax.selection_tentative = Some(sel);
+        return;
+    }
+    if matches!(
+        ax.selection_tentative.as_ref().map(|s| &s.source),
+        Some(SelectionSource::ChatBlock { .. })
+    ) {
+        ax.selection_tentative = None;
+    }
+}
+
+/// Set the tentative attachment from a content tab editor selection. Any
+/// chat-sourced tentative is dropped; chat block anchors are cleared so
+/// the user's most recent gesture wins the tentative slot.
+///
+/// `display_path` and `tab_id` are caller-supplied so this module doesn't
+/// have to know about `tab_bar::TabView` shapes — see main.rs where
+/// content-tab editor actions are handled.
+pub fn set_tentative_from_tab(
+    ax: &mut AgentSession,
+    editor: &EditorState,
+    display_path: String,
+) {
+    if let Some(sel) = tab_editor_selection(editor, display_path) {
+        for chat_editor in ax.chat_editors.iter_mut() {
+            chat_editor.anchor = None;
+        }
+        ax.selection_tentative = Some(sel);
+    } else if matches!(
+        ax.selection_tentative.as_ref().map(|s| &s.source),
+        Some(SelectionSource::Tab { .. })
+    ) {
+        ax.selection_tentative = None;
+    }
+}
+
 /// Build a read-only queue editor with markdown highlighting applied so the
 /// queue pill reads like a regular chat message.
 fn make_queue_editor(text: &str, highlighter: &SyntaxHighlighter) -> EditorState {
@@ -530,6 +1043,31 @@ pub fn send_prompt_text(ax: &mut AgentSession, text: String, highlighter: &Synta
         }
     }
 
+    // Selection-context attachments: pinned + tentative, in that order,
+    // prepended to the per-turn prompt. They can't ride
+    // `system_additions` — that maps to `--append-system-prompt` on the
+    // claude CLI and only takes effect on the first invocation; later
+    // turns reuse the resumed session's baked-in system prompt and would
+    // silently drop the attachments.
+    let prompt = {
+        let mut attached: Vec<SelectionContext> = ax.selection_pinned.clone();
+        if let Some(t) = ax.selection_tentative.as_ref() {
+            attached.push(t.clone());
+        }
+        match render_selection_attachments(&attached) {
+            Some(blurb) => {
+                tracing::info!(
+                    pinned = ax.selection_pinned.len(),
+                    tentative = ax.selection_tentative.is_some(),
+                    blurb_chars = blurb.chars().count(),
+                    "prepending selection-context blurb to prompt"
+                );
+                format!("{blurb}{prompt}")
+            }
+            None => prompt,
+        }
+    };
+
     // Card description: inject on the first turn (when non-empty), and
     // re-inject on any later turn where the description has changed since
     // we last told the agent. Empty descriptions are skipped — if the card
@@ -570,6 +1108,9 @@ pub fn send_prompt_text(ax: &mut AgentSession, text: String, highlighter: &Synta
     ax.chat_input = EditorState::new("");
     rehighlight_input(&mut ax.chat_input, highlighter);
     ax.chat_completion.visible = false;
+    // Drop the tentative attachment — it rode this turn but is not pinned.
+    // Pinned attachments persist across messages until Cmd-R clears them.
+    ax.selection_tentative = None;
     rebuild_chat_editor(ax, highlighter);
 }
 
@@ -1013,6 +1554,8 @@ pub fn view_column<'a, M: 'a + Clone>(
                     &ax.chat_completion,
                     status,
                     ax.obvious_command.as_deref(),
+                    &ax.selection_pinned,
+                    ax.selection_tentative.as_ref(),
                 )
                 .map(move |m| w(Msg::AgentChat(m)));
 

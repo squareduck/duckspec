@@ -81,6 +81,35 @@ pub(crate) fn block_header_color(kind: BlockKind) -> Color {
     }
 }
 
+/// Round `col` down to the nearest UTF-8 char boundary inside `line`.
+/// Defensive helper for `text_in_range` / `delete_range`: those paths
+/// historically assumed col was a byte index, but `pixel_to_pos_wrapped`
+/// publishes a character count in the wrap path. Snapping here lets both
+/// callers stay non-panicking without forcing a coordinated rewrite of the
+/// hit-testing code. Cols past the end clamp to `line.len()`.
+fn snap_col(line: &str, col: usize) -> usize {
+    if col >= line.len() {
+        return line.len();
+    }
+    if line.is_char_boundary(col) {
+        return col;
+    }
+    let mut c = col;
+    while c > 0 && !line.is_char_boundary(c) {
+        c -= 1;
+    }
+    c
+}
+
+/// Clamp a `Pos` to the editor's lines and snap its `col` to the nearest
+/// byte boundary. Used at the entry points (Click/Drag) so internal paths
+/// can keep slicing without paying the snap cost.
+fn clamp_pos(pos: Pos, lines: &[String]) -> Pos {
+    let line = pos.line.min(lines.len().saturating_sub(1));
+    let col = snap_col(&lines[line], pos.col);
+    Pos::new(line, col)
+}
+
 // ── Position ───────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -290,14 +319,18 @@ impl EditorState {
             EditorAction::Undo => self.undo(),
             EditorAction::Redo => self.redo(),
             EditorAction::Click(pos) => {
-                self.cursor = pos;
+                self.cursor = clamp_pos(pos, &self.lines);
                 self.anchor = None;
             }
             EditorAction::Drag(pos) => {
                 if self.anchor.is_none() {
                     self.anchor = Some(self.cursor);
                 }
-                self.cursor = pos;
+                self.cursor = clamp_pos(pos, &self.lines);
+            }
+            EditorAction::DragEnd => {
+                // No state mutation — purely a signal to consumers that
+                // the drag has ended and the selection is now stable.
             }
             EditorAction::Scroll {
                 dy,
@@ -360,16 +393,22 @@ impl EditorState {
     }
 
     fn text_in_range(&self, start: Pos, end: Pos) -> String {
+        // Snap cols to char boundaries — `pixel_to_pos_wrapped` produces a
+        // character count in the wrap path, but col is treated as a byte
+        // index by the editing path. Slicing mid-multibyte panics; round
+        // down to the nearest valid boundary as a safety net.
+        let s_start = snap_col(&self.lines[start.line], start.col);
+        let s_end = snap_col(&self.lines[end.line], end.col);
         if start.line == end.line {
-            self.lines[start.line][start.col..end.col].to_string()
+            self.lines[start.line][s_start..s_end].to_string()
         } else {
-            let mut result = self.lines[start.line][start.col..].to_string();
+            let mut result = self.lines[start.line][s_start..].to_string();
             result.push('\n');
             for line in &self.lines[start.line + 1..end.line] {
                 result.push_str(line);
                 result.push('\n');
             }
-            result.push_str(&self.lines[end.line][..end.col]);
+            result.push_str(&self.lines[end.line][..s_end]);
             result
         }
     }
@@ -394,12 +433,14 @@ impl EditorState {
     }
 
     fn delete_range(&mut self, start: Pos, end: Pos) {
+        let s_start = snap_col(&self.lines[start.line], start.col);
+        let s_end = snap_col(&self.lines[end.line], end.col);
         let lines = Arc::make_mut(&mut self.lines);
         if start.line == end.line {
-            lines[start.line].replace_range(start.col..end.col, "");
+            lines[start.line].replace_range(s_start..s_end, "");
         } else {
-            let tail = lines[end.line][end.col..].to_string();
-            lines[start.line].truncate(start.col);
+            let tail = lines[end.line][s_end..].to_string();
+            lines[start.line].truncate(s_start);
             lines[start.line].push_str(&tail);
             lines.drain(start.line + 1..=end.line);
         }
@@ -753,6 +794,38 @@ impl EditorState {
     }
 }
 
+// ── Tests ──────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn snap_col_rounds_down_to_char_boundary() {
+        // "ab—cd": bytes a=0, b=1, '—'=2..5, c=5, d=6. Bytes 3 and 4 sit
+        // inside the em-dash and are not valid string boundaries.
+        let line = "ab—cd";
+        assert_eq!(snap_col(line, 0), 0);
+        assert_eq!(snap_col(line, 2), 2); // start of '—'
+        assert_eq!(snap_col(line, 3), 2); // inside '—' → snap back
+        assert_eq!(snap_col(line, 4), 2); // inside '—' → snap back
+        assert_eq!(snap_col(line, 5), 5); // start of 'c'
+        assert_eq!(snap_col(line, 99), line.len()); // past end → clamp
+    }
+
+    #[test]
+    fn click_with_mid_char_col_does_not_panic_on_text_in_range() {
+        // Reproduces the crash: a wrap-mode click in a multibyte chat block
+        // can publish a `Pos` whose `col` falls inside an em-dash.
+        // `selection_text()` then byte-slices and panics. The clamp on
+        // Click + the snap in `text_in_range` together keep this safe.
+        let mut ed = EditorState::new("No — I don't have any selection context");
+        ed.apply_action(EditorAction::Click(Pos::new(0, 0)));
+        ed.apply_action(EditorAction::Drag(Pos::new(0, 5))); // mid '—'
+        let _ = ed.selection_text(); // must not panic
+    }
+}
+
 // ── Messages ───────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone)]
@@ -777,6 +850,12 @@ pub enum EditorAction {
     Redo,
     Click(Pos),
     Drag(Pos),
+    /// Mouse button released after a drag completed. Carries no payload —
+    /// the cursor/anchor already reflect the final selection. Lets callers
+    /// distinguish "still dragging, selection mid-update" from "drag is
+    /// over, selection stable" without polling the editor's internal
+    /// state.
+    DragEnd,
     /// Scroll by `dy`/`dx` pixels, with viewport and content dimensions for clamping.
     Scroll {
         dy: f32,
