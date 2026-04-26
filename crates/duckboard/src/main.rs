@@ -1827,6 +1827,82 @@ fn take_pending_chat_snap(state: &mut State) -> Task<Message> {
     }
 }
 
+/// Snapshot of the active chat session's scroll intent — captured before
+/// `update` runs and replayed afterwards to neutralize layout-driven
+/// resets. Iced 0.14's `Scrollable` re-clamps offset on bounds/content
+/// changes, and the `on_scroll` viewport notifications fire for both
+/// user scrolls and content reflows. We can't reliably tell them apart
+/// inside the handler, so instead we treat *all* messages other than
+/// `ChatScrolled` itself as potential layout-changers and re-issue the
+/// last user-intended position. For `ChatScrolled` we skip — the user's
+/// own scroll *is* the new intent.
+#[derive(Clone, Copy)]
+enum ChatScrollSnapshot {
+    StickToBottom,
+    At(f32),
+}
+
+fn capture_chat_scroll_snapshot(state: &State) -> Option<ChatScrollSnapshot> {
+    let scope = state.active_scope()?;
+    let ix = state.interactions.get(&scope)?;
+    let ax = ix.active()?;
+    if ax.stick_to_bottom {
+        Some(ChatScrollSnapshot::StickToBottom)
+    } else {
+        ax.last_chat_offset_y.map(ChatScrollSnapshot::At)
+    }
+}
+
+fn replay_chat_scroll(snap: ChatScrollSnapshot) -> Task<Message> {
+    match snap {
+        ChatScrollSnapshot::StickToBottom => iced::widget::operation::snap_to_end(
+            widget::agent_chat::CHAT_SCROLLABLE_ID,
+        ),
+        ChatScrollSnapshot::At(y) => iced::widget::operation::scroll_to(
+            widget::agent_chat::CHAT_SCROLLABLE_ID,
+            iced::widget::scrollable::AbsoluteOffset { x: 0.0, y },
+        ),
+    }
+}
+
+/// True when the message is the chat scrollable's own viewport notification.
+/// Those messages *are* the user's new scroll intent, so the wrapper must not
+/// override them with the pre-message snapshot.
+fn is_chat_scroll_message(msg: &Message) -> bool {
+    fn is_chat_scrolled(im: &interaction::Msg) -> bool {
+        matches!(
+            im,
+            interaction::Msg::AgentChat(widget::agent_chat::Msg::ChatScrolled(_))
+        )
+    }
+    match msg {
+        Message::Interaction(im) => is_chat_scrolled(im),
+        Message::Change(area::change::Message::Interaction(im)) => is_chat_scrolled(im),
+        Message::Caps(area::caps::Message::Interaction(im)) => is_chat_scrolled(im),
+        Message::Codex(area::codex::Message::Interaction(im)) => is_chat_scrolled(im),
+        Message::Ideas(area::ideas::Message::Interaction(im)) => is_chat_scrolled(im),
+        _ => false,
+    }
+}
+
+/// Outer entry point for `iced::application`. Wraps `update` so every
+/// non-`ChatScrolled` message captures the chat's scroll intent before
+/// dispatch and replays it after — preventing layout-driven resets
+/// (modal open/close, content column appearing/disappearing, etc.) from
+/// silently jumping the chat to the top.
+fn update_with_scroll_preservation(state: &mut State, message: Message) -> Task<Message> {
+    let snapshot = if is_chat_scroll_message(&message) {
+        None
+    } else {
+        capture_chat_scroll_snapshot(state)
+    };
+    let task = update(state, message);
+    match snapshot {
+        Some(snap) => Task::batch([task, replay_chat_scroll(snap)]),
+        None => task,
+    }
+}
+
 /// Resolve a composite routing key `<instance_id>/<session_id>` to its
 /// AgentSession from the shared `interactions` map. Borrows only the map
 /// so callers can keep parallel borrows on other `State` fields.
@@ -3487,25 +3563,23 @@ fn view(state: &State) -> Element<'_, Message> {
     ]
     .height(Length::Fill);
 
-    if state.project_picker.visible {
-        let overlay = widget::project_picker::view(
-            &state.project_picker,
-            &state.config.projects.recent,
-        )
-        .map(Message::ProjectPicker);
-        stack![main_view, overlay].into()
+    // Always render as a stack so the widget-tree shape stays the same when a
+    // modal opens/closes. Otherwise the top-level type would flip between
+    // `Column` and `Stack`, which restructures the subtree and resets the
+    // chat scrollable's state to (0, 0) — see `restore_chat_scroll`.
+    let overlay: Element<'_, Message> = if state.project_picker.visible {
+        widget::project_picker::view(&state.project_picker, &state.config.projects.recent)
+            .map(Message::ProjectPicker)
     } else if state.file_finder.visible {
-        let overlay = widget::file_finder::view(&state.file_finder).map(Message::FileFinder);
-        stack![main_view, overlay].into()
+        widget::file_finder::view(&state.file_finder).map(Message::FileFinder)
     } else if state.text_search.visible {
-        let overlay = widget::text_search::view(&state.text_search).map(Message::TextSearch);
-        stack![main_view, overlay].into()
+        widget::text_search::view(&state.text_search).map(Message::TextSearch)
     } else if state.quick_idea.visible {
-        let overlay = widget::quick_idea::view(&state.quick_idea).map(Message::QuickIdea);
-        stack![main_view, overlay].into()
+        widget::quick_idea::view(&state.quick_idea).map(Message::QuickIdea)
     } else {
-        main_view.into()
-    }
+        Space::new().width(0.0).height(0.0).into()
+    };
+    stack![main_view, overlay].into()
 }
 
 // ── Subscription ────────────────────────────────────────────────────────────
@@ -3653,7 +3727,7 @@ fn main() -> iced::Result {
     theme::set_mode(theme::detect_mode());
     tracing::info!(mode = ?theme::mode(), "duckboard starting");
 
-    iced::application(State::new, update, view)
+    iced::application(State::new, update_with_scroll_preservation, view)
         .subscription(subscription)
         .title("duckboard")
         .theme(theme_fn)
