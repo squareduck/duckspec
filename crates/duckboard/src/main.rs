@@ -860,8 +860,8 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                     }
                 }
                 msg => {
-                    let needs_focus =
-                        is_chat_focus_msg(extract_change_interaction_msg(&msg));
+                    let needs_focus = matches!(msg, area::change::Message::AddExploration)
+                        || is_chat_focus_msg(extract_change_interaction_msg(&msg));
                     area::change::update(
                         &mut state.change,
                         &mut state.tabs,
@@ -1396,6 +1396,22 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                 return update(state, Message::Ideas(area::ideas::Message::AddIdea));
             }
 
+            // Cmd+N in the Change area when there's no active interaction
+            // (nothing selected yet): spawn a fresh exploration and focus
+            // chat. The chat-focused-on-real-change variant (NewSession) is
+            // handled further down where routing_key is in scope.
+            if mods.command()
+                && !mods.shift()
+                && key == keyboard::Key::Character("n".into())
+                && state.active_area == Area::Change
+                && state.active_interaction_key().is_none()
+            {
+                return update(
+                    state,
+                    Message::Change(area::change::Message::AddExploration),
+                );
+            }
+
             // Cmd+S in the Ideas area with the pinned tab active → save the
             // idea body (frontmatter is rederived from H1). Routed through
             // the ideas update so it picks up filename moves on title/tag
@@ -1800,29 +1816,32 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                         }
                     }
 
-                    // Cmd-N (Ctrl-N off-mac): spawn a fresh exploration when the
-                    // current scope is an exploration, otherwise start a new
-                    // chat session inside the current change. Explorations use
-                    // the single-session UI, so reusing NewSession would just
-                    // visually clear the current chat — and Clear is button-only
-                    // by design.
+                    // Cmd-N (Ctrl-N off-mac) in the Change area:
+                    // - chat input focused on a real change → start a new
+                    //   chat session in that change (multi-session UI).
+                    // - otherwise → spawn a fresh exploration and focus chat,
+                    //   same as the `+` in the Change header.
+                    // Cmd+Shift+N (spawn new window) is intercepted earlier;
+                    // Cmd+N in Ideas is area-scoped above.
                     if state.active_area == Area::Change
                         && mods.command()
                         && key == keyboard::Key::Character("n".into())
                     {
-                        if state.change.is_exploration_selected() {
-                            return Task::batch([
-                                update(
-                                    state,
-                                    Message::Change(area::change::Message::AddExploration),
-                                ),
-                                focus_chat_input(),
-                            ]);
+                        let chat_focused_on_change = !state.change.is_exploration_selected()
+                            && state
+                                .interaction_mut(routing_key)
+                                .and_then(|ix| ix.active_mut())
+                                .is_some_and(|ax| ax.chat_input_focused);
+                        if chat_focused_on_change {
+                            return dispatch_interaction_msg(
+                                state,
+                                routing_key,
+                                interaction::Msg::NewSession,
+                            );
                         }
-                        return dispatch_interaction_msg(
+                        return update(
                             state,
-                            routing_key,
-                            interaction::Msg::NewSession,
+                            Message::Change(area::change::Message::AddExploration),
                         );
                     }
                 }
