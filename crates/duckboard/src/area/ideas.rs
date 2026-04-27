@@ -33,6 +33,11 @@ pub const PINNED_TAB_PREFIX: &str = "idea:";
 /// `text_input::Id` for the inline tag-add field; used to focus on open.
 pub const TAG_INPUT_ID: &str = "ideas-tag-input";
 
+/// Focus id for the pinned idea body editor. Attached in `widget::tab_bar`
+/// rendering when the active editor tab is the ideas pinned tab so that
+/// `Message::AddIdea` can drop the cursor straight into the body.
+pub const EDITOR_ID: &str = "ideas-editor";
+
 pub fn pinned_tab_id(path: &Path) -> String {
     format!("{PINNED_TAB_PREFIX}{}", path.display())
 }

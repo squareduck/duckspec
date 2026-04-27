@@ -566,7 +566,13 @@ pub fn view_content(state: &TabState) -> Element<'_, TabContentMsg> {
 
             let body: Element<'_, TabContentMsg> = match &tab.view {
                 TabView::Editor { editor, .. } => {
-                    text_edit::view(editor, TabContentMsg::EditorAction)
+                    // Ideas pinned tab gets a stable focus id so cmd-n
+                    // (`Message::AddIdea`) can target the body editor.
+                    let mut w = text_edit::TextEdit::new(editor, TabContentMsg::EditorAction);
+                    if tab.id.starts_with(crate::area::ideas::PINNED_TAB_PREFIX) {
+                        w = w.id(crate::area::ideas::EDITOR_ID);
+                    }
+                    w.into()
                 }
                 TabView::Diff { editor, .. } => {
                     text_edit::TextEdit::new(editor, TabContentMsg::EditorAction)
