@@ -35,6 +35,7 @@ nucleo = "0.5"
 grep-regex = "0.1"
 grep-searcher = "0.1"
 grep-matcher = "0.1"
+regex = "1"
 syntect = { version = "5", default-features = false, features = ["default-syntaxes", "parsing", "plist-load", "regex-fancy"] }
 dark-light = "2"
 linkify = "0.11"

@@ -1510,6 +1510,11 @@ pub fn view_column<'a, M: 'a + Clone>(
     state: &'a InteractionState,
     wrap: impl Fn(Msg) -> M + 'a + Clone,
     controls: SessionControls,
+    block_highlights: Vec<(
+        Vec<crate::widget::text_edit::HighlightRange>,
+        Option<crate::widget::text_edit::HighlightRange>,
+    )>,
+    find_toolbar: Option<Element<'a, M>>,
 ) -> Element<'a, M> {
     use iced::widget::column;
 
@@ -1556,13 +1561,17 @@ pub fn view_column<'a, M: 'a + Clone>(
                     ax.obvious_command.as_deref(),
                     &ax.selection_pinned,
                     ax.selection_tentative.as_ref(),
+                    block_highlights,
                 )
                 .map(move |m| w(Msg::AgentChat(m)));
 
                 let session_bar = view_session_bar(state, controls, wrap.clone());
-                column![session_bar, chat_view]
-                    .height(iced::Length::Fill)
-                    .into()
+                let mut col = column![session_bar];
+                if let Some(toolbar) = find_toolbar {
+                    col = col.push(toolbar);
+                }
+                col = col.push(chat_view);
+                col.height(iced::Length::Fill).into()
             } else {
                 view_placeholder(wrap.clone())
             }

@@ -291,16 +291,30 @@ pub fn view<'a>(
     obvious_command: Option<&str>,
     pinned_selections: &'a [SelectionContext],
     tentative_selection: Option<&'a SelectionContext>,
+    block_highlights: Vec<(Vec<text_edit::HighlightRange>, Option<text_edit::HighlightRange>)>,
 ) -> Element<'a, Msg> {
     // Chat content — scrollable column of full-width sections.
     let mut chat_col = column![]
         .spacing(theme::SPACING_XS)
         .padding([theme::SPACING_SM, 0.0]);
 
+    let mut block_highlights = block_highlights;
     for (i, block) in blocks.iter().enumerate() {
         let is_collapsed = collapsed.get(i).copied().unwrap_or(false);
-        let block_el = view_block(i, block, editors.get(i), is_collapsed);
-        chat_col = chat_col.push(block_el);
+        let (ranges, current) = if i < block_highlights.len() {
+            std::mem::take(&mut block_highlights[i])
+        } else {
+            (Vec::new(), None)
+        };
+        let block_el = view_block(i, block, editors.get(i), is_collapsed, ranges, current);
+        // Tag each block with a stable widget id so `widget::find` can read
+        // the laid-out bounds during an Operation pass and scroll the
+        // matching block to the top of the viewport — bypasses all the
+        // per-kind padding / wrap / collapse pixel math.
+        let tagged = container(block_el)
+            .id(crate::widget::find::chat_block_widget_id(i))
+            .width(Length::Fill);
+        chat_col = chat_col.push(tagged);
     }
 
     // Streaming indicator: animated pulsing dots + inline cancel hint at
@@ -537,10 +551,12 @@ fn view_block<'a>(
     block: &'a Block,
     editor: Option<&'a EditorState>,
     collapsed: bool,
+    hl_ranges: Vec<text_edit::HighlightRange>,
+    hl_current: Option<text_edit::HighlightRange>,
 ) -> Element<'a, Msg> {
     let is_tool = matches!(block.kind, BlockKind::ToolUse | BlockKind::ToolResult);
     if is_tool {
-        return view_tool_block(idx, block, editor, collapsed);
+        return view_tool_block(idx, block, editor, collapsed, hl_ranges, hl_current);
     }
 
     // User / Assistant / System: no header, no chevron.
@@ -557,7 +573,8 @@ fn view_block<'a>(
         .word_wrap(true)
         .read_only(true)
         .fit_content(true)
-        .transparent_bg(true);
+        .transparent_bg(true)
+        .highlights(hl_ranges, hl_current);
 
     let padded = container(content)
         .padding([theme::SPACING_SM, theme::SPACING_MD])
@@ -580,6 +597,8 @@ fn view_tool_block<'a>(
     block: &'a Block,
     editor: Option<&'a EditorState>,
     collapsed: bool,
+    hl_ranges: Vec<text_edit::HighlightRange>,
+    hl_current: Option<text_edit::HighlightRange>,
 ) -> Element<'a, Msg> {
     let label_color = block_header_color(block.kind);
     let has_content = !block.lines.is_empty();
@@ -630,7 +649,8 @@ fn view_tool_block<'a>(
                 .word_wrap(true)
                 .read_only(true)
                 .fit_content(true)
-                .transparent_bg(true),
+                .transparent_bg(true)
+                .highlights(hl_ranges, hl_current),
         )
         .padding([theme::SPACING_SM, theme::SPACING_MD])
         .width(Length::Fill)

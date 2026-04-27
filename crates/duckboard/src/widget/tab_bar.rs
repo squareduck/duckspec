@@ -12,7 +12,7 @@ use iced::{Center, Element, Length};
 
 use crate::theme;
 use crate::vcs::{DiffData, FileStatus};
-use crate::widget::text_edit::{self, EditorAction, EditorState};
+use crate::widget::text_edit::{self, EditorAction, EditorState, HighlightRange};
 
 const ICON_FILE: &[u8] = include_bytes!("../../assets/icon_file.svg");
 const ICON_SPEC: &[u8] = include_bytes!("../../assets/icon_spec.svg");
@@ -497,7 +497,29 @@ fn tab_separator<'a, M: 'a>() -> Element<'a, M> {
         .into()
 }
 
-pub fn view_content(state: &TabState) -> Element<'_, TabContentMsg> {
+/// Static focus id shared by every editor tab. Only one tab body is
+/// rendered at a time, so a single id is unambiguous and dispatches via
+/// `iced::widget::operation::focus(ACTIVE_EDITOR_ID)` reach the right
+/// widget. (Per-tab String ids didn't reliably take focus — possibly an
+/// id-hashing edge case in iced 0.14 — and a static id matches the
+/// pattern used by the chat input which is known to work.)
+pub const ACTIVE_EDITOR_ID: &str = "active-editor";
+
+/// Resolve the focus id for the active tab. The Ideas pinned tab keeps
+/// its own stable id (used by cmd-n to focus the body editor); everything
+/// else uses [`ACTIVE_EDITOR_ID`].
+pub fn editor_focus_id(tab_id: &str) -> &'static str {
+    if tab_id.starts_with(crate::area::ideas::PINNED_TAB_PREFIX) {
+        crate::area::ideas::EDITOR_ID
+    } else {
+        ACTIVE_EDITOR_ID
+    }
+}
+
+pub fn view_content<'a>(
+    state: &'a TabState,
+    highlights: Option<(Vec<HighlightRange>, Option<HighlightRange>)>,
+) -> Element<'a, TabContentMsg> {
     match state.active_tab() {
         Some(tab) if matches!(&tab.view, TabView::SearchStack { .. }) => {
             view_search_stack(tab)
@@ -564,20 +586,21 @@ pub fn view_content(state: &TabState) -> Element<'_, TabContentMsg> {
                 Space::new().into()
             };
 
+            let (hl_ranges, hl_current) = highlights.unwrap_or((Vec::new(), None));
+            let focus_id = editor_focus_id(&tab.id);
             let body: Element<'_, TabContentMsg> = match &tab.view {
                 TabView::Editor { editor, .. } => {
-                    // Ideas pinned tab gets a stable focus id so cmd-n
-                    // (`Message::AddIdea`) can target the body editor.
-                    let mut w = text_edit::TextEdit::new(editor, TabContentMsg::EditorAction);
-                    if tab.id.starts_with(crate::area::ideas::PINNED_TAB_PREFIX) {
-                        w = w.id(crate::area::ideas::EDITOR_ID);
-                    }
-                    w.into()
+                    text_edit::TextEdit::new(editor, TabContentMsg::EditorAction)
+                        .highlights(hl_ranges, hl_current)
+                        .id(focus_id)
+                        .into()
                 }
                 TabView::Diff { editor, .. } => {
                     text_edit::TextEdit::new(editor, TabContentMsg::EditorAction)
                         .read_only(true)
                         .show_gutter(false)
+                        .highlights(hl_ranges, hl_current)
+                        .id(focus_id)
                         .into()
                 }
                 TabView::SearchStack { .. } => {
