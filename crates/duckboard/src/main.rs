@@ -968,6 +968,7 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                 msg,
                 area::ideas::Message::OpenTagInput | area::ideas::Message::EditTag(_)
             );
+            let focus_idea_editor = matches!(msg, area::ideas::Message::AddIdea);
             area::ideas::update(
                 &mut state.ideas,
                 &mut state.tabs,
@@ -978,6 +979,9 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
             );
             if focus_tag_input {
                 return iced::widget::operation::focus(area::ideas::TAG_INPUT_ID);
+            }
+            if focus_idea_editor {
+                return iced::widget::operation::focus(area::ideas::EDITOR_ID);
             }
             if needs_focus {
                 return focus_chat_input();

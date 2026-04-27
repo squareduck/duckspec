@@ -1327,14 +1327,6 @@ fn pos_in_hover(
     pos.line == hover.line && pos.col >= hover.char_start && pos.col < hover.char_end
 }
 
-/// Convenience: create the widget.
-pub fn view<'a, M: Clone + 'a>(
-    state: &'a EditorState,
-    on_action: impl Fn(EditorAction) -> M + 'a,
-) -> Element<'a, M> {
-    TextEdit::new(state, on_action).into()
-}
-
 /// Try to read an image off the system clipboard, encode it as PNG, and
 /// return an `AttachImage` action for the host to register and link into
 /// the editor. Returns `None` when the clipboard has no image (or any
