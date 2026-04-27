@@ -2,6 +2,7 @@ pub mod agent_chat;
 pub mod collapsible;
 pub mod diff_view;
 pub mod file_finder;
+pub mod find;
 pub mod horizontal_pan;
 pub mod interaction_toggle;
 pub mod list_view;

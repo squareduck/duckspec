@@ -16,8 +16,8 @@ use iced::{
 use linkify::LinkFinder;
 
 use super::state::{
-    CONTENT_PAD_Y, EditorAction, EditorState, LINE_HEIGHT, Pos, block_header_color, block_kind_bg,
-    line_bg_color,
+    CONTENT_PAD_Y, EditorAction, EditorState, HighlightRange, LINE_HEIGHT, Pos,
+    block_header_color, block_kind_bg, line_bg_color,
 };
 use crate::theme;
 use crate::widget::terminal::current_modifiers;
@@ -181,6 +181,13 @@ pub struct TextEdit<'a, M> {
     /// scrollbars are drawn and wheel events are ignored so the parent
     /// scrollable handles them. Used by the search-stack slices.
     static_viewport: bool,
+    /// Match-range highlights to overlay in `theme::search_match_bg`. The
+    /// "current" candidate (if any) gets a stronger accent fill on top.
+    /// Owned so callers can compute highlights inside `view()` and pass them
+    /// down without lifetime gymnastics — the Vec lives inside the widget
+    /// builder, which lives inside the returned Element.
+    highlight_ranges: Vec<HighlightRange>,
+    current_highlight: Option<HighlightRange>,
 }
 
 impl<'a, M> TextEdit<'a, M> {
@@ -197,7 +204,22 @@ impl<'a, M> TextEdit<'a, M> {
             transparent_bg: false,
             id: None,
             static_viewport: false,
+            highlight_ranges: Vec::new(),
+            current_highlight: None,
         }
+    }
+
+    /// Overlay match highlights drawn in the muted "search match" background
+    /// color. Use `current_highlight` to mark one of these as the active
+    /// candidate (stronger accent fill).
+    pub fn highlights(
+        mut self,
+        ranges: Vec<HighlightRange>,
+        current: Option<HighlightRange>,
+    ) -> Self {
+        self.highlight_ranges = ranges;
+        self.current_highlight = current;
+        self
     }
 
     /// Assign an [`Id`] so the editor can be targeted by focus operations
@@ -812,6 +834,77 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for TextEdit<'a, M> {
                     );
                 }
 
+                // Match-range highlights (find feature). Drawn behind the
+                // selection so an active selection over a match still reads
+                // as selected. Two passes: dim background for every match,
+                // then a stronger accent fill on top for the current
+                // candidate so the user can tell prev/next apart.
+                let line = &self.state.lines[line_idx];
+                let line_char_count = line.chars().count();
+                let draw_match = |renderer: &mut iced::Renderer,
+                                  range: &HighlightRange,
+                                  bg: Color,
+                                  border: Option<Color>| {
+                    if range.line != line_idx {
+                        return;
+                    }
+                    let safe_start = snap_byte_boundary(line, range.byte_start);
+                    let safe_end = snap_byte_boundary(line, range.byte_end);
+                    if safe_end <= safe_start {
+                        return;
+                    }
+                    let char_start_abs = line[..safe_start].chars().count();
+                    let char_end_abs = line[..safe_end].chars().count();
+                    let vis_lo = char_start_abs.max(char_start);
+                    let vis_hi = char_end_abs.min(char_end);
+                    if vis_hi <= vis_lo {
+                        return;
+                    }
+                    let rel_start = vis_lo - char_start;
+                    let rel_end = vis_hi - char_start;
+                    let rel_end = rel_end.min(line_char_count.saturating_sub(char_start));
+                    if rel_end <= rel_start {
+                        return;
+                    }
+                    let mx = content_x + CONTENT_PAD + rel_start as f32 * cell_w - scroll_x;
+                    let mw = (rel_end - rel_start) as f32 * cell_w;
+                    let border = border
+                        .map(|c| Border {
+                            color: c,
+                            width: 1.0,
+                            radius: 2.0.into(),
+                        })
+                        .unwrap_or_default();
+                    renderer::Renderer::fill_quad(
+                        renderer,
+                        renderer::Quad {
+                            bounds: Rectangle {
+                                x: mx,
+                                y,
+                                width: mw,
+                                height: LINE_HEIGHT,
+                            },
+                            border,
+                            ..renderer::Quad::default()
+                        },
+                        bg,
+                    );
+                };
+                for range in self.highlight_ranges.iter() {
+                    draw_match(renderer, range, theme::search_match_bg(), None);
+                }
+                if let Some(cur) = self.current_highlight.as_ref() {
+                    draw_match(
+                        renderer,
+                        cur,
+                        Color {
+                            a: 0.55,
+                            ..theme::accent()
+                        },
+                        Some(theme::accent()),
+                    );
+                }
+
                 // Selection highlight.
                 if let Some((sel_start, sel_end)) = selection
                     && line_idx >= sel_start.line
@@ -1039,8 +1132,13 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for TextEdit<'a, M> {
                 }
             }
 
-            // Cursor.
-            if internal.focused {
+            // Cursor — paint when the widget owns focus, OR when a find
+            // candidate is currently highlighted in an *editable* editor.
+            // Read-only editors (chat blocks) suppress the decoration
+            // cursor: per-block highlights mark the match, but a caret
+            // would suggest editability that doesn't exist.
+            let force_cursor = self.current_highlight.is_some() && !self.read_only;
+            if internal.focused || force_cursor {
                 let cursor_line = self.state.cursor.line;
                 let cursor_col = self.state.cursor.col;
                 let (cy, cx) = if let Some(ref w) = wrap {
@@ -1232,6 +1330,19 @@ fn measure_cell_width(_renderer: &iced::Renderer) -> f32 {
     });
     let w = para.min_bounds().width;
     if w > 0.0 { w } else { 7.8 }
+}
+
+/// Round `i` down to the nearest UTF-8 char boundary inside `s`. Used by
+/// the highlight overlay so a malformed range (mid-multibyte) renders an
+/// adjusted box rather than panicking on `&line[i..]`.
+fn snap_byte_boundary(s: &str, mut i: usize) -> usize {
+    if i >= s.len() {
+        return s.len();
+    }
+    while i > 0 && !s.is_char_boundary(i) {
+        i -= 1;
+    }
+    i
 }
 
 fn digit_count(n: usize) -> usize {

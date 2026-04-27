@@ -35,6 +35,13 @@ use widget::tab_bar;
 const KEY_CAPS: &str = "caps";
 const KEY_CODEX: &str = "codex";
 
+/// Last-focused content column, used by cmd-f to pick a find target.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FocusedColumn {
+    Content,
+    Chat,
+}
+
 // ── State ────────────────────────────────────────────────────────────────────
 
 struct State {
@@ -51,6 +58,21 @@ struct State {
     text_search: widget::text_search::TextSearchState,
     project_picker: widget::project_picker::ProjectPickerState,
     quick_idea: widget::quick_idea::QuickIdeaState,
+    find_modal: widget::find::FindModalState,
+    /// Active local-find state per target. Editor finds key by tab id;
+    /// chat finds key by `(instance_id, session_id)`. Survives tab/session
+    /// switches; cleared by Esc / click-away on the modal, the toolbar's
+    /// cancel, or a fresh cmd-f opening the modal again.
+    find_states: HashMap<widget::find::FindTarget, widget::find::FindState>,
+    /// Most-recently-focused content column. Drives the cmd-f scope rule:
+    /// `Chat` → target the active session, `Content` → target the active
+    /// editor tab. `None` → cmd-f is a no-op.
+    focused_column: Option<FocusedColumn>,
+    /// Set by `jump_to_current` when find scrolls the chat to a match.
+    /// Read by `update_with_scroll_preservation` to skip the post-update
+    /// chat-scroll replay (which would otherwise restore the pre-find
+    /// position and visually undo the jump). Reset every wrapper tick.
+    chat_scroll_overridden: bool,
     /// Shared via `Arc` so background tasks (e.g. search-stack highlighting)
     /// can hold a handle without blocking the UI on syntax-set ownership.
     highlighter: Arc<highlight::SyntaxHighlighter>,
@@ -106,6 +128,10 @@ impl State {
             text_search: widget::text_search::TextSearchState::default(),
             project_picker: widget::project_picker::ProjectPickerState::default(),
             quick_idea: widget::quick_idea::QuickIdeaState::default(),
+            find_modal: widget::find::FindModalState::default(),
+            find_states: HashMap::new(),
+            focused_column: None,
+            chat_scroll_overridden: false,
             highlighter: Arc::new(highlight::SyntaxHighlighter::new()),
             tabs: tab_bar::TabState::default(),
             cached_previews: HashMap::new(),
@@ -251,6 +277,11 @@ enum Message {
     ProjectPicker(widget::project_picker::Msg),
     // Quick idea capture/jump modal (cmd-i).
     QuickIdea(widget::quick_idea::Msg),
+    // Local find — cmd-f within the focused editor or chat session.
+    /// Open the find modal targeting the focused column. No payload — the
+    /// handler reads `state.focused_column` and builds the snapshot.
+    FindOpen,
+    Find(widget::find::Msg),
     /// Open a project rooted at this path (from picker confirm or recents).
     OpenProject(PathBuf),
     // Async search-stack highlighting: one message per unique file once the
@@ -320,6 +351,7 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
         state.ideas.tag_input = None;
         state.ideas.tag_input_editing = None;
     }
+    update_focused_column(state, &message);
     match message {
         Message::AreaSelected(area) => {
             switch_area(state, area);
@@ -537,6 +569,12 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                     return update(state, Message::OpenProject(path));
                 }
             }
+        }
+        Message::FindOpen => {
+            return open_find_modal(state);
+        }
+        Message::Find(msg) => {
+            return handle_find_msg(state, msg);
         }
         Message::OpenProject(path) => {
             state.open_project(path);
@@ -1383,6 +1421,81 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                 return update(state, Message::TextSearch(widget::text_search::Msg::Open));
             }
 
+            // Cmd+F: open local find modal targeting the focused column.
+            // No-op if neither editor nor chat owns focus.
+            if mods.command()
+                && !mods.shift()
+                && matches!(&key, keyboard::Key::Character(c) if c.eq_ignore_ascii_case("f"))
+            {
+                return update(state, Message::FindOpen);
+            }
+
+            // When the find modal is open, route Esc / Enter / preview nav.
+            // Char input flows to the embedded text_input naturally.
+            if state.find_modal.visible {
+                use keyboard::key::Named;
+                match &key {
+                    keyboard::Key::Named(Named::Escape) => {
+                        return update(state, Message::Find(widget::find::Msg::Cancel));
+                    }
+                    keyboard::Key::Named(Named::Enter) => {
+                        return update(state, Message::Find(widget::find::Msg::Commit));
+                    }
+                    keyboard::Key::Named(Named::ArrowDown) => {
+                        let _ = update(
+                            state,
+                            Message::Find(widget::find::Msg::PreviewSelectNext),
+                        );
+                    }
+                    keyboard::Key::Named(Named::ArrowUp) => {
+                        let _ = update(
+                            state,
+                            Message::Find(widget::find::Msg::PreviewSelectPrev),
+                        );
+                    }
+                    _ if mods.control() && key == keyboard::Key::Character("n".into()) => {
+                        let _ = update(
+                            state,
+                            Message::Find(widget::find::Msg::PreviewSelectNext),
+                        );
+                    }
+                    _ if mods.control() && key == keyboard::Key::Character("p".into()) => {
+                        let _ = update(
+                            state,
+                            Message::Find(widget::find::Msg::PreviewSelectPrev),
+                        );
+                    }
+                    _ => {}
+                }
+                return Task::none();
+            }
+
+            // Ctrl-N / Ctrl-P navigation when a find is active for the
+            // focused column. Lower priority than the chat completion popup
+            // (handled later via `handle_agent_chat_key`), so a visible
+            // completion still wins.
+            if mods.control()
+                && !mods.shift()
+                && (key == keyboard::Key::Character("n".into())
+                    || key == keyboard::Key::Character("p".into()))
+                && let Some(target) = focused_find_target(state)
+                && state.find_states.contains_key(&target)
+            {
+                let completion_eats = state
+                    .active_scope()
+                    .and_then(|s| state.interactions.get(&s))
+                    .and_then(|ix| ix.active())
+                    .is_some_and(|ax| ax.chat_completion.visible);
+                if !completion_eats {
+                    let dir = if key == keyboard::Key::Character("n".into()) {
+                        widget::find::NavDir::Next
+                    } else {
+                        widget::find::NavDir::Prev
+                    };
+                    return update(state, Message::Find(widget::find::Msg::Navigate(target, dir)));
+                }
+            }
+
             // When text search is visible, route navigation keys.
             if state.text_search.visible {
                 use keyboard::key::Named;
@@ -1897,9 +2010,10 @@ fn replay_chat_scroll(snap: ChatScrollSnapshot) -> Task<Message> {
     }
 }
 
-/// True when the message is the chat scrollable's own viewport notification.
-/// Those messages *are* the user's new scroll intent, so the wrapper must not
-/// override them with the pre-message snapshot.
+/// True when the message is the chat scrollable's own viewport notification,
+/// or when the message intentionally drives chat scroll itself (e.g. local
+/// find navigation). Those messages own the scroll intent — the wrapper
+/// must not override them with the pre-message snapshot.
 fn is_chat_scroll_message(msg: &Message) -> bool {
     fn is_chat_scrolled(im: &interaction::Msg) -> bool {
         matches!(
@@ -1913,6 +2027,11 @@ fn is_chat_scroll_message(msg: &Message) -> bool {
         Message::Caps(area::caps::Message::Interaction(im)) => is_chat_scrolled(im),
         Message::Codex(area::codex::Message::Interaction(im)) => is_chat_scrolled(im),
         Message::Ideas(area::ideas::Message::Interaction(im)) => is_chat_scrolled(im),
+        // Local-find commit/navigate is a deliberate scroll into a chat
+        // match — letting the snapshot wrapper restore the prior offset
+        // would visually undo the find jump.
+        Message::Find(widget::find::Msg::Commit)
+        | Message::Find(widget::find::Msg::Navigate(_, _)) => true,
         _ => false,
     }
 }
@@ -1928,7 +2047,16 @@ fn update_with_scroll_preservation(state: &mut State, message: Message) -> Task<
     } else {
         capture_chat_scroll_snapshot(state)
     };
+    state.chat_scroll_overridden = false;
     let task = update(state, message);
+    // If a Find action drove a chat scroll during this tick (e.g. ctrl-n/p
+    // routed via KeyPress → Find(Navigate)), skip the replay — its job is
+    // to *preserve* the user's prior intent, not to undo a deliberate
+    // scroll-to-match.
+    if state.chat_scroll_overridden {
+        state.chat_scroll_overridden = false;
+        return task;
+    }
     match snapshot {
         Some(snap) => Task::batch([task, replay_chat_scroll(snap)]),
         None => task,
@@ -2932,6 +3060,449 @@ fn ensure_active_area(active_area: &mut Area) {
     }
 }
 
+// ── Focused-column tracking ────────────────────────────────────────────────
+
+/// Heuristic: every editor-targeted message that implies focus pulls
+/// `focused_column` toward that side. Used by cmd-f to pick a target.
+/// Conservative — leaves the value untouched for messages that don't
+/// involve a specific column (e.g. background events, area switches).
+fn update_focused_column(state: &mut State, message: &Message) {
+    use widget::text_edit::EditorAction;
+    match message {
+        Message::TabContent(tab_bar::TabContentMsg::EditorAction(_))
+        | Message::TabContent(tab_bar::TabContentMsg::SearchSliceAction(_, _))
+        | Message::TabSelect(_) => {
+            state.focused_column = Some(FocusedColumn::Content);
+        }
+        Message::Interaction(interaction::Msg::AgentChat(inner)) => {
+            // Any agent-chat editor action (input or block) signals chat
+            // focus. Other agent_chat messages (scroll, completion popup
+            // toggles) also count — they only fire from chat interactions.
+            use widget::agent_chat::Msg as ChatMsg;
+            let is_focus_signal = matches!(
+                inner,
+                ChatMsg::InputAction(_)
+                    | ChatMsg::ChatAction(_, _)
+                    | ChatMsg::QueueAction(_)
+                    | ChatMsg::SendPressed
+                    | ChatMsg::ChatScrolled(_)
+            );
+            // Click on a chat block or chat input → focus chat. Avoid
+            // pulling focus on irrelevant variants (e.g. completion popup
+            // toggles fired from elsewhere).
+            if is_focus_signal {
+                let pull = match inner {
+                    ChatMsg::ChatAction(_, action)
+                    | ChatMsg::InputAction(action)
+                    | ChatMsg::QueueAction(action) => matches!(
+                        action,
+                        EditorAction::Click(_)
+                            | EditorAction::Drag(_)
+                            | EditorAction::DragEnd
+                            | EditorAction::Insert(_)
+                            | EditorAction::Paste(_)
+                            | EditorAction::Backspace
+                            | EditorAction::Delete
+                            | EditorAction::Enter
+                            | EditorAction::SelectAll
+                    ),
+                    _ => true,
+                };
+                if pull {
+                    state.focused_column = Some(FocusedColumn::Chat);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+// ── Local find helpers ─────────────────────────────────────────────────────
+
+/// Resolve the current cmd-f target from `focused_column` + the active tab /
+/// session. Returns `None` when neither column is in a state to host find
+/// (e.g. focus on terminal, no editor tab open, no chat session).
+fn focused_find_target(state: &State) -> Option<widget::find::FindTarget> {
+    match state.focused_column? {
+        FocusedColumn::Content => {
+            let tab = state.tabs.active_tab()?;
+            // Only Editor / Diff have a single back-buffer to search; the
+            // SearchStack tab is a stack of slices (each its own editor) and
+            // local find isn't meaningful at the slice level for v1.
+            match &tab.view {
+                tab_bar::TabView::Editor { .. } | tab_bar::TabView::Diff { .. } => {
+                    Some(widget::find::FindTarget::editor(tab.id.clone()))
+                }
+                tab_bar::TabView::SearchStack { .. } => None,
+            }
+        }
+        FocusedColumn::Chat => {
+            let scope = state.active_scope()?;
+            let ix = state.interactions.get(&scope)?;
+            let ax = ix.active()?;
+            Some(widget::find::FindTarget::chat(
+                ix.instance_id,
+                ax.session.id.clone(),
+            ))
+        }
+    }
+}
+
+/// Build the modal snapshot for the focused target. The snapshot lets the
+/// modal compute live previews without holding borrows on the app state.
+fn build_find_snapshot(state: &State) -> Option<(widget::find::FindTarget, widget::find::ModalSnapshot)> {
+    let target = focused_find_target(state)?;
+    match &target {
+        widget::find::FindTarget::Editor(tab_id) => {
+            let tab = state.tabs.active_tab()?;
+            if &tab.id != tab_id {
+                return None;
+            }
+            let editor = match &tab.view {
+                tab_bar::TabView::Editor { editor, .. }
+                | tab_bar::TabView::Diff { editor, .. } => editor,
+                _ => return None,
+            };
+            let label = widget::find::editor_label_for(
+                tab_id,
+                state.project.project_root.as_deref(),
+            );
+            let snap = widget::find::snapshot_editor(target.clone(), label, editor);
+            Some((target, snap))
+        }
+        widget::find::FindTarget::ChatSession(_, session_id) => {
+            let scope = state.active_scope()?;
+            let ix = state.interactions.get(&scope)?;
+            let ax = ix.active()?;
+            if &ax.session.id != session_id {
+                return None;
+            }
+            let roles: Vec<&'static str> = ax
+                .chat_blocks
+                .iter()
+                .map(|b| match b.kind {
+                    widget::text_edit::BlockKind::User => "User",
+                    widget::text_edit::BlockKind::Assistant => "Assistant",
+                    widget::text_edit::BlockKind::ToolUse => "Tool",
+                    widget::text_edit::BlockKind::ToolResult => "Result",
+                    widget::text_edit::BlockKind::System => "System",
+                })
+                .collect();
+            let searchable = chat_block_searchable(&ax.chat_blocks);
+            let label = ax.session.display_name.clone();
+            let snap = widget::find::snapshot_chat(
+                target.clone(),
+                label,
+                &ax.chat_editors,
+                &roles,
+                &searchable,
+            );
+            Some((target, snap))
+        }
+    }
+}
+
+/// Predicate vector mirroring `chat_blocks`: `true` for blocks the user
+/// authored or read as conversation, `false` for tool plumbing. Local find
+/// stays scoped to the conversation surface.
+fn chat_block_searchable(blocks: &[widget::text_edit::Block]) -> Vec<bool> {
+    blocks
+        .iter()
+        .map(|b| {
+            !matches!(
+                b.kind,
+                widget::text_edit::BlockKind::ToolUse
+                    | widget::text_edit::BlockKind::ToolResult
+            )
+        })
+        .collect()
+}
+
+/// Open the find modal for the focused column. Clears any prior find for
+/// the same target so the modal always enters fresh "create" mode (per the
+/// design contract: cmd-f is the gesture to start over).
+fn open_find_modal(state: &mut State) -> Task<Message> {
+    let Some((target, snapshot)) = build_find_snapshot(state) else {
+        return Task::none();
+    };
+    state.find_states.remove(&target);
+    state.find_modal.open(snapshot);
+    // Match the other modals' behaviour: release the terminal focus latch
+    // so the PTY doesn't swallow the user's typing into the find input.
+    for ix in state.interactions.values_mut() {
+        ix.terminal_focused = false;
+    }
+    iced::widget::operation::focus(widget::find::FIND_INPUT_ID)
+}
+
+/// Apply a find::Msg to the app. The modal owns the live preview state;
+/// committing creates a `FindState` keyed by target that survives modal
+/// dismissal and tab switches.
+fn handle_find_msg(state: &mut State, msg: widget::find::Msg) -> Task<Message> {
+    use widget::find::Msg;
+    match msg {
+        Msg::QueryChanged(q) => {
+            state.find_modal.set_query(q);
+            Task::none()
+        }
+        Msg::PreviewSelectNext => {
+            state.find_modal.select_next();
+            Task::none()
+        }
+        Msg::PreviewSelectPrev => {
+            state.find_modal.select_prev();
+            Task::none()
+        }
+        Msg::Cancel => {
+            // Esc / click-away: close the modal AND clear any active find
+            // for the modal's current target. Cmd-f always enters fresh.
+            if let Some(target) = state.find_modal.target().cloned() {
+                state.find_states.remove(&target);
+            }
+            state.find_modal.close();
+            Task::none()
+        }
+        Msg::Commit => commit_find(state),
+        Msg::Navigate(target, dir) => navigate_find(state, &target, dir),
+        Msg::Deactivate(target) => {
+            state.find_states.remove(&target);
+            Task::none()
+        }
+    }
+}
+
+fn commit_find(state: &mut State) -> Task<Message> {
+    let Some(target) = state.find_modal.target().cloned() else {
+        return Task::none();
+    };
+    let query = state.find_modal.query.clone();
+    if query.is_empty() {
+        // Empty query: dismiss without activating, don't store an empty find.
+        state.find_modal.close();
+        return Task::none();
+    }
+    let matches = match &target {
+        widget::find::FindTarget::Editor(tab_id) => {
+            let Some(tab) = state.tabs.active_tab() else {
+                state.find_modal.close();
+                return Task::none();
+            };
+            if &tab.id != tab_id {
+                state.find_modal.close();
+                return Task::none();
+            }
+            let editor = match &tab.view {
+                tab_bar::TabView::Editor { editor, .. }
+                | tab_bar::TabView::Diff { editor, .. } => editor,
+                _ => {
+                    state.find_modal.close();
+                    return Task::none();
+                }
+            };
+            match widget::find::matches_for_editor(&query, editor) {
+                Ok(m) => m,
+                Err(_) => return Task::none(),
+            }
+        }
+        widget::find::FindTarget::ChatSession(_, session_id) => {
+            let Some(scope) = state.active_scope() else {
+                state.find_modal.close();
+                return Task::none();
+            };
+            let Some(ix) = state.interactions.get(&scope) else {
+                state.find_modal.close();
+                return Task::none();
+            };
+            let Some(ax) = ix.active() else {
+                state.find_modal.close();
+                return Task::none();
+            };
+            if &ax.session.id != session_id {
+                state.find_modal.close();
+                return Task::none();
+            }
+            let roles: Vec<&'static str> = ax
+                .chat_blocks
+                .iter()
+                .map(|b| match b.kind {
+                    widget::text_edit::BlockKind::User => "User",
+                    widget::text_edit::BlockKind::Assistant => "Assistant",
+                    widget::text_edit::BlockKind::ToolUse => "Tool",
+                    widget::text_edit::BlockKind::ToolResult => "Result",
+                    widget::text_edit::BlockKind::System => "System",
+                })
+                .collect();
+            let searchable = chat_block_searchable(&ax.chat_blocks);
+            match widget::find::matches_for_chat(&query, &ax.chat_editors, &roles, &searchable) {
+                Ok(m) => m,
+                Err(_) => return Task::none(),
+            }
+        }
+    };
+    state.find_modal.close();
+    if matches.is_empty() {
+        // No matches: don't bother activating the toolbar.
+        return Task::none();
+    }
+    let find_state = widget::find::FindState {
+        query,
+        matches,
+        current: 0,
+    };
+    state.find_states.insert(target.clone(), find_state);
+    jump_to_current(state, &target)
+}
+
+fn navigate_find(
+    state: &mut State,
+    target: &widget::find::FindTarget,
+    dir: widget::find::NavDir,
+) -> Task<Message> {
+    if let Some(fs) = state.find_states.get_mut(target) {
+        match dir {
+            widget::find::NavDir::Next => fs.select_next(),
+            widget::find::NavDir::Prev => fs.select_prev(),
+        }
+    }
+    jump_to_current(state, target)
+}
+
+/// Move the cursor / scroll position so the current match is visible.
+/// Editor: set cursor at the match end, scroll to bring the line into
+/// view, and focus the editor so the cursor paints. Chat: estimate the
+/// y offset of the matching block + line and scroll the chat area there.
+/// Also clears `stick_to_bottom` so streaming auto-snap doesn't fight us.
+fn jump_to_current(state: &mut State, target: &widget::find::FindTarget) -> Task<Message> {
+    let Some(fs) = state.find_states.get(target) else {
+        return Task::none();
+    };
+    let Some(m) = fs.current_match().cloned() else {
+        return Task::none();
+    };
+    match target {
+        widget::find::FindTarget::Editor(tab_id) => {
+            let Some(tab) = state.tabs.active_tab_mut() else {
+                return Task::none();
+            };
+            if &tab.id != tab_id {
+                return Task::none();
+            }
+            let editor = match &mut tab.view {
+                tab_bar::TabView::Editor { editor, .. }
+                | tab_bar::TabView::Diff { editor, .. } => editor,
+                _ => return Task::none(),
+            };
+            let line = m.line.min(editor.lines.len().saturating_sub(1));
+            let line_len = editor.lines[line].len();
+            let col = m.byte_end.min(line_len);
+            editor.cursor = widget::text_edit::Pos::new(line, col);
+            editor.anchor = None;
+            // Center-ish: line * LINE_HEIGHT - 1/3 of viewport. We don't
+            // know viewport height here so use a fixed 200px window.
+            let target_y = line as f32 * 20.0 - 200.0;
+            editor.scroll_y = target_y.max(0.0);
+            // Focus the editor so its `InternalState::focused` flips on —
+            // the renderer paints the caret only when focused, so without
+            // this the cursor we just placed would be invisible.
+            iced::widget::operation::focus(tab_bar::editor_focus_id(tab_id))
+        }
+        widget::find::FindTarget::ChatSession(_, _) => {
+            let Some(block_idx) = m.block_idx else {
+                return Task::none();
+            };
+            let Some(scope) = state.active_scope() else {
+                return Task::none();
+            };
+            // Tell the scroll-preservation wrapper to skip its replay this
+            // tick — otherwise our scroll_to gets overwritten with the
+            // pre-keypress offset.
+            state.chat_scroll_overridden = true;
+            // Drop stick-to-bottom so a streaming auto-snap can't override
+            // the scroll we're about to issue.
+            if let Some(ix) = state.interactions.get_mut(&scope) {
+                if let Some(ax) = ix.active_mut() {
+                    ax.stick_to_bottom = false;
+                    ax.pending_snap_to_bottom = false;
+                }
+            }
+            // Scroll the matching block's container to the top of the
+            // chat scrollable. The Operation reads the actual laid-out
+            // bounds, so word-wrap / collapsed tools / per-kind padding
+            // all come out exact — no pixel math from outside the layout
+            // pass.
+            widget::find::scroll_block_to_top(
+                widget::agent_chat::CHAT_SCROLLABLE_ID,
+                widget::find::chat_block_widget_id(block_idx),
+            )
+        }
+    }
+}
+
+/// Build the highlight ranges for the editor in the active tab — both the
+/// "all matches" set and the current candidate. Returns empty when no find
+/// is active for that tab.
+fn editor_find_highlights<'a>(
+    state: &'a State,
+    tab_id: &str,
+) -> (Vec<widget::text_edit::HighlightRange>, Option<widget::text_edit::HighlightRange>) {
+    let target = widget::find::FindTarget::editor(tab_id.to_string());
+    let Some(fs) = state.find_states.get(&target) else {
+        return (Vec::new(), None);
+    };
+    let ranges: Vec<widget::text_edit::HighlightRange> = fs
+        .matches
+        .iter()
+        .filter(|m| m.block_idx.is_none())
+        .map(|m| widget::text_edit::HighlightRange {
+            line: m.line,
+            byte_start: m.byte_start,
+            byte_end: m.byte_end,
+        })
+        .collect();
+    let current = fs.current_match().filter(|m| m.block_idx.is_none()).map(|m| {
+        widget::text_edit::HighlightRange {
+            line: m.line,
+            byte_start: m.byte_start,
+            byte_end: m.byte_end,
+        }
+    });
+    (ranges, current)
+}
+
+/// Build per-block highlight ranges for a chat session. Returns a Vec
+/// indexed by block_idx; each entry is the (ranges, current) pair for that
+/// block. Empty Vec when no find is active for the session.
+fn chat_find_highlights(
+    state: &State,
+    instance_id: u64,
+    session_id: &str,
+    block_count: usize,
+) -> Vec<(Vec<widget::text_edit::HighlightRange>, Option<widget::text_edit::HighlightRange>)> {
+    let target = widget::find::FindTarget::chat(instance_id, session_id.to_string());
+    let Some(fs) = state.find_states.get(&target) else {
+        return Vec::new();
+    };
+    let mut out: Vec<(Vec<widget::text_edit::HighlightRange>, Option<widget::text_edit::HighlightRange>)> =
+        (0..block_count).map(|_| (Vec::new(), None)).collect();
+    let current_idx = fs.current;
+    for (i, m) in fs.matches.iter().enumerate() {
+        let Some(bi) = m.block_idx else { continue };
+        if bi >= out.len() {
+            continue;
+        }
+        let range = widget::text_edit::HighlightRange {
+            line: m.line,
+            byte_start: m.byte_start,
+            byte_end: m.byte_end,
+        };
+        out[bi].0.push(range);
+        if i == current_idx {
+            out[bi].1 = Some(range);
+        }
+    }
+    out
+}
+
 /// Close a tab id from every cached per-area preview slot. Only the active
 /// area's preview lives in `state.tabs.preview`; the others are stashed in
 /// `state.cached_previews`. When a file disappears from disk we need to
@@ -3454,8 +4025,30 @@ fn view_area_three_column(state: &State) -> Element<'_, Message> {
     if let Some(ix) = ix
         && ix.visible
     {
-        let interaction_col =
-            interaction::view_column(ix, Message::Interaction, controls);
+        // Per-block highlights for the active session's chat editors.
+        let block_hl: Vec<(
+            Vec<widget::text_edit::HighlightRange>,
+            Option<widget::text_edit::HighlightRange>,
+        )> = if let Some(ax) = ix.active() {
+            chat_find_highlights(state, ix.instance_id, &ax.session.id, ax.chat_blocks.len())
+        } else {
+            Vec::new()
+        };
+        // Find toolbar above the chat (when active for this session).
+        let find_toolbar: Option<Element<'_, Message>> = ix.active().and_then(|ax| {
+            let target = widget::find::FindTarget::chat(ix.instance_id, ax.session.id.clone());
+            state
+                .find_states
+                .get(&target)
+                .map(|fs| widget::find::view_toolbar(target.clone(), fs).map(Message::Find))
+        });
+        let interaction_col = interaction::view_column(
+            ix,
+            Message::Interaction,
+            controls,
+            block_hl,
+            find_toolbar,
+        );
         let col = container(interaction_col)
             .height(Length::Fill)
             .style(theme::surface);
@@ -3474,7 +4067,28 @@ fn view_area_three_column(state: &State) -> Element<'_, Message> {
 /// toolbar + tab content + (Change-only) error panel.
 fn view_global_content(state: &State) -> Element<'_, Message> {
     let bar = tab_bar::view_bar(&state.tabs, Message::TabSelect, Message::TabClose);
-    let body = tab_bar::view_content(&state.tabs).map(Message::TabContent);
+
+    // Editor find highlights + toolbar — only when the active tab has a
+    // committed find for it.
+    let editor_hl_owned = state
+        .tabs
+        .active_tab()
+        .map(|t| editor_find_highlights(state, &t.id))
+        .unwrap_or_else(|| (Vec::new(), None));
+    let editor_hl = if editor_hl_owned.0.is_empty() && editor_hl_owned.1.is_none() {
+        None
+    } else {
+        Some(editor_hl_owned)
+    };
+    let body = tab_bar::view_content(&state.tabs, editor_hl).map(Message::TabContent);
+
+    let editor_toolbar: Option<Element<'_, Message>> = state.tabs.active_tab().and_then(|tab| {
+        let target = widget::find::FindTarget::editor(tab.id.clone());
+        state
+            .find_states
+            .get(&target)
+            .map(|fs| widget::find::view_toolbar(target.clone(), fs).map(Message::Find))
+    });
 
     let mut col = column![bar];
 
@@ -3483,6 +4097,10 @@ fn view_global_content(state: &State) -> Element<'_, Message> {
         && let Some(toolbar) = area::ideas::view_pinned_toolbar(&state.ideas, &state.tabs)
     {
         col = col.push(toolbar.map(Message::Ideas));
+    }
+
+    if let Some(toolbar) = editor_toolbar {
+        col = col.push(toolbar);
     }
 
     col = col.push(body);
@@ -3608,6 +4226,8 @@ fn view(state: &State) -> Element<'_, Message> {
         widget::text_search::view(&state.text_search).map(Message::TextSearch)
     } else if state.quick_idea.visible {
         widget::quick_idea::view(&state.quick_idea).map(Message::QuickIdea)
+    } else if state.find_modal.visible {
+        widget::find::view_modal(&state.find_modal).map(Message::Find)
     } else {
         Space::new().width(0.0).height(0.0).into()
     };

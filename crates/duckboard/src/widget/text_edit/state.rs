@@ -61,6 +61,16 @@ pub enum LineBgKind {
     Match,
 }
 
+/// One match range to render as a highlight overlay. `byte_start`/`byte_end`
+/// are byte offsets into `lines[line]`. The renderer converts to char offsets
+/// for cell positioning, mirroring how selection highlights work.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HighlightRange {
+    pub line: usize,
+    pub byte_start: usize,
+    pub byte_end: usize,
+}
+
 pub(crate) fn line_bg_color(kind: LineBgKind) -> Color {
     match kind {
         LineBgKind::Hunk => theme::diff_hunk_bg(),
