@@ -1817,22 +1817,20 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                     }
 
                     // Cmd-N (Ctrl-N off-mac) in the Change area:
-                    // - chat input focused on a real change → start a new
-                    //   chat session in that change (multi-session UI).
-                    // - otherwise → spawn a fresh exploration and focus chat,
-                    //   same as the `+` in the Change header.
+                    // - a real change is selected → start a new chat session
+                    //   in that change (multi-session UI). Chat input doesn't
+                    //   need to be focused; just having the change-based chat
+                    //   open is enough.
+                    // - otherwise (exploration selected or nothing selected) →
+                    //   spawn a fresh exploration and focus chat, same as the
+                    //   `+` in the Change header.
                     // Cmd+Shift+N (spawn new window) is intercepted earlier;
                     // Cmd+N in Ideas is area-scoped above.
                     if state.active_area == Area::Change
                         && mods.command()
                         && key == keyboard::Key::Character("n".into())
                     {
-                        let chat_focused_on_change = !state.change.is_exploration_selected()
-                            && state
-                                .interaction_mut(routing_key)
-                                .and_then(|ix| ix.active_mut())
-                                .is_some_and(|ax| ax.chat_input_focused);
-                        if chat_focused_on_change {
+                        if !state.change.is_exploration_selected() {
                             return dispatch_interaction_msg(
                                 state,
                                 routing_key,
