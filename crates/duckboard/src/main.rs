@@ -1140,7 +1140,7 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
         Message::AgentEvent(key, evt) => {
             use agent::AgentEvent;
             let proj_root = state.project.project_root.clone();
-            // `(working_dir, scope_key, scope_kind, first_user_msg, card_description)`.
+            // `(working_dir, scope_key, scope_kind, first_user_msg, idea_description)`.
             let mut title_task_input: Option<(
                 PathBuf,
                 String,
@@ -1211,7 +1211,7 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                                 ax.session.scope.clone(),
                                 ax.scope_kind,
                                 user,
-                                ax.card_description.clone(),
+                                ax.idea_description.clone(),
                             ));
                         }
                     }
@@ -1287,7 +1287,7 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                 Task::none()
             };
 
-            if let Some((working_dir, scope_key, scope_kind, user, card_description)) =
+            if let Some((working_dir, scope_key, scope_kind, user, idea_description)) =
                 title_task_input
             {
                 use duckchat::ContextHook;
@@ -1302,7 +1302,7 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                 if let Some(out) = scope::CurrentScopeHook.compute(&scope_input) {
                     hints.push(out.text);
                 }
-                if let Some(idea_hint) = title_hints::build_idea_hint(card_description.as_deref()) {
+                if let Some(idea_hint) = title_hints::build_idea_hint(idea_description.as_deref()) {
                     hints.push(idea_hint);
                 }
                 let mut req = duckchat::TitleRequest::new(user);
@@ -2543,11 +2543,7 @@ fn reload_and_reconcile(state: &mut State) -> bool {
         }
     }
 
-    area::change::refresh_obvious_command(
-        &state.change,
-        &mut state.interactions,
-        &state.project,
-    );
+    area::change::refresh_obvious_command(&mut state.interactions, &state.project);
     archived_any
 }
 

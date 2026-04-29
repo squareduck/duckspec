@@ -12,6 +12,8 @@
 //! time (caps / codex panels know their kind; change panels decide between
 //! `Change` and `Exploration` based on the explorations list).
 
+use std::path::PathBuf;
+
 use duckchat::{ContextHook, HookOutput};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -101,5 +103,46 @@ and `project.md` in the project root."
             }
         };
         Some(HookOutput { text })
+    }
+}
+
+/// Inject the project's `AGENTS.md` (if present) into the first turn so the
+/// agent picks up project conventions. Claude Code natively auto-discovers
+/// `CLAUDE.md` but not `AGENTS.md`; this hook bridges that gap and works for
+/// any agent backend we might add later.
+pub struct AgentsMarkdownHook;
+
+/// Cap on AGENTS.md content we'll inject. Keeps a runaway file from blowing
+/// out the first-turn system prompt.
+const AGENTS_MD_CHAR_CAP: usize = 16_000;
+
+impl ContextHook<PathBuf> for AgentsMarkdownHook {
+    fn name(&self) -> &str {
+        "agents-md"
+    }
+
+    fn compute(&self, project_root: &PathBuf) -> Option<HookOutput> {
+        let path = project_root.join("AGENTS.md");
+        let raw = std::fs::read_to_string(&path).ok()?;
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            return None;
+        }
+        let body = if trimmed.chars().count() > AGENTS_MD_CHAR_CAP {
+            let end = trimmed
+                .char_indices()
+                .nth(AGENTS_MD_CHAR_CAP)
+                .map(|(i, _)| i)
+                .unwrap_or(trimmed.len());
+            &trimmed[..end]
+        } else {
+            trimmed
+        };
+        Some(HookOutput {
+            text: format!(
+                "Project conventions from `AGENTS.md` (project root). Treat these as standing \
+instructions for this repository:\n\n{body}"
+            ),
+        })
     }
 }

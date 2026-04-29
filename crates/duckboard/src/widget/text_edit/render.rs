@@ -133,6 +133,82 @@ impl WrapLayout {
     }
 }
 
+/// Cursor's visual row + char column within that row, given a wrap layout.
+fn cursor_visual_pos(state: &EditorState, wrap: &WrapLayout) -> (usize, usize) {
+    let line = state
+        .cursor
+        .line
+        .min(wrap.row_starts.len().saturating_sub(1));
+    let line_str = &state.lines[line];
+    let byte_col = state.cursor.col.min(line_str.len());
+    let char_col = line_str[..byte_col].chars().count();
+    let starts = &wrap.row_starts[line];
+    let sub_row = starts.iter().rposition(|&s| char_col >= s).unwrap_or(0);
+    let row_start = starts[sub_row];
+    let visual_row = wrap.cum_rows[line] + sub_row;
+    (visual_row, char_col - row_start)
+}
+
+/// Translate a visual sub-row + char column-within-row back to a logical
+/// `Pos` (byte-offset col), clamping to the row's visual width.
+fn visual_to_logical_pos(
+    state: &EditorState,
+    wrap: &WrapLayout,
+    line: usize,
+    sub_row: usize,
+    col_in_row: usize,
+) -> Pos {
+    let starts = &wrap.row_starts[line];
+    let row_start = starts[sub_row];
+    let row_end = if sub_row + 1 < starts.len() {
+        starts[sub_row + 1]
+    } else {
+        state.lines[line].chars().count()
+    };
+    let char_col = (row_start + col_in_row).min(row_end);
+    let line_str = &state.lines[line];
+    let byte_col = line_str
+        .char_indices()
+        .nth(char_col)
+        .map(|(b, _)| b)
+        .unwrap_or(line_str.len());
+    Pos::new(line, byte_col)
+}
+
+/// Pos one visual row above the cursor when wrap is enabled. `None` means
+/// the cursor is already on the topmost visual row, so callers should fall
+/// back to logical `MoveUp`.
+fn visual_up_target(state: &EditorState, wrap: &WrapLayout) -> Option<Pos> {
+    let (visual_row, col_in_row) = cursor_visual_pos(state, wrap);
+    if visual_row == 0 {
+        return None;
+    }
+    let (target_line, target_sub_row) = wrap.visual_to_logical(visual_row - 1);
+    Some(visual_to_logical_pos(
+        state,
+        wrap,
+        target_line,
+        target_sub_row,
+        col_in_row,
+    ))
+}
+
+/// Mirror of `visual_up_target` for downward motion.
+fn visual_down_target(state: &EditorState, wrap: &WrapLayout) -> Option<Pos> {
+    let (visual_row, col_in_row) = cursor_visual_pos(state, wrap);
+    if visual_row + 1 >= wrap.total_visual_rows {
+        return None;
+    }
+    let (target_line, target_sub_row) = wrap.visual_to_logical(visual_row + 1);
+    Some(visual_to_logical_pos(
+        state,
+        wrap,
+        target_line,
+        target_sub_row,
+        col_in_row,
+    ))
+}
+
 /// Compute the character offsets where each visual row starts for a single line.
 fn wrap_line_starts(line: &str, max_chars: usize) -> Vec<usize> {
     if max_chars == 0 {
@@ -535,10 +611,26 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for TextEdit<'a, M> {
                         shell.publish((self.on_action)(EditorAction::MoveRight(shift)));
                     }
                     keyboard::Key::Named(Named::ArrowUp) => {
-                        shell.publish((self.on_action)(EditorAction::MoveUp(shift)));
+                        let target = wrap
+                            .as_ref()
+                            .and_then(|w| visual_up_target(self.state, w));
+                        let action = match target {
+                            Some(pos) if shift => EditorAction::Drag(pos),
+                            Some(pos) => EditorAction::Click(pos),
+                            None => EditorAction::MoveUp(shift),
+                        };
+                        shell.publish((self.on_action)(action));
                     }
                     keyboard::Key::Named(Named::ArrowDown) => {
-                        shell.publish((self.on_action)(EditorAction::MoveDown(shift)));
+                        let target = wrap
+                            .as_ref()
+                            .and_then(|w| visual_down_target(self.state, w));
+                        let action = match target {
+                            Some(pos) if shift => EditorAction::Drag(pos),
+                            Some(pos) => EditorAction::Click(pos),
+                            None => EditorAction::MoveDown(shift),
+                        };
+                        shell.publish((self.on_action)(action));
                     }
                     keyboard::Key::Named(Named::Home) => {
                         shell.publish((self.on_action)(EditorAction::MoveHome(shift)));

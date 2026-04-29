@@ -347,13 +347,12 @@ pub struct AgentSession {
     /// when the current turn ends (either naturally or via user-triggered
     /// interrupt). `None` means the queue is empty.
     pub queue_editor: Option<EditorState>,
-    /// Latest known kanban-card description for this session's scope, if
-    /// any. Populated by the kanban area whenever a card is opened or its
-    /// description is edited. Not persisted — rehydrated from disk on next
-    /// open. `send_prompt_text` compares this against
-    /// `session.last_seeded_description` to decide whether to inject the
-    /// description as system context on the upcoming turn.
-    pub card_description: Option<String>,
+    /// Latest known idea body for this session's scope, if any. Populated by
+    /// the ideas area whenever an idea is opened or its body is edited. Not
+    /// persisted — rehydrated from disk on next open. `send_prompt_text`
+    /// compares this against `session.last_seeded_description` to decide
+    /// whether to inject the body as system context on the upcoming turn.
+    pub idea_description: Option<String>,
     /// True when the chat transcript is at (or near) the bottom — driven by
     /// the scrollable's `on_scroll` callback. Streaming events use this to
     /// decide whether to auto-scroll the view: stays put while the user is
@@ -412,7 +411,7 @@ impl AgentSession {
             agent_context_window: 200_000,
             obvious_command: None,
             queue_editor: None,
-            card_description: None,
+            idea_description: None,
             stick_to_bottom: true,
             last_chat_offset_y: None,
             pending_snap_to_bottom: false,
@@ -1041,6 +1040,10 @@ pub fn send_prompt_text(ax: &mut AgentSession, text: String, highlighter: &Synta
         if let Some(out) = crate::scope::CurrentScopeHook.compute(&scope) {
             system_additions.push(out.text);
         }
+        let working_dir = handle.working_dir().to_path_buf();
+        if let Some(out) = crate::scope::AgentsMarkdownHook.compute(&working_dir) {
+            system_additions.push(out.text);
+        }
     }
 
     // Selection-context attachments: pinned + tentative, in that order,
@@ -1068,19 +1071,19 @@ pub fn send_prompt_text(ax: &mut AgentSession, text: String, highlighter: &Synta
         }
     };
 
-    // Card description: inject on the first turn (when non-empty), and
+    // Idea description: inject on the first turn (when non-empty), and
     // re-inject on any later turn where the description has changed since
-    // we last told the agent. Empty descriptions are skipped — if the card
+    // we last told the agent. Empty descriptions are skipped — if the idea
     // later gains a description, the diff against stored `None` will trigger
     // an inject at that point.
-    if let Some(desc) = ax.card_description.as_ref()
+    if let Some(desc) = ax.idea_description.as_ref()
         && !desc.trim().is_empty()
         && ax.session.last_seeded_description.as_deref() != Some(desc.as_str())
     {
         let blurb = if ax.session.last_seeded_description.is_none() {
-            format!("Card description:\n\n{desc}")
+            format!("Idea description:\n\n{desc}")
         } else {
-            format!("Card description (updated since last turn):\n\n{desc}")
+            format!("Idea description (updated since last turn):\n\n{desc}")
         };
         system_additions.push(blurb);
         ax.session.last_seeded_description = Some(desc.clone());

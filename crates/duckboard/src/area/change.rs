@@ -482,13 +482,15 @@ pub fn update(
         }
     }
 
-    refresh_obvious_command(state, interactions, project);
+    refresh_obvious_command(interactions, project);
 }
 
 /// Compute the suggested next /ds-* command (without the leading slash) given
 /// the selected change's artifact state. Returns `None` for archived changes
-/// or when nothing is selected.
-pub fn compute_obvious_command(state: &State, project: &ProjectData) -> Option<String> {
+/// or when nothing is selected. Test-only — production paths use
+/// `refresh_obvious_command`, which iterates all interaction scopes.
+#[cfg(test)]
+fn compute_obvious_command(state: &State, project: &ProjectData) -> Option<String> {
     let selected = state.selected_change.as_deref()?;
 
     // Exploration (virtual) — always orient first.
@@ -496,12 +498,20 @@ pub fn compute_obvious_command(state: &State, project: &ProjectData) -> Option<S
         return Some("ds-explore".into());
     }
 
-    // Archived changes are terminal — no further action.
-    if project.archived_changes.iter().any(|c| c.name == selected) {
+    obvious_command_from_artifacts(selected, project)
+}
+
+/// Inspect a change directory's artifact state and return the suggested
+/// next /ds-* command. Pure function over `project` — independent of
+/// `state.selected_change`, so it can refresh any change session (e.g.
+/// freshly-promoted idea sessions where the user is still in the Ideas
+/// area and the Changes area's selection hasn't moved).
+fn obvious_command_from_artifacts(name: &str, project: &ProjectData) -> Option<String> {
+    if project.archived_changes.iter().any(|c| c.name == name) {
         return None;
     }
 
-    let change = project.active_changes.iter().find(|c| c.name == selected)?;
+    let change = project.active_changes.iter().find(|c| c.name == name)?;
 
     // Steps exist → either apply (unfinished) or archive (all done).
     if !change.steps.is_empty() {
@@ -535,23 +545,24 @@ pub fn compute_obvious_command(state: &State, project: &ProjectData) -> Option<S
     Some("ds-propose".into())
 }
 
-/// Refresh the `obvious_command` on every session of the active interaction.
-/// Call after update() and after project reload.
+/// Refresh the `obvious_command` on every session of every change /
+/// exploration interaction. Iterating all scopes (rather than only
+/// `state.selected_change`) ensures freshly-promoted sessions show the
+/// right placeholder even when the user is in another area at the time
+/// of promotion.
 pub fn refresh_obvious_command(
-    state: &State,
     interactions: &mut HashMap<Scope, InteractionState>,
     project: &ProjectData,
 ) {
-    let cmd = compute_obvious_command(state, project);
-    let Some(name) = state.selected_change.as_deref() else {
-        return;
-    };
-    let scope = state.scope_for(name);
-    let Some(ix) = interactions.get_mut(&scope) else {
-        return;
-    };
-    for ax in ix.sessions.iter_mut() {
-        ax.obvious_command = cmd.clone();
+    for (scope, ix) in interactions.iter_mut() {
+        let cmd = match scope {
+            Scope::Exploration(_) => Some("ds-explore".into()),
+            Scope::Change(name) => obvious_command_from_artifacts(name, project),
+            Scope::Caps | Scope::Codex => continue,
+        };
+        for ax in ix.sessions.iter_mut() {
+            ax.obvious_command = cmd.clone();
+        }
     }
 }
 

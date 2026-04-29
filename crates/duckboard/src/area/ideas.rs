@@ -547,7 +547,7 @@ pub fn open_idea(
             highlighter,
         );
         if let Some(ax) = ix.active_mut() {
-            ax.card_description = Some(body.clone());
+            ax.idea_description = Some(body.clone());
         }
         ix.visible = true;
     }
