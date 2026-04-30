@@ -4386,6 +4386,11 @@ fn main() -> iced::Result {
     // gets in their terminal. Non-blocking — just starts the thread.
     duckchat::shell_env::init();
 
+    // Capture panics to a per-launch file. Stderr is detached when launched
+    // from Finder, and Apple's crash reporter can't recover the panic message
+    // from a `block2` `panic_cannot_unwind` abort — so we need our own log.
+    install_panic_log();
+
     tracing_subscriber::fmt::init();
 
     // Detect system dark/light mode before creating the window.
@@ -4402,6 +4407,43 @@ fn main() -> iced::Result {
 
 fn theme_fn(_state: &State) -> iced::Theme {
     theme::app_theme()
+}
+
+/// Append every panic to `~/.config/duckboard/logs/panic-<utc-timestamp>.log`
+/// so we have a record after the process aborts. The default panic handler
+/// writes only to stderr, which is detached when the app is launched from
+/// Finder; and `block2`'s FFI-boundary `panic_cannot_unwind` abort prevents
+/// the OS crash reporter from capturing the original panic message.
+fn install_panic_log() {
+    let dir = config::config_dir().join("logs");
+    if let Err(e) = std::fs::create_dir_all(&dir) {
+        eprintln!("panic-log: failed to create {}: {e}", dir.display());
+        return;
+    }
+    let stamp = time::OffsetDateTime::now_utc()
+        .format(&time::format_description::well_known::Iso8601::DEFAULT)
+        .unwrap_or_else(|_| format!("{}", std::process::id()));
+    let path = dir.join(format!("panic-{}.log", stamp.replace(':', "-")));
+
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        use std::io::Write;
+        let backtrace = std::backtrace::Backtrace::force_capture();
+        if let Ok(mut f) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+        {
+            let _ = writeln!(
+                f,
+                "---- panic at {} ----\n{info}\n{backtrace}\n",
+                time::OffsetDateTime::now_utc()
+                    .format(&time::format_description::well_known::Iso8601::DEFAULT)
+                    .unwrap_or_default(),
+            );
+        }
+        default_hook(info);
+    }));
 }
 
 fn handle_key_event(
