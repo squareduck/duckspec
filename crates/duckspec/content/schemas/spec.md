@@ -68,6 +68,13 @@ bullet — not just after `**THEN**`.
 
 **Scenarios:**
 
+- **Outcome, not branch.** Scenarios are derived from the requirement, not the
+  implementation. If you couldn't list the scenarios without first reading the
+  code, they're mirroring it. A pure refactor that preserves observable
+  behavior must not change the scenario list. Group scenarios by the *outcomes*
+  callers can observe; if two code paths converge on the same observable
+  outcome, they're one scenario (parameterize GIVEN if the entry conditions
+  differ).
 - **Declarative, not procedural.** Describe *what the system does*, not *how a
   user clicks through it*. "WHEN the user submits the form" not "WHEN the user
   types their email, then tabs to password, then clicks submit."
@@ -75,16 +82,30 @@ bullet — not just after `**THEN**`.
   "GIVEN the user has logged in."
 - **WHEN is a single trigger.** If you need multiple WHENs, you probably have
   two scenarios.
-- **THEN is an observable outcome.** Not implementation details. "THEN the
-  session is invalidated" not "THEN the sessions table row is deleted."
-- **Fewer, better scenarios.** Each scenario should cover a distinct behavioral
-  path. If two scenarios differ only trivially, merge them. Redundant scenarios
-  are maintenance debt.
+- **THEN is an observable outcome.** Not implementation details, internal
+  state, private fields, enum variants, function names, or which branch ran.
+  Restate in caller-observable terms — return value, side effect, persisted
+  state, emitted event, response code. "THEN the session is invalidated" not
+  "THEN the sessions table row is deleted" and not "THEN the `expire_session`
+  branch is taken."
+- **Fewer, better scenarios.** Each scenario should cover a distinct
+  *observable outcome*, not a distinct code path. If two scenarios differ only
+  trivially, merge them. Redundant scenarios are maintenance debt.
 - **Every `test: code` is a commitment.** Only mark scenarios that genuinely
   need automated verification. Visual checks, deployment concerns, and
   documentation-only behaviors should use `manual:` or `skip:`.
 - **Name scenarios by what's distinctive.** "Valid credentials" and "Invalid
   password" are good. "Test case 1" and "Happy path" are not.
+
+Two self-tests before committing a scenario list:
+
+- **Refactor test.** If the implementation were rewritten — lookup table
+  instead of if/else, polymorphism instead of switch, early returns instead of
+  nesting — would these scenarios still describe the same behavior? If no, the
+  scenarios are mirroring the code, not the contract.
+- **Stranger test.** Could someone who has never seen the code write this
+  scenario list from the requirement prose alone? If no, the scenarios are
+  leaking the implementation.
 
 ## Formatting
 

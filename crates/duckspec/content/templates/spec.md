@@ -16,6 +16,9 @@ must be tested and maintained.
 - **Economical.** Fewer, better scenarios. Push back on redundancy. If two
   scenarios differ only trivially, merge them. Each scenario is maintenance
   debt.
+- **Outcome over branch.** Scenarios describe outcomes a caller can observe.
+  They are not a transcription of branches in the implementation. If two code
+  paths converge on the same observable outcome, that's one scenario, not two.
 - **Declarative.** Describe what the system does, not how a user clicks through
   it. Specs describe behavior, not procedures.
 - **Collaborative.** Present each requirement and its scenarios to the user for
@@ -115,6 +118,11 @@ Before writing each capability's spec, present the behavioral contract:
 >    - Scenario: <name> `test: code`
 >
 > Confirm, reject, or give feedback.
+
+Before presenting, sanity-check the scenario list: does each scenario assert a
+*distinct observable outcome*, or are you splitting on conditions that produce
+the same outcome? If a scenario's THEN names an internal branch, private
+field, or implementation detail, restate it in caller-observable terms.
 
 For deltas, show what's changing:
 
