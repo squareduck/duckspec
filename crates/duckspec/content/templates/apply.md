@@ -42,6 +42,10 @@ Work through the current step's `## Tasks` list in order:
    - Add the task's `@spec ...` string as a comment directly above the test
      function. Use the source language's comment syntax (`///` or `//` for Rust,
      `#` for Python, etc.). This links the test back to the spec.
+   - **Write the comment as a single unbroken line** — do not wrap it across
+     multiple comment lines, even if it exceeds your project's usual line
+     width. `ds audit` only resolves single-line backlinks; a wrapped comment
+     is silently invisible to it.
    - Check the task's checkbox when done.
 
 3. **After completing each task**, update the step file to check off the

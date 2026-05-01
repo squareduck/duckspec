@@ -53,6 +53,11 @@ concrete, ordered, and independently completable.
 After writing or updating each artifact, run `ds format <path>` to apply
 canonical formatting (line wrap, indentation, blank lines).
 
+**Never wrap `@spec` or `@step` references across line breaks.** Write each
+reference as a single unbroken line, no matter how long the scenario name.
+`ds format` will not wrap them, and `ds audit` only resolves single-line
+references — a wrapped reference is silently treated as freeform text.
+
 Use fenced code blocks for tables and diagrams; add a `<language>` tag to
 fences that contain real code.
 

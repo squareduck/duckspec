@@ -56,12 +56,18 @@ single agent session. Steps are ordered, and each is processed in its own
 
 - Freeform text describing work to do, or
 - A single `@spec <capability-path> <Requirement>: <Scenario>` backlink — a
-  scenario implementation task.
+  scenario implementation task. The backlink MUST be written as a single
+  unbroken line. `ds format` preserves long `@spec` lines, but if the
+  reference is already wrapped across line breaks `ds format` will not
+  rejoin it — the continuation becomes an orphan paragraph, the task
+  silently keeps only the first line, and `ds audit` reports the truncated
+  scenario as unresolved.
 
 **Prerequisite content:**
 
 - `@step <slug>` — reference to another step in the same change. Slug only — do
-  **not** include the `NN-` filename prefix.
+  **not** include the `NN-` filename prefix. The reference MUST be a single
+  unbroken line; do not wrap it.
 - Freeform text — any other precondition.
 
 ## Quality
