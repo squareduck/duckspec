@@ -1429,16 +1429,29 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                 return update(state, Message::Ideas(area::ideas::Message::AddIdea));
             }
 
-            // Cmd+N in the Change area when there's no active interaction
-            // (nothing selected yet): spawn a fresh exploration and focus
-            // chat. The chat-focused-on-real-change variant (NewSession) is
-            // handled further down where routing_key is in scope.
+            // Cmd+N in the Change area:
+            // - real change selected → start a new chat session in that
+            //   change (multi-session UI), regardless of whether the chat
+            //   panel is visible / which tab is active / whether the chat
+            //   input is focused.
+            // - exploration selected, or nothing selected → spawn a fresh
+            //   exploration (single-session UI), same as the `+` in the
+            //   Change header.
+            // Cmd+Shift+N (spawn new window) is intercepted earlier; Cmd+N
+            // in Ideas is area-scoped above.
             if mods.command()
                 && !mods.shift()
                 && key == keyboard::Key::Character("n".into())
                 && state.active_area == Area::Change
-                && state.active_interaction_key().is_none()
             {
+                let routing_key = state.active_interaction_key();
+                let real_change_selected =
+                    routing_key.is_some() && !state.change.is_exploration_selected();
+                if real_change_selected
+                    && let Some(rk) = routing_key
+                {
+                    return dispatch_interaction_msg(state, &rk, interaction::Msg::NewSession);
+                }
                 return update(
                     state,
                     Message::Change(area::change::Message::AddExploration),
@@ -1847,33 +1860,6 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                             }
                             interaction::AgentChatKeyResult::NotHandled => {}
                         }
-                    }
-
-                    // Cmd-N (Ctrl-N off-mac) in the Change area:
-                    // - a real change is selected → start a new chat session
-                    //   in that change (multi-session UI). Chat input doesn't
-                    //   need to be focused; just having the change-based chat
-                    //   open is enough.
-                    // - otherwise (exploration selected or nothing selected) →
-                    //   spawn a fresh exploration and focus chat, same as the
-                    //   `+` in the Change header.
-                    // Cmd+Shift+N (spawn new window) is intercepted earlier;
-                    // Cmd+N in Ideas is area-scoped above.
-                    if state.active_area == Area::Change
-                        && mods.command()
-                        && key == keyboard::Key::Character("n".into())
-                    {
-                        if !state.change.is_exploration_selected() {
-                            return dispatch_interaction_msg(
-                                state,
-                                routing_key,
-                                interaction::Msg::NewSession,
-                            );
-                        }
-                        return update(
-                            state,
-                            Message::Change(area::change::Message::AddExploration),
-                        );
                     }
                 }
 
