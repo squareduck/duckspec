@@ -383,6 +383,18 @@ pub struct AgentSession {
     /// a content tab editor. Used to gate Cmd-R so it only fires when the
     /// user is plausibly typing into the chat.
     pub chat_input_focused: bool,
+    /// True while a synthetic AGENTS.md priming turn is in flight on a
+    /// fresh session. Set when `send_prompt_text` chooses the two-turn
+    /// path; cleared in the `TurnComplete` handler so the user's actual
+    /// follow-up message can be dispatched and the title summariser can
+    /// fire on the right turn.
+    pub priming_in_flight: bool,
+    /// User's intended first message, stashed when priming is dispatched
+    /// in its place. Drained on the priming turn's `TurnComplete` and
+    /// re-fed through `send_prompt_text` against the now-resumable session.
+    /// Cleared on cancel/error so a backed-out priming doesn't strand a
+    /// phantom command.
+    pub pending_followup_prompt: Option<String>,
 }
 
 impl AgentSession {
@@ -418,6 +430,8 @@ impl AgentSession {
             selection_pinned: Vec::new(),
             selection_tentative: None,
             chat_input_focused: false,
+            priming_in_flight: false,
+            pending_followup_prompt: None,
         }
     }
 }
@@ -909,6 +923,11 @@ fn handle_agent_chat(
             if let Some(handle) = &ax.agent_handle {
                 handle.cancel();
             }
+            // If the user is cancelling a priming turn, drop the staged
+            // follow-up so the post-`TurnComplete` dispatch doesn't fire
+            // their original message after they explicitly backed out.
+            ax.priming_in_flight = false;
+            ax.pending_followup_prompt = None;
         }
         agent_chat::Msg::QueueAction(action) => {
             if let text_edit::EditorAction::OpenUrl(url) = &action {
@@ -1018,6 +1037,75 @@ pub fn send_prompt_text(ax: &mut AgentSession, text: String, highlighter: &Synta
     let Some(handle) = &ax.agent_handle else {
         return;
     };
+
+    // Two-turn priming for AGENTS.md.
+    //
+    // Claude Code's CLI silently drops `--append-system-prompt` content
+    // (model can't see it via introspection, and recent CLI versions ignore
+    // the flag entirely), so AGENTS.md needs to ride the message channel.
+    // Inlining it ahead of the user's text breaks slash-command parsing —
+    // `/ds-step` no longer starts the message — so we send AGENTS.md as a
+    // standalone first user turn and stash the user's actual text for
+    // dispatch when that turn completes. The priming body tells the model
+    // not to respond substantively (single-dot ack) so the round-trip cost
+    // is minimal.
+    //
+    // Gated on a brand-new session (no `claude_session_id` *and* no prior
+    // messages) so legacy sessions with history but no resume id keep
+    // hitting the `build_history_preamble` path below instead of getting
+    // re-primed mid-conversation.
+    if ax.session.claude_session_id.is_none()
+        && ax.session.messages.is_empty()
+        && let Some(out) =
+            crate::scope::AgentsMarkdownHook.compute(&handle.working_dir().to_path_buf())
+    {
+        let priming_text = format!(
+            "{0}\n\nDo not respond to this message — reply with a single dot \
+             (\".\") and wait for my actual instructions.",
+            out.text
+        );
+
+        ax.session.messages.push(crate::chat_store::ChatMessage {
+            role: crate::chat_store::Role::User,
+            content: vec![crate::chat_store::ContentBlock::Text(priming_text.clone())],
+            timestamp: String::new(),
+            is_priming: true,
+        });
+        ax.session.is_streaming = true;
+        ax.session.pending_text.clear();
+        if ax.stick_to_bottom {
+            ax.pending_snap_to_bottom = true;
+        }
+
+        ax.priming_in_flight = true;
+        ax.pending_followup_prompt = Some(text);
+
+        // Scope orientation blurb still rides `--append-system-prompt` —
+        // small, scope-specific, and we accept the flakiness. AGENTS.md is
+        // already in the message channel via the priming body above.
+        let mut additions = Vec::new();
+        let scope = crate::scope::SessionScope {
+            kind: ax.scope_kind,
+            scope_key: ax.session.scope.clone(),
+        };
+        if let Some(scope_out) = crate::scope::CurrentScopeHook.compute(&scope) {
+            additions.push(scope_out.text);
+        }
+
+        let mut req = TurnRequest::new(priming_text, handle.working_dir().to_path_buf());
+        req.system_additions = additions;
+        // Selection / image attachments and idea-description blurb all
+        // belong to the user's intended turn — leave them on `ax` so the
+        // follow-up dispatch picks them up.
+        handle.send_turn(req);
+
+        ax.chat_input = EditorState::new("");
+        rehighlight_input(&mut ax.chat_input, highlighter);
+        ax.chat_completion.visible = false;
+        rebuild_chat_editor(ax, highlighter);
+        return;
+    }
+
     // Fallback: if we have prior messages but no Claude session to `--resume`,
     // prepend the history as context so the agent isn't starting blind.
     // Happens for legacy sessions saved before session-id persistence, or if
@@ -1038,10 +1126,6 @@ pub fn send_prompt_text(ax: &mut AgentSession, text: String, highlighter: &Synta
             scope_key: ax.session.scope.clone(),
         };
         if let Some(out) = crate::scope::CurrentScopeHook.compute(&scope) {
-            system_additions.push(out.text);
-        }
-        let working_dir = handle.working_dir().to_path_buf();
-        if let Some(out) = crate::scope::AgentsMarkdownHook.compute(&working_dir) {
             system_additions.push(out.text);
         }
     }
@@ -1093,6 +1177,7 @@ pub fn send_prompt_text(ax: &mut AgentSession, text: String, highlighter: &Synta
         role: crate::chat_store::Role::User,
         content: vec![crate::chat_store::ContentBlock::Text(text)],
         timestamp: String::new(),
+        is_priming: false,
     });
     ax.session.is_streaming = true;
     ax.session.pending_text.clear();

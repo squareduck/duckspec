@@ -15,6 +15,13 @@ pub struct ChatMessage {
     pub role: Role,
     pub content: Vec<ContentBlock>,
     pub timestamp: String,
+    /// Synthetic priming turn injected by the harness — currently the
+    /// first-turn AGENTS.md inject. Excluded from `first_user_text` so the
+    /// title summariser keys off the user's actual intent, not boilerplate
+    /// project conventions. Defaults to false on load for backwards
+    /// compatibility with sessions persisted before this field existed.
+    #[serde(default)]
+    pub is_priming: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -110,7 +117,7 @@ struct PersistedSession {
 /// hints) and deliberately ignores the assistant's reply.
 pub fn first_user_text(session: &ChatSession) -> Option<String> {
     for msg in &session.messages {
-        if !matches!(msg.role, Role::User) {
+        if !matches!(msg.role, Role::User) || msg.is_priming {
             continue;
         }
         for block in &msg.content {

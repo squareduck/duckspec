@@ -1175,6 +1175,7 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                             role: chat_store::Role::Assistant,
                             content: vec![chat_store::ContentBlock::ToolUse { id, name, input }],
                             timestamp: String::new(),
+                            is_priming: false,
                         });
                     }
                     AgentEvent::ToolResult { id, name, output } => {
@@ -1186,19 +1187,31 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                                 output,
                             }],
                             timestamp: String::new(),
+                            is_priming: false,
                         });
                     }
                     AgentEvent::TurnComplete => {
                         flush_pending_text(&mut ax.session);
                         ax.session.is_streaming = false;
+                        // Detect the AGENTS.md priming turn and stage the
+                        // user's actual first message for dispatch in the
+                        // post-match block (where we can borrow `highlighter`
+                        // alongside the session). Skip the title summariser
+                        // on this turn — the priming exchange isn't the
+                        // user's intent and would yield a useless title.
+                        let was_priming = ax.priming_in_flight;
+                        if was_priming {
+                            ax.priming_in_flight = false;
+                        }
                         if let Err(e) = chat_store::save_session(&ax.session, proj_root.as_deref())
                         {
                             tracing::error!("failed to save chat session: {e}");
                         }
                         // Kick off a one-shot title summary after the first
-                        // successful turn. Only for change / exploration
-                        // scopes; caps and codex don't get summarised.
-                        if ax.session.title.is_none()
+                        // real turn. Only for change / exploration scopes;
+                        // caps and codex don't get summarised.
+                        if !was_priming
+                            && ax.session.title.is_none()
                             && matches!(
                                 ax.scope_kind,
                                 scope::ScopeKind::Change | scope::ScopeKind::Exploration
@@ -1218,10 +1231,16 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                     AgentEvent::Error(msg) => {
                         tracing::error!(key, "agent error: {msg}");
                         ax.session.is_streaming = false;
+                        // Drop priming state so a failed AGENTS.md priming
+                        // doesn't fire its follow-up against a half-broken
+                        // session. The user will retype if they want to retry.
+                        ax.priming_in_flight = false;
+                        ax.pending_followup_prompt = None;
                         ax.session.messages.push(chat_store::ChatMessage {
                             role: chat_store::Role::System,
                             content: vec![chat_store::ContentBlock::Text(format!("Error: {msg}"))],
                             timestamp: String::new(),
+                            is_priming: false,
                         });
                     }
                     AgentEvent::SessionIdUpdated { session_id } => {
@@ -1250,6 +1269,11 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                         tracing::info!(key, "agent process exited");
                         ax.agent_handle = None;
                         ax.session.is_streaming = false;
+                        // Drop any priming state — without a handle the
+                        // follow-up can't dispatch, and stale flags would
+                        // confuse the next reconnect.
+                        ax.priming_in_flight = false;
+                        ax.pending_followup_prompt = None;
                     }
                 }
             }
@@ -1266,13 +1290,22 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                 should_snap_to_bottom = ax.stick_to_bottom;
                 if !is_streaming {
                     ax.esc_count = 0;
-                    // Auto-flush a queued message once the current turn is
-                    // done (natural completion or user-triggered interrupt).
-                    // Only flush if the agent is still attached — on
-                    // ProcessExited the handle is gone and we'd lose the text.
+                    // Order matters: dispatch the AGENTS.md priming follow-up
+                    // before any queued message so the user's intended first
+                    // turn lands ahead of anything they typed while priming
+                    // was streaming. `send_prompt_text` flips `is_streaming`
+                    // back on, so the queue branch below correctly defers.
                     if ax.agent_handle.is_some()
+                        && let Some(text) = ax.pending_followup_prompt.take()
+                    {
+                        interaction::send_prompt_text(ax, text, highlighter);
+                    } else if ax.agent_handle.is_some()
                         && let Some(q) = ax.queue_editor.take()
                     {
+                        // Auto-flush a queued message once the current turn is
+                        // done (natural completion or user-triggered interrupt).
+                        // Only flush if the agent is still attached — on
+                        // ProcessExited the handle is gone and we'd lose the text.
                         let text = q.text();
                         if !text.trim().is_empty() {
                             interaction::send_prompt_text(ax, text, highlighter);
@@ -3915,6 +3948,7 @@ fn flush_pending_text(session: &mut chat_store::ChatSession) {
             role: chat_store::Role::Assistant,
             content: vec![chat_store::ContentBlock::Text(text)],
             timestamp: String::new(),
+            is_priming: false,
         });
     }
 }
