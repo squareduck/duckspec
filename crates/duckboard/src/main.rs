@@ -978,13 +978,35 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                 return focus_chat_input();
             }
             if let area::ideas::Message::OpenChange(ref change_name) = msg {
-                let change_name = change_name.clone();
+                // Ideas store the unprefixed change name in frontmatter, but
+                // archived changes live under `YYYY-MM-DD-NN-<name>`. Resolve
+                // to the canonical folder name so SelectChange can find it.
+                let base = change_name.clone();
+                let canonical = state
+                    .project
+                    .active_changes
+                    .iter()
+                    .find(|c| c.name == base)
+                    .map(|c| c.name.clone())
+                    .or_else(|| {
+                        state
+                            .project
+                            .archived_changes
+                            .iter()
+                            .find(|c| {
+                                c.name == base
+                                    || crate::data::strip_archive_prefix(&c.name)
+                                        == Some(base.as_str())
+                            })
+                            .map(|c| c.name.clone())
+                    })
+                    .unwrap_or(base);
                 switch_area(state, Area::Change);
                 area::change::update(
                     &mut state.change,
                     &mut state.tabs,
                     &mut state.interactions,
-                    area::change::Message::SelectChange(change_name),
+                    area::change::Message::SelectChange(canonical),
                     &state.project,
                     &state.highlighter,
                 );
@@ -4006,7 +4028,8 @@ fn view_area_three_column(state: &State) -> Element<'_, Message> {
             .map(Message::Caps),
         Area::Codex => area::codex::view_list(&state.codex, &state.project, &state.tabs)
             .map(Message::Codex),
-        Area::Ideas => area::ideas::view_list(&state.ideas, &state.tabs).map(Message::Ideas),
+        Area::Ideas => area::ideas::view_list(&state.ideas, &state.project, &state.tabs)
+            .map(Message::Ideas),
         _ => unreachable!("view_area_three_column called for area without three-column layout"),
     };
 

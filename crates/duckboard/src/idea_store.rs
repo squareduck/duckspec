@@ -50,16 +50,6 @@ pub enum ArchiveKind {
     Orphaned,
 }
 
-impl ArchiveKind {
-    pub fn label(self) -> &'static str {
-        match self {
-            ArchiveKind::Manual => "manual",
-            ArchiveKind::ViaChange => "via change",
-            ArchiveKind::Orphaned => "orphaned",
-        }
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum IdeaState {
     Inbox,

@@ -307,6 +307,14 @@ pub fn update(
                 );
             }
 
+            // Reveal the row in the list when navigation arrives from
+            // another area (the toolbar Change button on an idea, etc.) —
+            // the archived section is collapsed by default, so a fresh
+            // selection there would otherwise be invisible.
+            let in_archived = project.archived_changes.iter().any(|c| c.name == name);
+            let section = if in_archived { "archived" } else { "picker" };
+            state.expanded_sections.insert(section.to_string());
+
             let kind = state.scope_kind_for(&name);
             let label = state.scope_display_label(&name);
             let scope = state.scope_for(&name);

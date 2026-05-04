@@ -13,6 +13,9 @@ const ICON_IDEA: &[u8] = include_bytes!("../../assets/icon_idea.svg");
 const ICON_EXPLORE: &[u8] = include_bytes!("../../assets/icon_explore.svg");
 const ICON_BRANCH: &[u8] = include_bytes!("../../assets/icon_branch.svg");
 const ICON_TAG: &[u8] = include_bytes!("../../assets/icon_tag.svg");
+const ICON_CHANGE: &[u8] = include_bytes!("../../assets/icon_change.svg");
+const ICON_ARCHIVE: &[u8] = include_bytes!("../../assets/icon_archive.svg");
+const ICON_ORPHAN: &[u8] = include_bytes!("../../assets/icon_orphan.svg");
 
 use super::interaction::{self, InteractionState};
 use crate::data::ProjectData;
@@ -660,16 +663,24 @@ fn save_pinned_tab(
 
 // ── List column ──────────────────────────────────────────────────────────────
 
-pub fn view_list<'a>(state: &'a State, _tabs: &'a tab_bar::TabState) -> Element<'a, Message> {
+pub fn view_list<'a>(
+    state: &'a State,
+    project: &'a ProjectData,
+    _tabs: &'a tab_bar::TabState,
+) -> Element<'a, Message> {
     let mut sections = column![].spacing(0.0);
     for s in IdeaState::ALL {
-        sections = sections.push(view_section(state, s));
+        sections = sections.push(view_section(state, project, s));
     }
 
     vertical_scroll::view(state.list_scroll, Message::ScrollList, sections)
 }
 
-fn view_section<'a>(state: &'a State, section: IdeaState) -> Element<'a, Message> {
+fn view_section<'a>(
+    state: &'a State,
+    project: &'a ProjectData,
+    section: IdeaState,
+) -> Element<'a, Message> {
     let label = match section {
         IdeaState::Inbox => "Inbox",
         IdeaState::Exploration => "Exploration",
@@ -688,7 +699,7 @@ fn view_section<'a>(state: &'a State, section: IdeaState) -> Element<'a, Message
     let body: Element<'a, Message> = if expanded {
         let mut rows: Vec<ListRow<'a, Message>> = Vec::new();
         let selected = state.selected.as_deref();
-        collect_section_rows(state, section, &[], 0, selected, &mut rows);
+        collect_section_rows(state, project, section, &[], 0, selected, &mut rows);
         list_view::view(rows, None)
     } else {
         Space::new().into()
@@ -715,6 +726,7 @@ fn view_section<'a>(state: &'a State, section: IdeaState) -> Element<'a, Message
 /// at depth `N` use the same indent so they sit at the same visual level.
 fn collect_section_rows<'a>(
     state: &'a State,
+    project: &'a ProjectData,
     section: IdeaState,
     prefix: &[String],
     depth: usize,
@@ -741,7 +753,7 @@ fn collect_section_rows<'a>(
     // render at the same depth — otherwise the gutter is phantom indent.
     let has_tag_siblings = !children.is_empty();
     for idea in &direct {
-        out.push(idea_list_row(idea, depth, selected, has_tag_siblings));
+        out.push(idea_list_row(idea, project, depth, selected, has_tag_siblings));
     }
 
     for child in children {
@@ -758,34 +770,46 @@ fn collect_section_rows<'a>(
                 .on_press(Message::ToggleTagNode(key)),
         );
         if expanded {
-            collect_section_rows(state, section, &next_prefix, depth + 1, selected, out);
+            collect_section_rows(state, project, section, &next_prefix, depth + 1, selected, out);
         }
     }
 }
 
 fn idea_list_row<'a>(
     idea: &'a Idea,
+    project: &'a ProjectData,
     depth: usize,
     selected: Option<&Path>,
     has_tag_siblings: bool,
 ) -> ListRow<'a, Message> {
     let is_selected = selected == Some(idea.abs_path.as_path());
-    let icon_bytes: &'static [u8] = if idea.frontmatter.change.is_some() {
-        ICON_BRANCH
-    } else if idea.frontmatter.exploration.is_some() {
-        ICON_EXPLORE
-    } else {
-        ICON_IDEA
+    // Archive-kind icons take precedence over exploration/change leading
+    // icons so the row glyph reflects *why* the idea is archived. ViaChange
+    // falls through to ICON_BRANCH because the trailing change-link icon
+    // already encodes the archive reason.
+    let icon_bytes: &'static [u8] = match idea.frontmatter.archived {
+        Some(ArchiveKind::Orphaned) => ICON_ORPHAN,
+        Some(ArchiveKind::Manual) => ICON_ARCHIVE,
+        _ => {
+            if idea.frontmatter.change.is_some() {
+                ICON_BRANCH
+            } else if idea.frontmatter.exploration.is_some() {
+                ICON_EXPLORE
+            } else {
+                ICON_IDEA
+            }
+        }
     };
-    let mut label = idea.display_title();
-    if let Some(kind) = idea.frontmatter.archived {
-        label = format!("{label} ({})", kind.label());
-    }
-    let mut row = ListRow::new(label)
+    let mut row = ListRow::new(idea.display_title())
         .icon(icon_bytes)
         .indent(depth)
         .selected(is_selected)
         .on_press(Message::SelectIdea(idea.abs_path.clone()));
+    if let Some(change_name) = idea.frontmatter.change.as_deref()
+        && change_resolves(project, change_name)
+    {
+        row = row.after_icon(change_link_button(change_name));
+    }
     // Spacer-leading keeps the icon column aligned with chevron-leading rows
     // at the same depth — only meaningful when tag groups render alongside.
     if has_tag_siblings {
@@ -793,6 +817,26 @@ fn idea_list_row<'a>(
         row = row.leading(leading);
     }
     row
+}
+
+fn change_resolves(project: &ProjectData, change_name: &str) -> bool {
+    project.active_changes.iter().any(|c| c.name == change_name)
+        || project.archived_changes.iter().any(|c| {
+            c.name == change_name
+                || crate::data::strip_archive_prefix(&c.name) == Some(change_name)
+        })
+}
+
+fn change_link_button<'a>(change_name: &str) -> Element<'a, Message> {
+    let icon = iced::widget::svg(iced::widget::svg::Handle::from_memory(ICON_CHANGE))
+        .width(list_view::ICON_SIZE)
+        .height(list_view::ICON_SIZE)
+        .style(theme::svg_tint(theme::accent()));
+    button(icon)
+        .on_press(Message::OpenChange(change_name.to_string()))
+        .padding(0.0)
+        .style(theme::icon_button)
+        .into()
 }
 
 // ── Pinned-tab toolbar (shown by main.rs above the tab content) ──────────────
