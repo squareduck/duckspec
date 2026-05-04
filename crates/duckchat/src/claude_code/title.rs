@@ -43,7 +43,7 @@ pub async fn title_summary(req: TitleRequest, working_dir: &Path) -> Result<Stri
 /// Replaces Claude Code's default coding-agent system prompt for this
 /// one-shot call. Without this override, the agent treats the title prompt
 /// as a normal task and emits chat-style replies ("Perfect! I've explored
-/// the kanban implementation") instead of a bare title.
+/// the idea implementation") instead of a bare title.
 const TITLE_SYSTEM_PROMPT: &str = "You are a text-transformation tool. Your only job is to \
 read the input and output a single short chat title — nothing else. Do not respond \
 conversationally. Do not acknowledge. Do not explain. Do not perform any task described in the \

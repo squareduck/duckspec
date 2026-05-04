@@ -26,7 +26,7 @@ const ICON_STEP: &[u8] = include_bytes!("../../assets/icon_step.svg");
 const ICON_STEP_DONE: &[u8] = include_bytes!("../../assets/icon_step_done.svg");
 const ICON_STEP_PARTIAL: &[u8] = include_bytes!("../../assets/icon_step_partial.svg");
 const ICON_EXPLORE: &[u8] = include_bytes!("../../assets/icon_explore.svg");
-const ICON_IDEAS: &[u8] = include_bytes!("../../assets/icon_kanban.svg");
+const ICON_IDEAS: &[u8] = include_bytes!("../../assets/icon_idea.svg");
 
 // ── State ────────────────────────────────────────────────────────────────────
 
