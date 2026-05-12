@@ -12,7 +12,6 @@ pub mod event;
 pub mod hook;
 pub mod provider;
 pub mod request;
-pub mod shell_env;
 pub mod worker;
 
 pub mod claude_code;

@@ -1,7 +1,6 @@
 //! Spawns `claude -p` and drives a single turn.
 
 use std::collections::HashMap;
-use std::time::Duration;
 
 use base64::Engine as _;
 use tokio::sync::mpsc;
@@ -10,15 +9,9 @@ use crate::cancel::CancelToken;
 use crate::error::Error;
 use crate::event::AgentEvent;
 use crate::request::{Attachment, ToolPolicy, TurnOutcome, TurnRequest};
-use crate::shell_env::SHELL_ENV;
 
 use super::protocol::{ProtocolMsg, parse_protocol_line};
-
-/// How long a subprocess spawn will wait for the background shell-env
-/// harvest before giving up and inheriting the parent env. Long-running
-/// turns can afford a few hundred milliseconds on the first spawn; by the
-/// time a second turn runs the harvest is cached.
-const SHELL_ENV_TIMEOUT: Duration = Duration::from_millis(500);
+use super::spawn::claude_command;
 
 /// Run a single prompt turn by spawning `claude -p` and streaming its output.
 /// Returns the session ID from the result message (for `--resume` on next
@@ -42,7 +35,7 @@ pub async fn run_turn(
     let stream_line = serde_json::to_string(&stream_msg)
         .map_err(|e| Error::Process(format!("failed to encode stream-json input: {e}")))?;
 
-    let mut cmd = std::process::Command::new("claude");
+    let mut cmd = claude_command();
     cmd.arg("-p")
         .arg("--input-format")
         .arg("stream-json")
@@ -70,8 +63,6 @@ pub async fn run_turn(
     if let Some(system) = join_system_additions(&req.system_additions) {
         cmd.arg("--append-system-prompt").arg(system);
     }
-
-    SHELL_ENV.apply(&mut cmd, SHELL_ENV_TIMEOUT);
 
     let mut child = cmd
         .spawn()

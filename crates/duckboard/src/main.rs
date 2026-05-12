@@ -4423,12 +4423,6 @@ fn main() -> iced::Result {
     // in the app would fail with ENOENT.
     path_env::augment();
 
-    // Kick off a background harvest of the user's login-shell env so
-    // subprocesses we later spawn (claude and anything it runs) see the
-    // same tool-manager activation (mise, asdf, nix, rustup, …) the user
-    // gets in their terminal. Non-blocking — just starts the thread.
-    duckchat::shell_env::init();
-
     // Capture panics to a per-launch file. Stderr is detached when launched
     // from Finder, and Apple's crash reporter can't recover the panic message
     // from a `block2` `panic_cannot_unwind` abort — so we need our own log.

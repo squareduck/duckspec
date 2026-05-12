@@ -9,18 +9,14 @@
 use std::io::Read;
 use std::path::Path;
 use std::process::Stdio;
-use std::time::Duration;
 
 use tokio::sync::oneshot;
 
 use crate::error::Error;
 use crate::request::TitleRequest;
-use crate::shell_env::SHELL_ENV;
 
 use super::TITLE_MODEL;
-
-/// Matches the run-turn budget — keeps both spawns consistent.
-const SHELL_ENV_TIMEOUT: Duration = Duration::from_millis(500);
+use super::spawn::claude_command;
 
 pub async fn title_summary(req: TitleRequest, working_dir: &Path) -> Result<String, Error> {
     let prompt = build_prompt(&req);
@@ -72,7 +68,7 @@ proper nouns. Plain text, no quotes, no trailing punctuation.\n\n",
 }
 
 fn run_sync(prompt: &str, working_dir: &Path) -> Result<String, Error> {
-    let mut cmd = std::process::Command::new("claude");
+    let mut cmd = claude_command();
     cmd.arg("-p")
         .arg("--model")
         .arg(TITLE_MODEL)
@@ -83,8 +79,6 @@ fn run_sync(prompt: &str, working_dir: &Path) -> Result<String, Error> {
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
-
-    SHELL_ENV.apply(&mut cmd, SHELL_ENV_TIMEOUT);
 
     let mut child = cmd
         .spawn()

@@ -7,6 +7,7 @@
 mod discover;
 mod protocol;
 mod run;
+mod spawn;
 mod title;
 
 use std::path::Path;
