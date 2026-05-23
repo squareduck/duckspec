@@ -17,6 +17,7 @@ mod data;
 pub mod highlight;
 mod idea_format;
 mod idea_store;
+mod keybinds;
 mod path_env;
 mod scope;
 mod theme;
@@ -28,6 +29,7 @@ mod widget;
 use area::Area;
 use area::interaction::{self, ActiveTab};
 use data::ProjectData;
+use keybinds::FocusedColumn;
 use widget::tab_bar;
 
 // ── Constants for routing keys ──────────────────────────────────────────────
@@ -35,22 +37,15 @@ use widget::tab_bar;
 const KEY_CAPS: &str = "caps";
 const KEY_CODEX: &str = "codex";
 
-/// Last-focused content column, used by cmd-f to pick a find target.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum FocusedColumn {
-    Content,
-    Chat,
-}
-
 // ── State ────────────────────────────────────────────────────────────────────
 
-struct State {
-    active_area: Area,
-    project: ProjectData,
+pub(crate) struct State {
+    pub(crate) active_area: Area,
+    pub(crate) project: ProjectData,
     config: config::Config,
     dashboard: area::dashboard::State,
     ideas: area::ideas::State,
-    change: area::change::State,
+    pub(crate) change: area::change::State,
     caps: area::caps::State,
     codex: area::codex::State,
     settings: area::settings::State,
@@ -58,6 +53,7 @@ struct State {
     text_search: widget::text_search::TextSearchState,
     project_picker: widget::project_picker::ProjectPickerState,
     quick_idea: widget::quick_idea::QuickIdeaState,
+    new_file: widget::new_file::NewFileState,
     find_modal: widget::find::FindModalState,
     /// Active local-find state per target. Editor finds key by tab id;
     /// chat finds key by `(instance_id, session_id)`. Survives tab/session
@@ -67,7 +63,7 @@ struct State {
     /// Most-recently-focused content column. Drives the cmd-f scope rule:
     /// `Chat` → target the active session, `Content` → target the active
     /// editor tab. `None` → cmd-f is a no-op.
-    focused_column: Option<FocusedColumn>,
+    pub(crate) focused_column: Option<FocusedColumn>,
     /// Set by `jump_to_current` when find scrolls the chat to a match.
     /// Read by `update_with_scroll_preservation` to skip the post-update
     /// chat-scroll replay (which would otherwise restore the pre-find
@@ -79,7 +75,7 @@ struct State {
     /// Single tab stack shared across Change/Caps/Codex/Ideas. The active
     /// area drives the `preview` (pinned) slot via its list selection;
     /// `file_tabs` (closable) persist across area switches.
-    tabs: tab_bar::TabState,
+    pub(crate) tabs: tab_bar::TabState,
     /// Cached pinned tab per area, swapped in/out of `tabs.preview` on area
     /// switch so editor cursor + dirty state survive the round-trip.
     cached_previews: HashMap<Area, Option<tab_bar::Tab>>,
@@ -91,7 +87,7 @@ struct State {
     /// Single interaction registry keyed by scope. One entry per
     /// (Caps | Codex | Change(name) | Exploration(id)). Survives area
     /// switches; the visible column reads from the active area's scope.
-    interactions: HashMap<scope::Scope, interaction::InteractionState>,
+    pub(crate) interactions: HashMap<scope::Scope, interaction::InteractionState>,
 }
 
 impl State {
@@ -128,6 +124,7 @@ impl State {
             text_search: widget::text_search::TextSearchState::default(),
             project_picker: widget::project_picker::ProjectPickerState::default(),
             quick_idea: widget::quick_idea::QuickIdeaState::default(),
+            new_file: widget::new_file::NewFileState::default(),
             find_modal: widget::find::FindModalState::default(),
             find_states: HashMap::new(),
             focused_column: None,
@@ -217,7 +214,7 @@ impl State {
     }
 
     /// Compute the active scope from `active_area` and that area's selection.
-    fn active_scope(&self) -> Option<scope::Scope> {
+    pub(crate) fn active_scope(&self) -> Option<scope::Scope> {
         match self.active_area {
             Area::Caps => Some(scope::Scope::Caps),
             Area::Codex => Some(scope::Scope::Codex),
@@ -243,7 +240,7 @@ impl State {
     }
 
     /// Active scope's key as a `String`, when one exists.
-    fn active_interaction_key(&self) -> Option<String> {
+    pub(crate) fn active_interaction_key(&self) -> Option<String> {
         Some(self.active_scope()?.key().to_string())
     }
 }
@@ -277,6 +274,8 @@ enum Message {
     ProjectPicker(widget::project_picker::Msg),
     // Quick idea capture/jump modal (cmd-i).
     QuickIdea(widget::quick_idea::Msg),
+    // New-file modal — create-or-open by typed path (cmd+n when content focused).
+    NewFile(widget::new_file::Msg),
     // Local find — cmd-f within the focused editor or chat session.
     /// Open the find modal targeting the focused column. No payload — the
     /// handler reads `state.focused_column` and builds the snapshot.
@@ -657,6 +656,51 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                 }
             }
         }
+        Message::NewFile(msg) => {
+            use widget::new_file::Msg;
+            match msg {
+                Msg::OpenAt(starting) => {
+                    let Some(root) = state.project.project_root.clone() else {
+                        return Task::none();
+                    };
+                    state.new_file.open_at(&root, starting);
+                    for ix in state.interactions.values_mut() {
+                        ix.terminal_focused = false;
+                    }
+                    return Task::batch([
+                        iced::widget::operation::focus(widget::new_file::INPUT_ID),
+                        iced::widget::operation::move_cursor_to_end(
+                            widget::new_file::INPUT_ID,
+                        ),
+                    ]);
+                }
+                Msg::Close => {
+                    state.new_file.close();
+                }
+                Msg::QueryChanged(q) => {
+                    if state.new_file.handle_input(q) {
+                        return iced::widget::operation::move_cursor_to_end(
+                            widget::new_file::INPUT_ID,
+                        );
+                    }
+                }
+                Msg::SelectNext => state.new_file.select_next(),
+                Msg::SelectPrev => state.new_file.select_prev(),
+                Msg::TabComplete => {
+                    state.new_file.tab_complete();
+                    return iced::widget::operation::move_cursor_to_end(
+                        widget::new_file::INPUT_ID,
+                    );
+                }
+                Msg::Confirm => {
+                    let action = state.new_file.confirm_action();
+                    state.new_file.close();
+                    if let Some(action) = action {
+                        return confirm_new_file(state, action);
+                    }
+                }
+            }
+        }
         Message::SearchStackHighlighted {
             tab_id,
             abs_path,
@@ -858,6 +902,16 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                         );
                         return restore_chat_scroll(state);
                     }
+                }
+                area::change::Message::AddFile => {
+                    // `+` header button always opens at project root, regardless
+                    // of what's currently focused — the header is about adding
+                    // a file to the project as a whole, not next to whatever
+                    // tab happens to be active.
+                    return update(
+                        state,
+                        Message::NewFile(widget::new_file::Msg::OpenAt(String::new())),
+                    );
                 }
                 msg => {
                     let needs_focus = matches!(msg, area::change::Message::AddExploration)
@@ -1462,62 +1516,48 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                 return Task::none();
             }
 
-            // Cmd+N in the Ideas area: add a new idea and open it. Area-scoped
-            // so it doesn't fight the Change area's Cmd+N (which spawns a
-            // chat session or exploration and is handled inside the
-            // chat-focus block further down).
-            if mods.command()
-                && key == keyboard::Key::Character("n".into())
-                && state.active_area == Area::Ideas
-                && state.project.project_root.is_some()
-            {
-                return update(state, Message::Ideas(area::ideas::Message::AddIdea));
-            }
-
-            // Cmd+N in the Change area:
-            // - real change selected → start a new chat session in that
-            //   change (multi-session UI), regardless of whether the chat
-            //   panel is visible / which tab is active / whether the chat
-            //   input is focused.
-            // - exploration selected, or nothing selected → spawn a fresh
-            //   exploration (single-session UI), same as the `+` in the
-            //   Change header.
-            // Cmd+Shift+N (spawn new window) is intercepted earlier; Cmd+N
-            // in Ideas is area-scoped above.
+            // Cmd+N — `keybinds::keybind_new` decides what "new" means given
+            // current focus + area. Content-column focus opens the new-file
+            // modal; chat / no focus falls through to area-specific behavior
+            // (add idea, new chat session, add exploration). Cmd+Shift+N
+            // (spawn new window) was intercepted above.
             if mods.command()
                 && !mods.shift()
                 && key == keyboard::Key::Character("n".into())
-                && state.active_area == Area::Change
+                && let Some(action) = keybinds::keybind_new(state)
             {
-                let routing_key = state.active_interaction_key();
-                let real_change_selected =
-                    routing_key.is_some() && !state.change.is_exploration_selected();
-                if real_change_selected
-                    && let Some(rk) = routing_key
-                {
-                    return dispatch_interaction_msg(state, &rk, interaction::Msg::NewSession);
-                }
-                return update(
-                    state,
-                    Message::Change(area::change::Message::AddExploration),
-                );
+                use keybinds::NewAction;
+                return match action {
+                    NewAction::OpenNewFile => {
+                        let seed = new_file_seed_path(state);
+                        update(state, Message::NewFile(widget::new_file::Msg::OpenAt(seed)))
+                    }
+                    NewAction::AddIdea => {
+                        update(state, Message::Ideas(area::ideas::Message::AddIdea))
+                    }
+                    NewAction::NewChatSession(rk) => {
+                        dispatch_interaction_msg(state, &rk, interaction::Msg::NewSession)
+                    }
+                    NewAction::AddExploration => update(
+                        state,
+                        Message::Change(area::change::Message::AddExploration),
+                    ),
+                };
             }
 
-            // Cmd+S in the Ideas area with the pinned tab active → save the
-            // idea body (frontmatter is rederived from H1). Routed through
-            // the ideas update so it picks up filename moves on title/tag
-            // changes; the generic file-save path doesn't know about
-            // frontmatter.
+            // Cmd+S — `keybinds::keybind_save` only flags focus-conditional
+            // saves. The generic in-editor save path runs through the editor
+            // widget's own `SaveRequested` action and never reaches here.
             if mods.command()
                 && matches!(&key, keyboard::Key::Character(c) if c.eq_ignore_ascii_case("s"))
-                && state.active_area == Area::Ideas
-                && matches!(state.tabs.active, tab_bar::ActiveTab::Preview)
-                && state
-                    .tabs
-                    .active_tab()
-                    .is_some_and(|t| t.id.starts_with(area::ideas::PINNED_TAB_PREFIX))
+                && let Some(action) = keybinds::keybind_save(state)
             {
-                return update(state, Message::Ideas(area::ideas::Message::SaveBody));
+                use keybinds::SaveAction;
+                return match action {
+                    SaveAction::SaveIdeaBody => {
+                        update(state, Message::Ideas(area::ideas::Message::SaveBody))
+                    }
+                };
             }
 
             // Cmd+Shift+F: open project-wide text search.
@@ -1585,7 +1625,7 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                 && !mods.shift()
                 && (key == keyboard::Key::Character("n".into())
                     || key == keyboard::Key::Character("p".into()))
-                && let Some(target) = focused_find_target(state)
+                && let Some(target) = keybinds::keybind_find(state)
                 && state.find_states.contains_key(&target)
             {
                 let completion_eats = state
@@ -1708,6 +1748,54 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                 return Task::none();
             }
 
+            // When new-file modal is visible, route navigation keys. Tab
+            // completes the highlighted candidate; Enter resolves to either
+            // open (existing file) or create (new file), then opens it as a
+            // tab. Ctrl-N/P navigate the candidate list.
+            if state.new_file.visible {
+                use keyboard::key::Named;
+                match &key {
+                    keyboard::Key::Named(Named::Escape) => {
+                        let _ = update(state, Message::NewFile(widget::new_file::Msg::Close));
+                    }
+                    keyboard::Key::Named(Named::Tab) => {
+                        return update(
+                            state,
+                            Message::NewFile(widget::new_file::Msg::TabComplete),
+                        );
+                    }
+                    keyboard::Key::Named(Named::Enter) => {
+                        return update(state, Message::NewFile(widget::new_file::Msg::Confirm));
+                    }
+                    keyboard::Key::Named(Named::ArrowDown) => {
+                        let _ = update(
+                            state,
+                            Message::NewFile(widget::new_file::Msg::SelectNext),
+                        );
+                    }
+                    keyboard::Key::Named(Named::ArrowUp) => {
+                        let _ = update(
+                            state,
+                            Message::NewFile(widget::new_file::Msg::SelectPrev),
+                        );
+                    }
+                    _ if mods.control() && key == keyboard::Key::Character("n".into()) => {
+                        let _ = update(
+                            state,
+                            Message::NewFile(widget::new_file::Msg::SelectNext),
+                        );
+                    }
+                    _ if mods.control() && key == keyboard::Key::Character("p".into()) => {
+                        let _ = update(
+                            state,
+                            Message::NewFile(widget::new_file::Msg::SelectPrev),
+                        );
+                    }
+                    _ => {}
+                }
+                return Task::none();
+            }
+
             // Esc closes the inline tag-add/edit input when it's open. Handled
             // ahead of the file finder block because the input is a
             // text_input — iced captures Escape to clear focus, but we want
@@ -1801,17 +1889,17 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                 return Task::none();
             }
 
-            // Cmd-K: pin the tentative selection attachment so it persists
-            // across messages. Gated on chat being visible + a session
-            // loaded; the action is a no-op (and the global handler returns
-            // early) when there's no tentative to pin.
+            // Cmd-K — pin the active session's tentative selection.
+            // `keybinds::keybind_pin_selection` decides whether the focus
+            // is right; the live runtime check (was there actually a
+            // tentative to pin?) stays here because it needs `&mut` and is
+            // outcome-driven, not focus-driven.
             if mods.command()
                 && !mods.shift()
                 && matches!(&key, keyboard::Key::Character(c) if c.eq_ignore_ascii_case("k"))
+                && keybinds::keybind_pin_selection(state)
                 && let Some(scope) = state.active_scope()
                 && let Some(ix) = state.interactions.get_mut(&scope)
-                && ix.visible
-                && ix.active_tab == ActiveTab::Chat
                 && let Some(ax) = ix.active_mut()
                 && interaction::pin_tentative(ax)
             {
@@ -1831,51 +1919,28 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                 return Task::none();
             }
 
-            // Cmd-R: clear all selection attachments on the active session.
-            // Gated on chat input being focused so the shortcut doesn't
-            // collide with editor refresh-style muscle memory while a
-            // content tab editor is the focus target.
+            // Cmd-R — clear all attachments on the active session.
             if mods.command()
                 && !mods.shift()
                 && matches!(&key, keyboard::Key::Character(c) if c.eq_ignore_ascii_case("r"))
+                && keybinds::keybind_clear_attachments(state)
                 && let Some(scope) = state.active_scope()
                 && let Some(ix) = state.interactions.get_mut(&scope)
-                && ix.visible
-                && ix.active_tab == ActiveTab::Chat
                 && let Some(ax) = ix.active_mut()
-                && ax.chat_input_focused
-                && (!ax.selection_pinned.is_empty() || ax.selection_tentative.is_some())
             {
                 interaction::clear_all_attachments(ax);
                 return Task::none();
             }
 
-            // Cmd-W: close the active file tab when focus is on the content
-            // area (i.e. neither the chat input nor the terminal pane is
-            // capturing keys). Preview tab is non-closeable, so the binding
-            // is a no-op when it's the active tab.
+            // Cmd-W — close the active file tab. `keybinds::keybind_close`
+            // gates on focus (chat input / terminal don't claim cmd-w) and
+            // returns the logical tab index to close.
             if mods.command()
                 && !mods.shift()
                 && matches!(&key, keyboard::Key::Character(c) if c.eq_ignore_ascii_case("w"))
-                && matches!(
-                    state.active_area,
-                    Area::Change | Area::Caps | Area::Codex | Area::Ideas
-                )
-                && let tab_bar::ActiveTab::File(fi) = state.tabs.active
+                && let Some(idx) = keybinds::keybind_close(state)
             {
-                let chat_focused = state
-                    .active_scope()
-                    .and_then(|scope| state.interactions.get(&scope))
-                    .and_then(|ix| ix.active())
-                    .is_some_and(|ax| ax.chat_input_focused);
-                let terminal_focused = state
-                    .active_scope()
-                    .and_then(|scope| state.interactions.get(&scope))
-                    .is_some_and(|ix| ix.terminal_focused);
-                if !chat_focused && !terminal_focused {
-                    let logical_idx = if state.tabs.preview.is_some() { fi + 1 } else { fi };
-                    return update(state, Message::TabClose(logical_idx));
-                }
+                return update(state, Message::TabClose(idx));
             }
 
             // Get the active area's interaction state for keyboard routing.
@@ -2322,6 +2387,100 @@ fn ensure_h1_prefix(body: &str) -> String {
     out
 }
 
+/// Default starting query for the new-file modal: the directory of the active
+/// editor / diff tab's file, repo-relative, with a trailing `/`. Empty string
+/// when no editor tab is open or its file lives outside the project root.
+fn new_file_seed_path(state: &State) -> String {
+    let Some(root) = state.project.project_root.as_deref() else {
+        return String::new();
+    };
+    let Some(tab) = state.tabs.active_tab() else {
+        return String::new();
+    };
+    let path = match &tab.view {
+        tab_bar::TabView::Editor { path: Some(p), .. } => p.as_path(),
+        tab_bar::TabView::Diff { path, .. } => path.as_path(),
+        _ => return String::new(),
+    };
+    let Some(parent) = path.parent() else {
+        return String::new();
+    };
+    let Ok(rel) = parent.strip_prefix(root) else {
+        return String::new();
+    };
+    if rel.as_os_str().is_empty() {
+        String::new()
+    } else {
+        format!("{}/", rel.display())
+    }
+}
+
+/// Resolve the new-file modal's Enter action: create the file (touching parent
+/// dirs as needed) if missing, then open it as a regular file tab. Existing
+/// files take the same code path as the file finder's confirm.
+fn confirm_new_file(
+    state: &mut State,
+    action: widget::new_file::ConfirmAction,
+) -> Task<Message> {
+    use widget::new_file::ConfirmAction;
+    let abs = match &action {
+        ConfirmAction::Open(p) | ConfirmAction::Create(p) => p.clone(),
+    };
+    if let ConfirmAction::Create(_) = &action {
+        if let Some(parent) = abs.parent()
+            && let Err(e) = std::fs::create_dir_all(parent)
+        {
+            tracing::warn!(path = %abs.display(), %e, "failed to create parent dir");
+            return Task::none();
+        }
+        if let Err(e) = std::fs::File::create(&abs) {
+            tracing::warn!(path = %abs.display(), %e, "failed to create file");
+            return Task::none();
+        }
+        tracing::info!(path = %abs.display(), "created new file");
+    }
+
+    let Some(root) = state.project.project_root.clone() else {
+        return Task::none();
+    };
+    let rel = abs
+        .strip_prefix(&root)
+        .unwrap_or(&abs)
+        .to_path_buf();
+    let content = std::fs::read_to_string(&abs).unwrap_or_default();
+    let id = format!("file:{}", rel.display());
+    let title = rel
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| rel.display().to_string());
+    let area = match state.active_area {
+        Area::Dashboard | Area::Settings => Area::Change,
+        other => other,
+    };
+    let switched = state.active_area != area;
+    switch_area(state, area);
+    state
+        .tabs
+        .open_file(id.clone(), title, content, Some(abs.clone()));
+    let mut task = Task::none();
+    if let Some(tab) = state.tabs.file_tabs.iter_mut().find(|t| t.id == id)
+        && let tab_bar::TabView::Editor { editor, .. } = &mut tab.view
+    {
+        task = spawn_file_tab_highlight(
+            area,
+            id,
+            editor,
+            state.highlighter.clone(),
+            false,
+        );
+    }
+    if switched {
+        Task::batch([task, restore_chat_scroll(state)])
+    } else {
+        task
+    }
+}
+
 /// True when `message` represents a user action that pulls focus away from
 /// the inline tag-add/edit input — clicking the editor, switching areas,
 /// triggering a lifecycle action on the idea, or selecting another idea.
@@ -2336,6 +2495,7 @@ fn tag_input_loses_focus_on(message: &Message) -> bool {
         Message::ProjectPicker(_) => true,
         Message::TextSearch(_) => true,
         Message::QuickIdea(_) => true,
+        Message::NewFile(_) => true,
         Message::Ideas(im) => matches!(
             im,
             IM::SelectIdea(_)
@@ -3196,39 +3356,10 @@ fn update_focused_column(state: &mut State, message: &Message) {
 
 // ── Local find helpers ─────────────────────────────────────────────────────
 
-/// Resolve the current cmd-f target from `focused_column` + the active tab /
-/// session. Returns `None` when neither column is in a state to host find
-/// (e.g. focus on terminal, no editor tab open, no chat session).
-fn focused_find_target(state: &State) -> Option<widget::find::FindTarget> {
-    match state.focused_column? {
-        FocusedColumn::Content => {
-            let tab = state.tabs.active_tab()?;
-            // Only Editor / Diff have a single back-buffer to search; the
-            // SearchStack tab is a stack of slices (each its own editor) and
-            // local find isn't meaningful at the slice level for v1.
-            match &tab.view {
-                tab_bar::TabView::Editor { .. } | tab_bar::TabView::Diff { .. } => {
-                    Some(widget::find::FindTarget::editor(tab.id.clone()))
-                }
-                tab_bar::TabView::SearchStack { .. } => None,
-            }
-        }
-        FocusedColumn::Chat => {
-            let scope = state.active_scope()?;
-            let ix = state.interactions.get(&scope)?;
-            let ax = ix.active()?;
-            Some(widget::find::FindTarget::chat(
-                ix.instance_id,
-                ax.session.id.clone(),
-            ))
-        }
-    }
-}
-
 /// Build the modal snapshot for the focused target. The snapshot lets the
 /// modal compute live previews without holding borrows on the app state.
 fn build_find_snapshot(state: &State) -> Option<(widget::find::FindTarget, widget::find::ModalSnapshot)> {
-    let target = focused_find_target(state)?;
+    let target = keybinds::keybind_find(state)?;
     match &target {
         widget::find::FindTarget::Editor(tab_id) => {
             let tab = state.tabs.active_tab()?;
@@ -4303,6 +4434,8 @@ fn view(state: &State) -> Element<'_, Message> {
         widget::text_search::view(&state.text_search).map(Message::TextSearch)
     } else if state.quick_idea.visible {
         widget::quick_idea::view(&state.quick_idea).map(Message::QuickIdea)
+    } else if state.new_file.visible {
+        widget::new_file::view(&state.new_file).map(Message::NewFile)
     } else if state.find_modal.visible {
         widget::find::view_modal(&state.find_modal).map(Message::Find)
     } else {

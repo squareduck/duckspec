@@ -6,6 +6,7 @@ pub mod find;
 pub mod horizontal_pan;
 pub mod interaction_toggle;
 pub mod list_view;
+pub mod new_file;
 pub mod pan_row;
 pub mod project_picker;
 pub mod quick_idea;

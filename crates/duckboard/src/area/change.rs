@@ -275,6 +275,9 @@ pub enum Message {
     /// loop (switches `active_area` to Ideas and selects the idea); a no-op
     /// here so the message body can be a plain String.
     OpenIdeaForChange(String),
+    /// `+` on the Changed Files header → open the new-file modal seeded with
+    /// the project root. Intercepted by `main::update`.
+    AddFile,
     ScrollList(f32),
 }
 
@@ -484,6 +487,9 @@ pub fn update(
         }
         Message::OpenIdeaForChange(_) => {
             // Handled in main.rs — crosses area boundaries.
+        }
+        Message::AddFile => {
+            // Handled in main.rs — opens the global new-file modal.
         }
         Message::ScrollList(offset) => {
             state.list_scroll = offset;
@@ -1076,10 +1082,11 @@ fn view_changed_files_section<'a>(
             .collect()
     };
 
-    collapsible::view(
+    collapsible::view_with_add(
         "Changed Files",
         state.expanded_sections.contains("changed_files"),
         Message::ToggleSection("changed_files".to_string()),
+        Some(collapsible::add_button(Message::AddFile)),
         list_view::view(rows, Some("No changes")),
     )
 }
