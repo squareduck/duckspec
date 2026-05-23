@@ -121,16 +121,6 @@ impl WrapLayout {
         (line, sub_row)
     }
 
-    /// Convert a logical (line, col) to a visual row index.
-    fn logical_to_visual(&self, line: usize, col: usize) -> usize {
-        if line >= self.row_starts.len() {
-            return self.total_visual_rows.saturating_sub(1);
-        }
-        let base = self.cum_rows[line];
-        let starts = &self.row_starts[line];
-        let sub = starts.iter().rposition(|&s| col >= s).unwrap_or(0);
-        base + sub
-    }
 }
 
 /// Cursor's visual row + char column within that row, given a wrap layout.
@@ -1232,12 +1222,11 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for TextEdit<'a, M> {
             let force_cursor = self.current_highlight.is_some() && !self.read_only;
             if internal.focused || force_cursor {
                 let cursor_line = self.state.cursor.line;
-                let cursor_col = self.state.cursor.col;
+                let line_str = &self.state.lines[cursor_line];
+                let byte_col = self.state.cursor.col.min(line_str.len());
+                let char_col = line_str[..byte_col].chars().count();
                 let (cy, cx) = if let Some(ref w) = wrap {
-                    let vrow = w.logical_to_visual(cursor_line, cursor_col);
-                    let starts = &w.row_starts[cursor_line];
-                    let sub = starts.iter().rposition(|&s| cursor_col >= s).unwrap_or(0);
-                    let col_in_row = cursor_col - starts[sub];
+                    let (vrow, col_in_row) = cursor_visual_pos(self.state, w);
                     (
                         bounds.y + CONTENT_PAD_Y + vrow as f32 * LINE_HEIGHT - scroll_y,
                         content_x + CONTENT_PAD + col_in_row as f32 * cell_w,
@@ -1245,7 +1234,7 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for TextEdit<'a, M> {
                 } else {
                     (
                         bounds.y + CONTENT_PAD_Y + cursor_line as f32 * LINE_HEIGHT - scroll_y,
-                        content_x + CONTENT_PAD + cursor_col as f32 * cell_w - scroll_x,
+                        content_x + CONTENT_PAD + char_col as f32 * cell_w - scroll_x,
                     )
                 };
                 renderer::Renderer::fill_quad(

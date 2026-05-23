@@ -518,8 +518,13 @@ impl EditorState {
         }
         if self.cursor.col > 0 {
             let lines = Arc::make_mut(&mut self.lines);
-            let ch = lines[self.cursor.line].remove(self.cursor.col - 1);
-            self.cursor.col -= ch.len_utf8();
+            let prev = lines[self.cursor.line][..self.cursor.col]
+                .char_indices()
+                .next_back()
+                .map(|(i, _)| i)
+                .unwrap_or(0);
+            let ch = lines[self.cursor.line].remove(prev);
+            self.cursor.col = prev;
             self.push_undo(UndoOp::Delete {
                 start: self.cursor,
                 end: Pos::new(self.cursor.line, self.cursor.col + ch.len_utf8()),
@@ -821,6 +826,19 @@ mod tests {
         assert_eq!(snap_col(line, 4), 2); // inside '—' → snap back
         assert_eq!(snap_col(line, 5), 5); // start of 'c'
         assert_eq!(snap_col(line, 99), line.len()); // past end → clamp
+    }
+
+    #[test]
+    fn backspace_after_multibyte_char_does_not_panic() {
+        // Typing a Cyrillic letter leaves the cursor mid-way through a 2-byte
+        // UTF-8 sequence relative to `col - 1`. Backspace must find the
+        // previous char boundary instead of slicing through it.
+        let mut ed = EditorState::new("");
+        ed.apply_action(EditorAction::Insert('а')); // U+0430, 2 bytes
+        assert_eq!(ed.cursor, Pos::new(0, 2));
+        ed.apply_action(EditorAction::Backspace);
+        assert_eq!(ed.cursor, Pos::new(0, 0));
+        assert_eq!(ed.lines[0], "");
     }
 
     #[test]
