@@ -103,7 +103,7 @@ Summarise what's being implemented.";
 /// Pull the first whitespace-delimited token and strip its leading `/`.
 /// Returns `None` for messages that don't start with a slash command.
 fn extract_slash_command(msg: &str) -> Option<&str> {
-    let first = msg.trim_start().split_whitespace().next()?;
+    let first = msg.split_whitespace().next()?;
     first.strip_prefix('/')
 }
 

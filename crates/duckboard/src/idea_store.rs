@@ -191,7 +191,7 @@ fn primary_tag_segments(tags: &[String]) -> Vec<String> {
         .split('/')
         .map(str::trim)
         .filter(|s| !s.is_empty())
-        .map(|s| slugify(s))
+        .map(slugify)
         .collect()
 }
 
@@ -327,10 +327,11 @@ fn walk_state_dir(state_root: &Path, state: IdeaState, out: &mut Vec<Idea>) {
                 let mut next = tag_path.clone();
                 next.push(entry.file_name().to_string_lossy().into_owned());
                 stack.push((p, next));
-            } else if ft.is_file() && p.extension().is_some_and(|e| e == "md") {
-                if let Some(idea) = read_idea_meta(&p, state, tag_path.clone()) {
-                    out.push(idea);
-                }
+            } else if ft.is_file()
+                && p.extension().is_some_and(|e| e == "md")
+                && let Some(idea) = read_idea_meta(&p, state, tag_path.clone())
+            {
+                out.push(idea);
             }
         }
     }
@@ -429,9 +430,7 @@ pub fn save_idea(
     let slug = slugify(&idea.frontmatter.title);
 
     let candidate = idea_path(&root, idea.state, &target_segments, &slug);
-    let final_path = if candidate == idea.abs_path && candidate.exists() {
-        candidate
-    } else if !candidate.exists() {
+    let final_path = if !candidate.exists() || candidate == idea.abs_path {
         candidate
     } else {
         unique_path(&root, idea.state, &target_segments, &slug)

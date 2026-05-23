@@ -286,16 +286,11 @@ static NEXT_INSTANCE_ID: AtomicU64 = AtomicU64::new(1);
 
 /// Which tab is currently selected in the interaction column.
 /// Chat is implicit (always present); terminals are stored as a `Vec`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ActiveTab {
+    #[default]
     Chat,
     Terminal(usize),
-}
-
-impl Default for ActiveTab {
-    fn default() -> Self {
-        ActiveTab::Chat
-    }
 }
 
 /// One terminal tab — owns its TerminalState and a stable id used as the

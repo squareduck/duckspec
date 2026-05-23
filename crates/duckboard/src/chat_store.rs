@@ -16,10 +16,11 @@ pub struct ChatMessage {
     pub content: Vec<ContentBlock>,
     pub timestamp: String,
     /// Synthetic priming turn injected by the harness — currently the
-    /// first-turn AGENTS.md inject. Excluded from `first_user_text` so the
-    /// title summariser keys off the user's actual intent, not boilerplate
-    /// project conventions. Defaults to false on load for backwards
-    /// compatibility with sessions persisted before this field existed.
+    /// first-turn AGENTS.md inject. Excluded from `title_summarization_target`
+    /// so the title summariser keys off the user's actual intent, not
+    /// boilerplate project conventions. Defaults to false on load for
+    /// backwards compatibility with sessions persisted before this field
+    /// existed.
     #[serde(default)]
     pub is_priming: bool,
 }
@@ -112,21 +113,75 @@ struct PersistedSession {
     last_seeded_description: Option<String>,
 }
 
-/// Return the first user text block in the session. Used by the title
-/// summariser, which derives titles from the user's intent (message + scope
-/// hints) and deliberately ignores the assistant's reply.
-pub fn first_user_text(session: &ChatSession) -> Option<String> {
+/// What the title summariser should summarise. A "bare slash command" turn
+/// (e.g. just `/ds-apply` with no trailing content) is skipped as the
+/// summarisation target because the message itself carries no intent —
+/// instead we wait for a turn with actual content. The most recent slash
+/// command seen up to that point is carried in `command_hint_source` so
+/// callers can still attach the matching `title_hints` hint.
+pub struct TitleTarget {
+    /// The user message whose text will be summarised. Always non-empty and
+    /// never a bare slash command.
+    pub message: String,
+    /// The user-message text (bare command or otherwise) that contributed
+    /// the most recent `/<cmd>` seen up to and including `message`. `None`
+    /// when no slash command has been sent yet.
+    pub command_hint_source: Option<String>,
+}
+
+/// Walk the session's user turns (skipping priming) and decide whether the
+/// title summariser should fire. Returns `None` when every user turn so far
+/// is a bare slash command — the caller defers summarisation until a real
+/// message arrives. Otherwise returns the first non-bare-command message
+/// together with the most recent slash-command context.
+pub fn title_summarization_target(session: &ChatSession) -> Option<TitleTarget> {
+    let mut last_command_source: Option<String> = None;
     for msg in &session.messages {
         if !matches!(msg.role, Role::User) || msg.is_priming {
             continue;
         }
-        for block in &msg.content {
-            if let ContentBlock::Text(t) = block {
-                return Some(t.clone());
-            }
+        let Some(text) = msg.content.iter().find_map(|b| match b {
+            ContentBlock::Text(t) => Some(t.clone()),
+            _ => None,
+        }) else {
+            continue;
+        };
+        if starts_with_slash_command(&text) {
+            last_command_source = Some(text.clone());
         }
+        if is_bare_slash_command(&text) {
+            continue;
+        }
+        return Some(TitleTarget {
+            message: text,
+            command_hint_source: last_command_source,
+        });
     }
     None
+}
+
+/// True when `text` starts with a `/` followed by a non-empty token. Used
+/// to detect command-bearing turns regardless of whether they have content
+/// after the command.
+fn starts_with_slash_command(text: &str) -> bool {
+    let trimmed = text.trim_start();
+    let Some(rest) = trimmed.strip_prefix('/') else {
+        return false;
+    };
+    rest.chars()
+        .next()
+        .is_some_and(|c| !c.is_whitespace())
+}
+
+/// True when `text` is exactly a slash command with no trailing content
+/// (e.g. `/ds-apply`, `   /ds-apply  `). Leading/trailing whitespace is
+/// ignored; anything else after the command token makes it non-bare.
+pub fn is_bare_slash_command(text: &str) -> bool {
+    let trimmed = text.trim();
+    let Some(rest) = trimmed.strip_prefix('/') else {
+        return false;
+    };
+    !rest.is_empty() && !rest.chars().any(char::is_whitespace)
 }
 
 /// Recompute `display_name` on every session so that sessions sharing the
@@ -376,5 +431,123 @@ pub fn save_explorations(
             }
         }
         Err(e) => tracing::warn!("failed to serialize explorations: {e}"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn user_msg(text: &str) -> ChatMessage {
+        ChatMessage {
+            role: Role::User,
+            content: vec![ContentBlock::Text(text.into())],
+            timestamp: String::new(),
+            is_priming: false,
+        }
+    }
+
+    fn priming_msg(text: &str) -> ChatMessage {
+        ChatMessage {
+            role: Role::User,
+            content: vec![ContentBlock::Text(text.into())],
+            timestamp: String::new(),
+            is_priming: true,
+        }
+    }
+
+    fn assistant_msg(text: &str) -> ChatMessage {
+        ChatMessage {
+            role: Role::Assistant,
+            content: vec![ContentBlock::Text(text.into())],
+            timestamp: String::new(),
+            is_priming: false,
+        }
+    }
+
+    fn session_with(messages: Vec<ChatMessage>) -> ChatSession {
+        let mut s = ChatSession::new("test".into());
+        s.messages = messages;
+        s
+    }
+
+    #[test]
+    fn is_bare_slash_command_basics() {
+        assert!(is_bare_slash_command("/ds-apply"));
+        assert!(is_bare_slash_command("  /ds-apply  "));
+        assert!(!is_bare_slash_command("/ds-apply now"));
+        assert!(!is_bare_slash_command("hello"));
+        assert!(!is_bare_slash_command(""));
+        assert!(!is_bare_slash_command("/"));
+        assert!(!is_bare_slash_command("/ next"));
+    }
+
+    #[test]
+    fn target_none_when_empty_or_only_priming() {
+        assert!(title_summarization_target(&session_with(vec![])).is_none());
+        assert!(
+            title_summarization_target(&session_with(vec![priming_msg("AGENTS.md ...")])).is_none()
+        );
+    }
+
+    #[test]
+    fn target_none_when_only_bare_commands() {
+        let s = session_with(vec![user_msg("/ds-apply"), assistant_msg("...")]);
+        assert!(title_summarization_target(&s).is_none());
+    }
+
+    #[test]
+    fn target_returns_first_real_message_no_command_history() {
+        let s = session_with(vec![user_msg("wire up the login form")]);
+        let t = title_summarization_target(&s).unwrap();
+        assert_eq!(t.message, "wire up the login form");
+        assert!(t.command_hint_source.is_none());
+    }
+
+    #[test]
+    fn target_carries_prior_bare_command_as_hint_source() {
+        let s = session_with(vec![
+            user_msg("/ds-apply"),
+            assistant_msg("ok"),
+            user_msg("now wire up the form"),
+        ]);
+        let t = title_summarization_target(&s).unwrap();
+        assert_eq!(t.message, "now wire up the form");
+        assert_eq!(t.command_hint_source.as_deref(), Some("/ds-apply"));
+    }
+
+    #[test]
+    fn target_uses_most_recent_bare_command() {
+        let s = session_with(vec![
+            user_msg("/ds-apply"),
+            user_msg("/ds-verify"),
+            user_msg("ok continue"),
+        ]);
+        let t = title_summarization_target(&s).unwrap();
+        assert_eq!(t.message, "ok continue");
+        assert_eq!(t.command_hint_source.as_deref(), Some("/ds-verify"));
+    }
+
+    #[test]
+    fn target_self_references_when_message_leads_with_command() {
+        let s = session_with(vec![user_msg("/ds-apply look at the tests too")]);
+        let t = title_summarization_target(&s).unwrap();
+        assert_eq!(t.message, "/ds-apply look at the tests too");
+        assert_eq!(
+            t.command_hint_source.as_deref(),
+            Some("/ds-apply look at the tests too")
+        );
+    }
+
+    #[test]
+    fn target_skips_priming_messages() {
+        let s = session_with(vec![
+            priming_msg("AGENTS.md ..."),
+            user_msg("/ds-apply"),
+            user_msg("real text"),
+        ]);
+        let t = title_summarization_target(&s).unwrap();
+        assert_eq!(t.message, "real text");
+        assert_eq!(t.command_hint_source.as_deref(), Some("/ds-apply"));
     }
 }

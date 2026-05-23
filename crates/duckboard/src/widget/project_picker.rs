@@ -170,7 +170,7 @@ impl ProjectPickerState {
             .filter_map(|e| e.ok())
             .filter(|e| e.file_type().map(|t| t.is_dir()).unwrap_or(false))
             .map(|e| e.file_name().to_string_lossy().to_string())
-            .filter(|name| !(!include_hidden && name.starts_with('.')))
+            .filter(|name| include_hidden || !name.starts_with('.'))
             .collect();
 
         self.candidates = if prefix.is_empty() {
@@ -187,10 +187,9 @@ impl ProjectPickerState {
                     let lower = name.to_lowercase();
                     if lower.starts_with(&prefix_lower) {
                         Some((0, 0, name.len(), name))
-                    } else if let Some(span) = subsequence_span(&lower, &prefix_lower) {
-                        Some((1, span, name.len(), name))
                     } else {
-                        None
+                        subsequence_span(&lower, &prefix_lower)
+                            .map(|span| (1, span, name.len(), name))
                     }
                 })
                 .collect();

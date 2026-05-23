@@ -1162,14 +1162,19 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
         Message::AgentEvent(key, evt) => {
             use agent::AgentEvent;
             let proj_root = state.project.project_root.clone();
-            // `(working_dir, scope_key, scope_kind, first_user_msg, idea_description)`.
-            let mut title_task_input: Option<(
+            // `(working_dir, scope_key, scope_kind, target_msg, command_hint_source, idea_description)`.
+            // `command_hint_source` is the user-message-form text of the most
+            // recent slash command — fed to `title_hints::build_hint` even
+            // when the target message itself carries no command.
+            type TitleTaskInput = (
                 PathBuf,
                 String,
                 scope::ScopeKind,
                 String,
                 Option<String>,
-            )> = None;
+                Option<String>,
+            );
+            let mut title_task_input: Option<TitleTaskInput> = None;
             {
                 let Some(ax) = state.agent_session_mut(&key) else {
                     return Task::none();
@@ -1230,8 +1235,12 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                             tracing::error!("failed to save chat session: {e}");
                         }
                         // Kick off a one-shot title summary after the first
-                        // real turn. Only for change / exploration scopes;
-                        // caps and codex don't get summarised.
+                        // turn whose user message isn't a bare slash command.
+                        // Bare-command-only sessions defer summarisation
+                        // until a real message arrives — `title.is_none()`
+                        // ensures this block runs again on each TurnComplete
+                        // until that happens. Only for change / exploration
+                        // scopes; caps and codex don't get summarised.
                         if !was_priming
                             && ax.session.title.is_none()
                             && matches!(
@@ -1239,13 +1248,15 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                                 scope::ScopeKind::Change | scope::ScopeKind::Exploration
                             )
                             && let Some(handle) = ax.agent_handle.as_ref()
-                            && let Some(user) = chat_store::first_user_text(&ax.session)
+                            && let Some(target) =
+                                chat_store::title_summarization_target(&ax.session)
                         {
                             title_task_input = Some((
                                 handle.working_dir().to_path_buf(),
                                 ax.session.scope.clone(),
                                 ax.scope_kind,
-                                user,
+                                target.message,
+                                target.command_hint_source,
                                 ax.idea_description.clone(),
                             ));
                         }
@@ -1342,12 +1353,24 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                 Task::none()
             };
 
-            if let Some((working_dir, scope_key, scope_kind, user, idea_description)) =
-                title_task_input
+            if let Some((
+                working_dir,
+                scope_key,
+                scope_kind,
+                user,
+                command_hint_source,
+                idea_description,
+            )) = title_task_input
             {
                 use duckchat::ContextHook;
                 let mut hints = Vec::new();
-                if let Some(hint) = title_hints::build_hint(&user, &scope_key, &state.project) {
+                // Slash-command hint comes from the most recent command-bearing
+                // turn (which may be `user` itself, an earlier bare-command
+                // turn, or absent). `build_hint` re-extracts the command name
+                // from the source message text.
+                if let Some(src) = command_hint_source.as_deref()
+                    && let Some(hint) = title_hints::build_hint(src, &scope_key, &state.project)
+                {
                     hints.push(hint);
                 }
                 let scope_input = scope::SessionScope {
@@ -1869,19 +1892,19 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                 (active_info, &active_key)
             {
                 // Agent chat keyboard shortcuts (completion, esc-cancel, enter-send).
-                if agent_chat_active {
-                    if let Some(ix) = state.interaction_mut(routing_key) {
-                        match interaction::handle_agent_chat_key(ix, &key, mods) {
-                            interaction::AgentChatKeyResult::Handled => return Task::none(),
-                            interaction::AgentChatKeyResult::Dispatch(msg) => {
-                                return dispatch_interaction_msg(
-                                    state,
-                                    routing_key,
-                                    interaction::Msg::AgentChat(msg),
-                                );
-                            }
-                            interaction::AgentChatKeyResult::NotHandled => {}
+                if agent_chat_active
+                    && let Some(ix) = state.interaction_mut(routing_key)
+                {
+                    match interaction::handle_agent_chat_key(ix, &key, mods) {
+                        interaction::AgentChatKeyResult::Handled => return Task::none(),
+                        interaction::AgentChatKeyResult::Dispatch(msg) => {
+                            return dispatch_interaction_msg(
+                                state,
+                                routing_key,
+                                interaction::Msg::AgentChat(msg),
+                            );
                         }
+                        interaction::AgentChatKeyResult::NotHandled => {}
                     }
                 }
 
@@ -3473,11 +3496,11 @@ fn jump_to_current(state: &mut State, target: &widget::find::FindTarget) -> Task
             state.chat_scroll_overridden = true;
             // Drop stick-to-bottom so a streaming auto-snap can't override
             // the scroll we're about to issue.
-            if let Some(ix) = state.interactions.get_mut(&scope) {
-                if let Some(ax) = ix.active_mut() {
-                    ax.stick_to_bottom = false;
-                    ax.pending_snap_to_bottom = false;
-                }
+            if let Some(ix) = state.interactions.get_mut(&scope)
+                && let Some(ax) = ix.active_mut()
+            {
+                ax.stick_to_bottom = false;
+                ax.pending_snap_to_bottom = false;
             }
             // Scroll the matching block's container to the top of the
             // chat scrollable. The Operation reads the actual laid-out
@@ -3495,8 +3518,8 @@ fn jump_to_current(state: &mut State, target: &widget::find::FindTarget) -> Task
 /// Build the highlight ranges for the editor in the active tab — both the
 /// "all matches" set and the current candidate. Returns empty when no find
 /// is active for that tab.
-fn editor_find_highlights<'a>(
-    state: &'a State,
+fn editor_find_highlights(
+    state: &State,
     tab_id: &str,
 ) -> (Vec<widget::text_edit::HighlightRange>, Option<widget::text_edit::HighlightRange>) {
     let target = widget::find::FindTarget::editor(tab_id.to_string());
@@ -3606,9 +3629,7 @@ fn switch_area(state: &mut State, target: Area) {
             };
         }
         tab_bar::ActiveTab::File(i) if i >= state.tabs.file_tabs.len() => {
-            state.tabs.active = if state.tabs.preview.is_some() {
-                tab_bar::ActiveTab::Preview
-            } else if state.tabs.file_tabs.is_empty() {
+            state.tabs.active = if state.tabs.preview.is_some() || state.tabs.file_tabs.is_empty() {
                 tab_bar::ActiveTab::Preview
             } else {
                 tab_bar::ActiveTab::File(state.tabs.file_tabs.len() - 1)

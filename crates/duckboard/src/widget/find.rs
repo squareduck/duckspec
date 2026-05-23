@@ -7,8 +7,6 @@
 //! Ctrl-N/P navigate. Esc / click-away on the modal also clears any active
 //! find for the same target so cmd-f always enters a fresh "create" mode.
 
-use std::path::PathBuf;
-
 use iced::Task;
 use iced::advanced::widget::{Id, Operation, operation};
 use iced::widget::text::Span;
@@ -362,11 +360,11 @@ pub fn editor_label_for(tab_id: &str, project_root: Option<&std::path::Path>) ->
 /// Translate an absolute file path into a project-relative display label,
 /// falling back to the absolute path if the file is outside the root.
 #[allow(dead_code)]
-pub fn rel_or_abs(path: &PathBuf, project_root: Option<&std::path::Path>) -> String {
-    if let Some(root) = project_root {
-        if let Ok(rel) = path.strip_prefix(root) {
-            return rel.display().to_string();
-        }
+pub fn rel_or_abs(path: &std::path::Path, project_root: Option<&std::path::Path>) -> String {
+    if let Some(root) = project_root
+        && let Ok(rel) = path.strip_prefix(root)
+    {
+        return rel.display().to_string();
     }
     path.display().to_string()
 }
