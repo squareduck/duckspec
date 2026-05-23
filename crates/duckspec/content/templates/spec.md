@@ -1,6 +1,6 @@
 # spec
 
-## Hook - Pre
+## Before write
 
 ## Role
 
@@ -155,4 +155,4 @@ When all capabilities from the proposal's scope are specced and validated:
 
 Offer once. The user may want to refine specs further.
 
-## Hook - Post
+## After write

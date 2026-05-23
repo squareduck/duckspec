@@ -1,6 +1,6 @@
 # propose
 
-## Hook - Pre
+## Before write
 
 ## Role
 
@@ -116,4 +116,4 @@ When the proposal is written and validated:
 
 Offer once. The user may want to refine the proposal further before moving on.
 
-## Hook - Post
+## After write

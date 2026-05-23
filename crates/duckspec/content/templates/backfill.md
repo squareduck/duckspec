@@ -1,6 +1,6 @@
 # backfill
 
-## Hook - Pre
+## Before write
 
 ## Role
 
@@ -160,4 +160,4 @@ Hand off to `/ds-propose` with a clean summary:
 Offer the handoff once. If the user wants to keep refining the slice or the
 test plan first, drop the suggestion and stay in the conversation.
 
-## Hook - Post
+## After write

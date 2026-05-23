@@ -1,6 +1,6 @@
 # explore
 
-## Hook - Pre
+## Before write
 
 ## Role
 
@@ -142,4 +142,4 @@ When suggesting a transition, offer once and move on. If the user doesn't take
 the suggestion, drop it. Don't ask again. **Sometimes the thinking IS the
 value.**
 
-## Hook - Post
+## After write

@@ -1,6 +1,6 @@
 # codex
 
-## Hook - Pre
+## Before write
 
 ## Role
 
@@ -78,4 +78,4 @@ entries:
 - If this was a standalone knowledge harvest, no further action needed: "Entry
   saved. That's it unless you have more to capture."
 
-## Hook - Post
+## After write

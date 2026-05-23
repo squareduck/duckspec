@@ -1,6 +1,6 @@
 # archive
 
-## Hook - Pre
+## Before write
 
 ## Role
 
@@ -60,4 +60,4 @@ After archiving:
 - If this was a proposal-only or doc-only archive, no further action is needed:
   "Archived. No code changes involved."
 
-## Hook - Post
+## After write

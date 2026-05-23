@@ -1,6 +1,6 @@
 # design
 
-## Hook - Pre
+## Before write
 
 ## Role
 
@@ -99,4 +99,4 @@ When the design is written and validated:
 
 Offer once. The user may want to iterate on the design further.
 
-## Hook - Post
+## After write

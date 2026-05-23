@@ -186,18 +186,18 @@ A file must match `test_patterns`, pass `test_includes`, and not match `test_exc
 
 ## Customization
 
-### Template hooks
+### Per-stage hooks
 
-Inject project-specific instructions into any workflow. Place a markdown file at `duckspec/hooks/<stage>-<position>.md`:
+Inject project-specific instructions into any workflow stage. Place a markdown file at `duckspec/hooks/<stage>-<position>.md`, where `<position>` is `before` or `after`:
 
 ```sh
 mkdir -p duckspec/hooks
-cat > duckspec/hooks/apply-post.md << 'EOF'
+cat > duckspec/hooks/apply-after.md << 'EOF'
 Always run `cargo fmt` and `cargo clippy --fix` after modifying Rust files.
 EOF
 ```
 
-Positions are `pre` (runs before the stage's core instructions) and `post` (after).
+When you run `ds template <stage>`, the file's contents are inserted into the rendered template under a `## Before write` or `## After write` section header. The hook body is emitted verbatim — no H1 or other structure is required. An empty or whitespace-only file is treated as no hook.
 
 ### Schema overrides
 

@@ -1,6 +1,6 @@
 # step
 
-## Hook - Pre
+## Before write
 
 ## Role
 
@@ -93,4 +93,4 @@ When all steps are written and validated:
 - If step ordering seems unclear, suggest resolving dependencies before
   proceeding.
 
-## Hook - Post
+## After write

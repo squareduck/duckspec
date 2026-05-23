@@ -1,6 +1,6 @@
 # verify
 
-## Hook - Pre
+## Before write
 
 ## Role
 
@@ -66,4 +66,4 @@ After reporting:
   they are in the workflow.
 - Don't push toward any stage — verify is a side operation.
 
-## Hook - Post
+## After write

@@ -1,6 +1,6 @@
 # apply
 
-## Hook - Pre
+## Before write
 
 ## Role
 
@@ -89,4 +89,4 @@ When all tasks in the current step are checked:
   already tell the story, leave the section off entirely. Don't write
   "implemented what the tasks said" summaries.
 
-## Hook - Post
+## After write
