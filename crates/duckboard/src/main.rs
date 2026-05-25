@@ -2233,9 +2233,14 @@ fn dispatch_interaction_msg(state: &mut State, key: &str, msg: interaction::Msg)
             Message::Codex(area::codex::Message::Interaction(msg)),
         ),
         _ => {
-            // Ideas-owned scope (exploration id; post-promotion the change
-            // area takes over). For non-ideas scopes fall through to change.
-            if state.ideas.idea_for_scope(key).is_some() {
+            // Discriminate by *active area*, not by whether an idea happens to
+            // point at this scope. An idea-promoted change has an
+            // `idea_for_scope` hit but can be viewed from either area, and
+            // `ideas::handle_interaction` keys off `state.ideas.selected` —
+            // so routing to Ideas from the Change area silently drops the
+            // message (cmd+N parity with the `+` button, which uses the
+            // calling area's own wrap, depends on this).
+            if state.active_area == Area::Ideas && state.ideas.idea_for_scope(key).is_some() {
                 update(state, Message::Ideas(area::ideas::Message::Interaction(msg)))
             } else {
                 update(

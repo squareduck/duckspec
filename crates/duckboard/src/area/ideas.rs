@@ -501,6 +501,13 @@ fn handle_interaction(
             );
         }
     }
+    // Mirror `area::change::update` — refresh the obvious-command hint after
+    // any session-touching interaction so a freshly-created chat on an
+    // idea-promoted Change picks up the right `/ds-*` placeholder. Without
+    // this, cmd+N on a promoted change lands on a session with
+    // `obvious_command: None` (this update path doesn't go through
+    // change::update where the refresh otherwise lives).
+    super::change::refresh_obvious_command(interactions, project);
     let _ = fm;
 }
 
