@@ -37,11 +37,14 @@ Same markers as spec deltas:
 
 ## Quality
 
-- **Deltas read as edits to live documentation.** The `+` and `~` bodies you
-  write must describe the capability's current state *after* the delta is
-  applied — not narrate what changed. If you catch yourself writing
-  "previously", "used to", or "now also", rewrite in the present tense to
-  describe what is.
+- **Deltas produce a doc for a cold reader.** The `+` and `~` bodies you write
+  are merged into a doc whose readers have no knowledge of the change, the
+  proposal, the design, or what the section looked like before. The proposal,
+  design, and steps are ephemeral and archived away with the change — don't
+  reference `proposal.md`, `design.md`, or anything else under `changes/` or
+  `archive/`, since those paths won't exist alongside the merged doc. Don't
+  narrate the transition either, with phrases like "previously", "used to", or
+  "now also" — rewrite in present tense to describe what is.
 - **Keep the doc's tables, diagrams, and prose in step with spec changes.** A
   spec delta that adds a new failure mode usually implies a doc delta that
   adds a row to an error table or a paragraph explaining the mode. A spec

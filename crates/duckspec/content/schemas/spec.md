@@ -68,6 +68,12 @@ bullet — not just after `**THEN**`.
 
 **Scenarios:**
 
+- **Falsifiability.** A scenario's THEN must be something a realistic-but-broken
+  implementation could get wrong. If you can't picture an implementation that
+  would fail it — other than complete nonsense — the scenario isn't encoding a
+  contract; it's restating an identity. A getter returning what was set, a
+  default value equaling the default, a method named `toggle` toggling — all
+  pass "observable" but fail falsifiability. Drop them.
 - **Outcome, not branch.** Scenarios are derived from the requirement, not the
   implementation. If you couldn't list the scenarios without first reading the
   code, they're mirroring it. A pure refactor that preserves observable

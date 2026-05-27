@@ -49,10 +49,14 @@ codex entries — not here.
   or structural relationship is genuinely easier to see than to read. When
   prose handles it, use prose. Both MUST be authored inside plain fenced code
   blocks — the formatter would otherwise reflow or corrupt them.
-- **Docs describe current behavior, not change history.** Write the capability
-  as it is *after* the change lands. Don't use phrases like "previously",
-  "before the fix", or "now also supports" — those belong in PR descriptions and
-  commit messages, not live documentation.
+- **Written for a cold reader.** The audience is someone who walks up to this
+  file with no knowledge of the change, the proposal, the design, or any
+  previous version of the spec. The proposal, design, and steps are ephemeral
+  and archived away with the change — don't reference `proposal.md`,
+  `design.md`, or anything else under `changes/` or `archive/`, since those
+  paths won't exist alongside the merged doc. Don't narrate the change either,
+  with phrases like "previously", "before the fix", or "now also supports" —
+  they assume a reader who saw the before.
 
 ## Formatting
 

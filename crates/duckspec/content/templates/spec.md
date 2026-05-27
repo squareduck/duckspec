@@ -86,9 +86,10 @@ Work through the proposal's scope, one capability at a time:
    - Modified capabilities may need a `doc.delta.md` when the change touches
      something a reader would need to relearn. Load `ds schema doc` or
      `ds schema doc-delta` for reference.
-   - Write docs as live documentation of the capability's current behavior —
-     not a changelog. Don't reference "previously" or "before the fix"; the
-     schema has detailed guidance.
+   - Write docs for a cold reader — someone with no knowledge of the change,
+     proposal, or design. No references to `proposal.md`, `design.md`, or
+     anything under `changes/`/`archive/`, and no historical narration. See
+     `ds schema doc` for details.
 
 5. **Validate.** After writing each file, run `ds check` on it.
 
@@ -122,7 +123,9 @@ Before writing each capability's spec, present the behavioral contract:
 Before presenting, sanity-check the scenario list: does each scenario assert a
 *distinct observable outcome*, or are you splitting on conditions that produce
 the same outcome? If a scenario's THEN names an internal branch, private
-field, or implementation detail, restate it in caller-observable terms.
+field, or implementation detail, restate it in caller-observable terms. Check
+falsifiability: if no realistic-but-broken implementation could fail a
+scenario, drop it — it's an identity, not a contract.
 
 For deltas, show what's changing:
 
