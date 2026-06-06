@@ -76,6 +76,12 @@ pub(crate) struct State {
     /// area drives the `preview` (pinned) slot via its list selection;
     /// `file_tabs` (closable) persist across area switches.
     pub(crate) tabs: tab_bar::TabState,
+    /// Logical index of the dirty file tab whose close × has been clicked
+    /// once and is now armed — a second `TabClose` for the same index
+    /// commits, discarding unsaved edits. Cleared by `TabSelect`, by any
+    /// `TabClose` of a different index (or success), and by the next
+    /// keypress in the keyboard subscription.
+    armed_tab_close: Option<usize>,
     /// Cached pinned tab per area, swapped in/out of `tabs.preview` on area
     /// switch so editor cursor + dirty state survive the round-trip.
     cached_previews: HashMap<Area, Option<tab_bar::Tab>>,
@@ -131,6 +137,7 @@ impl State {
             chat_scroll_overridden: false,
             highlighter: Arc::new(highlight::SyntaxHighlighter::new()),
             tabs: tab_bar::TabState::default(),
+            armed_tab_close: None,
             cached_previews: HashMap::new(),
             cached_active: HashMap::new(),
             interactions,
@@ -161,6 +168,7 @@ impl State {
         idea_store::reconcile(&mut self.ideas.ideas, &self.project);
         // Drop interactions / tabs from the prior project; reseed singletons.
         self.tabs = tab_bar::TabState::default();
+        self.armed_tab_close = None;
         self.cached_previews.clear();
         self.cached_active.clear();
         self.interactions.clear();
@@ -175,6 +183,26 @@ impl State {
         if let Err(e) = config::save(&self.config) {
             tracing::warn!("failed to persist recent projects: {e}");
         }
+    }
+
+    /// Drop `path` from the recent-projects list and persist the config.
+    /// Reversible: reopening the project re-touches it back to the top.
+    fn forget_recent(&mut self, path: &Path) {
+        self.config.projects.recent.retain(|p| p != path);
+        self.dashboard.hovered_recent = None;
+        self.dashboard.armed_delete_recent = None;
+        self.project_picker.hovered_recent = None;
+        self.project_picker.armed_delete_recent = None;
+        if let Err(e) = config::save(&self.config) {
+            tracing::warn!("failed to persist recent projects: {e}");
+        }
+    }
+
+    /// Drop `path` from recents AND wipe its on-disk data directory
+    /// (chats, ideas, explorations). Irrecoverable.
+    fn delete_recent_data(&mut self, path: &Path) {
+        chat_store::delete_project_data(path);
+        self.forget_recent(path);
     }
 
     /// Resolve a scope key (bare change name / exploration id / "caps" / "codex")
@@ -262,6 +290,9 @@ enum Message {
     /// shared-tabs refactor.
     TabSelect(usize),
     TabClose(usize),
+    /// First click on the × of a dirty file tab. Arms `armed_tab_close` so
+    /// the next matching `TabClose` commits, discarding unsaved edits.
+    TabArmClose(usize),
     TabContent(tab_bar::TabContentMsg),
     /// Shared interaction-column messages (sessions, terminals, agent input).
     /// Routed to `state.interactions[active_scope]`.
@@ -566,6 +597,28 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                 Msg::PickPath(path) => {
                     state.project_picker.close();
                     return update(state, Message::OpenProject(path));
+                }
+                Msg::HoverRecent(path) => {
+                    state.project_picker.hovered_recent = Some(path);
+                }
+                Msg::UnhoverRecent(path) => {
+                    if state.project_picker.hovered_recent.as_deref() == Some(path.as_path()) {
+                        state.project_picker.hovered_recent = None;
+                    }
+                    if state.project_picker.armed_delete_recent.as_deref()
+                        == Some(path.as_path())
+                    {
+                        state.project_picker.armed_delete_recent = None;
+                    }
+                }
+                Msg::ForgetRecent(path) => {
+                    state.forget_recent(&path);
+                }
+                Msg::ArmDeleteRecent(path) => {
+                    state.project_picker.armed_delete_recent = Some(path);
+                }
+                Msg::DeleteRecentData(path) => {
+                    state.delete_recent_data(&path);
                 }
             }
         }
@@ -882,6 +935,27 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                     );
                     return restore_chat_scroll(state);
                 }
+                area::dashboard::Message::HoverRecent(path) => {
+                    state.dashboard.hovered_recent = Some(path.clone());
+                }
+                area::dashboard::Message::UnhoverRecent(path) => {
+                    if state.dashboard.hovered_recent.as_deref() == Some(path.as_path()) {
+                        state.dashboard.hovered_recent = None;
+                    }
+                    // Hover off the row → disarm the destructive button.
+                    if state.dashboard.armed_delete_recent.as_deref() == Some(path.as_path()) {
+                        state.dashboard.armed_delete_recent = None;
+                    }
+                }
+                area::dashboard::Message::ForgetRecent(path) => {
+                    state.forget_recent(path);
+                }
+                area::dashboard::Message::ArmDeleteRecent(path) => {
+                    state.dashboard.armed_delete_recent = Some(path.clone());
+                }
+                area::dashboard::Message::DeleteRecentData(path) => {
+                    state.delete_recent_data(path);
+                }
             }
         }
         Message::Change(msg) => {
@@ -1105,8 +1179,17 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
             area::settings::update(&mut state.settings, &mut state.config, msg);
             theme::set_fonts(&state.config);
         }
-        Message::TabSelect(idx) => state.tabs.select(idx),
-        Message::TabClose(idx) => state.tabs.close(idx),
+        Message::TabSelect(idx) => {
+            state.armed_tab_close = None;
+            state.tabs.select(idx);
+        }
+        Message::TabClose(idx) => {
+            state.armed_tab_close = None;
+            state.tabs.close(idx);
+        }
+        Message::TabArmClose(idx) => {
+            state.armed_tab_close = Some(idx);
+        }
         Message::TabContent(tab_bar::TabContentMsg::EditorAction(action)) => {
             // Cmd-S on the ideas pinned tab routes through ideas::SaveBody so
             // frontmatter is rederived and the file moves on title/tag change.
@@ -1478,6 +1561,11 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
             widget::streaming_indicator::bump_tick();
         }
         Message::KeyPress(key, mods, text) => {
+            // Disarm any pending dirty-tab close on the next keypress.
+            // Snapshot first so Cmd-W can still consult the previously
+            // armed value within this same key handler. Any other key
+            // simply lets the arm decay.
+            let armed_tab_snapshot = state.armed_tab_close.take();
             // Cmd+P: open file finder.
             if mods.command() && key == keyboard::Key::Character("p".into()) {
                 // Skip when no project is loaded — file finder needs a project
@@ -1934,12 +2022,36 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
 
             // Cmd-W — close the active file tab. `keybinds::keybind_close`
             // gates on focus (chat input / terminal don't claim cmd-w) and
-            // returns the logical tab index to close.
+            // returns the logical tab index to close. Mirrors the X-click
+            // flow: dirty unarmed → arm; dirty armed → close; clean → close.
             if mods.command()
                 && !mods.shift()
                 && matches!(&key, keyboard::Key::Character(c) if c.eq_ignore_ascii_case("w"))
                 && let Some(idx) = keybinds::keybind_close(state)
             {
+                let logical_to_active = |i: usize| -> tab_bar::ActiveTab {
+                    if state.tabs.preview.is_some() {
+                        if i == 0 {
+                            tab_bar::ActiveTab::Preview
+                        } else {
+                            tab_bar::ActiveTab::File(i - 1)
+                        }
+                    } else {
+                        tab_bar::ActiveTab::File(i)
+                    }
+                };
+                let is_dirty = match logical_to_active(idx) {
+                    tab_bar::ActiveTab::Preview => false,
+                    tab_bar::ActiveTab::File(fi) => state
+                        .tabs
+                        .file_tabs
+                        .get(fi)
+                        .map(|t| matches!(&t.view, tab_bar::TabView::Editor { editor, .. } if editor.dirty))
+                        .unwrap_or(false),
+                };
+                if is_dirty && armed_tab_snapshot != Some(idx) {
+                    return update(state, Message::TabArmClose(idx));
+                }
                 return update(state, Message::TabClose(idx));
             }
 
@@ -4279,7 +4391,13 @@ fn view_area_three_column(state: &State) -> Element<'_, Message> {
 /// Render the shared content column: tab bar + (optional) area-specific
 /// toolbar + tab content + (Change-only) error panel.
 fn view_global_content(state: &State) -> Element<'_, Message> {
-    let bar = tab_bar::view_bar(&state.tabs, Message::TabSelect, Message::TabClose);
+    let bar = tab_bar::view_bar(
+        &state.tabs,
+        Message::TabSelect,
+        Message::TabClose,
+        Message::TabArmClose,
+        state.armed_tab_close,
+    );
 
     // Editor find highlights + toolbar — only when the active tab has a
     // committed find for it.

@@ -51,6 +51,12 @@ pub struct State {
     /// Id of the exploration row currently under the cursor, if any. When
     /// set, the exploration row's icon slot renders a close button instead.
     pub hovered_exploration: Option<String>,
+    /// Id of the exploration whose close button has been clicked once and
+    /// is now "armed" — the next click commits the destructive delete.
+    /// Cleared on hover-leave, on a different selection, on `AddExploration`,
+    /// and whenever the destructive delete actually fires. Skipped entirely
+    /// for explorations whose `session_count` is zero (nothing to lose).
+    pub armed_remove_exploration: Option<String>,
     /// Vertical scroll offset for the list column.
     pub list_scroll: f32,
 }
@@ -75,6 +81,7 @@ impl State {
             explorations,
             exploration_counter,
             hovered_exploration: None,
+            armed_remove_exploration: None,
             list_scroll: 0.0,
         }
     }
@@ -259,6 +266,10 @@ pub enum Message {
     SelectChangedFile(PathBuf),
     ToggleFileDir(String),
     AddExploration,
+    /// First click on the close button of an exploration that has chat
+    /// sessions. Sets `armed_remove_exploration` so the next
+    /// `RemoveExploration` for the same id commits.
+    ArmRemoveExploration(String),
     RemoveExploration(String),
     HoverExploration(String),
     /// Payload is the exploration name the row thinks it's clearing. Only
@@ -295,6 +306,7 @@ pub fn update(
         Message::SelectChange(name) => {
             state.selected_change = Some(name.clone());
             state.expanded_nodes.clear();
+            state.armed_remove_exploration = None;
 
             let is_exploration = state.explorations.iter().any(|e| e.id == name);
             if !is_exploration
@@ -427,6 +439,7 @@ pub fn update(
             let display_name = exp.display_name.clone();
             state.explorations.push(exp);
             state.selected_change = Some(id.clone());
+            state.armed_remove_exploration = None;
             crate::chat_store::save_explorations(
                 &state.explorations,
                 state.exploration_counter,
@@ -444,6 +457,13 @@ pub fn update(
                 highlighter,
             );
             ix.visible = true;
+            crate::chat_store::recount_explorations(
+                &mut state.explorations,
+                project.project_root.as_deref(),
+            );
+        }
+        Message::ArmRemoveExploration(id) => {
+            state.armed_remove_exploration = Some(id);
         }
         Message::RemoveExploration(id) => {
             state.explorations.retain(|e| e.id != id);
@@ -453,6 +473,9 @@ pub fn update(
             }
             if state.hovered_exploration.as_deref() == Some(&id) {
                 state.hovered_exploration = None;
+            }
+            if state.armed_remove_exploration.as_deref() == Some(&id) {
+                state.armed_remove_exploration = None;
             }
             crate::chat_store::delete_scope(&id, project.project_root.as_deref());
             crate::chat_store::save_explorations(
@@ -467,6 +490,11 @@ pub fn update(
         Message::UnhoverExploration(id) => {
             if state.hovered_exploration.as_deref() == Some(id.as_str()) {
                 state.hovered_exploration = None;
+            }
+            // Moving the cursor off an armed row disarms it — matches the
+            // visual disappearance of the red icon.
+            if state.armed_remove_exploration.as_deref() == Some(id.as_str()) {
+                state.armed_remove_exploration = None;
             }
         }
         Message::OpenArtifact {
@@ -497,6 +525,12 @@ pub fn update(
     }
 
     refresh_obvious_command(interactions, project);
+    // Cheap: one `read_dir` per exploration. Keeps `Exploration.session_count`
+    // in sync so the close-button arming logic doesn't `read_dir` per frame.
+    crate::chat_store::recount_explorations(
+        &mut state.explorations,
+        project.project_root.as_deref(),
+    );
 }
 
 /// Compute the suggested next /ds-* command (without the leading slash) given
@@ -682,10 +716,30 @@ pub fn view_list<'a>(
                 Message::UnhoverExploration(exp.id.clone()),
             );
         if is_hovered {
-            r = r.leading(collapsible::close_button_sized(
-                Message::RemoveExploration(exp.id.clone()),
-                list_view::ICON_SIZE,
-            ));
+            let armed = state.armed_remove_exploration.as_deref() == Some(exp.id.as_str());
+            // Skip the arming step when there's nothing to lose — first
+            // click is the only click. Otherwise the first click arms
+            // (`ArmRemoveExploration`) and a second matching click commits
+            // (`RemoveExploration`); the armed state tints the X red so
+            // the user can't miss that they're about to delete chats.
+            let close: Element<'a, Message> = if exp.session_count == 0 {
+                collapsible::close_button_sized(
+                    Message::RemoveExploration(exp.id.clone()),
+                    list_view::ICON_SIZE,
+                )
+            } else if armed {
+                collapsible::close_button_sized_tinted(
+                    Message::RemoveExploration(exp.id.clone()),
+                    list_view::ICON_SIZE,
+                    theme::error(),
+                )
+            } else {
+                collapsible::close_button_sized(
+                    Message::ArmRemoveExploration(exp.id.clone()),
+                    list_view::ICON_SIZE,
+                )
+            };
+            r = r.leading(close);
         } else {
             r = r.icon(ICON_EXPLORE);
         }
@@ -1291,10 +1345,12 @@ mod breadcrumb_tests {
                     id: (*id).to_string(),
                     display_name: (*name).to_string(),
                     idea_path: None,
+                    session_count: 0,
                 })
                 .collect(),
             exploration_counter: 0,
             hovered_exploration: None,
+            armed_remove_exploration: None,
             list_scroll: 0.0,
             known_file_dirs: HashSet::new(),
         }
@@ -1392,6 +1448,7 @@ mod breadcrumb_tests {
             explorations: vec![],
             exploration_counter: 0,
             hovered_exploration: None,
+            armed_remove_exploration: None,
             list_scroll: 0.0,
             known_file_dirs: HashSet::new(),
         };

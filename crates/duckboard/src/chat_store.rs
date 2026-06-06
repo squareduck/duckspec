@@ -349,6 +349,30 @@ pub fn delete_scope(scope: &str, project_root: Option<&Path>) {
     }
 }
 
+/// Count `.json` session files for a scope. Returns 0 when the scope dir
+/// is missing or unreadable.
+pub fn count_sessions(scope: &str, project_root: Option<&Path>) -> usize {
+    let dir = scope_dir(scope, project_root);
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return 0;
+    };
+    entries
+        .filter_map(|e| e.ok())
+        .filter(|e| e.path().extension().is_some_and(|ext| ext == "json"))
+        .count()
+}
+
+/// Wipe the entire per-project data directory (chats, ideas, explorations.json,
+/// anything future). Idempotent — missing dirs are not an error.
+pub fn delete_project_data(project_root: &Path) {
+    let dir = crate::config::data_dir(Some(project_root));
+    if let Err(e) = std::fs::remove_dir_all(&dir)
+        && e.kind() != std::io::ErrorKind::NotFound
+    {
+        tracing::warn!(path = %dir.display(), "failed to delete project data: {e}");
+    }
+}
+
 /// Rename a scope directory: `chats/<old>` → `chats/<new>`.
 pub fn rename_scope(old: &str, new: &str, project_root: Option<&Path>) {
     let old_dir = scope_dir(old, project_root);
@@ -378,6 +402,12 @@ pub struct Exploration {
     pub display_name: String,
     #[serde(default, alias = "card_id")]
     pub idea_path: Option<String>,
+    /// Transient cache of `count_sessions(id, ...)` so the UI can decide
+    /// whether to arm the destructive close button without `read_dir`-ing
+    /// on every redraw. Repopulated by `load_explorations` and
+    /// `recount_explorations`; never serialised.
+    #[serde(skip)]
+    pub session_count: usize,
 }
 
 impl Exploration {
@@ -390,6 +420,7 @@ impl Exploration {
             id: format!("exploration-{nanos}"),
             display_name: format!("Exploration {counter}"),
             idea_path: None,
+            session_count: 0,
         }
     }
 }
@@ -408,7 +439,19 @@ pub fn load_explorations(project_root: Option<&Path>) -> (Vec<Exploration>, usiz
     let Ok(state) = serde_json::from_str::<ExplorationData>(&data) else {
         return (vec![], 0);
     };
-    (state.explorations, state.counter)
+    let mut explorations = state.explorations;
+    recount_explorations(&mut explorations, project_root);
+    (explorations, state.counter)
+}
+
+/// Refresh `session_count` on every exploration via `count_sessions`. Cheap
+/// (one `read_dir` per exploration); call after any message that may have
+/// added or removed a session, so the UI's arm-or-skip decision stays
+/// accurate without per-frame I/O.
+pub fn recount_explorations(explorations: &mut [Exploration], project_root: Option<&Path>) {
+    for exp in explorations.iter_mut() {
+        exp.session_count = count_sessions(&exp.id, project_root);
+    }
 }
 
 pub fn save_explorations(
@@ -549,5 +592,132 @@ mod tests {
         let t = title_summarization_target(&s).unwrap();
         assert_eq!(t.message, "real text");
         assert_eq!(t.command_hint_source.as_deref(), Some("/ds-apply"));
+    }
+
+    // ── session count / delete project data ─────────────────────────────
+
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    static FS_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    struct FsTmp(std::path::PathBuf);
+
+    impl FsTmp {
+        fn new() -> Self {
+            let nanos = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0);
+            let counter = FS_COUNTER.fetch_add(1, Ordering::SeqCst);
+            let mut p = std::env::temp_dir();
+            p.push(format!("duckboard-chat-store-test-{nanos}-{counter}"));
+            std::fs::create_dir_all(&p).unwrap();
+            Self(p)
+        }
+        fn path(&self) -> &std::path::Path {
+            &self.0
+        }
+    }
+
+    impl Drop for FsTmp {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    /// Set XDG-equivalent `HOME` so `config::data_dir` resolves under our
+    /// temp dir. Two tests run in parallel can collide if they share `HOME`;
+    /// each test serialises through the `HOME_LOCK` mutex.
+    static HOME_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn with_home<R>(home: &std::path::Path, f: impl FnOnce() -> R) -> R {
+        let _guard = HOME_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let prev = std::env::var_os("HOME");
+        // SAFETY: tests serialise through HOME_LOCK so concurrent set_var is impossible.
+        unsafe { std::env::set_var("HOME", home) };
+        let out = f();
+        // SAFETY: same lock guarantees no concurrent reader observing the
+        // mutation race here.
+        unsafe {
+            match prev {
+                Some(v) => std::env::set_var("HOME", v),
+                None => std::env::remove_var("HOME"),
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn count_sessions_empty_returns_zero() {
+        let tmp = FsTmp::new();
+        with_home(tmp.path(), || {
+            let root = tmp.path().join("project-a");
+            std::fs::create_dir_all(&root).unwrap();
+            assert_eq!(count_sessions("missing-scope", Some(&root)), 0);
+        });
+    }
+
+    #[test]
+    fn count_sessions_counts_only_json() {
+        let tmp = FsTmp::new();
+        with_home(tmp.path(), || {
+            let root = tmp.path().join("project-b");
+            std::fs::create_dir_all(&root).unwrap();
+            let dir = scope_dir("scope-1", Some(&root));
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join("a.json"), "{}").unwrap();
+            std::fs::write(dir.join("b.json"), "{}").unwrap();
+            std::fs::write(dir.join("c.tmp"), "ignored").unwrap();
+            std::fs::create_dir_all(dir.join("subdir")).unwrap();
+            assert_eq!(count_sessions("scope-1", Some(&root)), 2);
+        });
+    }
+
+    #[test]
+    fn delete_project_data_idempotent() {
+        let tmp = FsTmp::new();
+        with_home(tmp.path(), || {
+            let root = tmp.path().join("project-c");
+            std::fs::create_dir_all(&root).unwrap();
+            // First call: dir doesn't exist yet — must not panic.
+            delete_project_data(&root);
+            let data = crate::config::data_dir(Some(&root));
+            std::fs::create_dir_all(&data).unwrap();
+            std::fs::write(data.join("explorations.json"), "[]").unwrap();
+            delete_project_data(&root);
+            assert!(!data.exists());
+            // Second call after deletion: still a no-op.
+            delete_project_data(&root);
+        });
+    }
+
+    #[test]
+    fn delete_project_data_removes_chats_and_explorations() {
+        let tmp = FsTmp::new();
+        with_home(tmp.path(), || {
+            let root_a = tmp.path().join("project-a");
+            let root_b = tmp.path().join("project-b");
+            std::fs::create_dir_all(&root_a).unwrap();
+            std::fs::create_dir_all(&root_b).unwrap();
+
+            // Seed both projects with chats + explorations.json.
+            for root in [&root_a, &root_b] {
+                let dir = scope_dir("scope-x", Some(root));
+                std::fs::create_dir_all(&dir).unwrap();
+                std::fs::write(dir.join("s.json"), "{}").unwrap();
+                let data = crate::config::data_dir(Some(root));
+                std::fs::write(data.join("explorations.json"), "[]").unwrap();
+            }
+
+            delete_project_data(&root_a);
+
+            // Project A's data dir is gone.
+            assert!(!crate::config::data_dir(Some(&root_a)).exists());
+            // Project B is untouched.
+            let data_b = crate::config::data_dir(Some(&root_b));
+            assert!(data_b.join("explorations.json").exists());
+            assert!(data_b.join("chats").join("scope-x").join("s.json").exists());
+        });
     }
 }

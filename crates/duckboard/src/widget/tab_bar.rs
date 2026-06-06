@@ -398,6 +398,8 @@ pub fn view_bar<'a, M: Clone + 'a>(
     state: &'a TabState,
     on_select: impl Fn(usize) -> M + 'a,
     on_close: impl Fn(usize) -> M + 'a,
+    on_arm_close: impl Fn(usize) -> M + 'a,
+    armed: Option<usize>,
 ) -> Element<'a, M> {
     let all = state.all_tabs();
     if all.is_empty() {
@@ -433,8 +435,25 @@ pub fn view_bar<'a, M: Clone + 'a>(
         tab_row = tab_row.push(text(&tab.title).size(theme::font_sm()));
 
         // File tabs get a close button; the preview tab doesn't.
+        // Clean tabs close on the first click (unchanged). Dirty tabs need
+        // an arm-then-close two-step to protect unsaved edits — the armed
+        // state tints the × red and is reset by `TabSelect`, by any other
+        // `TabClose`, and by the next keypress (see the keyboard handler
+        // in `main.rs`).
         if !is_preview {
-            let close_btn = crate::widget::collapsible::close_button(on_close(*logical_idx));
+            let logical = *logical_idx;
+            let is_armed = armed == Some(logical);
+            let close_btn = if is_dirty && !is_armed {
+                crate::widget::collapsible::close_button(on_arm_close(logical))
+            } else if is_dirty && is_armed {
+                crate::widget::collapsible::close_button_sized_tinted(
+                    on_close(logical),
+                    theme::font_sm(),
+                    theme::error(),
+                )
+            } else {
+                crate::widget::collapsible::close_button(on_close(logical))
+            };
             tab_row = tab_row.push(Space::new().width(theme::SPACING_SM));
             tab_row = tab_row.push(close_btn);
         }

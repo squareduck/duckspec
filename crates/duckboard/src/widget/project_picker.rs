@@ -34,6 +34,14 @@ pub enum Msg {
     Confirm,
     /// Pick a specific path (recent entry clicked in the modal).
     PickPath(PathBuf),
+    HoverRecent(PathBuf),
+    UnhoverRecent(PathBuf),
+    /// One-click drop from the recents list. Reversible.
+    ForgetRecent(PathBuf),
+    /// First click on "Delete data" — arms the destructive follow-up.
+    ArmDeleteRecent(PathBuf),
+    /// Wipe the per-project data directory and drop from recents.
+    DeleteRecentData(PathBuf),
 }
 
 // ── State ───────────────────────────────────────────────────────────────────
@@ -47,6 +55,11 @@ pub struct ProjectPickerState {
     /// Resolved parent directory of the current query, or `None` if it
     /// doesn't point to a readable directory.
     parent: Option<PathBuf>,
+    /// Path of the recent-projects row currently under the cursor.
+    pub hovered_recent: Option<PathBuf>,
+    /// Recent-projects path armed for destructive delete; cleared on
+    /// hover-leave, `close`, or a successful delete.
+    pub armed_delete_recent: Option<PathBuf>,
 }
 
 impl ProjectPickerState {
@@ -66,6 +79,8 @@ impl ProjectPickerState {
         self.selected = 0;
         self.candidates.clear();
         self.parent = None;
+        self.hovered_recent = None;
+        self.armed_delete_recent = None;
     }
 
     pub fn set_query(&mut self, query: String) {
@@ -291,39 +306,7 @@ pub fn view<'a>(
             .padding([theme::SPACING_XS, theme::SPACING_MD]),
         );
         for path in recent.iter().take(5) {
-            let label = path
-                .file_name()
-                .map(|n| n.to_string_lossy().to_string())
-                .unwrap_or_else(|| path.display().to_string());
-            let full = path.display().to_string();
-            let dot = svg(svg::Handle::from_memory(ICON_DOT))
-                .width(theme::font_sm())
-                .height(theme::font_sm())
-                .style(theme::svg_tint(theme::text_muted()));
-            list = list.push(
-                iced::widget::button(
-                    row![
-                        dot,
-                        column![
-                            text(label)
-                                .size(theme::font_md())
-                                .font(theme::content_font())
-                                .color(theme::text_primary()),
-                            text(full)
-                                .size(theme::font_sm())
-                                .font(theme::content_font())
-                                .color(theme::text_muted()),
-                        ]
-                        .spacing(0.0),
-                    ]
-                    .spacing(theme::SPACING_SM)
-                    .align_y(Center),
-                )
-                .on_press(Msg::PickPath(path.clone()))
-                .width(Length::Fill)
-                .padding([theme::SPACING_XS, theme::SPACING_MD])
-                .style(crate::theme::list_item),
-            );
+            list = list.push(recent_row(state, path));
         }
         list = list.push(
             container(Space::new().height(1.0).width(Length::Fill)).style(divider_style),
@@ -411,6 +394,144 @@ pub fn view<'a>(
         .align_x(Center)
         .style(overlay_backdrop_style)
         .into()
+}
+
+/// One row in the "Recent" section: the path button plus hover-revealed
+/// "Forget" / "Delete data" actions. Mirrors the dashboard's recent-row
+/// behavior so the two surfaces stay in lockstep.
+fn recent_row<'a>(state: &'a ProjectPickerState, path: &'a Path) -> Element<'a, Msg> {
+    use iced::widget::{button, mouse_area};
+    let label = path
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| path.display().to_string());
+    let full = path.display().to_string();
+    let dot = svg(svg::Handle::from_memory(ICON_DOT))
+        .width(theme::font_sm())
+        .height(theme::font_sm())
+        .style(theme::svg_tint(theme::text_muted()));
+
+    let is_hovered = state.hovered_recent.as_deref() == Some(path);
+    let is_armed_delete = state.armed_delete_recent.as_deref() == Some(path);
+
+    // Transparent click target; row background is drawn by the outer
+    // container so the actions area sits inside the same hover band.
+    let open_btn = button(
+        row![
+            dot,
+            column![
+                text(label)
+                    .size(theme::font_md())
+                    .font(theme::content_font())
+                    .color(theme::text_primary()),
+                text(full)
+                    .size(theme::font_sm())
+                    .font(theme::content_font())
+                    .color(theme::text_muted()),
+            ]
+            .spacing(0.0),
+        ]
+        .spacing(theme::SPACING_SM)
+        .align_y(Center),
+    )
+    .on_press(Msg::PickPath(path.to_path_buf()))
+    .width(Length::Fill)
+    .padding([theme::SPACING_XS, theme::SPACING_MD])
+    .style(transparent_row_button);
+
+    let actions: Element<'a, Msg> = if is_hovered {
+        let forget = button(text("Forget").size(theme::font_sm()))
+            .on_press(Msg::ForgetRecent(path.to_path_buf()))
+            .padding([theme::SPACING_XS, theme::SPACING_SM])
+            .style(theme::icon_button);
+        let (delete_label, delete_msg, delete_style) = if is_armed_delete {
+            (
+                "Delete data — click again",
+                Msg::DeleteRecentData(path.to_path_buf()),
+                destructive_button_armed
+                    as fn(&iced::Theme, iced::widget::button::Status) -> iced::widget::button::Style,
+            )
+        } else {
+            (
+                "Delete data",
+                Msg::ArmDeleteRecent(path.to_path_buf()),
+                theme::icon_button
+                    as fn(&iced::Theme, iced::widget::button::Status) -> iced::widget::button::Style,
+            )
+        };
+        let delete = button(text(delete_label).size(theme::font_sm()))
+            .on_press(delete_msg)
+            .padding([theme::SPACING_XS, theme::SPACING_SM])
+            .style(delete_style);
+        row![forget, delete]
+            .spacing(theme::SPACING_XS)
+            .align_y(Center)
+            .into()
+    } else {
+        Space::new().into()
+    };
+
+    let row_content = row![open_btn, actions]
+        .spacing(0.0)
+        .align_y(Center)
+        .width(Length::Fill);
+
+    let highlighted = container(row_content)
+        .padding(iced::Padding {
+            top: 0.0,
+            right: theme::SPACING_SM,
+            bottom: 0.0,
+            left: 0.0,
+        })
+        .style(if is_hovered {
+            recent_row_hover_bg as fn(&iced::Theme) -> container::Style
+        } else {
+            recent_row_idle_bg
+        });
+
+    mouse_area(highlighted)
+        .on_enter(Msg::HoverRecent(path.to_path_buf()))
+        .on_exit(Msg::UnhoverRecent(path.to_path_buf()))
+        .into()
+}
+
+fn transparent_row_button(
+    _theme: &iced::Theme,
+    _status: iced::widget::button::Status,
+) -> iced::widget::button::Style {
+    iced::widget::button::Style {
+        background: None,
+        text_color: theme::text_primary(),
+        border: iced::Border::default(),
+        ..Default::default()
+    }
+}
+
+fn destructive_button_armed(
+    _theme: &iced::Theme,
+    status: iced::widget::button::Status,
+) -> iced::widget::button::Style {
+    let bg = match status {
+        iced::widget::button::Status::Hovered => Some(theme::bg_list_hover().into()),
+        _ => None,
+    };
+    iced::widget::button::Style {
+        background: bg,
+        text_color: theme::error(),
+        border: iced::Border::default(),
+        ..Default::default()
+    }
+}
+
+fn recent_row_hover_bg(_theme: &iced::Theme) -> container::Style {
+    container::Style {
+        background: Some(theme::bg_list_hover().into()),
+        ..Default::default()
+    }
+}
+
+fn recent_row_idle_bg(_theme: &iced::Theme) -> container::Style {
+    container::Style::default()
 }
 
 // ── Styles ──────────────────────────────────────────────────────────────────

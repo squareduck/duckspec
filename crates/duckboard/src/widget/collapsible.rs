@@ -22,10 +22,21 @@ pub fn close_button<'a, M: Clone + 'a>(on_press: M) -> Element<'a, M> {
 /// button replaces a list-row icon on hover and the two must match widths
 /// so the row's label doesn't jump.
 pub fn close_button_sized<'a, M: Clone + 'a>(on_press: M, size: f32) -> Element<'a, M> {
+    close_button_sized_tinted(on_press, size, theme::text_muted())
+}
+
+/// Sized close button with a caller-chosen tint. Used by destructive
+/// actions to render the "armed" state in `theme::error()` so a follow-up
+/// click visibly differs from a stray brush.
+pub fn close_button_sized_tinted<'a, M: Clone + 'a>(
+    on_press: M,
+    size: f32,
+    color: iced::Color,
+) -> Element<'a, M> {
     let icon = svg(svg::Handle::from_memory(ICON_CLOSE))
         .width(size)
         .height(size)
-        .style(theme::svg_tint(theme::text_muted()));
+        .style(theme::svg_tint(color));
     button(icon)
         .on_press(on_press)
         .padding(0.0)

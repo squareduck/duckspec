@@ -13,7 +13,15 @@ use crate::theme;
 // ── State ────────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Default)]
-pub struct State {}
+pub struct State {
+    /// Path of the recent-projects row currently under the cursor, if any.
+    /// Drives the per-row forget/delete affordances.
+    pub hovered_recent: Option<PathBuf>,
+    /// Recent-projects row whose trash button has been clicked once and is
+    /// now armed; the next matching `DeleteRecentData` commits and wipes
+    /// the project's on-disk data dir.
+    pub armed_delete_recent: Option<PathBuf>,
+}
 
 // ── Messages ─────────────────────────────────────────────────────────────────
 
@@ -28,6 +36,17 @@ pub enum Message {
     OpenProjectPicker,
     /// Open a specific project root immediately (used by the recents list).
     OpenRecent(PathBuf),
+    HoverRecent(PathBuf),
+    UnhoverRecent(PathBuf),
+    /// One-click drop from the recents list. Reversible — reopening the
+    /// project re-adds it. Project state on disk is untouched.
+    ForgetRecent(PathBuf),
+    /// First click on the trash icon arms the project for a destructive
+    /// `DeleteRecentData` follow-up.
+    ArmDeleteRecent(PathBuf),
+    /// Wipe `~/.config/duckboard/data/projects/{hash}/` for this project
+    /// (chats, ideas, explorations) and drop it from recents. Irrecoverable.
+    DeleteRecentData(PathBuf),
 }
 
 // ── Icons ───────────────────────────────────────────────────────────────────
@@ -41,7 +60,7 @@ const SECTION_HEADING_SIZE: f32 = 18.0;
 // ── View ─────────────────────────────────────────────────────────────────────
 
 pub fn view<'a>(
-    _state: &'a State,
+    state: &'a State,
     project: &'a ProjectData,
     explorations: &'a [crate::chat_store::Exploration],
     recent_projects: &'a [PathBuf],
@@ -53,7 +72,7 @@ pub fn view<'a>(
         column![
             header,
             Space::new().height(theme::SPACING_XL),
-            view_empty_state(recent_projects),
+            view_empty_state(state, recent_projects),
         ]
         .height(Length::Fill)
         .into()
@@ -201,7 +220,7 @@ fn open_project_button<'a>(label: &'a str) -> Element<'a, Message> {
 
 // ── Empty state (no project open) ──────────────────────────────────────────
 
-fn view_empty_state<'a>(recent: &'a [PathBuf]) -> Element<'a, Message> {
+fn view_empty_state<'a>(state: &'a State, recent: &'a [PathBuf]) -> Element<'a, Message> {
     let prompt = text("No project open")
         .size(theme::font_md())
         .color(theme::text_secondary());
@@ -227,7 +246,7 @@ fn view_empty_state<'a>(recent: &'a [PathBuf]) -> Element<'a, Message> {
                 .color(theme::text_secondary()),
         );
         for path in recent {
-            col = col.push(recent_row(path));
+            col = col.push(recent_row(state, path));
         }
     }
 
@@ -240,14 +259,18 @@ fn view_empty_state<'a>(recent: &'a [PathBuf]) -> Element<'a, Message> {
         .into()
 }
 
-fn recent_row<'a>(path: &'a Path) -> Element<'a, Message> {
+fn recent_row<'a>(state: &'a State, path: &'a Path) -> Element<'a, Message> {
+    use iced::widget::mouse_area;
     let label = path
         .file_name()
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_else(|| path.display().to_string());
     let full = path.display().to_string();
 
-    let content = column![
+    let is_hovered = state.hovered_recent.as_deref() == Some(path);
+    let is_armed_delete = state.armed_delete_recent.as_deref() == Some(path);
+
+    let label_block = column![
         text(label)
             .size(theme::font_md())
             .color(theme::text_primary())
@@ -259,12 +282,113 @@ fn recent_row<'a>(path: &'a Path) -> Element<'a, Message> {
     ]
     .spacing(2.0);
 
-    button(content)
+    // Transparent click target — the row's hover highlight comes from the
+    // outer container so the whole row (including the action zone)
+    // lights up as a unit instead of leaving the actions floating in
+    // dead space.
+    let open_btn = button(label_block)
         .on_press(Message::OpenRecent(path.to_path_buf()))
         .width(Length::Fill)
         .padding([theme::SPACING_SM, theme::SPACING_MD])
-        .style(theme::list_item)
+        .style(transparent_row_button);
+
+    // Actions mount only on hover. "Forget" is one-click (reversible —
+    // reopening the project re-adds it). "Delete data" arms on the first
+    // click (label turns red) and commits on the second, wiping the
+    // per-project data directory irrecoverably.
+    let actions: Element<'a, Message> = if is_hovered {
+        let forget = button(text("Forget").size(theme::font_sm()))
+            .on_press(Message::ForgetRecent(path.to_path_buf()))
+            .padding([theme::SPACING_XS, theme::SPACING_SM])
+            .style(theme::icon_button);
+        let (delete_label, delete_msg, delete_style) = if is_armed_delete {
+            (
+                "Delete data — click again",
+                Message::DeleteRecentData(path.to_path_buf()),
+                destructive_button_armed as fn(&iced::Theme, iced::widget::button::Status) -> iced::widget::button::Style,
+            )
+        } else {
+            (
+                "Delete data",
+                Message::ArmDeleteRecent(path.to_path_buf()),
+                theme::icon_button as fn(&iced::Theme, iced::widget::button::Status) -> iced::widget::button::Style,
+            )
+        };
+        let delete = button(text(delete_label).size(theme::font_sm()))
+            .on_press(delete_msg)
+            .padding([theme::SPACING_XS, theme::SPACING_SM])
+            .style(delete_style);
+        row![forget, delete]
+            .spacing(theme::SPACING_XS)
+            .align_y(Center)
+            .into()
+    } else {
+        Space::new().into()
+    };
+
+    let row_content = row![open_btn, actions]
+        .spacing(0.0)
+        .align_y(Center)
+        .width(Length::Fill);
+
+    // Outer container drives the unified hover background; padding-right
+    // gives the actions breathing room without pushing them off the row.
+    let highlighted = container(row_content)
+        .padding(iced::Padding {
+            top: 0.0,
+            right: theme::SPACING_SM,
+            bottom: 0.0,
+            left: 0.0,
+        })
+        .style(if is_hovered {
+            recent_row_hover_bg as fn(&iced::Theme) -> container::Style
+        } else {
+            recent_row_idle_bg
+        });
+
+    mouse_area(highlighted)
+        .on_enter(Message::HoverRecent(path.to_path_buf()))
+        .on_exit(Message::UnhoverRecent(path.to_path_buf()))
         .into()
+}
+
+fn transparent_row_button(
+    _theme: &iced::Theme,
+    _status: iced::widget::button::Status,
+) -> iced::widget::button::Style {
+    iced::widget::button::Style {
+        background: None,
+        text_color: theme::text_primary(),
+        border: iced::Border::default(),
+        ..Default::default()
+    }
+}
+
+fn destructive_button_armed(
+    _theme: &iced::Theme,
+    status: iced::widget::button::Status,
+) -> iced::widget::button::Style {
+    let bg = match status {
+        iced::widget::button::Status::Hovered => Some(theme::bg_list_hover().into()),
+        _ => None,
+    };
+    iced::widget::button::Style {
+        background: bg,
+        text_color: theme::error(),
+        border: iced::Border::default(),
+        ..Default::default()
+    }
+}
+
+fn recent_row_hover_bg(_theme: &iced::Theme) -> container::Style {
+    container::Style {
+        background: Some(theme::bg_list_hover().into()),
+        ..Default::default()
+    }
+}
+
+fn recent_row_idle_bg(_theme: &iced::Theme) -> container::Style {
+    container::Style::default()
 }
 
 // ── Items panel (left) ─────────────────────────────────────────────────────
