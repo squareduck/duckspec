@@ -54,6 +54,15 @@ pub async fn run_turn(
         .arg("--include-partial-messages")
         .arg("--disallowedTools")
         .arg(DISALLOWED_TOOLS)
+        // Auto-memory writes/reads MEMORY.md under ~/.claude/projects/… and
+        // injects the contents into the system prompt. Useful in standalone
+        // Claude Code but noisy inside duckboard, where the model is driven
+        // turn-by-turn against a duckspec scope and shouldn't be steering
+        // itself with stale per-project notes. Found by probe: this is the
+        // single recognised settings key; unknown keys are silently dropped
+        // in -p mode.
+        .arg("--settings")
+        .arg(r#"{"autoMemoryEnabled":false}"#)
         .current_dir(&req.working_dir)
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
