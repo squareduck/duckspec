@@ -13,6 +13,15 @@ use crate::request::{Attachment, ToolPolicy, TurnOutcome, TurnRequest};
 use super::protocol::{ProtocolMsg, parse_protocol_line};
 use super::spawn::claude_command;
 
+/// Built-in CLI tools that can't function in our headless `-p` invocation —
+/// either they need an interactive UI the CLI auto-denies (AskUserQuestion,
+/// plan mode) or they depend on a parent harness duckboard doesn't provide
+/// (cron, scheduling, remote control, push notifications, worktree sessions).
+/// Letting the model attempt them just wastes a turn on a synthetic deny.
+const DISALLOWED_TOOLS: &str = "AskUserQuestion,EnterPlanMode,ExitPlanMode,\
+    CronCreate,CronDelete,CronList,ScheduleWakeup,RemoteTrigger,\
+    PushNotification,EnterWorktree,ExitWorktree";
+
 /// Run a single prompt turn by spawning `claude -p` and streaming its output.
 /// Returns the session ID from the result message (for `--resume` on next
 /// turn).
@@ -43,6 +52,8 @@ pub async fn run_turn(
         .arg("stream-json")
         .arg("--verbose")
         .arg("--include-partial-messages")
+        .arg("--disallowedTools")
+        .arg(DISALLOWED_TOOLS)
         .current_dir(&req.working_dir)
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
