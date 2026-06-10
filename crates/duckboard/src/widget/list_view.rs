@@ -39,6 +39,9 @@ pub struct ListRow<'a, Msg> {
     indent_level: usize,
     selected: bool,
     errored: bool,
+    /// Tints the label and (unless `icon_tint` is set) the icon. Used for
+    /// VCS status coloring in the Files explorer. `errored` wins over it.
+    tint: Option<Color>,
     on_press: Option<Msg>,
     /// (on_enter, on_exit) — wraps the row in a mouse_area so callers can
     /// track cursor hover (e.g. to swap the icon for a close button).
@@ -58,6 +61,7 @@ impl<'a, Msg: Clone + 'a> ListRow<'a, Msg> {
             indent_level: 0,
             selected: false,
             errored: false,
+            tint: None,
             on_press: None,
             hover: None,
             spacing: theme::SPACING_XS,
@@ -112,6 +116,14 @@ impl<'a, Msg: Clone + 'a> ListRow<'a, Msg> {
         self
     }
 
+    /// Tint the label and icon with a status color (e.g. VCS modified /
+    /// added). Overridden by `errored`; an explicit `icon_tint` keeps
+    /// priority for the icon.
+    pub fn tint(mut self, color: Color) -> Self {
+        self.tint = Some(color);
+        self
+    }
+
     /// Mark the row as containing errors. Tints the label and the icon red;
     /// the specific diagnostic is expected to be shown elsewhere (inline
     /// error panel, dashboard).
@@ -143,7 +155,7 @@ impl<'a, Msg: Clone + 'a> ListRow<'a, Msg> {
             let tint = if self.errored {
                 Some(theme::error())
             } else {
-                self.icon_tint
+                self.icon_tint.or(self.tint)
             };
             inner = inner.push(icon_svg(bytes, tint));
         }
@@ -156,6 +168,8 @@ impl<'a, Msg: Clone + 'a> ListRow<'a, Msg> {
             .wrapping(Wrapping::None);
         if self.errored {
             label = label.color(theme::error());
+        } else if let Some(tint) = self.tint {
+            label = label.color(tint);
         }
         inner = inner.push(label);
 

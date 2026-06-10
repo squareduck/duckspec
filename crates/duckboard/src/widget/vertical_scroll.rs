@@ -295,3 +295,80 @@ pub fn view<'a, M: Clone + 'a>(
 ) -> Element<'a, M> {
     VerticalScroll::new(offset_y, on_scroll, content).into()
 }
+
+// ── Scroll into view ─────────────────────────────────────────────────────────
+
+/// Task that computes the offset needed to bring row `index` of an
+/// evenly-rowed block into a controlled [`VerticalScroll`]'s viewport.
+///
+/// `viewport_id` / `content_id` are container ids: the first wraps the
+/// scroll widget itself, the second wraps a block of `count` uniform-height
+/// rows inside the scroll content. Bounds are measured from the layout tree
+/// — which `VerticalScroll` never translates by its offset — so the row's
+/// rectangle can be derived as `content.height / count` even when it is
+/// currently off-screen. Produces the new offset, or nothing when the row
+/// is already fully visible (the caller's `on_scroll` message is never
+/// published in that case).
+pub fn reveal_row(
+    viewport_id: &'static str,
+    content_id: &'static str,
+    index: usize,
+    count: usize,
+    current_offset: f32,
+) -> iced::Task<f32> {
+    use iced::advanced::widget::Id;
+    use iced::advanced::widget::operation::{Operation, Outcome};
+
+    struct RevealRow {
+        viewport_id: Id,
+        content_id: Id,
+        index: usize,
+        count: usize,
+        current_offset: f32,
+        viewport: Option<Rectangle>,
+        content: Option<Rectangle>,
+    }
+
+    impl Operation<f32> for RevealRow {
+        fn traverse(&mut self, operate: &mut dyn FnMut(&mut dyn Operation<f32>)) {
+            operate(self);
+        }
+
+        fn container(&mut self, id: Option<&Id>, bounds: Rectangle) {
+            if id == Some(&self.viewport_id) {
+                self.viewport = Some(bounds);
+            } else if id == Some(&self.content_id) {
+                self.content = Some(bounds);
+            }
+        }
+
+        fn finish(&self) -> Outcome<f32> {
+            let (Some(viewport), Some(content)) = (self.viewport, self.content) else {
+                return Outcome::None;
+            };
+            if self.count == 0 || viewport.height <= 0.0 {
+                return Outcome::None;
+            }
+            let row_h = content.height / self.count as f32;
+            let row_top = content.y - viewport.y + row_h * self.index as f32;
+            let row_bottom = row_top + row_h;
+            if row_top < self.current_offset {
+                Outcome::Some(row_top)
+            } else if row_bottom > self.current_offset + viewport.height {
+                Outcome::Some(row_bottom - viewport.height)
+            } else {
+                Outcome::None
+            }
+        }
+    }
+
+    iced::advanced::widget::operate(RevealRow {
+        viewport_id: Id::new(viewport_id),
+        content_id: Id::new(content_id),
+        index,
+        count,
+        current_offset,
+        viewport: None,
+        content: None,
+    })
+}

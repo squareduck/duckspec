@@ -1,6 +1,6 @@
 //! Tree view with expand/collapse and selection.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use iced::Element;
 use iced::widget::{Space, row};
@@ -43,11 +43,35 @@ pub fn view<'a, M: Clone + 'a>(
     on_toggle: impl Fn(String) -> M + 'a,
     on_select: impl Fn(String) -> M + 'a,
 ) -> Element<'a, M> {
+    view_with_tints(
+        nodes,
+        expanded,
+        selected,
+        error_ids,
+        &HashMap::new(),
+        on_toggle,
+        on_select,
+    )
+}
+
+/// Same as [`view`] but with a per-node-id tint map (label + icon color).
+/// Used by the Files explorer to color VCS-affected files and directories
+/// by status. Error coloring still wins over a tint.
+pub fn view_with_tints<'a, M: Clone + 'a>(
+    nodes: &[TreeNode],
+    expanded: &HashSet<String>,
+    selected: Option<&str>,
+    error_ids: &HashSet<String>,
+    tints: &HashMap<String, iced::Color>,
+    on_toggle: impl Fn(String) -> M + 'a,
+    on_select: impl Fn(String) -> M + 'a,
+) -> Element<'a, M> {
     let rows: Vec<ListRow<'a, M>> = flatten(nodes, expanded, 0)
         .into_iter()
         .map(|node| {
             let is_selected = selected.is_some_and(|s| s == node.id);
             let has_error = error_ids.contains(&node.id);
+            let tint = tints.get(&node.id).copied();
 
             let (leading, icon_bytes, on_press) = if node.has_children {
                 let leading = collapsible::chevron(node.is_expanded);
@@ -61,13 +85,17 @@ pub fn view<'a, M: Clone + 'a>(
                 )
             };
 
-            ListRow::new(node.label)
+            let mut r = ListRow::new(node.label)
                 .leading(leading)
                 .icon(icon_bytes)
                 .indent(node.depth)
                 .selected(is_selected)
                 .errored(has_error)
-                .on_press(on_press)
+                .on_press(on_press);
+            if let Some(tint) = tint {
+                r = r.tint(tint);
+            }
+            r
         })
         .collect();
 

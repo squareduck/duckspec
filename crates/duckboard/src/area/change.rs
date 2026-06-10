@@ -7,7 +7,7 @@ use iced::Element;
 use iced::widget::{Space, button, column, container, row, text};
 
 use crate::chat_store::Exploration;
-use crate::data::{ChangeData, ProjectData, StepCompletion};
+use crate::data::{ChangeData, ProjectData, StepCompletion, TreeNode};
 use crate::scope::{Scope, ScopeKind};
 use crate::theme;
 use crate::vcs::{ChangedFile, FileStatus};
@@ -28,6 +28,20 @@ const ICON_STEP_PARTIAL: &[u8] = include_bytes!("../../assets/icon_step_partial.
 const ICON_EXPLORE: &[u8] = include_bytes!("../../assets/icon_explore.svg");
 const ICON_IDEAS: &[u8] = include_bytes!("../../assets/icon_idea.svg");
 
+/// Section key for the Files explorer in `expanded_sections`. Absent by
+/// default — the explorer starts collapsed with its header pinned to the
+/// bottom of the list column.
+pub const FILES_SECTION: &str = "files";
+
+/// Container id wrapping the list column's scroll viewport. Measured by the
+/// scroll-into-view operation in `main::reveal_active_file_in_explorer`.
+pub const EXPLORER_VIEWPORT_ID: &str = "change-list-viewport";
+
+/// Container id wrapping the Files explorer's row block (uniform-height
+/// rows). Measured together with `EXPLORER_VIEWPORT_ID` to derive a row's
+/// position inside the scroll content.
+pub const EXPLORER_CONTENT_ID: &str = "files-explorer-content";
+
 // ── State ────────────────────────────────────────────────────────────────────
 
 pub struct State {
@@ -42,6 +56,13 @@ pub struct State {
     /// don't keep re-opening folders the user explicitly collapsed.
     known_file_dirs: HashSet<String>,
     pub changed_files: Vec<ChangedFile>,
+    /// Full project file tree (gitignore-respecting, hidden files excluded)
+    /// shown in the Files explorer section. Dir node ids are root-relative
+    /// paths; file node ids are `file:<rel-path>` so they match file tab ids
+    /// and row highlighting derives directly from the active tab.
+    pub explorer_tree: Vec<TreeNode>,
+    /// Directory node ids expanded in the Files explorer tree.
+    pub expanded_explorer_dirs: HashSet<String>,
     /// Virtual exploration changes (not persisted to duckspec). Each carries
     /// a stable `id` used as the on-disk scope key plus a mutable
     /// `display_name` the UI shows.
@@ -78,6 +99,8 @@ impl State {
             expanded_file_dirs: HashSet::new(),
             known_file_dirs: HashSet::new(),
             changed_files: vec![],
+            explorer_tree: vec![],
+            expanded_explorer_dirs: HashSet::new(),
             explorations,
             exploration_counter,
             hovered_exploration: None,
@@ -120,6 +143,65 @@ impl State {
         self.changed_files = files;
     }
 
+    /// Replace the Files explorer contents from a fresh project walk.
+    /// `files` are root-relative paths. Expanded state is pruned to
+    /// directories that still exist; everything stays collapsed by default.
+    pub fn set_project_files(&mut self, files: &[PathBuf]) {
+        let mut dirs = HashSet::new();
+        self.explorer_tree = build_explorer_tree(files, &mut dirs);
+        self.expanded_explorer_dirs.retain(|d| dirs.contains(d));
+    }
+
+    /// Expand every ancestor directory of a root-relative file path in the
+    /// Files explorer, so the file's row is present in the flattened tree.
+    pub fn expand_explorer_ancestors(&mut self, rel: &str) {
+        let Some((dirs, _file)) = rel.rsplit_once('/') else {
+            return;
+        };
+        let mut prefix = String::new();
+        for part in dirs.split('/') {
+            if !prefix.is_empty() {
+                prefix.push('/');
+            }
+            prefix.push_str(part);
+            self.expanded_explorer_dirs.insert(prefix.clone());
+        }
+    }
+
+    /// Index of `target_id` among the visible (flattened) explorer rows,
+    /// plus the total visible row count. Mirrors `tree_view`'s flatten
+    /// order: a node counts one row, children only when their parent is
+    /// expanded.
+    pub fn explorer_flat_position(&self, target_id: &str) -> Option<(usize, usize)> {
+        fn walk(
+            nodes: &[TreeNode],
+            expanded: &HashSet<String>,
+            target: &str,
+            index: &mut usize,
+            found: &mut Option<usize>,
+        ) {
+            for node in nodes {
+                if node.id == target {
+                    *found = Some(*index);
+                }
+                *index += 1;
+                if expanded.contains(&node.id) {
+                    walk(&node.children, expanded, target, index, found);
+                }
+            }
+        }
+        let mut index = 0;
+        let mut found = None;
+        walk(
+            &self.explorer_tree,
+            &self.expanded_explorer_dirs,
+            target_id,
+            &mut index,
+            &mut found,
+        );
+        found.map(|f| (f, index))
+    }
+
     /// Whether the currently selected change is an exploration (virtual).
     pub fn is_exploration_selected(&self) -> bool {
         self.selected_change
@@ -154,6 +236,67 @@ impl State {
             .map(|e| e.display_name.clone())
             .unwrap_or_else(|| scope.to_string())
     }
+}
+
+/// Build the Files explorer tree from root-relative paths. Directories
+/// come first (sorted), then files (sorted), matching the changed-files
+/// tree. Every directory id encountered is also collected into `dirs_out`
+/// so the caller can prune stale expanded state.
+fn build_explorer_tree(files: &[PathBuf], dirs_out: &mut HashSet<String>) -> Vec<TreeNode> {
+    #[derive(Default)]
+    struct Dir {
+        dirs: BTreeMap<String, Dir>,
+        files: Vec<String>,
+    }
+
+    let mut root = Dir::default();
+    for path in files {
+        let parts: Vec<&str> = path
+            .components()
+            .filter_map(|c| c.as_os_str().to_str())
+            .collect();
+        let Some((file_name, dir_parts)) = parts.split_last() else {
+            continue;
+        };
+        let mut node = &mut root;
+        for part in dir_parts {
+            node = node.dirs.entry((*part).to_string()).or_default();
+        }
+        node.files.push((*file_name).to_string());
+    }
+
+    fn convert(dir: Dir, prefix: &str, dirs_out: &mut HashSet<String>) -> Vec<TreeNode> {
+        let join = |name: &str| {
+            if prefix.is_empty() {
+                name.to_string()
+            } else {
+                format!("{prefix}/{name}")
+            }
+        };
+        let mut nodes = Vec::new();
+        for (name, sub) in dir.dirs {
+            let path = join(&name);
+            dirs_out.insert(path.clone());
+            let children = convert(sub, &path, dirs_out);
+            nodes.push(TreeNode {
+                id: path,
+                label: name,
+                children,
+            });
+        }
+        let mut files = dir.files;
+        files.sort_unstable();
+        for name in files {
+            nodes.push(TreeNode {
+                id: format!("file:{}", join(&name)),
+                label: name,
+                children: vec![],
+            });
+        }
+        nodes
+    }
+
+    convert(root, "", dirs_out)
 }
 
 /// Directories the changed-files tree should leave collapsed even on first
@@ -265,6 +408,12 @@ pub enum Message {
     Interaction(interaction::Msg),
     SelectChangedFile(PathBuf),
     ToggleFileDir(String),
+    /// Toggle a directory node in the Files explorer tree.
+    ToggleExplorerDir(String),
+    /// A file row in the Files explorer was clicked. Payload is the row's
+    /// node id (`file:<rel-path>`). Intercepted by `main::update`, which
+    /// opens the file as a regular file tab.
+    SelectExplorerFile(String),
     AddExploration,
     /// First click on the close button of an exploration that has chat
     /// sessions. Sets `armed_remove_exploration` so the next
@@ -360,6 +509,14 @@ pub fn update(
             if !state.expanded_file_dirs.remove(&id) {
                 state.expanded_file_dirs.insert(id);
             }
+        }
+        Message::ToggleExplorerDir(id) => {
+            if !state.expanded_explorer_dirs.remove(&id) {
+                state.expanded_explorer_dirs.insert(id);
+            }
+        }
+        Message::SelectExplorerFile(_) => {
+            // Intercepted by `main::update` (needs `open_path_in_tab`).
         }
         Message::SelectItem(id) => {
             open_artifact(tabs, &id, project, highlighter);
@@ -832,7 +989,31 @@ pub fn view_list<'a>(
 
     list_col = list_col.push(view_changed_files_section(tabs, state));
 
-    vertical_scroll::view(state.list_scroll, Message::ScrollList, list_col)
+    let files_expanded = state.expanded_sections.contains(FILES_SECTION);
+    if files_expanded {
+        list_col = list_col.push(view_files_section(tabs, state));
+    }
+
+    let scroll: Element<'a, Message> = container(vertical_scroll::view(
+        state.list_scroll,
+        Message::ScrollList,
+        list_col,
+    ))
+    .width(iced::Length::Fill)
+    .height(iced::Length::Fill)
+    .id(EXPLORER_VIEWPORT_ID)
+    .into();
+
+    if files_expanded {
+        scroll
+    } else {
+        // Collapsed: pin the Files header below the scroll viewport so it
+        // stays anchored to the bottom edge of the list column regardless
+        // of scroll position.
+        column![scroll, view_files_section(tabs, state)]
+            .height(iced::Length::Fill)
+            .into()
+    }
 }
 
 fn view_overview_section<'a>(
@@ -1141,6 +1322,95 @@ fn view_changed_files_section<'a>(
     )
 }
 
+/// Files explorer section — the full project tree, gitignore-respecting.
+/// File rows carry `file:<rel>` node ids, so the row of the file open in
+/// the content column highlights without any extra selection state.
+fn view_files_section<'a>(tabs: &'a tab_bar::TabState, state: &'a State) -> Element<'a, Message> {
+    let expanded = state.expanded_sections.contains(FILES_SECTION);
+
+    let content: Element<'a, Message> = if !expanded {
+        // Collapsible sections skip their content when collapsed.
+        Space::new().into()
+    } else if state.explorer_tree.is_empty() {
+        container(
+            text("No files")
+                .size(theme::font_md())
+                .color(theme::text_muted()),
+        )
+        .padding([theme::SPACING_XS, theme::SPACING_SM])
+        .into()
+    } else {
+        let no_errors = HashSet::new();
+        let tints = explorer_vcs_tints(&state.changed_files);
+        container(tree_view::view_with_tints(
+            &state.explorer_tree,
+            &state.expanded_explorer_dirs,
+            tabs.active_tab().map(|t| t.id.as_str()),
+            &no_errors,
+            &tints,
+            Message::ToggleExplorerDir,
+            Message::SelectExplorerFile,
+        ))
+        .id(EXPLORER_CONTENT_ID)
+        .into()
+    };
+
+    collapsible::view_with_add(
+        "Files",
+        expanded,
+        Message::ToggleSection(FILES_SECTION.to_string()),
+        Some(collapsible::add_button(Message::AddFile)),
+        content,
+    )
+}
+
+/// Per-node tints for the Files explorer: VCS-changed files take their
+/// status color, and every ancestor directory takes the aggregate color of
+/// the changes inside it — falling back to the modified color when statuses
+/// are mixed — so collapsed directories still signal where changes live.
+/// Deleted files have no row in the explorer (they're gone from the working
+/// tree) but still tint their ancestors.
+fn explorer_vcs_tints(changed: &[ChangedFile]) -> HashMap<String, iced::Color> {
+    let mut tints = HashMap::new();
+    let mut dir_status: HashMap<String, Option<FileStatus>> = HashMap::new();
+    for cf in changed {
+        let parts: Vec<&str> = cf
+            .path
+            .components()
+            .filter_map(|c| c.as_os_str().to_str())
+            .collect();
+        if parts.is_empty() {
+            continue;
+        }
+        if cf.status != FileStatus::Deleted {
+            tints.insert(
+                format!("file:{}", parts.join("/")),
+                theme::vcs_status_color(&cf.status),
+            );
+        }
+        let mut prefix = String::new();
+        for part in &parts[..parts.len() - 1] {
+            if !prefix.is_empty() {
+                prefix.push('/');
+            }
+            prefix.push_str(part);
+            dir_status
+                .entry(prefix.clone())
+                .and_modify(|s| {
+                    if *s != Some(cf.status) {
+                        *s = None;
+                    }
+                })
+                .or_insert(Some(cf.status));
+        }
+    }
+    for (dir, status) in dir_status {
+        let color = theme::vcs_status_color(&status.unwrap_or(FileStatus::Modified));
+        tints.insert(dir, color);
+    }
+    tints
+}
+
 fn icon_for_artifact(label: &str) -> &'static [u8] {
     match label {
         l if l.starts_with("spec.delta") => ICON_SPEC_DELTA,
@@ -1327,6 +1597,8 @@ mod breadcrumb_tests {
             expanded_nodes: HashSet::new(),
             expanded_file_dirs: HashSet::new(),
             changed_files: vec![],
+            explorer_tree: vec![],
+            expanded_explorer_dirs: HashSet::new(),
             explorations: explorations
                 .iter()
                 .map(|(id, name)| Exploration {
@@ -1430,6 +1702,8 @@ mod breadcrumb_tests {
             expanded_nodes: HashSet::new(),
             expanded_file_dirs: HashSet::new(),
             changed_files: vec![],
+            explorer_tree: vec![],
+            expanded_explorer_dirs: HashSet::new(),
             explorations: vec![],
             exploration_counter: 0,
             hovered_exploration: None,
@@ -1619,6 +1893,119 @@ mod breadcrumb_tests {
         assert_eq!(
             compute_obvious_command(&state, &project).as_deref(),
             Some("ds-archive")
+        );
+    }
+}
+
+#[cfg(test)]
+mod explorer_tests {
+    use super::*;
+
+    fn paths(list: &[&str]) -> Vec<PathBuf> {
+        list.iter().map(PathBuf::from).collect()
+    }
+
+    fn make_state() -> State {
+        State::new(None)
+    }
+
+    #[test]
+    fn tree_puts_sorted_dirs_before_sorted_files() {
+        let mut dirs = HashSet::new();
+        let tree = build_explorer_tree(
+            &paths(&["zeta.rs", "src/b.rs", "src/a.rs", "Cargo.toml"]),
+            &mut dirs,
+        );
+        let labels: Vec<&str> = tree.iter().map(|n| n.label.as_str()).collect();
+        assert_eq!(labels, vec!["src", "Cargo.toml", "zeta.rs"]);
+        let src_children: Vec<&str> = tree[0].children.iter().map(|n| n.id.as_str()).collect();
+        assert_eq!(src_children, vec!["file:src/a.rs", "file:src/b.rs"]);
+    }
+
+    #[test]
+    fn tree_ids_use_file_prefix_for_leaves_and_rel_paths_for_dirs() {
+        let mut dirs = HashSet::new();
+        let tree = build_explorer_tree(&paths(&["a/b/c.rs"]), &mut dirs);
+        assert_eq!(tree[0].id, "a");
+        assert_eq!(tree[0].children[0].id, "a/b");
+        assert_eq!(tree[0].children[0].children[0].id, "file:a/b/c.rs");
+        assert!(dirs.contains("a"));
+        assert!(dirs.contains("a/b"));
+    }
+
+    #[test]
+    fn set_project_files_prunes_stale_expanded_dirs() {
+        let mut state = make_state();
+        state.set_project_files(&paths(&["src/a.rs", "docs/b.md"]));
+        state.expanded_explorer_dirs.insert("src".into());
+        state.expanded_explorer_dirs.insert("docs".into());
+        state.set_project_files(&paths(&["src/a.rs"]));
+        assert!(state.expanded_explorer_dirs.contains("src"));
+        assert!(!state.expanded_explorer_dirs.contains("docs"));
+    }
+
+    #[test]
+    fn expand_ancestors_inserts_each_prefix() {
+        let mut state = make_state();
+        state.expand_explorer_ancestors("crates/duckboard/src/main.rs");
+        assert!(state.expanded_explorer_dirs.contains("crates"));
+        assert!(state.expanded_explorer_dirs.contains("crates/duckboard"));
+        assert!(state.expanded_explorer_dirs.contains("crates/duckboard/src"));
+        assert_eq!(state.expanded_explorer_dirs.len(), 3);
+    }
+
+    #[test]
+    fn expand_ancestors_of_root_file_is_noop() {
+        let mut state = make_state();
+        state.expand_explorer_ancestors("Cargo.toml");
+        assert!(state.expanded_explorer_dirs.is_empty());
+    }
+
+    #[test]
+    fn vcs_tints_color_files_and_aggregate_dirs() {
+        let cf = |path: &str, status: FileStatus| ChangedFile {
+            path: PathBuf::from(path),
+            status,
+        };
+        let tints = explorer_vcs_tints(&[
+            cf("src/a.rs", FileStatus::Modified),
+            cf("src/new/b.rs", FileStatus::Added),
+            cf("docs/gone.md", FileStatus::Deleted),
+        ]);
+
+        let modified = theme::vcs_status_color(&FileStatus::Modified);
+        let added = theme::vcs_status_color(&FileStatus::Added);
+
+        assert_eq!(tints.get("file:src/a.rs"), Some(&modified));
+        assert_eq!(tints.get("file:src/new/b.rs"), Some(&added));
+        // Deleted files have no explorer row, but their dir is tinted with
+        // the deletion color so the change is still discoverable.
+        assert!(!tints.contains_key("file:docs/gone.md"));
+        assert_eq!(
+            tints.get("docs"),
+            Some(&theme::vcs_status_color(&FileStatus::Deleted))
+        );
+        // Uniform dir takes its status color; mixed falls back to modified.
+        assert_eq!(tints.get("src/new"), Some(&added));
+        assert_eq!(tints.get("src"), Some(&modified));
+    }
+
+    #[test]
+    fn flat_position_counts_only_visible_rows() {
+        let mut state = make_state();
+        state.set_project_files(&paths(&["src/a.rs", "src/b.rs", "Cargo.toml"]));
+        // Collapsed: rows are [src, Cargo.toml].
+        assert_eq!(
+            state.explorer_flat_position("file:Cargo.toml"),
+            Some((1, 2))
+        );
+        assert_eq!(state.explorer_flat_position("file:src/a.rs"), None);
+        // Expanded: rows are [src, src/a.rs, src/b.rs, Cargo.toml].
+        state.expanded_explorer_dirs.insert("src".into());
+        assert_eq!(state.explorer_flat_position("file:src/a.rs"), Some((1, 4)));
+        assert_eq!(
+            state.explorer_flat_position("file:Cargo.toml"),
+            Some((3, 4))
         );
     }
 }

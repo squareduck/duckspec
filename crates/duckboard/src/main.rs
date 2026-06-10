@@ -435,6 +435,13 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
             let mut tasks: Vec<Task<Message>> = Vec::new();
             refresh_open_tabs(state, &mut tasks);
             refresh_changed_files(state);
+            if state
+                .change
+                .expanded_sections
+                .contains(area::change::FILES_SECTION)
+            {
+                refresh_project_files(state);
+            }
             state.project.revalidate();
             tracing::info!("project reloaded");
             return Task::batch(tasks);
@@ -860,6 +867,13 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
             }
 
             refresh_changed_files(state);
+            if state
+                .change
+                .expanded_sections
+                .contains(area::change::FILES_SECTION)
+            {
+                refresh_project_files(state);
+            }
 
             return Task::batch(highlight_tasks);
         }
@@ -946,6 +960,15 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                 area::change::Message::SelectChangedFile(path) => {
                     return open_diff_preview(state, Area::Change, &path);
                 }
+                area::change::Message::SelectExplorerFile(id) => {
+                    // Explorer rows open the working-tree file (a `file:`
+                    // tab), unlike changed-files rows which open a diff —
+                    // the section clicked expresses the intent.
+                    if let Some(root) = state.project.project_root.clone() {
+                        let rel = id.strip_prefix("file:").unwrap_or(&id);
+                        return open_path_in_tab(state, root.join(rel), None);
+                    }
+                }
                 area::change::Message::OpenIdeaForChange(change_name) => {
                     if let Some(idea_path) = state.ideas.idea_path_for_change(&change_name) {
                         switch_area(state, Area::Ideas);
@@ -971,6 +994,11 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                     );
                 }
                 msg => {
+                    let toggled_files = matches!(
+                        &msg,
+                        area::change::Message::ToggleSection(id)
+                            if id == area::change::FILES_SECTION
+                    );
                     let needs_focus = matches!(msg, area::change::Message::AddExploration)
                         || is_chat_focus_msg(extract_change_interaction_msg(&msg));
                     area::change::update(
@@ -983,6 +1011,17 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                     );
                     if needs_focus {
                         return focus_chat_input();
+                    }
+                    if toggled_files
+                        && state
+                            .change
+                            .expanded_sections
+                            .contains(area::change::FILES_SECTION)
+                    {
+                        // Walk the tree the moment the section opens, and
+                        // reveal whichever file tab is already active.
+                        refresh_project_files(state);
+                        return reveal_active_file_in_explorer(state);
                     }
                 }
             }
@@ -2257,7 +2296,17 @@ fn update_with_scroll_preservation(state: &mut State, message: Message) -> Task<
         capture_chat_scroll_snapshot(state)
     };
     state.chat_scroll_overridden = false;
+    let tab_before = state.tabs.active_tab().map(|t| t.id.clone());
     let task = update(state, message);
+    // Whenever this tick changed the active tab — regardless of which route
+    // did it (tab bar, file finder, search, cmd-click, tab close) — reveal
+    // the newly active file in the Files explorer.
+    let tab_after = state.tabs.active_tab().map(|t| t.id.as_str());
+    let task = if tab_before.as_deref() != tab_after {
+        Task::batch([task, reveal_active_file_in_explorer(state)])
+    } else {
+        task
+    };
     // If a Find action drove a chat scroll during this tick (e.g. ctrl-n/p
     // routed via KeyPress → Find(Navigate)), skip the replay — its job is
     // to *preserve* the user's prior intent, not to undo a deliberate
@@ -3172,6 +3221,60 @@ fn find_diff_tab_mut<'a>(
 }
 
 /// Refresh the VCS changed files list.
+/// Re-walk the project tree for the Files explorer. Only invoked while the
+/// explorer section is expanded, so collapsed sessions never pay for the
+/// walk.
+fn refresh_project_files(state: &mut State) {
+    let Some(root) = state.project.project_root.as_deref() else {
+        return;
+    };
+    let mut files = Vec::new();
+    widget::file_finder::walk_project_files(root, |rel| files.push(rel.to_path_buf()));
+    state.change.set_project_files(&files);
+}
+
+/// If the Files explorer is expanded and the active tab is a `file:` tab for
+/// a path inside the project, expand the file's ancestor directories and
+/// scroll its row into view. Row highlighting itself derives from the active
+/// tab id, so no selection state needs updating here.
+fn reveal_active_file_in_explorer(state: &mut State) -> Task<Message> {
+    if !state
+        .change
+        .expanded_sections
+        .contains(area::change::FILES_SECTION)
+    {
+        return Task::none();
+    }
+    let Some(tab_id) = state.tabs.active_tab().map(|t| t.id.clone()) else {
+        return Task::none();
+    };
+    let Some(rel) = tab_id.strip_prefix("file:") else {
+        return Task::none();
+    };
+    if std::path::Path::new(rel).is_absolute() {
+        // Files outside the project root never appear in the explorer.
+        return Task::none();
+    }
+    state.change.expand_explorer_ancestors(rel);
+    // A miss usually means the file was just created and the watcher hasn't
+    // refreshed the tree yet — re-walk once before giving up.
+    let position = state.change.explorer_flat_position(&tab_id).or_else(|| {
+        refresh_project_files(state);
+        state.change.explorer_flat_position(&tab_id)
+    });
+    let Some((index, count)) = position else {
+        return Task::none();
+    };
+    widget::vertical_scroll::reveal_row(
+        area::change::EXPLORER_VIEWPORT_ID,
+        area::change::EXPLORER_CONTENT_ID,
+        index,
+        count,
+        state.change.list_scroll,
+    )
+    .map(|offset| Message::Change(area::change::Message::ScrollList(offset)))
+}
+
 fn refresh_changed_files(state: &mut State) {
     if let Some(root) = &state.project.project_root {
         state.change.set_changed_files(vcs::changed_files(root));

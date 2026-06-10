@@ -167,7 +167,10 @@ impl FileFinderState {
 
 // ── File walking ────────────────────────────────────────────────────────────
 
-fn walk_project_files(root: &Path, mut cb: impl FnMut(&Path)) {
+/// Walk all project files under `root`, respecting gitignore and skipping
+/// hidden files, yielding root-relative paths. Shared by the file finder
+/// and the Changes area's Files explorer.
+pub fn walk_project_files(root: &Path, mut cb: impl FnMut(&Path)) {
     let walker = ignore::WalkBuilder::new(root)
         .hidden(true)
         .git_ignore(true)
