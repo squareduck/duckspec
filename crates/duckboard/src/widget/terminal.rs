@@ -25,6 +25,8 @@ use iced::widget::canvas::{Cache, Frame};
 use iced::{Color, Element, Length, Point as IcedPoint, Rectangle, Size, Subscription, Theme};
 use linkify::LinkFinder;
 
+use crate::path_link::{self, LinkTarget};
+
 use crate::theme;
 
 // ── Constants ────────────────────────────────────────────────────────────────
@@ -77,6 +79,10 @@ struct CellBuffer {
     cols: usize,
     rows: usize,
     cells: Vec<RenderCell>,
+    /// Per-row soft-wrap flags: `wrapped[r]` is true when row `r` continues
+    /// onto row `r + 1` (alacritty's `WRAPLINE`). Lets link detection stitch
+    /// wrapped rows back into one logical line.
+    wrapped: Vec<bool>,
     cursor: Option<CursorInfo>,
     default_fg: Color,
     default_bg: Color,
@@ -95,6 +101,7 @@ impl CellBuffer {
             cols,
             rows,
             cells: vec![RenderCell::default(); cols * rows],
+            wrapped: vec![false; rows],
             cursor: None,
             default_fg: theme::text_primary(),
             default_bg: theme::bg_base(),
@@ -109,6 +116,7 @@ impl CellBuffer {
         self.cols = cols;
         self.rows = rows;
         self.cells.resize(cols * rows, RenderCell::default());
+        self.wrapped.resize(rows, false);
     }
 }
 
@@ -696,6 +704,9 @@ impl TerminalState {
         for cell in &mut self.buffer.cells {
             *cell = RenderCell::default();
         }
+        for w in &mut self.buffer.wrapped {
+            *w = false;
+        }
 
         // Iterate visible cells.
         for indexed in content.display_iter {
@@ -719,6 +730,9 @@ impl TerminalState {
             let bold = cell.flags.contains(Flags::BOLD);
             let italic = cell.flags.contains(Flags::ITALIC);
             let inverse = cell.flags.contains(Flags::INVERSE);
+            if cell.flags.contains(Flags::WRAPLINE) {
+                self.buffer.wrapped[row_idx] = true;
+            }
 
             let mut fg = resolve_color(cell.fg, term_colors, fallback);
             let mut bg = resolve_color(cell.bg, term_colors, fallback);
@@ -838,15 +852,46 @@ pub enum TerminalEvent {
     Redraw,
     /// User cmd-clicked a hyperlink in the terminal output.
     OpenUrl(String),
+    /// User cmd-clicked a file-path reference in the terminal output.
+    /// `path` is as written, `line` is 1-based from a `:NN` suffix.
+    OpenPath { path: String, line: Option<usize> },
 }
 
-/// A URL detected in the visible buffer that the cursor is currently over.
+/// A URL or file-path reference detected in the visible buffer that the
+/// cursor is currently over. May span several visible rows when the source
+/// line soft-wrapped: rows strictly between `start_row` and `end_row` are
+/// covered edge to edge.
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct LinkHover {
-    row: usize,
+    /// First visible row of the span.
+    start_row: usize,
+    /// Char column where the span starts on `start_row`.
     start_col: usize,
+    /// Last visible row of the span (inclusive).
+    end_row: usize,
+    /// Char column one past the span's last character on `end_row`.
     end_col: usize,
-    url: String,
+    target: LinkTarget,
+}
+
+/// Map a char span within a stitched logical line back to visible-grid
+/// coordinates. `first_row` is the row the stitched line starts on; every
+/// stitched row contributes exactly `cols` chars.
+fn span_to_hover(
+    first_row: usize,
+    cols: usize,
+    char_start: usize,
+    char_end: usize,
+    target: LinkTarget,
+) -> LinkHover {
+    let last_char = char_end.saturating_sub(1).max(char_start);
+    LinkHover {
+        start_row: first_row + char_start / cols,
+        start_col: char_start % cols,
+        end_row: first_row + last_char / cols,
+        end_col: last_char % cols + 1,
+        target,
+    }
 }
 
 /// The Canvas Program that reads the pre-computed cell buffer and draws it.
@@ -929,9 +974,13 @@ impl<'a> canvas::Program<TerminalEvent> for TerminalCanvas<'a> {
                     && let Some(hover) = state.hover.borrow().clone()
                     && self.point_over_hover(pos, &hover)
                 {
-                    return Some(
-                        canvas::Action::publish(TerminalEvent::OpenUrl(hover.url)).and_capture(),
-                    );
+                    let event = match hover.target {
+                        LinkTarget::Url(url) => TerminalEvent::OpenUrl(url),
+                        LinkTarget::Path { path, line, .. } => {
+                            TerminalEvent::OpenPath { path, line }
+                        }
+                    };
+                    return Some(canvas::Action::publish(event).and_capture());
                 }
                 self.state.queue_selection_start(pos.x, pos.y);
                 state.dragging.set(true);
@@ -1103,17 +1152,36 @@ impl<'a> canvas::Program<TerminalEvent> for TerminalCanvas<'a> {
         });
 
         // Hover underline (drawn outside the cache so it tracks mouse moves).
+        // Solid = direct open (URL or resolved path); dashed = unresolved
+        // path that opens the fuzzy finder instead. Wrapped references get
+        // one underline run per visible row.
         let mut overlays = vec![geometry];
         if let Some(hover) = state.hover.borrow().as_ref() {
             let mut overlay = Frame::new(renderer, bounds.size());
-            let x = PAD_X + hover.start_col as f32 * cw;
-            let y = PAD_Y + hover.row as f32 * ch + ch - 1.0;
-            let width = (hover.end_col - hover.start_col) as f32 * cw;
-            overlay.fill_rectangle(
-                IcedPoint::new(x, y),
-                Size::new(width, 1.0),
-                theme::accent(),
-            );
+            let cols = self.state.buffer.cols;
+            let solid = hover.target.opens_directly();
+            for row in hover.start_row..=hover.end_row {
+                let sc = if row == hover.start_row {
+                    hover.start_col
+                } else {
+                    0
+                };
+                let ec = if row == hover.end_row {
+                    hover.end_col
+                } else {
+                    cols
+                };
+                let x = PAD_X + sc as f32 * cw;
+                let y = PAD_Y + row as f32 * ch + ch - 1.0;
+                let width = (ec - sc) as f32 * cw;
+                for (dx, dw) in path_link::underline_segments(width, solid) {
+                    overlay.fill_rectangle(
+                        IcedPoint::new(x + dx, y),
+                        Size::new(dw, 1.0),
+                        theme::accent(),
+                    );
+                }
+            }
             overlays.push(overlay.into_geometry());
         }
         overlays
@@ -1133,12 +1201,19 @@ impl<'a> TerminalCanvas<'a> {
         }
         let col = col_f as usize;
         let row = row_f as usize;
-        row == hover.row && col >= hover.start_col && col < hover.end_col
+        if row < hover.start_row || row > hover.end_row {
+            return false;
+        }
+        let after_start = row > hover.start_row || col >= hover.start_col;
+        let before_end = row < hover.end_row || col < hover.end_col;
+        after_start && before_end
     }
 
-    /// Detect a URL under canvas-local pixel position `pos`. Scans only the
-    /// hovered visible row (no wrap-aware joining yet — wrapped URLs won't be
-    /// detected).
+    /// Detect a URL or path reference under canvas-local pixel position
+    /// `pos`. Soft-wrapped rows are stitched back into one logical line
+    /// (via the buffer's `WRAPLINE` flags) so references that wrap across
+    /// rows are detected whole — as long as the line starts within the
+    /// visible screen; rows scrolled off the top can't be recovered here.
     fn detect_link_at(&self, pos: IcedPoint) -> Option<LinkHover> {
         let cw = cell_width();
         let ch = cell_height();
@@ -1155,22 +1230,45 @@ impl<'a> TerminalCanvas<'a> {
         }
 
         let cols = buffer.cols;
-        let line: String = (0..cols).map(|c| buffer.cell(row, c).grapheme).collect();
+        let mut first_row = row;
+        while first_row > 0 && buffer.wrapped[first_row - 1] {
+            first_row -= 1;
+        }
+        let mut last_row = row;
+        while last_row + 1 < buffer.rows && buffer.wrapped[last_row] {
+            last_row += 1;
+        }
+        let line: String = (first_row..=last_row)
+            .flat_map(|r| (0..cols).map(move |c| buffer.cell(r, c).grapheme))
+            .collect();
+        let col_in_line = (row - first_row) * cols + col;
 
         let finder = LinkFinder::new();
         for link in finder.links(&line) {
-            let start_col = line[..link.start()].chars().count();
-            let end_col = line[..link.end()].chars().count();
-            if col >= start_col && col < end_col {
-                return Some(LinkHover {
-                    row,
-                    start_col,
-                    end_col,
-                    url: link.as_str().to_string(),
-                });
+            let char_start = line[..link.start()].chars().count();
+            let char_end = line[..link.end()].chars().count();
+            if col_in_line >= char_start && col_in_line < char_end {
+                return Some(span_to_hover(
+                    first_row,
+                    cols,
+                    char_start,
+                    char_end,
+                    LinkTarget::Url(link.as_str().to_string()),
+                ));
             }
         }
-        None
+        let hit = path_link::detect_path_at(&line, col_in_line)?;
+        Some(span_to_hover(
+            first_row,
+            cols,
+            hit.char_start,
+            hit.char_end,
+            LinkTarget::Path {
+                path: hit.path,
+                line: hit.line,
+                exists: hit.exists,
+            },
+        ))
     }
 }
 
@@ -1572,5 +1670,48 @@ mod tests {
         s.feed(b"\x08 \x08");
         assert_eq!(cursor_col(&s.term), 0);
         assert_eq!(grid_row(&s.term, 0, 5), "     ");
+    }
+
+    #[test]
+    fn rebuild_buffer_records_soft_wrap_flags() {
+        let mut s = TerminalState::new().unwrap();
+        // 100 chars at the default 80-col width: row 0 soft-wraps into
+        // row 1. The explicit newline after means row 1 hard-breaks.
+        s.feed(&[b'a'; 100]);
+        s.feed(b"\r\nbb");
+        s.rebuild_buffer();
+        assert!(s.buffer.wrapped[0]);
+        assert!(!s.buffer.wrapped[1]);
+        assert!(!s.buffer.wrapped[2]);
+    }
+
+    #[test]
+    fn span_to_hover_single_row() {
+        let h = span_to_hover(3, 80, 5, 12, LinkTarget::Url("u".into()));
+        assert_eq!(
+            (h.start_row, h.start_col, h.end_row, h.end_col),
+            (3, 5, 3, 12)
+        );
+    }
+
+    #[test]
+    fn span_to_hover_across_rows() {
+        // Starts at col 70 of row 2, runs 30 chars, ends at col 20 of row 3.
+        let h = span_to_hover(2, 80, 70, 100, LinkTarget::Url("u".into()));
+        assert_eq!(
+            (h.start_row, h.start_col, h.end_row, h.end_col),
+            (2, 70, 3, 20)
+        );
+    }
+
+    #[test]
+    fn span_to_hover_end_on_row_boundary() {
+        // char_end == 160: the last char is the final cell of row 1, so the
+        // span must not spill onto row 2.
+        let h = span_to_hover(0, 80, 150, 160, LinkTarget::Url("u".into()));
+        assert_eq!(
+            (h.start_row, h.start_col, h.end_row, h.end_col),
+            (1, 70, 1, 80)
+        );
     }
 }

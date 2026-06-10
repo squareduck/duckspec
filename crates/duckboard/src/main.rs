@@ -19,6 +19,7 @@ mod idea_format;
 mod idea_store;
 mod keybinds;
 mod path_env;
+mod path_link;
 mod scope;
 mod theme;
 mod title_hints;
@@ -115,7 +116,10 @@ impl State {
         );
         let mut interactions = HashMap::new();
         interactions.insert(scope::Scope::Caps, interaction::InteractionState::default());
-        interactions.insert(scope::Scope::Codex, interaction::InteractionState::default());
+        interactions.insert(
+            scope::Scope::Codex,
+            interaction::InteractionState::default(),
+        );
         Self {
             active_area: Area::Dashboard,
             project,
@@ -150,6 +154,9 @@ impl State {
     fn open_project(&mut self, path: PathBuf) {
         tracing::info!(path = %path.display(), "opening project");
         self.project = ProjectData::open(&path);
+        // Mirror the root into the path_link global so editors and terminals
+        // can resolve relative path references at hover time.
+        path_link::set_project_root(self.project.project_root.clone());
         // Rebuild area states tied to the old project root. Dropping the
         // previous `change::State` also drops any live interactions /
         // agent sessions / terminals from that project.
@@ -174,8 +181,10 @@ impl State {
         self.interactions.clear();
         self.interactions
             .insert(scope::Scope::Caps, interaction::InteractionState::default());
-        self.interactions
-            .insert(scope::Scope::Codex, interaction::InteractionState::default());
+        self.interactions.insert(
+            scope::Scope::Codex,
+            interaction::InteractionState::default(),
+        );
         self.project.revalidate();
         self.active_area = Area::Dashboard;
 
@@ -402,6 +411,12 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
     }
     update_focused_column(state, &message);
     refresh_model_defaults(state);
+    // Cmd-clicked path references can surface from any editor or terminal
+    // route, but opening them needs `State` (tabs, file finder, project
+    // root) that the per-area handlers don't have — intercept centrally.
+    if let Some((path, line)) = extract_open_path(&message) {
+        return open_path_reference(state, &path, line);
+    }
     match message {
         Message::AreaSelected(area) => {
             switch_area(state, area);
@@ -450,45 +465,13 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                 }
                 Msg::Confirm => {
                     let mut task = Task::none();
-                    let mut switched = false;
                     if let Some(rel_path) = state.file_finder.selected_path() {
                         if let Some(root) = &state.project.project_root {
                             let abs = root.join(&rel_path);
-                            if let Ok(content) = std::fs::read_to_string(&abs) {
-                                let id = format!("file:{}", rel_path.display());
-                                let title = rel_path
-                                    .file_name()
-                                    .map(|n| n.to_string_lossy().to_string())
-                                    .unwrap_or_else(|| rel_path.display().to_string());
-                                let area = match state.active_area {
-                                    Area::Dashboard | Area::Settings => Area::Change,
-                                    other => other,
-                                };
-                                if state.active_area != area {
-                                    switched = true;
-                                }
-                                switch_area(state, area);
-                                state
-                                    .tabs
-                                    .open_file(id.clone(), title, content, Some(abs.clone()));
-                                if let Some(tab) =
-                                    state.tabs.file_tabs.iter_mut().find(|t| t.id == id)
-                                    && let tab_bar::TabView::Editor { editor, .. } = &mut tab.view
-                                {
-                                    task = spawn_file_tab_highlight(
-                                        area,
-                                        id,
-                                        editor,
-                                        state.highlighter.clone(),
-                                        false,
-                                    );
-                                }
-                            }
+                            let line = state.file_finder.pending_line.take();
+                            task = open_path_in_tab(state, abs, line);
                         }
                         state.file_finder.close();
-                    }
-                    if switched {
-                        return Task::batch([task, restore_chat_scroll(state)]);
                     }
                     return task;
                 }
@@ -502,9 +485,7 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                     for ix in state.interactions.values_mut() {
                         ix.terminal_focused = false;
                     }
-                    return iced::widget::operation::focus(
-                        widget::text_search::SEARCH_INPUT_ID,
-                    );
+                    return iced::widget::operation::focus(widget::text_search::SEARCH_INPUT_ID);
                 }
                 Msg::Close => {
                     state.text_search.close();
@@ -525,9 +506,8 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                 Msg::ScopeSelected(scope) => {
                     state.text_search.scope = scope;
                     let q = state.text_search.query.clone();
-                    let refocus = iced::widget::operation::focus(
-                        widget::text_search::SEARCH_INPUT_ID,
-                    );
+                    let refocus =
+                        iced::widget::operation::focus(widget::text_search::SEARCH_INPUT_ID);
                     if !q.is_empty() {
                         return Task::batch([spawn_text_search(state, q), refocus]);
                     }
@@ -626,9 +606,7 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                     if state.project_picker.hovered_recent.as_deref() == Some(path.as_path()) {
                         state.project_picker.hovered_recent = None;
                     }
-                    if state.project_picker.armed_delete_recent.as_deref()
-                        == Some(path.as_path())
-                    {
+                    if state.project_picker.armed_delete_recent.as_deref() == Some(path.as_path()) {
                         state.project_picker.armed_delete_recent = None;
                     }
                 }
@@ -677,9 +655,7 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                 }
                 Msg::Submit => {
                     if state.quick_idea.selected.is_some() {
-                        state
-                            .quick_idea
-                            .load_selected(state.highlighter.as_ref());
+                        state.quick_idea.load_selected(state.highlighter.as_ref());
                         return iced::widget::operation::focus(widget::quick_idea::INPUT_ID);
                     }
                     let payload = widget::quick_idea::build_save_payload(&state.quick_idea);
@@ -743,9 +719,7 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                     }
                     return Task::batch([
                         iced::widget::operation::focus(widget::new_file::INPUT_ID),
-                        iced::widget::operation::move_cursor_to_end(
-                            widget::new_file::INPUT_ID,
-                        ),
+                        iced::widget::operation::move_cursor_to_end(widget::new_file::INPUT_ID),
                     ]);
                 }
                 Msg::Close => {
@@ -762,9 +736,7 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                 Msg::SelectPrev => state.new_file.select_prev(),
                 Msg::TabComplete => {
                     state.new_file.tab_complete();
-                    return iced::widget::operation::move_cursor_to_end(
-                        widget::new_file::INPUT_ID,
-                    );
+                    return iced::widget::operation::move_cursor_to_end(widget::new_file::INPUT_ID);
                 }
                 Msg::Confirm => {
                     let action = state.new_file.confirm_action();
@@ -847,18 +819,8 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                             }
                         }
                         if let Some(root) = project_root.as_deref() {
-                            refresh_file_tabs_for_path(
-                                state,
-                                root,
-                                path,
-                                &mut highlight_tasks,
-                            );
-                            refresh_diff_tabs_for_path(
-                                state,
-                                root,
-                                path,
-                                &mut highlight_tasks,
-                            );
+                            refresh_file_tabs_for_path(state, root, path, &mut highlight_tasks);
+                            refresh_diff_tabs_for_path(state, root, path, &mut highlight_tasks);
                         }
                     }
                     watcher::FileEvent::Removed(path) => {
@@ -1027,10 +989,7 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
         }
         Message::Caps(msg) => {
             let needs_focus = is_chat_focus_msg(extract_caps_interaction_msg(&msg));
-            let ix = state
-                .interactions
-                .entry(scope::Scope::Caps)
-                .or_default();
+            let ix = state.interactions.entry(scope::Scope::Caps).or_default();
             area::caps::update(
                 &mut state.caps,
                 &mut state.tabs,
@@ -1045,10 +1004,7 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
         }
         Message::Codex(msg) => {
             let needs_focus = is_chat_focus_msg(extract_codex_interaction_msg(&msg));
-            let ix = state
-                .interactions
-                .entry(scope::Scope::Codex)
-                .or_default();
+            let ix = state.interactions.entry(scope::Scope::Codex).or_default();
             area::codex::update(
                 &mut state.codex,
                 &mut state.tabs,
@@ -1094,17 +1050,18 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                 let exp_id = exp.id.clone();
                 let old_path = path.clone();
                 let mut new_path = old_path.clone();
-                if let Some(idea) =
-                    state.ideas.ideas.iter_mut().find(|i| i.abs_path == old_path)
+                if let Some(idea) = state
+                    .ideas
+                    .ideas
+                    .iter_mut()
+                    .find(|i| i.abs_path == old_path)
                 {
                     idea.frontmatter.exploration = Some(exp_id.clone());
                     idea.state = idea_store::IdeaState::Exploration;
                     let body = idea_store::read_body(&idea.abs_path).unwrap_or_default();
-                    if let Err(e) = idea_store::save_idea(
-                        idea,
-                        &body,
-                        state.project.project_root.as_deref(),
-                    ) {
+                    if let Err(e) =
+                        idea_store::save_idea(idea, &body, state.project.project_root.as_deref())
+                    {
                         tracing::warn!("failed to save idea on Explore: {e}");
                     }
                     new_path = idea.abs_path.clone();
@@ -1703,28 +1660,16 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                         return update(state, Message::Find(widget::find::Msg::Commit));
                     }
                     keyboard::Key::Named(Named::ArrowDown) => {
-                        let _ = update(
-                            state,
-                            Message::Find(widget::find::Msg::PreviewSelectNext),
-                        );
+                        let _ = update(state, Message::Find(widget::find::Msg::PreviewSelectNext));
                     }
                     keyboard::Key::Named(Named::ArrowUp) => {
-                        let _ = update(
-                            state,
-                            Message::Find(widget::find::Msg::PreviewSelectPrev),
-                        );
+                        let _ = update(state, Message::Find(widget::find::Msg::PreviewSelectPrev));
                     }
                     _ if mods.control() && key == keyboard::Key::Character("n".into()) => {
-                        let _ = update(
-                            state,
-                            Message::Find(widget::find::Msg::PreviewSelectNext),
-                        );
+                        let _ = update(state, Message::Find(widget::find::Msg::PreviewSelectNext));
                     }
                     _ if mods.control() && key == keyboard::Key::Character("p".into()) => {
-                        let _ = update(
-                            state,
-                            Message::Find(widget::find::Msg::PreviewSelectPrev),
-                        );
+                        let _ = update(state, Message::Find(widget::find::Msg::PreviewSelectPrev));
                     }
                     _ => {}
                 }
@@ -1753,7 +1698,10 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                     } else {
                         widget::find::NavDir::Prev
                     };
-                    return update(state, Message::Find(widget::find::Msg::Navigate(target, dir)));
+                    return update(
+                        state,
+                        Message::Find(widget::find::Msg::Navigate(target, dir)),
+                    );
                 }
             }
 
@@ -1762,10 +1710,7 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                 use keyboard::key::Named;
                 match &key {
                     keyboard::Key::Named(Named::Escape) => {
-                        let _ = update(
-                            state,
-                            Message::TextSearch(widget::text_search::Msg::Close),
-                        );
+                        let _ = update(state, Message::TextSearch(widget::text_search::Msg::Close));
                     }
                     keyboard::Key::Named(Named::Enter) => {
                         let msg = if mods.shift() {
@@ -1873,37 +1818,22 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                         let _ = update(state, Message::NewFile(widget::new_file::Msg::Close));
                     }
                     keyboard::Key::Named(Named::Tab) => {
-                        return update(
-                            state,
-                            Message::NewFile(widget::new_file::Msg::TabComplete),
-                        );
+                        return update(state, Message::NewFile(widget::new_file::Msg::TabComplete));
                     }
                     keyboard::Key::Named(Named::Enter) => {
                         return update(state, Message::NewFile(widget::new_file::Msg::Confirm));
                     }
                     keyboard::Key::Named(Named::ArrowDown) => {
-                        let _ = update(
-                            state,
-                            Message::NewFile(widget::new_file::Msg::SelectNext),
-                        );
+                        let _ = update(state, Message::NewFile(widget::new_file::Msg::SelectNext));
                     }
                     keyboard::Key::Named(Named::ArrowUp) => {
-                        let _ = update(
-                            state,
-                            Message::NewFile(widget::new_file::Msg::SelectPrev),
-                        );
+                        let _ = update(state, Message::NewFile(widget::new_file::Msg::SelectPrev));
                     }
                     _ if mods.control() && key == keyboard::Key::Character("n".into()) => {
-                        let _ = update(
-                            state,
-                            Message::NewFile(widget::new_file::Msg::SelectNext),
-                        );
+                        let _ = update(state, Message::NewFile(widget::new_file::Msg::SelectNext));
                     }
                     _ if mods.control() && key == keyboard::Key::Character("p".into()) => {
-                        let _ = update(
-                            state,
-                            Message::NewFile(widget::new_file::Msg::SelectPrev),
-                        );
+                        let _ = update(state, Message::NewFile(widget::new_file::Msg::SelectPrev));
                     }
                     _ => {}
                 }
@@ -1918,10 +1848,7 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                 && state.ideas.tag_input.is_some()
                 && matches!(&key, keyboard::Key::Named(keyboard::key::Named::Escape))
             {
-                return update(
-                    state,
-                    Message::Ideas(area::ideas::Message::CancelTagInput),
-                );
+                return update(state, Message::Ideas(area::ideas::Message::CancelTagInput));
             }
 
             // When the Quick Idea modal is visible, route Esc + ctrl-n/p.
@@ -2095,9 +2022,7 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                 (active_info, &active_key)
             {
                 // Agent chat keyboard shortcuts (completion, esc-cancel, enter-send).
-                if agent_chat_active
-                    && let Some(ix) = state.interaction_mut(routing_key)
-                {
+                if agent_chat_active && let Some(ix) = state.interaction_mut(routing_key) {
                     match interaction::handle_agent_chat_key(ix, &key, mods) {
                         interaction::AgentChatKeyResult::Handled => return Task::none(),
                         interaction::AgentChatKeyResult::Dispatch(msg) => {
@@ -2284,9 +2209,9 @@ fn capture_chat_scroll_snapshot(state: &State) -> Option<ChatScrollSnapshot> {
 
 fn replay_chat_scroll(snap: ChatScrollSnapshot) -> Task<Message> {
     match snap {
-        ChatScrollSnapshot::StickToBottom => iced::widget::operation::snap_to_end(
-            widget::agent_chat::CHAT_SCROLLABLE_ID,
-        ),
+        ChatScrollSnapshot::StickToBottom => {
+            iced::widget::operation::snap_to_end(widget::agent_chat::CHAT_SCROLLABLE_ID)
+        }
         ChatScrollSnapshot::At(y) => iced::widget::operation::scroll_to(
             widget::agent_chat::CHAT_SCROLLABLE_ID,
             iced::widget::scrollable::AbsoluteOffset { x: 0.0, y },
@@ -2379,7 +2304,10 @@ fn dispatch_interaction_msg(state: &mut State, key: &str, msg: interaction::Msg)
             // message (cmd+N parity with the `+` button, which uses the
             // calling area's own wrap, depends on this).
             if state.active_area == Area::Ideas && state.ideas.idea_for_scope(key).is_some() {
-                update(state, Message::Ideas(area::ideas::Message::Interaction(msg)))
+                update(
+                    state,
+                    Message::Ideas(area::ideas::Message::Interaction(msg)),
+                )
             } else {
                 update(
                     state,
@@ -2561,10 +2489,7 @@ fn new_file_seed_path(state: &State) -> String {
 /// Resolve the new-file modal's Enter action: create the file (touching parent
 /// dirs as needed) if missing, then open it as a regular file tab. Existing
 /// files take the same code path as the file finder's confirm.
-fn confirm_new_file(
-    state: &mut State,
-    action: widget::new_file::ConfirmAction,
-) -> Task<Message> {
+fn confirm_new_file(state: &mut State, action: widget::new_file::ConfirmAction) -> Task<Message> {
     use widget::new_file::ConfirmAction;
     let abs = match &action {
         ConfirmAction::Open(p) | ConfirmAction::Create(p) => p.clone(),
@@ -2586,10 +2511,7 @@ fn confirm_new_file(
     let Some(root) = state.project.project_root.clone() else {
         return Task::none();
     };
-    let rel = abs
-        .strip_prefix(&root)
-        .unwrap_or(&abs)
-        .to_path_buf();
+    let rel = abs.strip_prefix(&root).unwrap_or(&abs).to_path_buf();
     let content = std::fs::read_to_string(&abs).unwrap_or_default();
     let id = format!("file:{}", rel.display());
     let title = rel
@@ -2609,13 +2531,7 @@ fn confirm_new_file(
     if let Some(tab) = state.tabs.file_tabs.iter_mut().find(|t| t.id == id)
         && let tab_bar::TabView::Editor { editor, .. } = &mut tab.view
     {
-        task = spawn_file_tab_highlight(
-            area,
-            id,
-            editor,
-            state.highlighter.clone(),
-            false,
-        );
+        task = spawn_file_tab_highlight(area, id, editor, state.highlighter.clone(), false);
     }
     if switched {
         Task::batch([task, restore_chat_scroll(state)])
@@ -2732,8 +2648,7 @@ fn rehighlight_all(state: &mut State) -> Task<Message> {
                 ..
             } => {
                 editor.highlight_version = editor.highlight_version.wrapping_add(1);
-                editor.highlight_spans =
-                    Some(widget::diff_view::build_diff_spans(diff_data, None));
+                editor.highlight_spans = Some(widget::diff_view::build_diff_spans(diff_data, None));
                 tasks.push(spawn_diff_highlight(
                     area,
                     tab_id,
@@ -2772,11 +2687,8 @@ fn rehighlight_all(state: &mut State) -> Task<Message> {
                     .highlight_lines(&ax.chat_input.lines, md_syntax),
             );
             for editor in ax.chat_editors.iter_mut() {
-                editor.highlight_spans = Some(
-                    state
-                        .highlighter
-                        .highlight_lines(&editor.lines, md_syntax),
-                );
+                editor.highlight_spans =
+                    Some(state.highlighter.highlight_lines(&editor.lines, md_syntax));
             }
         }
     }
@@ -3245,10 +3157,7 @@ fn find_editor_mut<'a>(
 fn find_diff_tab_mut<'a>(
     tabs: &'a mut tab_bar::TabState,
     tab_id: &str,
-) -> Option<(
-    &'a mut widget::text_edit::EditorState,
-    Arc<vcs::DiffData>,
-)> {
+) -> Option<(&'a mut widget::text_edit::EditorState, Arc<vcs::DiffData>)> {
     let tab = tabs
         .preview
         .as_mut()
@@ -3501,7 +3410,9 @@ fn update_focused_column(state: &mut State, message: &Message) {
 
 /// Build the modal snapshot for the focused target. The snapshot lets the
 /// modal compute live previews without holding borrows on the app state.
-fn build_find_snapshot(state: &State) -> Option<(widget::find::FindTarget, widget::find::ModalSnapshot)> {
+fn build_find_snapshot(
+    state: &State,
+) -> Option<(widget::find::FindTarget, widget::find::ModalSnapshot)> {
     let target = keybinds::keybind_find(state)?;
     match &target {
         widget::find::FindTarget::Editor(tab_id) => {
@@ -3510,14 +3421,13 @@ fn build_find_snapshot(state: &State) -> Option<(widget::find::FindTarget, widge
                 return None;
             }
             let editor = match &tab.view {
-                tab_bar::TabView::Editor { editor, .. }
-                | tab_bar::TabView::Diff { editor, .. } => editor,
+                tab_bar::TabView::Editor { editor, .. } | tab_bar::TabView::Diff { editor, .. } => {
+                    editor
+                }
                 _ => return None,
             };
-            let label = widget::find::editor_label_for(
-                tab_id,
-                state.project.project_root.as_deref(),
-            );
+            let label =
+                widget::find::editor_label_for(tab_id, state.project.project_root.as_deref());
             let snap = widget::find::snapshot_editor(target.clone(), label, editor);
             Some((target, snap))
         }
@@ -3562,8 +3472,7 @@ fn chat_block_searchable(blocks: &[widget::text_edit::Block]) -> Vec<bool> {
         .map(|b| {
             !matches!(
                 b.kind,
-                widget::text_edit::BlockKind::ToolUse
-                    | widget::text_edit::BlockKind::ToolResult
+                widget::text_edit::BlockKind::ToolUse | widget::text_edit::BlockKind::ToolResult
             )
         })
         .collect()
@@ -3643,8 +3552,9 @@ fn commit_find(state: &mut State) -> Task<Message> {
                 return Task::none();
             }
             let editor = match &tab.view {
-                tab_bar::TabView::Editor { editor, .. }
-                | tab_bar::TabView::Diff { editor, .. } => editor,
+                tab_bar::TabView::Editor { editor, .. } | tab_bar::TabView::Diff { editor, .. } => {
+                    editor
+                }
                 _ => {
                     state.find_modal.close();
                     return Task::none();
@@ -3739,8 +3649,9 @@ fn jump_to_current(state: &mut State, target: &widget::find::FindTarget) -> Task
                 return Task::none();
             }
             let editor = match &mut tab.view {
-                tab_bar::TabView::Editor { editor, .. }
-                | tab_bar::TabView::Diff { editor, .. } => editor,
+                tab_bar::TabView::Editor { editor, .. } | tab_bar::TabView::Diff { editor, .. } => {
+                    editor
+                }
                 _ => return Task::none(),
             };
             let line = m.line.min(editor.lines.len().saturating_sub(1));
@@ -3795,7 +3706,10 @@ fn jump_to_current(state: &mut State, target: &widget::find::FindTarget) -> Task
 fn editor_find_highlights(
     state: &State,
     tab_id: &str,
-) -> (Vec<widget::text_edit::HighlightRange>, Option<widget::text_edit::HighlightRange>) {
+) -> (
+    Vec<widget::text_edit::HighlightRange>,
+    Option<widget::text_edit::HighlightRange>,
+) {
     let target = widget::find::FindTarget::editor(tab_id.to_string());
     let Some(fs) = state.find_states.get(&target) else {
         return (Vec::new(), None);
@@ -3810,13 +3724,14 @@ fn editor_find_highlights(
             byte_end: m.byte_end,
         })
         .collect();
-    let current = fs.current_match().filter(|m| m.block_idx.is_none()).map(|m| {
-        widget::text_edit::HighlightRange {
+    let current = fs
+        .current_match()
+        .filter(|m| m.block_idx.is_none())
+        .map(|m| widget::text_edit::HighlightRange {
             line: m.line,
             byte_start: m.byte_start,
             byte_end: m.byte_end,
-        }
-    });
+        });
     (ranges, current)
 }
 
@@ -3828,13 +3743,18 @@ fn chat_find_highlights(
     instance_id: u64,
     session_id: &str,
     block_count: usize,
-) -> Vec<(Vec<widget::text_edit::HighlightRange>, Option<widget::text_edit::HighlightRange>)> {
+) -> Vec<(
+    Vec<widget::text_edit::HighlightRange>,
+    Option<widget::text_edit::HighlightRange>,
+)> {
     let target = widget::find::FindTarget::chat(instance_id, session_id.to_string());
     let Some(fs) = state.find_states.get(&target) else {
         return Vec::new();
     };
-    let mut out: Vec<(Vec<widget::text_edit::HighlightRange>, Option<widget::text_edit::HighlightRange>)> =
-        (0..block_count).map(|_| (Vec::new(), None)).collect();
+    let mut out: Vec<(
+        Vec<widget::text_edit::HighlightRange>,
+        Option<widget::text_edit::HighlightRange>,
+    )> = (0..block_count).map(|_| (Vec::new(), None)).collect();
     let current_idx = fs.current;
     for (i, m) in fs.matches.iter().enumerate() {
         let Some(bi) = m.block_idx else { continue };
@@ -3883,10 +3803,7 @@ fn switch_area(state: &mut State, target: Area) {
         .insert(prev, state.tabs.preview.take());
     state.cached_active.insert(prev, state.tabs.active);
 
-    state.tabs.preview = state
-        .cached_previews
-        .remove(&target)
-        .unwrap_or(None);
+    state.tabs.preview = state.cached_previews.remove(&target).unwrap_or(None);
     state.tabs.active = state
         .cached_active
         .remove(&target)
@@ -3931,10 +3848,7 @@ fn route_interaction(state: &mut State, msg: interaction::Msg) -> Task<Message> 
             );
         }
         Area::Caps => {
-            let ix = state
-                .interactions
-                .entry(scope::Scope::Caps)
-                .or_default();
+            let ix = state.interactions.entry(scope::Scope::Caps).or_default();
             area::caps::update(
                 &mut state.caps,
                 &mut state.tabs,
@@ -3945,10 +3859,7 @@ fn route_interaction(state: &mut State, msg: interaction::Msg) -> Task<Message> 
             );
         }
         Area::Codex => {
-            let ix = state
-                .interactions
-                .entry(scope::Scope::Codex)
-                .or_default();
+            let ix = state.interactions.entry(scope::Scope::Codex).or_default();
             area::codex::update(
                 &mut state.codex,
                 &mut state.tabs,
@@ -3970,7 +3881,11 @@ fn route_interaction(state: &mut State, msg: interaction::Msg) -> Task<Message> 
         }
         Area::Dashboard | Area::Settings => {}
     }
-    if needs_focus { focus_chat_input() } else { Task::none() }
+    if needs_focus {
+        focus_chat_input()
+    } else {
+        Task::none()
+    }
 }
 
 /// Tag a set of line indices with `LineBgKind::Match` so they stand out
@@ -3993,6 +3908,110 @@ pub fn set_match_line_highlights(editor: &mut widget::text_edit::EditorState, li
 /// sits near the center of the editor viewport. Highlights every hit in
 /// `all_hits` whose path matches this file so the user sees the full picture
 /// rather than just the one they confirmed.
+/// Pull a cmd-clicked path reference out of any message route that carries
+/// editor or terminal actions. Returns `(path, 1-based line)`.
+fn extract_open_path(msg: &Message) -> Option<(String, Option<usize>)> {
+    fn from_action(action: &widget::text_edit::EditorAction) -> Option<(String, Option<usize>)> {
+        if let widget::text_edit::EditorAction::OpenPath { path, line } = action {
+            Some((path.clone(), *line))
+        } else {
+            None
+        }
+    }
+    fn from_interaction(im: &interaction::Msg) -> Option<(String, Option<usize>)> {
+        match im {
+            interaction::Msg::TerminalOpenPath { path, line } => Some((path.clone(), *line)),
+            interaction::Msg::AgentChat(
+                widget::agent_chat::Msg::InputAction(action)
+                | widget::agent_chat::Msg::ChatAction(_, action)
+                | widget::agent_chat::Msg::QueueAction(action),
+            ) => from_action(action),
+            _ => None,
+        }
+    }
+    match msg {
+        Message::TabContent(tab_bar::TabContentMsg::EditorAction(action)) => from_action(action),
+        Message::TabContent(tab_bar::TabContentMsg::SearchSliceAction(_, action)) => {
+            from_action(action)
+        }
+        Message::QuickIdea(widget::quick_idea::Msg::EditorAction(action)) => from_action(action),
+        Message::Interaction(im) => from_interaction(im),
+        Message::Caps(area::caps::Message::Interaction(im)) => from_interaction(im),
+        Message::Codex(area::codex::Message::Interaction(im)) => from_interaction(im),
+        Message::Ideas(area::ideas::Message::Interaction(im)) => from_interaction(im),
+        Message::Change(area::change::Message::Interaction(im)) => from_interaction(im),
+        _ => None,
+    }
+}
+
+/// Handle a cmd-clicked path reference: open the file directly when it
+/// resolves, otherwise fall back to the fuzzy file finder pre-filled with
+/// the path. `line` is 1-based (from a `:NN` suffix in the text).
+fn open_path_reference(state: &mut State, path: &str, line: Option<usize>) -> Task<Message> {
+    let line_idx = line.map(|l| l.saturating_sub(1));
+    if let Some(abs) = path_link::resolve(path) {
+        return open_path_in_tab(state, abs, line_idx);
+    }
+    let Some(root) = state.project.project_root.clone() else {
+        return Task::none();
+    };
+    state.file_finder.open(&root);
+    state.file_finder.set_query(path.to_string());
+    state.file_finder.pending_line = line_idx;
+    for ix in state.interactions.values_mut() {
+        ix.terminal_focused = false;
+    }
+    iced::widget::operation::focus("file-finder-input")
+}
+
+/// Open `abs` as a file tab, switching to a tab-capable area when needed,
+/// and optionally jump to a 0-based line. Shared by the file finder and
+/// cmd-clicked path references.
+fn open_path_in_tab(state: &mut State, abs: PathBuf, line: Option<usize>) -> Task<Message> {
+    let Ok(content) = std::fs::read_to_string(&abs) else {
+        return Task::none();
+    };
+    // Files inside the project keep root-relative tab ids (matching every
+    // other open path); files outside fall back to the absolute path.
+    let display = state
+        .project
+        .project_root
+        .as_deref()
+        .and_then(|root| abs.strip_prefix(root).ok())
+        .unwrap_or(&abs)
+        .to_path_buf();
+    let id = format!("file:{}", display.display());
+    let title = display
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| display.display().to_string());
+    let area = match state.active_area {
+        Area::Dashboard | Area::Settings => Area::Change,
+        other => other,
+    };
+    let switched = state.active_area != area;
+    switch_area(state, area);
+    state
+        .tabs
+        .open_file(id.clone(), title, content, Some(abs.clone()));
+    let mut task = Task::none();
+    if let Some(tab) = state.tabs.file_tabs.iter_mut().find(|t| t.id == id)
+        && let tab_bar::TabView::Editor { editor, .. } = &mut tab.view
+    {
+        if let Some(line) = line {
+            let line = line.min(editor.lines.len().saturating_sub(1));
+            editor.cursor = widget::text_edit::Pos::new(line, 0);
+            editor.scroll_y = (line as f32 * 20.0 - 300.0).max(0.0);
+        }
+        task = spawn_file_tab_highlight(area, id, editor, state.highlighter.clone(), false);
+    }
+    if switched {
+        Task::batch([task, restore_chat_scroll(state)])
+    } else {
+        task
+    }
+}
+
 fn open_search_hit_as_file(
     state: &mut State,
     hit: &widget::text_search::SearchHit,
@@ -4311,22 +4330,21 @@ fn apply_session_title(state: &mut State, key: &str, title: &str) {
 /// Compose the shared three-column layout for any non-dashboard, non-settings
 /// area: list (per-area) | content (global tabs) | optional interaction.
 fn view_area_three_column(state: &State) -> Element<'_, Message> {
-    let list: Element<'_, Message> = match state.active_area {
-        Area::Change => area::change::view_list(
-            &state.change,
-            &state.project,
-            &state.ideas,
-            &state.tabs,
-        )
-        .map(Message::Change),
-        Area::Caps => area::caps::view_list(&state.caps, &state.project, &state.tabs)
-            .map(Message::Caps),
-        Area::Codex => area::codex::view_list(&state.codex, &state.project, &state.tabs)
-            .map(Message::Codex),
-        Area::Ideas => area::ideas::view_list(&state.ideas, &state.project, &state.tabs)
-            .map(Message::Ideas),
-        _ => unreachable!("view_area_three_column called for area without three-column layout"),
-    };
+    let list: Element<'_, Message> =
+        match state.active_area {
+            Area::Change => {
+                area::change::view_list(&state.change, &state.project, &state.ideas, &state.tabs)
+                    .map(Message::Change)
+            }
+            Area::Caps => {
+                area::caps::view_list(&state.caps, &state.project, &state.tabs).map(Message::Caps)
+            }
+            Area::Codex => area::codex::view_list(&state.codex, &state.project, &state.tabs)
+                .map(Message::Codex),
+            Area::Ideas => area::ideas::view_list(&state.ideas, &state.project, &state.tabs)
+                .map(Message::Ideas),
+            _ => unreachable!("view_area_three_column called for area without three-column layout"),
+        };
 
     let content = view_global_content(state);
     let scope = state.active_scope();
@@ -4356,11 +4374,7 @@ fn view_area_three_column(state: &State) -> Element<'_, Message> {
     ];
 
     if !is_exploration || has_tabs {
-        row_items = row_items.push(
-            container(content)
-                .width(Length::Fill)
-                .height(Length::Fill),
-        );
+        row_items = row_items.push(container(content).width(Length::Fill).height(Length::Fill));
     }
 
     let visible = ix.is_some_and(|i| i.visible);
@@ -4393,13 +4407,8 @@ fn view_area_three_column(state: &State) -> Element<'_, Message> {
                 .get(&target)
                 .map(|fs| widget::find::view_toolbar(target.clone(), fs).map(Message::Find))
         });
-        let interaction_col = interaction::view_column(
-            ix,
-            Message::Interaction,
-            controls,
-            block_hl,
-            find_toolbar,
-        );
+        let interaction_col =
+            interaction::view_column(ix, Message::Interaction, controls, block_hl, find_toolbar);
         let col = container(interaction_col)
             .height(Length::Fill)
             .style(theme::surface);
@@ -4464,7 +4473,8 @@ fn view_global_content(state: &State) -> Element<'_, Message> {
 
     // Change area: error panel for the active artifact.
     if state.active_area == Area::Change
-        && let Some(errors) = area::change::error_panel_for(&state.change, &state.project, &state.tabs)
+        && let Some(errors) =
+            area::change::error_panel_for(&state.change, &state.project, &state.tabs)
     {
         let divider = container(Space::new().width(Length::Fill))
             .height(1.0)
@@ -4518,14 +4528,12 @@ fn view(state: &State) -> Element<'_, Message> {
             &state.ideas.format_errors,
         )
         .map(Message::Dashboard),
-        Area::Settings => {
-            area::settings::view(
-                &state.settings,
-                &state.config,
-                state.project.project_root.as_deref(),
-            )
-            .map(Message::Settings)
-        }
+        Area::Settings => area::settings::view(
+            &state.settings,
+            &state.config,
+            state.project.project_root.as_deref(),
+        )
+        .map(Message::Settings),
         _ => view_area_three_column(state),
     };
 
@@ -4719,7 +4727,9 @@ fn spawn_new_instance() {
         }
     };
     match std::process::Command::new(&exe).spawn() {
-        Ok(child) => tracing::info!(pid = child.id(), exe = %exe.display(), "spawned new duckboard instance"),
+        Ok(child) => {
+            tracing::info!(pid = child.id(), exe = %exe.display(), "spawned new duckboard instance")
+        }
         Err(e) => tracing::warn!(exe = %exe.display(), "spawn_new_instance: spawn failed: {e}"),
     }
 }

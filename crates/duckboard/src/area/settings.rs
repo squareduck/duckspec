@@ -159,14 +159,9 @@ fn model_section<'a>(config: &Config, root: &Path) -> Element<'a, Message> {
         .style(theme::pick_list_style)
         .menu_style(theme::pick_list_menu);
 
-    column![
-        label,
-        desc,
-        Space::new().height(theme::SPACING_SM),
-        picker,
-    ]
-    .spacing(theme::SPACING_XS)
-    .into()
+    column![label, desc, Space::new().height(theme::SPACING_SM), picker,]
+        .spacing(theme::SPACING_XS)
+        .into()
 }
 
 fn font_section<'a>(

@@ -175,9 +175,7 @@ fn starts_with_slash_command(text: &str) -> bool {
     let Some(rest) = trimmed.strip_prefix('/') else {
         return false;
     };
-    rest.chars()
-        .next()
-        .is_some_and(|c| !c.is_whitespace())
+    rest.chars().next().is_some_and(|c| !c.is_whitespace())
 }
 
 /// True when `text` is exactly a slash command with no trailing content
@@ -200,9 +198,8 @@ pub fn is_bare_slash_command(text: &str) -> bool {
 /// hasn't been summarised yet. Sessions with `title` set use that instead.
 pub fn reconcile_display_names(sessions: &mut [ChatSession], scope_label: &str) {
     use std::collections::HashMap;
-    let label_for = |s: &ChatSession| -> String {
-        s.title.clone().unwrap_or_else(|| scope_label.to_string())
-    };
+    let label_for =
+        |s: &ChatSession| -> String { s.title.clone().unwrap_or_else(|| scope_label.to_string()) };
     let mut groups: HashMap<String, Vec<usize>> = HashMap::new();
     for (i, s) in sessions.iter().enumerate() {
         let prefix = minute_prefix_from_nanos(s.created_at_nanos);

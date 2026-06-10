@@ -10,7 +10,10 @@
 use iced::Task;
 use iced::advanced::widget::{Id, Operation, operation};
 use iced::widget::text::Span;
-use iced::widget::{Space, button, column, container, mouse_area, rich_text, row, scrollable, span, text, text_input};
+use iced::widget::{
+    Space, button, column, container, mouse_area, rich_text, row, scrollable, span, text,
+    text_input,
+};
 use iced::{Center, Color, Element, Font, Length, Rectangle, Vector};
 use regex::Regex;
 
@@ -192,7 +195,8 @@ impl FindModalState {
                 return;
             }
         };
-        self.preview = compute_matches_in_lines(&snap.lines, &snap.line_meta, &regex, PREVIEW_LIMIT);
+        self.preview =
+            compute_matches_in_lines(&snap.lines, &snap.line_meta, &regex, PREVIEW_LIMIT);
     }
 }
 
@@ -538,11 +542,9 @@ pub fn view_modal<'a>(state: &'a FindModalState) -> Element<'a, Msg> {
         .size(theme::font_sm())
         .font(theme::content_font())
         .color(theme::text_muted());
-    let status_bar = container(
-        row![left, Space::new().width(Length::Fill), hints].align_y(Center),
-    )
-    .padding([theme::SPACING_XS, theme::SPACING_MD])
-    .width(Length::Fill);
+    let status_bar = container(row![left, Space::new().width(Length::Fill), hints].align_y(Center))
+        .padding([theme::SPACING_XS, theme::SPACING_MD])
+        .width(Length::Fill);
 
     let panel = container(
         column![
@@ -598,14 +600,22 @@ pub fn view_toolbar<'a>(target: FindTarget, state: &'a FindState) -> Element<'a,
         .size(theme::font_sm())
         .color(theme::text_muted());
 
-    let prev_btn = button(text("‹").size(theme::font_sm()).color(theme::text_secondary()))
-        .on_press(Msg::Navigate(target.clone(), NavDir::Prev))
-        .padding([0.0, theme::SPACING_SM])
-        .style(toolbar_btn_style);
-    let next_btn = button(text("›").size(theme::font_sm()).color(theme::text_secondary()))
-        .on_press(Msg::Navigate(target.clone(), NavDir::Next))
-        .padding([0.0, theme::SPACING_SM])
-        .style(toolbar_btn_style);
+    let prev_btn = button(
+        text("‹")
+            .size(theme::font_sm())
+            .color(theme::text_secondary()),
+    )
+    .on_press(Msg::Navigate(target.clone(), NavDir::Prev))
+    .padding([0.0, theme::SPACING_SM])
+    .style(toolbar_btn_style);
+    let next_btn = button(
+        text("›")
+            .size(theme::font_sm())
+            .color(theme::text_secondary()),
+    )
+    .on_press(Msg::Navigate(target.clone(), NavDir::Next))
+    .padding([0.0, theme::SPACING_SM])
+    .style(toolbar_btn_style);
     let close_btn = button(text("×").size(theme::font_sm()).color(theme::text_muted()))
         .on_press(Msg::Deactivate(target))
         .padding([0.0, theme::SPACING_SM])
@@ -835,7 +845,11 @@ impl Operation<()> for ScrollBlockToTop {
                 let target_y = (by - sy).max(0.0);
                 operation::Outcome::Chain(Box::new(operation::scrollable::scroll_to(
                     self.scrollable_id.clone(),
-                    operation::scrollable::AbsoluteOffset { x: 0.0, y: target_y }.into(),
+                    operation::scrollable::AbsoluteOffset {
+                        x: 0.0,
+                        y: target_y,
+                    }
+                    .into(),
                 )))
             }
             _ => operation::Outcome::None,
@@ -890,8 +904,22 @@ mod tests {
         let mut s = FindState {
             query: "x".into(),
             matches: vec![
-                FindMatch { line: 0, byte_start: 0, byte_end: 1, line_text: "x".into(), block_idx: None, block_role: None },
-                FindMatch { line: 1, byte_start: 0, byte_end: 1, line_text: "x".into(), block_idx: None, block_role: None },
+                FindMatch {
+                    line: 0,
+                    byte_start: 0,
+                    byte_end: 1,
+                    line_text: "x".into(),
+                    block_idx: None,
+                    block_role: None,
+                },
+                FindMatch {
+                    line: 1,
+                    byte_start: 0,
+                    byte_end: 1,
+                    line_text: "x".into(),
+                    block_idx: None,
+                    block_role: None,
+                },
             ],
             current: 0,
         };

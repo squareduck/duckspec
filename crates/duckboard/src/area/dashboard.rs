@@ -31,7 +31,10 @@ pub enum Message {
     ArchivedChangeClicked(String),
     ExplorationClicked(String),
     AddExploration,
-    SelectAuditError { change: String, artifact_id: String },
+    SelectAuditError {
+        change: String,
+        artifact_id: String,
+    },
     /// Show the project-picker modal.
     OpenProjectPicker,
     /// Open a specific project root immediately (used by the recents list).
@@ -305,13 +308,21 @@ fn recent_row<'a>(state: &'a State, path: &'a Path) -> Element<'a, Message> {
             (
                 "Delete data — click again",
                 Message::DeleteRecentData(path.to_path_buf()),
-                destructive_button_armed as fn(&iced::Theme, iced::widget::button::Status) -> iced::widget::button::Style,
+                destructive_button_armed
+                    as fn(
+                        &iced::Theme,
+                        iced::widget::button::Status,
+                    ) -> iced::widget::button::Style,
             )
         } else {
             (
                 "Delete data",
                 Message::ArmDeleteRecent(path.to_path_buf()),
-                theme::icon_button as fn(&iced::Theme, iced::widget::button::Status) -> iced::widget::button::Style,
+                theme::icon_button
+                    as fn(
+                        &iced::Theme,
+                        iced::widget::button::Status,
+                    ) -> iced::widget::button::Style,
             )
         };
         let delete = button(text(delete_label).size(theme::font_sm()))

@@ -392,7 +392,10 @@ pub fn view<'a>(
     obvious_command: Option<&str>,
     pinned_selections: &'a [SelectionContext],
     tentative_selection: Option<&'a SelectionContext>,
-    block_highlights: Vec<(Vec<text_edit::HighlightRange>, Option<text_edit::HighlightRange>)>,
+    block_highlights: Vec<(
+        Vec<text_edit::HighlightRange>,
+        Option<text_edit::HighlightRange>,
+    )>,
 ) -> Element<'a, Msg> {
     // Chat content — scrollable column of full-width sections.
     let mut chat_col = column![]
@@ -521,9 +524,10 @@ pub fn view<'a>(
     } else {
         theme::text_muted()
     };
-    let has_attachments =
-        !pinned_selections.is_empty() || tentative_selection.is_some();
-    let mut meta_inner = row![].spacing(theme::SPACING_SM).align_y(iced::Alignment::Center);
+    let has_attachments = !pinned_selections.is_empty() || tentative_selection.is_some();
+    let mut meta_inner = row![]
+        .spacing(theme::SPACING_SM)
+        .align_y(iced::Alignment::Center);
     if has_attachments {
         meta_inner = meta_inner.push(
             text("⌘R reset")
@@ -552,17 +556,16 @@ pub fn view<'a>(
                 .color(theme::text_muted()),
         );
     }
-    meta_inner = meta_inner
-        .push(
-            text(format!(
-                "{} / {} ({}%)",
-                format_number(status.context_tokens),
-                format_number(status.context_max),
-                ctx_pct,
-            ))
-            .size(theme::font_sm())
-            .color(ctx_color),
-        );
+    meta_inner = meta_inner.push(
+        text(format!(
+            "{} / {} ({}%)",
+            format_number(status.context_tokens),
+            format_number(status.context_max),
+            ctx_pct,
+        ))
+        .size(theme::font_sm())
+        .color(ctx_color),
+    );
     let meta_row = container(meta_inner)
         .padding([0.0, theme::SPACING_SM])
         .width(Length::Fill);
@@ -643,12 +646,11 @@ pub fn view<'a>(
     // Horizontal padding here sums with TextEdit's internal CONTENT_PAD (8px)
     // to land the input's text at the same 12px the chat headers and the
     // completion rows use.
-    let input_row = container(
-        column![queue_el, attachments_el, input, meta_row].spacing(theme::SPACING_XS),
-    )
-    .padding([theme::SPACING_SM, theme::SPACING_XS])
-    .width(Length::Fill)
-    .style(theme::chat_input);
+    let input_row =
+        container(column![queue_el, attachments_el, input, meta_row].spacing(theme::SPACING_XS))
+            .padding([theme::SPACING_SM, theme::SPACING_XS])
+            .width(Length::Fill)
+            .style(theme::chat_input);
 
     column![chat_area, completion_el, input_divider, input_row]
         .height(Length::Fill)

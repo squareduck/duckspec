@@ -364,6 +364,11 @@ impl EditorState {
                 // Handled upstream — see `handle_editor_action` and chat input
                 // handlers, which dispatch to the system opener.
             }
+            EditorAction::OpenPath { .. } => {
+                // Handled upstream — intercepted centrally in `main::update`,
+                // which opens the file as a tab or falls back to the fuzzy
+                // file finder.
+            }
             EditorAction::AttachImage { .. } => {
                 // Handled upstream — see chat input handler, which stores the
                 // bytes in the per-session attachment side table and then
@@ -897,6 +902,13 @@ pub enum EditorAction {
     /// User cmd-clicked a hyperlink in the editor. Handled by the caller;
     /// `apply_action` is a no-op for this variant.
     OpenUrl(String),
+    /// User cmd-clicked a file-path reference. `path` is as written in the
+    /// text (relative or absolute), `line` is 1-based from a `:NN` suffix.
+    /// Handled centrally by `main::update`; `apply_action` is a no-op.
+    OpenPath {
+        path: String,
+        line: Option<usize>,
+    },
     /// Image-bearing paste. The host registers `bytes` under `id` in its
     /// per-input attachment side table and then dispatches a regular
     /// `Paste` of `[label](attach:<id>)` to insert the markdown link at the

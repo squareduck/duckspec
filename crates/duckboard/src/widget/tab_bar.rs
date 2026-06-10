@@ -193,7 +193,13 @@ impl TabState {
     /// Open a read-only "search stack" tab showing one slice per match.
     /// Always appends a fresh tab (does not reuse by id) so repeated searches
     /// produce distinct tabs the user can compare.
-    pub fn open_search_stack(&mut self, id: String, title: String, query: String, slices: Vec<SearchSlice>) {
+    pub fn open_search_stack(
+        &mut self,
+        id: String,
+        title: String,
+        query: String,
+        slices: Vec<SearchSlice>,
+    ) {
         if self.file_tabs.len() >= MAX_FILE_TABS {
             self.file_tabs.remove(0);
             if let ActiveTab::File(fi) = self.active {
@@ -315,11 +321,7 @@ impl TabState {
     /// old content is dropped when its result arrives. Returns a mutable
     /// reference to the editor so the caller can spawn a fresh highlight
     /// job; returns `None` if the tab is missing or isn't an `Editor`.
-    pub fn refresh_content(
-        &mut self,
-        id: &str,
-        new_source: String,
-    ) -> Option<&mut EditorState> {
+    pub fn refresh_content(&mut self, id: &str, new_source: String) -> Option<&mut EditorState> {
         let tab = self
             .preview
             .iter_mut()
@@ -340,7 +342,10 @@ impl TabState {
 
     /// True if the active tab is a SearchStack tab.
     pub fn active_is_search_stack(&self) -> bool {
-        matches!(self.active_tab().map(|t| &t.view), Some(TabView::SearchStack { .. }))
+        matches!(
+            self.active_tab().map(|t| &t.view),
+            Some(TabView::SearchStack { .. })
+        )
     }
 
     /// Update a diff tab in place. Preserves scroll/cursor and refreshes
@@ -540,9 +545,7 @@ pub fn view_content<'a>(
     highlights: Option<(Vec<HighlightRange>, Option<HighlightRange>)>,
 ) -> Element<'a, TabContentMsg> {
     match state.active_tab() {
-        Some(tab) if matches!(&tab.view, TabView::SearchStack { .. }) => {
-            view_search_stack(tab)
-        }
+        Some(tab) if matches!(&tab.view, TabView::SearchStack { .. }) => view_search_stack(tab),
         Some(tab) => {
             // Idea pinned tabs render their own header (tag chips + actions)
             // via `area::ideas::view_pinned_toolbar`; the file-path bar is
@@ -562,17 +565,15 @@ pub fn view_content<'a>(
                         path.display().to_string(),
                     ),
                     _ => {
-                        let display =
-                            tab.id.strip_prefix("file:").unwrap_or(&tab.id).to_string();
+                        let display = tab.id.strip_prefix("file:").unwrap_or(&tab.id).to_string();
                         (icon_for_title(&tab.title), theme::text_muted(), display)
                     }
                 };
-                let leading: Element<'_, TabContentMsg> =
-                    svg(svg::Handle::from_memory(icon_bytes))
-                        .width(theme::font_sm())
-                        .height(theme::font_sm())
-                        .style(theme::svg_tint(icon_color))
-                        .into();
+                let leading: Element<'_, TabContentMsg> = svg(svg::Handle::from_memory(icon_bytes))
+                    .width(theme::font_sm())
+                    .height(theme::font_sm())
+                    .style(theme::svg_tint(icon_color))
+                    .into();
                 let mut path_items = row![
                     leading,
                     text(path_text)
@@ -583,22 +584,19 @@ pub fn view_content<'a>(
                 .align_y(Center)
                 .width(Length::Fill);
                 if let TabView::Diff { path, .. } = &tab.view {
-                    path_items = path_items
-                        .push(Space::new().width(Length::Fill))
-                        .push(
-                            button(text("Open in tab").size(theme::font_sm()))
-                                .on_press(TabContentMsg::OpenInNewTab(path.clone()))
-                                .padding(0.0)
-                                .style(theme::icon_button),
-                        );
+                    path_items = path_items.push(Space::new().width(Length::Fill)).push(
+                        button(text("Open in tab").size(theme::font_sm()))
+                            .on_press(TabContentMsg::OpenInNewTab(path.clone()))
+                            .padding(0.0)
+                            .style(theme::icon_button),
+                    );
                 }
                 let path_row = container(path_items)
                     .padding([theme::SPACING_XS, theme::SPACING_SM])
                     .width(Length::Fill);
                 column![
                     path_row,
-                    container(Space::new().width(Length::Fill).height(1.0))
-                        .style(theme::divider),
+                    container(Space::new().width(Length::Fill).height(1.0)).style(theme::divider),
                 ]
                 .into()
             } else {
@@ -656,12 +654,11 @@ fn view_search_stack(tab: &Tab) -> Element<'_, TabContentMsg> {
 
     // Header strip: mirrors the shape of the Editor/Diff path bar so the
     // content region doesn't jump when switching tab kinds.
-    let hdr_leading: Element<'_, TabContentMsg> =
-        svg(svg::Handle::from_memory(ICON_FILE))
-            .width(theme::font_sm())
-            .height(theme::font_sm())
-            .style(theme::svg_tint(theme::accent()))
-            .into();
+    let hdr_leading: Element<'_, TabContentMsg> = svg(svg::Handle::from_memory(ICON_FILE))
+        .width(theme::font_sm())
+        .height(theme::font_sm())
+        .style(theme::svg_tint(theme::accent()))
+        .into();
     let hdr_title = format!("search: \"{query}\" — {} matches", slices.len());
     let path_row = container(
         row![
@@ -700,7 +697,11 @@ fn view_search_stack(tab: &Tab) -> Element<'_, TabContentMsg> {
     column![header, body].height(Length::Fill).into()
 }
 
-fn view_search_slice(idx: usize, slice: &SearchSlice, per_slice_h: f32) -> Element<'_, TabContentMsg> {
+fn view_search_slice(
+    idx: usize,
+    slice: &SearchSlice,
+    per_slice_h: f32,
+) -> Element<'_, TabContentMsg> {
     let path_label = format!("{}:{}", slice.rel_path, slice.line + 1);
     let slice_header = button(
         row![
@@ -721,11 +722,12 @@ fn view_search_slice(idx: usize, slice: &SearchSlice, per_slice_h: f32) -> Eleme
     .width(Length::Fill)
     .style(theme::section_header);
 
-    let editor_widget =
-        text_edit::TextEdit::new(&slice.editor, move |a| TabContentMsg::SearchSliceAction(idx, a))
-            .read_only(true)
-            .show_gutter(true)
-            .static_viewport(true);
+    let editor_widget = text_edit::TextEdit::new(&slice.editor, move |a| {
+        TabContentMsg::SearchSliceAction(idx, a)
+    })
+    .read_only(true)
+    .show_gutter(true)
+    .static_viewport(true);
 
     container(
         column![
@@ -739,4 +741,3 @@ fn view_search_slice(idx: usize, slice: &SearchSlice, per_slice_h: f32) -> Eleme
     .width(Length::Fill)
     .into()
 }
-

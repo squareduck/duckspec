@@ -184,12 +184,7 @@ impl QuickIdeaState {
             self.matches.clear();
             return;
         }
-        let q = self
-            .editor
-            .lines
-            .first()
-            .cloned()
-            .unwrap_or_default();
+        let q = self.editor.lines.first().cloned().unwrap_or_default();
         if q.trim().is_empty() {
             self.matches.clear();
             return;
@@ -453,10 +448,9 @@ pub fn view<'a>(state: &'a QuickIdeaState) -> Element<'a, Msg> {
     // Show a divider between the editor and the body section only when the
     // body has visible content, so a bare modal with no matches doesn't show
     // a stray rule.
-    let editor_divider: Element<'a, Msg> =
-        container(Space::new().height(1.0).width(Length::Fill))
-            .style(divider_style)
-            .into();
+    let editor_divider: Element<'a, Msg> = container(Space::new().height(1.0).width(Length::Fill))
+        .style(divider_style)
+        .into();
 
     let panel = container(
         column![header, divider, editor_box, editor_divider, body]
@@ -477,7 +471,12 @@ pub fn view<'a>(state: &'a QuickIdeaState) -> Element<'a, Msg> {
 
 fn view_matches<'a>(state: &'a QuickIdeaState) -> Element<'a, Msg> {
     if state.matches.is_empty() {
-        let hint_text = if state.editor.lines.first().is_some_and(|l| l.trim().is_empty()) {
+        let hint_text = if state
+            .editor
+            .lines
+            .first()
+            .is_some_and(|l| l.trim().is_empty())
+        {
             "Type to search. Enter saves a new idea."
         } else {
             "No matches. Press Enter to save as a new idea."

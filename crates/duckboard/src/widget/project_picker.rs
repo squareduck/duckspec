@@ -273,10 +273,7 @@ fn subsequence_span(haystack: &str, needle: &str) -> Option<usize> {
 
 // ── View ────────────────────────────────────────────────────────────────────
 
-pub fn view<'a>(
-    state: &'a ProjectPickerState,
-    recent: &'a [PathBuf],
-) -> Element<'a, Msg> {
+pub fn view<'a>(state: &'a ProjectPickerState, recent: &'a [PathBuf]) -> Element<'a, Msg> {
     let input = text_input("Path to project...", &state.query)
         .on_input(Msg::QueryChanged)
         .on_submit(Msg::Confirm)
@@ -308,9 +305,8 @@ pub fn view<'a>(
         for path in recent.iter().take(5) {
             list = list.push(recent_row(state, path));
         }
-        list = list.push(
-            container(Space::new().height(1.0).width(Length::Fill)).style(divider_style),
-        );
+        list =
+            list.push(container(Space::new().height(1.0).width(Length::Fill)).style(divider_style));
         list = list.push(
             container(
                 text("Browse")
@@ -322,12 +318,7 @@ pub fn view<'a>(
         );
     }
 
-    for (i, name) in state
-        .candidates
-        .iter()
-        .take(MAX_VISIBLE)
-        .enumerate()
-    {
+    for (i, name) in state.candidates.iter().take(MAX_VISIBLE).enumerate() {
         let is_selected = i as u32 == state.selected;
         let style: fn(&iced::Theme) -> container::Style = if is_selected {
             selected_item_style
@@ -363,7 +354,12 @@ pub fn view<'a>(
 
     let total = state.candidates.len();
     let status_text = match &state.parent {
-        Some(p) => format!("{}  \u{00b7}  {} match{}", p.display(), total, if total == 1 { "" } else { "es" }),
+        Some(p) => format!(
+            "{}  \u{00b7}  {} match{}",
+            p.display(),
+            total,
+            if total == 1 { "" } else { "es" }
+        ),
         None => "(path does not resolve)".to_string(),
     };
     let status = text(status_text)
@@ -449,14 +445,20 @@ fn recent_row<'a>(state: &'a ProjectPickerState, path: &'a Path) -> Element<'a, 
                 "Delete data — click again",
                 Msg::DeleteRecentData(path.to_path_buf()),
                 destructive_button_armed
-                    as fn(&iced::Theme, iced::widget::button::Status) -> iced::widget::button::Style,
+                    as fn(
+                        &iced::Theme,
+                        iced::widget::button::Status,
+                    ) -> iced::widget::button::Style,
             )
         } else {
             (
                 "Delete data",
                 Msg::ArmDeleteRecent(path.to_path_buf()),
                 theme::icon_button
-                    as fn(&iced::Theme, iced::widget::button::Status) -> iced::widget::button::Style,
+                    as fn(
+                        &iced::Theme,
+                        iced::widget::button::Status,
+                    ) -> iced::widget::button::Style,
             )
         };
         let delete = button(text(delete_label).size(theme::font_sm()))

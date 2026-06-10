@@ -7,11 +7,11 @@
 //! `if mods.command() && key == … { keybind_thing(state) }` cascade so the
 //! resolution rules don't drift back into the keypress arm.
 
+use crate::State;
 use crate::area::interaction::ActiveTab;
 use crate::area::{self, Area};
 use crate::widget::find::FindTarget;
 use crate::widget::tab_bar::{self, ActiveTab as TabActive};
-use crate::State;
 
 /// Which column the user last interacted with — drives focus-conditional
 /// shortcut resolution (cmd+n, cmd+f, …). Updated lazily by
@@ -115,7 +115,11 @@ pub fn keybind_close(state: &State) -> Option<usize> {
     if chat_focused || terminal_focused {
         return None;
     }
-    Some(if state.tabs.preview.is_some() { fi + 1 } else { fi })
+    Some(if state.tabs.preview.is_some() {
+        fi + 1
+    } else {
+        fi
+    })
 }
 
 /// `cmd+k` today. True when the chat tab is the visible, active interaction
@@ -146,8 +150,7 @@ pub fn keybind_clear_attachments(state: &State) -> bool {
     let Some(ax) = ix.active() else {
         return false;
     };
-    ax.chat_input_focused
-        && (!ax.selection_pinned.is_empty() || ax.selection_tentative.is_some())
+    ax.chat_input_focused && (!ax.selection_pinned.is_empty() || ax.selection_tentative.is_some())
 }
 
 /// `cmd+f` today. The local-find target for the focused column, or `None`

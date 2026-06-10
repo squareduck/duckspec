@@ -397,17 +397,12 @@ pub fn read_body(path: &Path) -> std::io::Result<String> {
 /// and renames atomically if the path changed. On rename, prunes empty
 /// ancestor directories. Updates `idea.abs_path` and `idea.primary_tag_path`
 /// on success.
-pub fn save_idea(
-    idea: &mut Idea,
-    body: &str,
-    project_root: Option<&Path>,
-) -> anyhow::Result<()> {
+pub fn save_idea(idea: &mut Idea, body: &str, project_root: Option<&Path>) -> anyhow::Result<()> {
     let now = OffsetDateTime::now_local().unwrap_or_else(|_| OffsetDateTime::now_utc());
 
     // Recompute title from body. Frontmatter title is purely derived — we
     // never let the YAML diverge from the body's H1.
-    idea.frontmatter.title =
-        derive_title_from_body(body).unwrap_or_else(fallback_title);
+    idea.frontmatter.title = derive_title_from_body(body).unwrap_or_else(fallback_title);
     if idea.frontmatter.created.trim().is_empty() {
         idea.frontmatter.created = iso8601_local(now);
     }
@@ -456,12 +451,7 @@ pub fn save_idea(
     Ok(())
 }
 
-fn unique_path(
-    root: &Path,
-    state: IdeaState,
-    tag_segments: &[String],
-    slug_base: &str,
-) -> PathBuf {
+fn unique_path(root: &Path, state: IdeaState, tag_segments: &[String], slug_base: &str) -> PathBuf {
     for n in 2..1000 {
         let candidate = idea_path(root, state, tag_segments, &format!("{slug_base}-{n}"));
         if !candidate.exists() {
@@ -572,7 +562,10 @@ mod tests {
 
     #[test]
     fn slugify_basic() {
-        assert_eq!(slugify("Fix overflow on long input"), "fix-overflow-on-long-input");
+        assert_eq!(
+            slugify("Fix overflow on long input"),
+            "fix-overflow-on-long-input"
+        );
         assert_eq!(slugify("  Hello,  World! "), "hello-world");
         assert_eq!(slugify("Spëcial-Chårs"), "sp-cial-ch-rs");
         assert_eq!(slugify("---"), "idea");
@@ -664,8 +657,14 @@ mod tests {
 
         let (parsed_fm, parsed_body) = parse_file_contents(&serialized);
         assert_eq!(parsed_fm.tags, vec!["parser/spec", "performance"]);
-        assert_eq!(parsed_fm.exploration.as_deref(), Some("exploration-1714082400000"));
-        assert_eq!(parsed_fm.change.as_deref(), Some("2026-04-25-01-fix-parser-overflow"));
+        assert_eq!(
+            parsed_fm.exploration.as_deref(),
+            Some("exploration-1714082400000")
+        );
+        assert_eq!(
+            parsed_fm.change.as_deref(),
+            Some("2026-04-25-01-fix-parser-overflow")
+        );
         assert!(matches!(parsed_fm.archived, Some(ArchiveKind::ViaChange)));
         assert_eq!(parsed_body, body);
     }

@@ -16,9 +16,10 @@ use iced::{
 use linkify::LinkFinder;
 
 use super::state::{
-    CONTENT_PAD_Y, EditorAction, EditorState, HighlightRange, LINE_HEIGHT, Pos,
-    block_header_color, block_kind_bg, line_bg_color,
+    CONTENT_PAD_Y, EditorAction, EditorState, HighlightRange, LINE_HEIGHT, Pos, block_header_color,
+    block_kind_bg, line_bg_color,
 };
+use crate::path_link::{self, LinkTarget};
 use crate::theme;
 use crate::widget::terminal::current_modifiers;
 
@@ -52,7 +53,8 @@ struct InternalState {
     link_hover: Option<LinkHover>,
 }
 
-/// A URL found at a click/hover position in the editor's text.
+/// A URL or file-path reference found at a click/hover position in the
+/// editor's text.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct LinkHover {
     /// Logical line index in `EditorState::lines`.
@@ -61,7 +63,7 @@ struct LinkHover {
     char_start: usize,
     /// Char offset one past the link's last character.
     char_end: usize,
-    url: String,
+    target: LinkTarget,
 }
 
 impl operation::Focusable for InternalState {
@@ -120,7 +122,6 @@ impl WrapLayout {
         let sub_row = visual_row.saturating_sub(self.cum_rows[line]);
         (line, sub_row)
     }
-
 }
 
 /// Cursor's visual row + char column within that row, given a wrap layout.
@@ -470,7 +471,13 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for TextEdit<'a, M> {
                             &hover,
                         )
                     {
-                        shell.publish((self.on_action)(EditorAction::OpenUrl(hover.url)));
+                        let action = match hover.target {
+                            LinkTarget::Url(url) => EditorAction::OpenUrl(url),
+                            LinkTarget::Path { path, line, .. } => {
+                                EditorAction::OpenPath { path, line }
+                            }
+                        };
+                        shell.publish((self.on_action)(action));
                         shell.capture_event();
                         return;
                     }
@@ -601,9 +608,7 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for TextEdit<'a, M> {
                         shell.publish((self.on_action)(EditorAction::MoveRight(shift)));
                     }
                     keyboard::Key::Named(Named::ArrowUp) => {
-                        let target = wrap
-                            .as_ref()
-                            .and_then(|w| visual_up_target(self.state, w));
+                        let target = wrap.as_ref().and_then(|w| visual_up_target(self.state, w));
                         let action = match target {
                             Some(pos) if shift => EditorAction::Drag(pos),
                             Some(pos) => EditorAction::Click(pos),
@@ -1104,10 +1109,9 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for TextEdit<'a, M> {
                                             .collect();
                                         if !slice.is_empty() {
                                             let sw = slice.chars().count() as f32 * cell_w;
-                                            let sx = content_x
-                                                + CONTENT_PAD
-                                                + vis_start as f32 * cell_w
-                                                - scroll_x;
+                                            let sx =
+                                                content_x + CONTENT_PAD + vis_start as f32 * cell_w
+                                                    - scroll_x;
                                             renderer.fill_text(
                                                 iced::advanced::Text {
                                                     content: slice,
@@ -1137,13 +1141,10 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for TextEdit<'a, M> {
                             if row_chars > col.saturating_sub(char_start) {
                                 let tail_start = col.saturating_sub(char_start);
                                 let tail_start = tail_start.min(row_chars);
-                                let tail: String =
-                                    row_text.chars().skip(tail_start).collect();
+                                let tail: String = row_text.chars().skip(tail_start).collect();
                                 if !tail.is_empty() {
                                     let tw = tail.chars().count() as f32 * cell_w;
-                                    let tx = content_x
-                                        + CONTENT_PAD
-                                        + tail_start as f32 * cell_w
+                                    let tx = content_x + CONTENT_PAD + tail_start as f32 * cell_w
                                         - scroll_x;
                                     renderer.fill_text(
                                         iced::advanced::Text {
@@ -1197,20 +1198,26 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for TextEdit<'a, M> {
                     let vis_end = hover.char_end.min(char_end) - char_start;
                     let ux = content_x + CONTENT_PAD + vis_start as f32 * cell_w - scroll_x;
                     let uw = (vis_end - vis_start) as f32 * cell_w;
-                    renderer::Renderer::fill_quad(
-                        renderer,
-                        renderer::Quad {
-                            bounds: Rectangle {
-                                x: ux,
-                                y: y + LINE_HEIGHT - 2.0,
-                                width: uw,
-                                height: 1.0,
+                    let uy = y + LINE_HEIGHT - 2.0;
+                    // Solid underline = direct open (URL or resolved path);
+                    // dashed = unresolved path that opens the fuzzy finder.
+                    for (dx, dw) in path_link::underline_segments(uw, hover.target.opens_directly())
+                    {
+                        renderer::Renderer::fill_quad(
+                            renderer,
+                            renderer::Quad {
+                                bounds: Rectangle {
+                                    x: ux + dx,
+                                    y: uy,
+                                    width: dw,
+                                    height: 1.0,
+                                },
+                                border: Border::default(),
+                                ..renderer::Quad::default()
                             },
-                            border: Border::default(),
-                            ..renderer::Quad::default()
-                        },
-                        theme::accent(),
-                    );
+                            theme::accent(),
+                        );
+                    }
                 }
             }
 
@@ -1485,8 +1492,9 @@ fn pixel_to_pos_wrapped(
     }
 }
 
-/// Find a URL on `pos`'s logical line that contains `pos.col`. Used to arm
-/// hover state and decide whether cmd-click opens a link or moves the caret.
+/// Find a URL or file-path reference on `pos`'s logical line that contains
+/// `pos.col`. Used to arm hover state and decide whether cmd-click opens a
+/// link or moves the caret. URLs win over path references when both match.
 fn detect_link_at(state: &EditorState, pos: Pos) -> Option<LinkHover> {
     let line = state.lines.get(pos.line)?;
     let finder = LinkFinder::new();
@@ -1498,11 +1506,21 @@ fn detect_link_at(state: &EditorState, pos: Pos) -> Option<LinkHover> {
                 line: pos.line,
                 char_start: start_col,
                 char_end: end_col,
-                url: link.as_str().to_string(),
+                target: LinkTarget::Url(link.as_str().to_string()),
             });
         }
     }
-    None
+    let hit = path_link::detect_path_at(line, pos.col)?;
+    Some(LinkHover {
+        line: pos.line,
+        char_start: hit.char_start,
+        char_end: hit.char_end,
+        target: LinkTarget::Path {
+            path: hit.path,
+            line: hit.line,
+            exists: hit.exists,
+        },
+    })
 }
 
 /// True when canvas-local `point` falls within the cells underlined for `hover`.
@@ -1537,8 +1555,7 @@ fn read_paste_action() -> Option<EditorAction> {
         writer.write_image_data(&img.bytes).ok()?;
     }
 
-    let now = time::OffsetDateTime::now_local()
-        .unwrap_or_else(|_| time::OffsetDateTime::now_utc());
+    let now = time::OffsetDateTime::now_local().unwrap_or_else(|_| time::OffsetDateTime::now_utc());
     let label = format!(
         "clip-{:04}-{:02}-{:02}-{:02}-{:02}-{:02}.png",
         now.year(),

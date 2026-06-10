@@ -32,6 +32,10 @@ pub struct FileFinderState {
     pub visible: bool,
     pub query: String,
     pub selected: u32,
+    /// 0-based line to jump to after the user confirms a match. Set when the
+    /// finder opens as the fallback for a cmd-clicked `path:line` reference
+    /// that didn't resolve; cleared on close.
+    pub pending_line: Option<usize>,
     matcher: Option<Nucleo<String>>,
     /// Scratch matcher reused to compute match indices for highlighting.
     /// Wrapped in `RefCell` because `view` only takes a shared reference.
@@ -44,6 +48,7 @@ impl Default for FileFinderState {
             visible: false,
             query: String::new(),
             selected: 0,
+            pending_line: None,
             matcher: None,
             index_matcher: RefCell::new(Matcher::default()),
         }
@@ -67,6 +72,7 @@ impl FileFinderState {
         self.visible = true;
         self.query.clear();
         self.selected = 0;
+        self.pending_line = None;
 
         let mut matcher = Nucleo::new(Config::DEFAULT, Arc::new(|| {}), None, 1);
 
@@ -87,6 +93,7 @@ impl FileFinderState {
         self.visible = false;
         self.query.clear();
         self.selected = 0;
+        self.pending_line = None;
         self.matcher = None;
     }
 

@@ -55,7 +55,9 @@ impl Default for Config {
 impl Config {
     /// The default `--model` value for `project_root`, if one is set.
     pub fn project_model_default(&self, project_root: &Path) -> Option<String> {
-        self.model_defaults.get(&project_hash(project_root)).cloned()
+        self.model_defaults
+            .get(&project_hash(project_root))
+            .cloned()
     }
 
     /// Set (or, with `None`, clear) the default model for `project_root`.

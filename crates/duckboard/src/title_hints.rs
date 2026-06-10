@@ -38,9 +38,9 @@ candidate to capture from existing behavior. Summarise which area is being captu
 Summarise what's being proposed."
                 .into(),
         ),
-        "ds-design" => Some(
-            "user is authoring a design document. Summarise what's being designed.".into(),
-        ),
+        "ds-design" => {
+            Some("user is authoring a design document. Summarise what's being designed.".into())
+        }
         "ds-spec" => Some(
             "user is authoring capability specs or spec deltas. \
 Summarise which capability area is being specified."
@@ -77,11 +77,7 @@ fn apply_hint(scope_key: &str, project: &ProjectData) -> String {
     let fallback = "user is implementing the next step of the current change. \
 Summarise what's being implemented.";
 
-    let Some(change) = project
-        .active_changes
-        .iter()
-        .find(|c| c.name == scope_key)
-    else {
+    let Some(change) = project.active_changes.iter().find(|c| c.name == scope_key) else {
         return fallback.into();
     };
 
@@ -133,11 +129,7 @@ fn truncate_chars(s: &str, cap: usize) -> &str {
     if s.chars().count() <= cap {
         return s;
     }
-    let end = s
-        .char_indices()
-        .nth(cap)
-        .map(|(i, _)| i)
-        .unwrap_or(s.len());
+    let end = s.char_indices().nth(cap).map(|(i, _)| i).unwrap_or(s.len());
     &s[..end]
 }
 
@@ -245,10 +237,7 @@ mod tests {
     fn apply_hint_falls_back_when_all_steps_done() {
         let project = project_with_steps(
             "finished",
-            vec![
-                step("01-a.md", true),
-                step("02-b.md", true),
-            ],
+            vec![step("01-a.md", true), step("02-b.md", true)],
         );
         let hint = build_hint("/ds-apply", "finished", &project).unwrap();
         assert!(hint.contains("next step"));

@@ -292,11 +292,7 @@ fn find_inline_code_runs(line: &str) -> Vec<(usize, usize)> {
 
 /// Recolor the parts of `spans` that fall inside `line`'s inline code runs.
 /// The concatenation of `spans` text must equal `line`.
-fn apply_inline_code(
-    spans: Vec<HighlightSpan>,
-    line: &str,
-    color: Color,
-) -> Vec<HighlightSpan> {
+fn apply_inline_code(spans: Vec<HighlightSpan>, line: &str, color: Color) -> Vec<HighlightSpan> {
     let runs = find_inline_code_runs(line);
     if runs.is_empty() {
         return spans;

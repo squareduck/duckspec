@@ -848,10 +848,7 @@ pub fn session_bar_button(_theme: &Theme, status: button::Status) -> button::Sty
 
 /// Destructive variant of `session_bar_button` — same shape, error-colored
 /// text and a tinted hover background to telegraph the irreversible action.
-pub fn session_bar_button_destructive(
-    _theme: &Theme,
-    status: button::Status,
-) -> button::Style {
+pub fn session_bar_button_destructive(_theme: &Theme, status: button::Status) -> button::Style {
     let bg = match status {
         button::Status::Hovered => Some(bg_hover().into()),
         _ => Some(bg_surface().into()),
@@ -908,7 +905,11 @@ pub fn pick_list_menu(_theme: &Theme) -> menu::Style {
         selected_background: Background::Color(bg_list_selected()),
         shadow: iced::Shadow {
             color: Color {
-                a: if IS_DARK.load(Ordering::Relaxed) { 0.5 } else { 0.2 },
+                a: if IS_DARK.load(Ordering::Relaxed) {
+                    0.5
+                } else {
+                    0.2
+                },
                 ..Color::BLACK
             },
             offset: iced::Vector::new(0.0, 2.0),

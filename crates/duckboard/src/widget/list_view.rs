@@ -184,10 +184,7 @@ impl<'a, Msg: Clone + 'a> ListRow<'a, Msg> {
             }
             let elem: Element<'a, Msg> = btn.into();
             match self.hover {
-                Some((enter, exit)) => MouseArea::new(elem)
-                    .on_enter(enter)
-                    .on_exit(exit)
-                    .into(),
+                Some((enter, exit)) => MouseArea::new(elem).on_enter(enter).on_exit(exit).into(),
                 None => elem,
             }
         } else {

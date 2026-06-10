@@ -3,8 +3,8 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
-use iced::widget::{Space, button, column, container, row, text};
 use iced::Element;
+use iced::widget::{Space, button, column, container, row, text};
 
 use crate::chat_store::Exploration;
 use crate::data::{ChangeData, ProjectData, StepCompletion};
@@ -616,11 +616,7 @@ pub fn refresh_obvious_command(
 
 // ── Breadcrumbs ──────────────────────────────────────────────────────────────
 
-pub fn breadcrumbs(
-    state: &State,
-    project: &ProjectData,
-    tabs: &tab_bar::TabState,
-) -> Vec<String> {
+pub fn breadcrumbs(state: &State, project: &ProjectData, tabs: &tab_bar::TabState) -> Vec<String> {
     let Some(selected) = state.selected_change.as_deref() else {
         return vec!["Changes".into()];
     };
@@ -1203,15 +1199,7 @@ fn open_artifact(
     if let Some(content) = project.read_artifact(id) {
         let title = id.rsplit('/').next().unwrap_or(id).to_string();
         let path = project.duckspec_root.as_ref().map(|r| r.join(id));
-        crate::open_artifact_tab(
-            tabs,
-            id.to_string(),
-            title,
-            content,
-            id,
-            path,
-            highlighter,
-        );
+        crate::open_artifact_tab(tabs, id.to_string(), title, content, id, path, highlighter);
     }
 }
 
@@ -1374,10 +1362,7 @@ mod breadcrumb_tests {
 
     #[test]
     fn exploration_root_after_selection() {
-        let state = make_state(
-            "exploration-1000",
-            &[("exploration-1000", "Exploration 1")],
-        );
+        let state = make_state("exploration-1000", &[("exploration-1000", "Exploration 1")]);
         let project = make_project(&[], &[]);
         let tabs = tab_bar::TabState::default();
         assert_eq!(
@@ -1458,10 +1443,7 @@ mod breadcrumb_tests {
 
     #[test]
     fn obvious_exploration_always_explore() {
-        let state = make_state(
-            "exploration-1000",
-            &[("exploration-1000", "Exploration 1")],
-        );
+        let state = make_state("exploration-1000", &[("exploration-1000", "Exploration 1")]);
         let project = make_project(&[], &[]);
         assert_eq!(
             compute_obvious_command(&state, &project).as_deref(),

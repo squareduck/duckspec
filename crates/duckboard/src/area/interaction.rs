@@ -17,6 +17,15 @@ use crate::widget::{
     text_edit::{self, Block, EditorState, Pos},
 };
 
+/// Appended to the system prompt on a session's first turn so the model's
+/// file references match what `path_link` detects — project-relative paths
+/// with an optional 1-based `:line` suffix become cmd-clickable in the
+/// chat panel.
+const PATH_REFERENCE_NOTE: &str = "When referencing project files in your replies, \
+    write the path relative to the project root, optionally with a 1-based line \
+    suffix — e.g. `crates/duckboard/src/main.rs:42`. Prefer this form over absolute \
+    paths or bare filenames; the UI turns such references into clickable links.";
+
 // ── Selection context attachments ───────────────────────────────────────────
 
 /// A captured selection from a content tab or chat history block, attached
@@ -550,7 +559,10 @@ mod tests {
             text: "let x = 1;\n".into(),
         };
         let out = render_selection_attachments(&[sel]).unwrap();
-        assert!(out.contains("File: src/main.rs (12:5–24:1)"), "header: {out}");
+        assert!(
+            out.contains("File: src/main.rs (12:5–24:1)"),
+            "header: {out}"
+        );
         assert!(out.contains("```\nlet x = 1;\n```"), "body: {out}");
     }
 
@@ -570,7 +582,10 @@ mod tests {
             text: "hello".into(),
         };
         let out = render_selection_attachments(&[sel]).unwrap();
-        assert!(out.contains("Chat excerpt: User message (block 3"), "header: {out}");
+        assert!(
+            out.contains("Chat excerpt: User message (block 3"),
+            "header: {out}"
+        );
         assert!(out.contains("```\nhello\n```"), "body: {out}");
     }
 
@@ -714,6 +729,12 @@ pub enum Msg {
     TerminalScroll,
     /// User cmd-clicked a hyperlink in the terminal output. Handled by main.
     TerminalOpenUrl(String),
+    /// User cmd-clicked a file-path reference in the terminal output.
+    /// Intercepted by `main::update` (needs tabs / file-finder state).
+    TerminalOpenPath {
+        path: String,
+        line: Option<usize>,
+    },
     /// Create a new agent session for the current scope. Handled by area.
     NewSession,
     /// Switch the active agent session by id. Handled by area.
@@ -775,6 +796,9 @@ pub fn update(state: &mut InteractionState, msg: Msg, highlighter: &SyntaxHighli
                 tracing::warn!(%url, %err, "failed to open terminal URL");
             }
         }
+        Msg::TerminalOpenPath { .. } => {
+            // Intercepted by `main::update` before area dispatch.
+        }
         Msg::ToggleChatSection => {
             state.chat_section_expanded = !state.chat_section_expanded;
         }
@@ -799,7 +823,13 @@ fn handle_agent_chat(
                 }
                 return;
             }
-            if let text_edit::EditorAction::AttachImage { id, label, media_type, bytes } = action {
+            if let text_edit::EditorAction::AttachImage {
+                id,
+                label,
+                media_type,
+                bytes,
+            } = action
+            {
                 let link = format!("[{label}](attach:{id})");
                 ax.input_attachments.insert(
                     id,
@@ -809,7 +839,8 @@ fn handle_agent_chat(
                         bytes,
                     },
                 );
-                ax.chat_input.apply_action(text_edit::EditorAction::Paste(link));
+                ax.chat_input
+                    .apply_action(text_edit::EditorAction::Paste(link));
                 rehighlight_input(&mut ax.chat_input, highlighter);
                 return;
             }
@@ -963,8 +994,7 @@ fn handle_agent_chat(
             let offset_y = viewport.absolute_offset().y;
             let max_scroll = (content.height - bounds.height).max(0.0);
             let distance_from_bottom = (max_scroll - offset_y).max(0.0);
-            let at_bottom =
-                distance_from_bottom <= agent_chat::STICK_TO_BOTTOM_THRESHOLD;
+            let at_bottom = distance_from_bottom <= agent_chat::STICK_TO_BOTTOM_THRESHOLD;
 
             // The scrollable publishes viewport notifications for both
             // user-driven scrolls *and* content-size changes (via
@@ -1013,11 +1043,7 @@ pub fn refresh_tentative_from_chat(ax: &mut AgentSession, idx: usize) {
 /// `display_path` and `tab_id` are caller-supplied so this module doesn't
 /// have to know about `tab_bar::TabView` shapes — see main.rs where
 /// content-tab editor actions are handled.
-pub fn set_tentative_from_tab(
-    ax: &mut AgentSession,
-    editor: &EditorState,
-    display_path: String,
-) {
+pub fn set_tentative_from_tab(ax: &mut AgentSession, editor: &EditorState, display_path: String) {
     if let Some(sel) = tab_editor_selection(editor, display_path) {
         for chat_editor in ax.chat_editors.iter_mut() {
             chat_editor.anchor = None;
@@ -1103,6 +1129,7 @@ pub fn send_prompt_text(ax: &mut AgentSession, text: String, highlighter: &Synta
         if let Some(scope_out) = crate::scope::CurrentScopeHook.compute(&scope) {
             additions.push(scope_out.text);
         }
+        additions.push(PATH_REFERENCE_NOTE.to_string());
 
         let mut req = TurnRequest::new(priming_text, handle.working_dir().to_path_buf());
         req.system_additions = additions;
@@ -1148,6 +1175,7 @@ pub fn send_prompt_text(ax: &mut AgentSession, text: String, highlighter: &Synta
         if let Some(out) = crate::scope::CurrentScopeHook.compute(&scope) {
             system_additions.push(out.text);
         }
+        system_additions.push(PATH_REFERENCE_NOTE.to_string());
     }
 
     // Selection-context attachments: pinned + tentative, in that order,
@@ -1472,8 +1500,7 @@ pub fn update_with_side_effects(
         );
     }
 
-    state.terminal_focused =
-        state.visible && matches!(state.active_tab, ActiveTab::Terminal(_));
+    state.terminal_focused = state.visible && matches!(state.active_tab, ActiveTab::Terminal(_));
 }
 
 // ── Session management ─────────────────────────────────────────────────────
@@ -1653,6 +1680,9 @@ pub fn view_column<'a, M: 'a + Clone>(
                     crate::widget::terminal::TerminalEvent::Redraw => w(Msg::TerminalScroll),
                     crate::widget::terminal::TerminalEvent::OpenUrl(url) => {
                         w(Msg::TerminalOpenUrl(url))
+                    }
+                    crate::widget::terminal::TerminalEvent::OpenPath { path, line } => {
+                        w(Msg::TerminalOpenPath { path, line })
                     }
                 })
             } else {
@@ -1842,11 +1872,7 @@ pub(crate) fn measure_text_advanced(text: &str, size: f32) -> f32 {
     measure_text_with_shaping(text, size, iced::widget::text::Shaping::Advanced)
 }
 
-fn measure_text_with_shaping(
-    text: &str,
-    size: f32,
-    shaping: iced::widget::text::Shaping,
-) -> f32 {
+fn measure_text_with_shaping(text: &str, size: f32, shaping: iced::widget::text::Shaping) -> f32 {
     use iced::advanced::graphics::text::Paragraph;
     use iced::advanced::text::Paragraph as _;
     let t = iced::advanced::text::Text {

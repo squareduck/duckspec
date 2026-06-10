@@ -19,5 +19,6 @@ pub fn format_body(body: &str, duckspec_root: Option<&Path>) -> Result<String, V
     let config = duckspec_root
         .and_then(|root| Config::load(root).ok())
         .unwrap_or_default();
-    format_doc(body, &config.format).map_err(|errors| errors.iter().map(|e| e.to_string()).collect())
+    format_doc(body, &config.format)
+        .map_err(|errors| errors.iter().map(|e| e.to_string()).collect())
 }

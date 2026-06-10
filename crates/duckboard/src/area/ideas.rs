@@ -197,8 +197,7 @@ pub fn update(
                 return;
             }
             let mut idea = idea_store::new_idea();
-            if let Err(e) = idea_store::save_idea(&mut idea, "", project.project_root.as_deref())
-            {
+            if let Err(e) = idea_store::save_idea(&mut idea, "", project.project_root.as_deref()) {
                 tracing::warn!("failed to save new idea: {e}");
                 return;
             }
@@ -231,8 +230,7 @@ pub fn update(
                 idea.state = IdeaState::Archive;
                 idea.frontmatter.archived = Some(ArchiveKind::Manual);
                 let body = idea_store::read_body(&idea.abs_path).unwrap_or_default();
-                if let Err(e) =
-                    idea_store::save_idea(idea, &body, project.project_root.as_deref())
+                if let Err(e) = idea_store::save_idea(idea, &body, project.project_root.as_deref())
                 {
                     tracing::warn!("failed to archive idea: {e}");
                 } else {
@@ -255,8 +253,7 @@ pub fn update(
                     IdeaState::Inbox
                 };
                 let body = idea_store::read_body(&idea.abs_path).unwrap_or_default();
-                if let Err(e) =
-                    idea_store::save_idea(idea, &body, project.project_root.as_deref())
+                if let Err(e) = idea_store::save_idea(idea, &body, project.project_root.as_deref())
                 {
                     tracing::warn!("failed to unarchive idea: {e}");
                 } else {
@@ -305,11 +302,7 @@ pub fn update(
         Message::SubmitTagInput => {
             let raw = state.tag_input.take().unwrap_or_default();
             let editing = state.tag_input_editing.take();
-            let cleaned: String = raw
-                .trim()
-                .trim_start_matches('#')
-                .trim()
-                .to_string();
+            let cleaned: String = raw.trim().trim_start_matches('#').trim().to_string();
             let Some(path) = state.selected.clone() else {
                 return;
             };
@@ -607,8 +600,7 @@ fn save_pinned_tab(
         },
         None => return,
     };
-    let format_result =
-        crate::idea_format::format_body(&body, project.duckspec_root.as_deref());
+    let format_result = crate::idea_format::format_body(&body, project.duckspec_root.as_deref());
     let body_to_save: String = match &format_result {
         Ok(formatted) => formatted.clone(),
         Err(_) => body.clone(),
@@ -647,8 +639,7 @@ fn save_pinned_tab(
                 next.cursor = Pos::new(row, col);
                 next.scroll_y = editor.scroll_y;
                 let syntax = highlighter.find_syntax("md");
-                next.highlight_spans =
-                    Some(highlighter.highlight_lines(&next.lines, syntax));
+                next.highlight_spans = Some(highlighter.highlight_lines(&next.lines, syntax));
                 *editor = next;
             } else {
                 editor.dirty = false;
@@ -760,7 +751,13 @@ fn collect_section_rows<'a>(
     // render at the same depth — otherwise the gutter is phantom indent.
     let has_tag_siblings = !children.is_empty();
     for idea in &direct {
-        out.push(idea_list_row(idea, project, depth, selected, has_tag_siblings));
+        out.push(idea_list_row(
+            idea,
+            project,
+            depth,
+            selected,
+            has_tag_siblings,
+        ));
     }
 
     for child in children {
@@ -777,7 +774,15 @@ fn collect_section_rows<'a>(
                 .on_press(Message::ToggleTagNode(key)),
         );
         if expanded {
-            collect_section_rows(state, project, section, &next_prefix, depth + 1, selected, out);
+            collect_section_rows(
+                state,
+                project,
+                section,
+                &next_prefix,
+                depth + 1,
+                selected,
+                out,
+            );
         }
     }
 }
@@ -829,8 +834,7 @@ fn idea_list_row<'a>(
 fn change_resolves(project: &ProjectData, change_name: &str) -> bool {
     project.active_changes.iter().any(|c| c.name == change_name)
         || project.archived_changes.iter().any(|c| {
-            c.name == change_name
-                || crate::data::strip_archive_prefix(&c.name) == Some(change_name)
+            c.name == change_name || crate::data::strip_archive_prefix(&c.name) == Some(change_name)
         })
 }
 
@@ -864,9 +868,7 @@ pub fn view_pinned_toolbar<'a>(
     let idea = state.ideas.iter().find(|i| i.abs_path == path)?;
 
     // ── Tag chips + add-tag input ────────────────────────────────────────
-    let mut tag_row = row![]
-        .spacing(theme::SPACING_XS)
-        .align_y(Center);
+    let mut tag_row = row![].spacing(theme::SPACING_XS).align_y(Center);
     let editing_idx = state.tag_input_editing;
     for (i, tag) in idea.frontmatter.tags.iter().enumerate() {
         if editing_idx == Some(i)
@@ -893,9 +895,7 @@ pub fn view_pinned_toolbar<'a>(
     }
 
     // ── Lifecycle actions ────────────────────────────────────────────────
-    let mut actions = row![]
-        .spacing(theme::SPACING_SM)
-        .align_y(Center);
+    let mut actions = row![].spacing(theme::SPACING_SM).align_y(Center);
 
     if let Some(change_name) = idea.frontmatter.change.as_deref() {
         actions = actions.push(
@@ -904,9 +904,7 @@ pub fn view_pinned_toolbar<'a>(
                 .padding([2.0, theme::SPACING_SM])
                 .style(theme::session_bar_button),
         );
-    } else if idea.frontmatter.exploration.is_none()
-        && !matches!(idea.state, IdeaState::Archive)
-    {
+    } else if idea.frontmatter.exploration.is_none() && !matches!(idea.state, IdeaState::Archive) {
         actions = actions.push(
             button(text("Explore").size(theme::font_sm()))
                 .on_press(Message::StartExploration(idea.abs_path.clone()))
@@ -936,19 +934,14 @@ pub fn view_pinned_toolbar<'a>(
             .style(theme::session_bar_button_destructive),
     );
 
-    let layout = row![
-        tag_row,
-        Space::new().width(Length::Fill),
-        actions,
-    ]
-    .spacing(theme::SPACING_MD)
-    .align_y(Center);
+    let layout = row![tag_row, Space::new().width(Length::Fill), actions,]
+        .spacing(theme::SPACING_MD)
+        .align_y(Center);
 
     let bar = container(layout)
         .padding([theme::SPACING_XS, theme::SPACING_SM])
         .width(Length::Fill);
-    let border = container(Space::new().width(Length::Fill).height(1.0))
-        .style(theme::divider);
+    let border = container(Space::new().width(Length::Fill).height(1.0)).style(theme::divider);
     Some(column![bar, border].into())
 }
 

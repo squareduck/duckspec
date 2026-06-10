@@ -13,7 +13,9 @@ use grep_regex::{RegexMatcher, RegexMatcherBuilder};
 use grep_searcher::{Searcher, Sink, SinkMatch};
 
 use iced::widget::text::Span;
-use iced::widget::{Space, button, column, container, rich_text, row, scrollable, span, text, text_input};
+use iced::widget::{
+    Space, button, column, container, rich_text, row, scrollable, span, text, text_input,
+};
 use iced::{Center, Color, Element, Font, Length};
 
 use crate::theme;
@@ -369,11 +371,9 @@ pub fn view<'a>(state: &'a TextSearchState) -> Element<'a, Msg> {
         .size(theme::font_sm())
         .font(theme::content_font())
         .color(theme::text_muted());
-    let status_bar = container(
-        row![left, Space::new().width(Length::Fill), hints].align_y(Center),
-    )
-    .padding([theme::SPACING_XS, theme::SPACING_MD])
-    .width(Length::Fill);
+    let status_bar = container(row![left, Space::new().width(Length::Fill), hints].align_y(Center))
+        .padding([theme::SPACING_XS, theme::SPACING_MD])
+        .width(Length::Fill);
 
     let panel = container(
         column![
