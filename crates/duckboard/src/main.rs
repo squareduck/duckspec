@@ -370,6 +370,25 @@ enum Message {
 
 // ── Update ───────────────────────────────────────────────────────────────────
 
+/// Stamp every chat session with the current project's default `--model`
+/// value. Cheap (a handful of sessions) and run once per update tick so a
+/// freshly-created session or a default just changed in Settings is reflected
+/// before the next send. `Config` and `project_root` live here on the global
+/// state; the interaction layer can't reach them, so it reads the stamped
+/// value off `AgentSession::project_model_default` instead.
+fn refresh_model_defaults(state: &mut State) {
+    let default = state
+        .project
+        .project_root
+        .as_deref()
+        .and_then(|root| state.config.project_model_default(root));
+    for ix in state.interactions.values_mut() {
+        for ax in ix.sessions.iter_mut() {
+            ax.project_model_default = default.clone();
+        }
+    }
+}
+
 fn update(state: &mut State, message: Message) -> Task<Message> {
     // The inline tag editor in the Ideas pinned toolbar dismisses itself
     // when the user clicks anywhere that would naturally pull focus from
@@ -382,6 +401,7 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
         state.ideas.tag_input_editing = None;
     }
     update_focused_column(state, &message);
+    refresh_model_defaults(state);
     match message {
         Message::AreaSelected(area) => {
             switch_area(state, area);
@@ -389,6 +409,7 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                 area::settings::update(
                     &mut state.settings,
                     &mut state.config,
+                    state.project.project_root.as_deref(),
                     area::settings::Message::LoadFonts,
                 );
             }
@@ -1176,7 +1197,12 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
             }
         }
         Message::Settings(msg) => {
-            area::settings::update(&mut state.settings, &mut state.config, msg);
+            area::settings::update(
+                &mut state.settings,
+                &mut state.config,
+                state.project.project_root.as_deref(),
+                msg,
+            );
             theme::set_fonts(&state.config);
         }
         Message::TabSelect(idx) => {
@@ -4493,7 +4519,12 @@ fn view(state: &State) -> Element<'_, Message> {
         )
         .map(Message::Dashboard),
         Area::Settings => {
-            area::settings::view(&state.settings, &state.config).map(Message::Settings)
+            area::settings::view(
+                &state.settings,
+                &state.config,
+                state.project.project_root.as_deref(),
+            )
+            .map(Message::Settings)
         }
         _ => view_area_three_column(state),
     };

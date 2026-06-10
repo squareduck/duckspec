@@ -1,6 +1,8 @@
 //! Agent chat widget — per-message text editors in a scrollable column.
 
-use iced::widget::{Space, button, column, container, row, rule, scrollable, stack, text};
+use iced::widget::{
+    Space, button, column, container, pick_list, row, rule, scrollable, stack, text,
+};
 
 pub const CHAT_SCROLLABLE_ID: &str = "agent-chat-scroll";
 pub const CHAT_INPUT_ID: &str = "agent-chat-input";
@@ -42,6 +44,98 @@ pub enum Msg {
     /// `stick_to_bottom` flag — true while the viewport is within
     /// `STICK_TO_BOTTOM_THRESHOLD` pixels of the bottom.
     ChatScrolled(scrollable::Viewport),
+    /// User picked a model from the meta-row selector.
+    ModelSelected(ModelChoice),
+}
+
+// ── Model picker ─────────────────────────────────────────────────────────────
+
+/// One entry in the meta-row model `pick_list`. `id` is the `--model` value
+/// to pin (`None` = "use project default"). Equality is on `id` only so the
+/// selected entry can carry a richer label (e.g. the resolved model in
+/// parens) while still matching its plain option in the dropdown.
+#[derive(Debug, Clone)]
+pub struct ModelChoice {
+    pub id: Option<String>,
+    pub label: String,
+}
+
+impl PartialEq for ModelChoice {
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id
+    }
+}
+
+impl Eq for ModelChoice {}
+
+impl std::fmt::Display for ModelChoice {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.label)
+    }
+}
+
+/// Picker options for a chat's model selector. The first entry (`id: None`)
+/// is the "use project default" sentinel; `project_default` lets its label
+/// name the model that default currently resolves to.
+pub fn chat_model_choices(project_default: Option<&str>) -> Vec<ModelChoice> {
+    let label = match project_default {
+        Some(id) => format!("Default ({})", model_display(id)),
+        None => "Default".to_string(),
+    };
+    let mut out = vec![ModelChoice { id: None, label }];
+    out.extend(model_entries());
+    out
+}
+
+/// Picker options for the project-level default selector in settings. The
+/// first entry (`id: None`) means "no default — let the CLI pick".
+pub fn project_model_choices() -> Vec<ModelChoice> {
+    let mut out = vec![ModelChoice {
+        id: None,
+        label: "No default".to_string(),
+    }];
+    out.extend(model_entries());
+    out
+}
+
+fn model_entries() -> Vec<ModelChoice> {
+    crate::agent::available_models()
+        .into_iter()
+        .map(|m| ModelChoice {
+            id: Some(m.id),
+            label: m.display,
+        })
+        .collect()
+}
+
+/// Resolve which option is selected for a pinned `--model` value. `None`
+/// selects the first (sentinel) entry. An unknown id (e.g. a full model name
+/// not in the alias list) yields a synthetic choice so the picker still shows
+/// it rather than silently falling back to the sentinel.
+pub fn selected_model_choice(choices: &[ModelChoice], selected: Option<&str>) -> ModelChoice {
+    match selected {
+        None => choices.first().cloned().unwrap_or(ModelChoice {
+            id: None,
+            label: "Default".to_string(),
+        }),
+        Some(id) => choices
+            .iter()
+            .find(|c| c.id.as_deref() == Some(id))
+            .cloned()
+            .unwrap_or(ModelChoice {
+                id: Some(id.to_string()),
+                label: id.to_string(),
+            }),
+    }
+}
+
+/// Friendly display for a `--model` value, falling back to the raw value.
+pub fn model_display(id: &str) -> String {
+    crate::agent::available_models()
+        .into_iter()
+        .find(|m| m.id == id)
+        .map(|m| m.display)
+        .unwrap_or_else(|| id.to_string())
 }
 
 // ── Status bar info ────────────────────────────────────────────────────────
@@ -51,7 +145,14 @@ pub struct StatusInfo {
     pub is_streaming: bool,
     /// 0 = no esc pressed, 1 = one esc pressed (waiting for second).
     pub esc_count: u8,
+    /// Observed model reported by the CLI for the last turn. Empty when the
+    /// agent hasn't reported one yet. Shown as muted text alongside the
+    /// picker so "use project default" is never opaque about what ran.
     pub model: String,
+    /// Picker options (Default sentinel + one per provider model).
+    pub model_choices: Vec<ModelChoice>,
+    /// The currently-selected picker entry (matched by `id`).
+    pub selected_model: ModelChoice,
     pub context_tokens: usize,
     pub context_max: usize,
 }
@@ -430,13 +531,28 @@ pub fn view<'a>(
                 .color(theme::text_muted()),
         );
     }
-    meta_inner = meta_inner
-        .push(Space::new().width(Length::Fill))
-        .push(
+    meta_inner = meta_inner.push(Space::new().width(Length::Fill)).push(
+        pick_list(
+            status.model_choices,
+            Some(status.selected_model),
+            Msg::ModelSelected,
+        )
+        .text_size(theme::font_sm())
+        .padding([1.0, theme::SPACING_XS])
+        .style(theme::pick_list_style)
+        .menu_style(theme::pick_list_menu),
+    );
+    // Observed model (what the CLI actually ran) — only meaningful once a
+    // turn has reported it. Sits right of the picker so a "Default" selection
+    // still shows the resolved model.
+    if !status.model.is_empty() {
+        meta_inner = meta_inner.push(
             text(status.model)
                 .size(theme::font_sm())
                 .color(theme::text_muted()),
-        )
+        );
+    }
+    meta_inner = meta_inner
         .push(
             text(format!(
                 "{} / {} ({}%)",

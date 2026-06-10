@@ -7,7 +7,8 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use iced::widget::{button, container, scrollable, svg};
+use iced::overlay::menu;
+use iced::widget::{button, container, pick_list, scrollable, svg};
 use iced::{Background, Border, Color, Theme};
 
 // ── Dark / light mode state ────────────────────────────────────────────────
@@ -864,6 +865,55 @@ pub fn session_bar_button_destructive(
             radius: BORDER_RADIUS.into(),
         },
         ..Default::default()
+    }
+}
+
+// ── Pick list ───────────────────────────────────────────────────────────────
+
+/// Theme-aware style for `pick_list` fields. Mirrors `session_bar_button`:
+/// surface background, hairline border, hover tint — so pickers read as the
+/// same family of compact controls. Works in both color modes since every
+/// color accessor switches on the global mode.
+pub fn pick_list_style(_theme: &Theme, status: pick_list::Status) -> pick_list::Style {
+    let background = match status {
+        pick_list::Status::Hovered | pick_list::Status::Opened { .. } => bg_hover(),
+        pick_list::Status::Active => bg_surface(),
+    };
+    pick_list::Style {
+        text_color: text_secondary(),
+        placeholder_color: text_muted(),
+        handle_color: text_muted(),
+        background: Background::Color(background),
+        border: Border {
+            color: border_color(),
+            width: 1.0,
+            radius: BORDER_RADIUS.into(),
+        },
+    }
+}
+
+/// Companion dropdown-menu style for `pick_list_style` — elevated background
+/// so the overlay separates from the surface beneath it, accent-tinted
+/// selected row matching list selection elsewhere in the app.
+pub fn pick_list_menu(_theme: &Theme) -> menu::Style {
+    menu::Style {
+        background: Background::Color(bg_elevated()),
+        border: Border {
+            color: border_color(),
+            width: 1.0,
+            radius: BORDER_RADIUS.into(),
+        },
+        text_color: text_secondary(),
+        selected_text_color: text_primary(),
+        selected_background: Background::Color(bg_list_selected()),
+        shadow: iced::Shadow {
+            color: Color {
+                a: if IS_DARK.load(Ordering::Relaxed) { 0.5 } else { 0.2 },
+                ..Color::BLACK
+            },
+            offset: iced::Vector::new(0.0, 2.0),
+            blur_radius: 8.0,
+        },
     }
 }
 

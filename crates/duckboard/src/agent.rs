@@ -10,9 +10,17 @@ use std::path::PathBuf;
 use iced::Subscription;
 use tokio::sync::mpsc;
 
-pub use duckchat::{AgentHandle, SlashCommand};
+pub use duckchat::{AgentHandle, ModelInfo, SlashCommand};
 
 use duckchat::claude_code::ClaudeCodeProvider;
+
+/// Models the active provider offers for the chat/project model picker.
+/// Static for Claude Code, so this is computed on demand without spawning a
+/// worker.
+pub fn available_models() -> Vec<ModelInfo> {
+    use duckchat::Provider;
+    ClaudeCodeProvider::new().list_models()
+}
 
 // ── Duckboard-level event enum ──────────────────────────────────────────────
 

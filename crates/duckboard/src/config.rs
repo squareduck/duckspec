@@ -1,5 +1,6 @@
 //! Application configuration stored at `~/.config/duckboard/config.toml`.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -10,6 +11,11 @@ pub struct Config {
     pub ui: FontConfig,
     pub content: FontConfig,
     pub projects: ProjectsConfig,
+    /// Default `--model` value (alias or full id) per project, keyed by
+    /// `project_hash`. New chat sessions in a project inherit this default
+    /// when they haven't pinned a model of their own. Absent = let the CLI
+    /// pick.
+    pub model_defaults: HashMap<String, String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -41,6 +47,27 @@ impl Default for Config {
                 font_size: 13.0,
             },
             projects: ProjectsConfig::default(),
+            model_defaults: HashMap::new(),
+        }
+    }
+}
+
+impl Config {
+    /// The default `--model` value for `project_root`, if one is set.
+    pub fn project_model_default(&self, project_root: &Path) -> Option<String> {
+        self.model_defaults.get(&project_hash(project_root)).cloned()
+    }
+
+    /// Set (or, with `None`, clear) the default model for `project_root`.
+    pub fn set_project_model_default(&mut self, project_root: &Path, model: Option<String>) {
+        let key = project_hash(project_root);
+        match model {
+            Some(m) => {
+                self.model_defaults.insert(key, m);
+            }
+            None => {
+                self.model_defaults.remove(&key);
+            }
         }
     }
 }

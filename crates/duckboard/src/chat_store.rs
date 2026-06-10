@@ -71,6 +71,10 @@ pub struct ChatSession {
     /// Persisted so we only re-inject when the idea body actually changes
     /// between turns (first turn always injects when non-empty).
     pub last_seeded_description: Option<String>,
+    /// Model override for this chat, as a `--model` value (alias or full id).
+    /// `None` means "use the project default" (which itself may be unset, in
+    /// which case the CLI picks). Persisted so a pinned model survives resume.
+    pub selected_model: Option<String>,
 }
 
 impl ChatSession {
@@ -94,6 +98,7 @@ impl ChatSession {
             claude_session_id: None,
             title: None,
             last_seeded_description: None,
+            selected_model: None,
         }
     }
 }
@@ -111,6 +116,8 @@ struct PersistedSession {
     title: Option<String>,
     #[serde(default)]
     last_seeded_description: Option<String>,
+    #[serde(default)]
+    selected_model: Option<String>,
 }
 
 /// What the title summariser should summarise. A "bare slash command" turn
@@ -303,6 +310,7 @@ pub fn load_sessions_for(scope: &str, project_root: Option<&Path>) -> Vec<ChatSe
             claude_session_id: persisted.claude_session_id,
             title: persisted.title,
             last_seeded_description: persisted.last_seeded_description,
+            selected_model: persisted.selected_model,
         });
     }
     sessions.sort_by(|a, b| b.created_at_nanos.cmp(&a.created_at_nanos));
@@ -325,6 +333,7 @@ pub fn save_session(session: &ChatSession, project_root: Option<&Path>) -> anyho
         claude_session_id: session.claude_session_id.clone(),
         title: session.title.clone(),
         last_seeded_description: session.last_seeded_description.clone(),
+        selected_model: session.selected_model.clone(),
     };
     let data = serde_json::to_string_pretty(&persisted)?;
     std::fs::write(path, data)?;

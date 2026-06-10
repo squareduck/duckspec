@@ -332,6 +332,14 @@ pub struct AgentSession {
     pub chat_collapsed: Vec<bool>,
     pub esc_count: u8,
     pub agent_model: String,
+    /// Resolved project-level default `--model` value for this session's
+    /// project. Transient (not persisted) — refreshed from `Config` by the
+    /// main loop. Used to render the picker's "Default (…)" label and to
+    /// resolve the effective model when `session.selected_model` is `None`.
+    pub project_model_default: Option<String>,
+    /// Set when the user changes the per-chat model via the picker; consumed
+    /// by `update_with_side_effects` to persist the session. Transient.
+    pub model_dirty: bool,
     pub agent_input_tokens: usize,
     pub agent_output_tokens: usize,
     pub agent_context_window: usize,
@@ -413,6 +421,8 @@ impl AgentSession {
             chat_collapsed: Vec::new(),
             esc_count: 0,
             agent_model: String::new(),
+            project_model_default: None,
+            model_dirty: false,
             agent_input_tokens: 0,
             agent_output_tokens: 0,
             agent_context_window: 200_000,
@@ -940,6 +950,13 @@ fn handle_agent_chat(
         agent_chat::Msg::DiscardQueue => {
             ax.queue_editor = None;
         }
+        agent_chat::Msg::ModelSelected(choice) => {
+            // `id == None` is the "use project default" sentinel, stored as
+            // `None` on the session. The actual model resolves at send time.
+            ax.session.selected_model = choice.id;
+            // Persisted by `update_with_side_effects`, which has `project_root`.
+            ax.model_dirty = true;
+        }
         agent_chat::Msg::ChatScrolled(viewport) => {
             let bounds = viewport.bounds();
             let content = viewport.content_bounds();
@@ -1089,6 +1106,14 @@ pub fn send_prompt_text(ax: &mut AgentSession, text: String, highlighter: &Synta
 
         let mut req = TurnRequest::new(priming_text, handle.working_dir().to_path_buf());
         req.system_additions = additions;
+        // Per-chat pin wins; otherwise fall back to the project default
+        // (which may itself be unset → CLI picks). Prime on the same model so
+        // the resumed session stays consistent.
+        req.model = ax
+            .session
+            .selected_model
+            .clone()
+            .or_else(|| ax.project_model_default.clone());
         // Selection / image attachments and idea-description blurb all
         // belong to the user's intended turn — leave them on `ax` so the
         // follow-up dispatch picks them up.
@@ -1185,6 +1210,14 @@ pub fn send_prompt_text(ax: &mut AgentSession, text: String, highlighter: &Synta
 
     let mut req = TurnRequest::new(prompt, handle.working_dir().to_path_buf());
     req.system_additions = system_additions;
+    // Per-chat pin wins; otherwise the project default (possibly unset → CLI
+    // default). On a resumed session this `--model` overrides the session's
+    // baked-in model for this turn.
+    req.model = ax
+        .session
+        .selected_model
+        .clone()
+        .or_else(|| ax.project_model_default.clone());
     req.attachments = std::mem::take(&mut ax.input_attachments);
     handle.send_turn(req);
 
@@ -1419,6 +1452,15 @@ pub fn update_with_side_effects(
 ) {
     update(state, msg, highlighter);
 
+    // Persist a just-changed per-chat model selection. Done here (not in
+    // `handle_agent_chat`) because this is the layer that has `project_root`.
+    if let Some(ax) = state.active_mut()
+        && ax.model_dirty
+    {
+        ax.model_dirty = false;
+        let _ = crate::chat_store::save_session(&ax.session, project_root);
+    }
+
     if state.visible && state.active_tab == ActiveTab::Chat {
         ensure_sessions_with_label(
             state,
@@ -1619,14 +1661,20 @@ pub fn view_column<'a, M: 'a + Clone>(
         }
         ActiveTab::Chat => {
             if let Some(ax) = state.active() {
+                let model_choices =
+                    agent_chat::chat_model_choices(ax.project_model_default.as_deref());
+                let selected_model = agent_chat::selected_model_choice(
+                    &model_choices,
+                    ax.session.selected_model.as_deref(),
+                );
                 let status = agent_chat::StatusInfo {
                     is_streaming: ax.session.is_streaming,
                     esc_count: ax.esc_count,
-                    model: if ax.agent_model.is_empty() {
-                        "\u{2014}".to_string()
-                    } else {
-                        ax.agent_model.clone()
-                    },
+                    // Observed model (what the CLI ran); empty until reported,
+                    // in which case the widget hides the readout.
+                    model: ax.agent_model.clone(),
+                    model_choices,
+                    selected_model,
                     context_tokens: ax.agent_input_tokens + ax.agent_output_tokens,
                     context_max: ax.agent_context_window,
                 };

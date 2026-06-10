@@ -1,10 +1,13 @@
-//! Settings area — font configuration UI.
+//! Settings area — font + per-project model configuration UI.
+
+use std::path::Path;
 
 use iced::widget::{Space, button, column, container, pick_list, row, scrollable, slider, text};
 use iced::{Center, Element, Length};
 
 use crate::config::{self, Config};
 use crate::theme;
+use crate::widget::agent_chat::{self, ModelChoice};
 
 // ── State ────────────────────────────────────────────────────────────────────
 
@@ -22,12 +25,19 @@ pub enum Message {
     UiFontSizeChanged(f32),
     ContentFontSelected(String),
     ContentFontSizeChanged(f32),
+    /// Project-level default model picked (`id == None` → no default).
+    ModelDefaultSelected(ModelChoice),
     ResetDefaults,
 }
 
 // ── Update ───────────────────────────────────────────────────────────────────
 
-pub fn update(state: &mut State, config: &mut Config, message: Message) {
+pub fn update(
+    state: &mut State,
+    config: &mut Config,
+    project_root: Option<&Path>,
+    message: Message,
+) {
     match message {
         Message::LoadFonts => {
             if state.system_fonts.is_empty() {
@@ -50,6 +60,12 @@ pub fn update(state: &mut State, config: &mut Config, message: Message) {
             config.content.font_size = size;
             let _ = config::save(config);
         }
+        Message::ModelDefaultSelected(choice) => {
+            if let Some(root) = project_root {
+                config.set_project_model_default(root, choice.id);
+                let _ = config::save(config);
+            }
+        }
         Message::ResetDefaults => {
             *config = Config::default();
             let _ = config::save(config);
@@ -59,7 +75,11 @@ pub fn update(state: &mut State, config: &mut Config, message: Message) {
 
 // ── View ─────────────────────────────────────────────────────────────────────
 
-pub fn view<'a>(state: &'a State, config: &'a Config) -> Element<'a, Message> {
+pub fn view<'a>(
+    state: &'a State,
+    config: &'a Config,
+    project_root: Option<&Path>,
+) -> Element<'a, Message> {
     let heading = text("Settings").size(22.0).color(theme::text_primary());
 
     let ui_section = font_section(
@@ -90,17 +110,24 @@ pub fn view<'a>(state: &'a State, config: &'a Config) -> Element<'a, Message> {
     .on_press(Message::ResetDefaults)
     .style(theme::dashboard_action);
 
-    let body = column![
+    let mut body = column![
         heading,
         Space::new().height(theme::SPACING_XL),
         ui_section,
         Space::new().height(theme::SPACING_XL),
         content_section,
-        Space::new().height(theme::SPACING_XL),
-        reset,
-    ]
-    .width(Length::Fill)
-    .max_width(480);
+    ];
+    // Per-project model default — only meaningful with a project open.
+    if let Some(root) = project_root {
+        body = body
+            .push(Space::new().height(theme::SPACING_XL))
+            .push(model_section(config, root));
+    }
+    let body = body
+        .push(Space::new().height(theme::SPACING_XL))
+        .push(reset)
+        .width(Length::Fill)
+        .max_width(480);
 
     container(
         scrollable(container(body).padding([theme::SPACING_XL, theme::SPACING_XL]))
@@ -110,6 +137,35 @@ pub fn view<'a>(state: &'a State, config: &'a Config) -> Element<'a, Message> {
     .width(Length::Fill)
     .height(Length::Fill)
     .style(theme::surface)
+    .into()
+}
+
+fn model_section<'a>(config: &Config, root: &Path) -> Element<'a, Message> {
+    let label = text("Default Model")
+        .size(theme::font_md())
+        .color(theme::text_primary());
+    let desc = text(
+        "Model new chats in this project use by default. A per-chat selection \
+         overrides it.",
+    )
+    .size(theme::font_sm())
+    .color(theme::text_muted());
+
+    let choices = agent_chat::project_model_choices();
+    let current = config.project_model_default(root);
+    let selected = agent_chat::selected_model_choice(&choices, current.as_deref());
+    let picker = pick_list(choices, Some(selected), Message::ModelDefaultSelected)
+        .width(280)
+        .style(theme::pick_list_style)
+        .menu_style(theme::pick_list_menu);
+
+    column![
+        label,
+        desc,
+        Space::new().height(theme::SPACING_SM),
+        picker,
+    ]
+    .spacing(theme::SPACING_XS)
     .into()
 }
 
@@ -137,7 +193,9 @@ fn font_section<'a>(
 
     let font_picker = pick_list(system_fonts.to_vec(), selected, on_font)
         .placeholder("System default")
-        .width(280);
+        .width(280)
+        .style(theme::pick_list_style)
+        .menu_style(theme::pick_list_menu);
 
     let size_label = text(format!("{:.0}px", current_size))
         .size(theme::font_sm())

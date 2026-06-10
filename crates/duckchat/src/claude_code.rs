@@ -51,9 +51,30 @@ impl Provider for ClaudeCodeProvider {
     }
 
     fn list_models(&self) -> Vec<ModelInfo> {
-        // Claude Code exposes model selection through its own `/model` slash
-        // command; we don't duplicate the list here.
-        Vec::new()
+        // The `claude` CLI exposes no machine-readable model list — `--model`
+        // accepts an alias for the latest model (`opus`, `sonnet`, ...) or a
+        // full id. We curate the alias list here so the provider owns it and
+        // duckboard stays provider-agnostic. The `id` is exactly what gets
+        // passed to `--model`; aliases track "latest" so they don't need
+        // bumping on every point release.
+        vec![
+            ModelInfo {
+                id: "fable".to_string(),
+                display: "Fable 5".to_string(),
+            },
+            ModelInfo {
+                id: "opus".to_string(),
+                display: "Opus 4.8".to_string(),
+            },
+            ModelInfo {
+                id: "sonnet".to_string(),
+                display: "Sonnet 4.6".to_string(),
+            },
+            ModelInfo {
+                id: "haiku".to_string(),
+                display: "Haiku 4.5".to_string(),
+            },
+        ]
     }
 
     fn list_commands(&self, project_root: &Path) -> Vec<SlashCommand> {
