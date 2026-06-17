@@ -6,6 +6,9 @@ pub struct Config {
     /// Paths to scan for `@spec` backlinks, relative to the project root.
     /// Empty means "scan from project root".
     pub test_paths: Vec<PathBuf>,
+    /// Files and directories omitted from backlink scanning, relative to the
+    /// project root. Empty by default.
+    pub exclude: Vec<PathBuf>,
     /// Formatting options applied when rendering artifact schemas.
     pub format: FormatConfig,
 }
@@ -32,6 +35,8 @@ pub enum ConfigError {
     Parse(#[from] toml::de::Error),
     #[error("config.toml: test_paths must be an array of strings")]
     BadTestPaths,
+    #[error("config.toml: exclude must be an array of strings")]
+    BadExclude,
     #[error("config.toml: [format] must be a table")]
     BadFormat,
     #[error("config.toml: format.line_width must be a positive integer")]
@@ -59,6 +64,15 @@ impl Config {
             None => Vec::new(),
         };
 
+        let exclude = match table.get("exclude") {
+            Some(toml::Value::Array(arr)) => arr
+                .iter()
+                .filter_map(|v| v.as_str().map(PathBuf::from))
+                .collect(),
+            Some(_) => return Err(ConfigError::BadExclude),
+            None => Vec::new(),
+        };
+
         let format = match table.get("format") {
             Some(toml::Value::Table(t)) => {
                 let line_width = match t.get("line_width") {
@@ -72,7 +86,11 @@ impl Config {
             None => FormatConfig::default(),
         };
 
-        Ok(Self { test_paths, format })
+        Ok(Self {
+            test_paths,
+            exclude,
+            format,
+        })
     }
 }
 
@@ -156,6 +174,15 @@ mod tests {
         .unwrap();
         let err = Config::load(dir.path()).unwrap_err();
         assert!(matches!(err, ConfigError::BadLineWidth));
+    }
+
+    /// @spec audit/scan-boundary Excluded paths: Non-array exclude raises BadExclude
+    #[test]
+    fn non_array_exclude_is_rejected() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("config.toml"), "exclude = \"references/\"\n").unwrap();
+        let err = Config::load(dir.path()).unwrap_err();
+        assert!(matches!(err, ConfigError::BadExclude));
     }
 
     #[test]

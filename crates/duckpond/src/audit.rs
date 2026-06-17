@@ -32,7 +32,7 @@ use crate::check::{self, CheckContext, DuckspecState, LoadedFile};
 use crate::config::Config;
 use crate::error::{ChangeError, ParseError};
 use crate::layout::{self, ArtifactKind};
-use crate::merge;
+use crate::merge::{self, MergeValidateError, Merged};
 use crate::parse;
 
 /// Per-file parse-error entry: (relative path, source, errors).
@@ -61,6 +61,9 @@ pub struct AuditReport {
     pub missing_step_coverage: Vec<MissingStepCoverage>,
     /// Step `@spec` task refs that do not resolve to any known scenario.
     pub unresolved_step_refs: Vec<UnresolvedStepRef>,
+    /// Change spec deltas that failed to apply or re-parse during the audit's
+    /// scenario projection.
+    pub change_merge_errors: Vec<ChangeMergeError>,
 }
 
 impl AuditReport {
@@ -84,6 +87,7 @@ impl AuditReport {
             + self.missing_backlink_scenarios.len()
             + missing_step_count
             + self.unresolved_step_refs.len()
+            + self.change_merge_errors.len()
     }
 
     pub fn is_empty(&self) -> bool {
@@ -151,6 +155,16 @@ pub struct UnresolvedStepRef {
     /// 1-based line number of the task within the step file.
     pub line: usize,
     pub key: ScenarioKey,
+}
+
+/// A change spec delta that failed to apply to its target or to re-parse as a
+/// valid spec while the audit projected the change's scenarios.
+#[derive(Debug)]
+pub struct ChangeMergeError {
+    pub change_name: String,
+    /// Delta target, relative to the duckspec root (e.g. `caps/auth/spec.md`).
+    pub target: PathBuf,
+    pub error: MergeValidateError,
 }
 
 /// Selects which portion of the project to audit.
@@ -314,7 +328,13 @@ fn audit_full(
     let mut active_change_keys: HashSet<ScenarioKey> = HashSet::new();
     for change_name in &change_names {
         let change_dir = changes_dir.join(change_name);
-        let scenarios = build_change_scenarios(duckspec_root, canonical_root, &change_dir)?;
+        let scenarios = build_change_scenarios(
+            duckspec_root,
+            canonical_root,
+            &change_dir,
+            change_name,
+            &mut report.change_merge_errors,
+        )?;
         for s in &scenarios {
             active_change_keys.insert(s.key.clone());
         }
@@ -439,7 +459,13 @@ fn audit_change(
     }
 
     // 3. Build change scenarios and the full scenario index.
-    let change_scenarios = build_change_scenarios(duckspec_root, canonical_root, &change_dir)?;
+    let change_scenarios = build_change_scenarios(
+        duckspec_root,
+        canonical_root,
+        &change_dir,
+        change_name,
+        &mut report.change_merge_errors,
+    )?;
     let scenario_index = build_scenario_index(duckspec_root, canonical_root)?;
 
     // 4. Scan source files for backlinks.
@@ -775,6 +801,8 @@ fn build_change_scenarios(
     duckspec_root: &Path,
     canonical_root: &Path,
     change_dir: &Path,
+    change_name: &str,
+    merge_errors: &mut Vec<ChangeMergeError>,
 ) -> Result<Vec<ChangeScenario>, AuditError> {
     let files = collect_md_files(change_dir)?;
     let caps_dir = duckspec_root.join("caps");
@@ -826,11 +854,10 @@ fn build_change_scenarios(
                     let mut original_index = HashMap::new();
                     index_spec_scenarios(&source, &cap_path, &mut original_index);
 
-                    if let Ok(Some(merged)) = merge::apply_delta(&source, &delta_source) {
-                        let elements = parse::parse_elements(&merged);
-                        if let Ok(spec) = parse::spec::parse_spec(&elements) {
+                    match merge::merge_spec_delta(&source, &delta_source) {
+                        Ok(Merged::Updated { artifact, .. }) => {
                             let mut merged_index = HashMap::new();
-                            add_spec_to_index(&spec, &cap_path, &mut merged_index);
+                            add_spec_to_index(&artifact, &cap_path, &mut merged_index);
                             for (key, is_test_code) in merged_index {
                                 if !original_index.contains_key(&key) {
                                     scenarios.push(ChangeScenario {
@@ -839,6 +866,16 @@ fn build_change_scenarios(
                                     });
                                 }
                             }
+                        }
+                        // A delta that deletes the whole cap introduces no new
+                        // scenarios — nothing to project.
+                        Ok(Merged::Deleted) => {}
+                        Err(error) => {
+                            merge_errors.push(ChangeMergeError {
+                                change_name: change_name.to_string(),
+                                target: PathBuf::from("caps").join(&cap_path).join("spec.md"),
+                                error,
+                            });
                         }
                     }
                 }
@@ -873,10 +910,36 @@ fn scan_source_files(
     let duckspec_canonical = duckspec_root
         .canonicalize()
         .map_err(|e| AuditError::io(duckspec_root, e))?;
+
+    let excluded: Vec<PathBuf> = config
+        .exclude
+        .iter()
+        .map(|p| project_root.join(p))
+        .filter_map(|p| p.canonicalize().ok())
+        .collect();
+
     let mut all_backlinks = Vec::new();
 
     for root in &scan_roots {
-        let walker = WalkBuilder::new(root).build();
+        let excluded = excluded.clone();
+        let walker = WalkBuilder::new(root)
+            .filter_entry(move |entry| {
+                let path = entry.path();
+                // Prune nested duckspec projects: any directory that owns its
+                // own `duckspec/caps/` is self-governing and resolves against
+                // its own specs.
+                if path.is_dir() && path.join("duckspec").join("caps").is_dir() {
+                    return false;
+                }
+                // Prune explicitly excluded files and directory subtrees.
+                if let Ok(canonical) = path.canonicalize()
+                    && excluded.iter().any(|e| canonical.starts_with(e))
+                {
+                    return false;
+                }
+                true
+            })
+            .build();
 
         for result in walker {
             let entry = match result {
@@ -907,6 +970,73 @@ fn scan_source_files(
     }
 
     Ok(all_backlinks)
+}
+
+// ---------------------------------------------------------------------------
+// Archive orphan guard
+// ---------------------------------------------------------------------------
+
+/// A capability's projected post-archive `spec.md` content.
+pub enum ProjectedSpec {
+    /// `spec.md` will have this content after the archive (a copy or a merged
+    /// delta).
+    Updated(String),
+    /// The capability is removed by the archive.
+    Deleted,
+}
+
+/// Report the source `@spec` backlinks a projected archive would orphan:
+/// those that resolve against the current capability specs but would not
+/// resolve once `projected` lands. `projected` is keyed by cap path (e.g.
+/// `auth`). Only spec content matters — doc changes never add or clear an
+/// orphan.
+///
+/// The result is the set difference `unresolved_after ∖ unresolved_before`,
+/// so a backlink already broken before the archive is not attributed to it.
+pub fn would_be_orphaned(
+    project_root: &Path,
+    duckspec_root: &Path,
+    config: &Config,
+    projected: &HashMap<String, ProjectedSpec>,
+) -> Result<Vec<UnresolvedBacklink>, AuditError> {
+    let canonical_root = duckspec_root
+        .canonicalize()
+        .map_err(|e| AuditError::io(duckspec_root, e))?;
+
+    // Current scenario index from main caps.
+    let current = build_scenario_index(duckspec_root, &canonical_root)?;
+
+    // Projected index: drop each projected cap's keys, then re-add the keys
+    // parsed from its new content (or leave them dropped on `Deleted`).
+    let mut projected_index = current.clone();
+    for (cap_path, proj) in projected {
+        projected_index.retain(|key, _| key.cap_path != *cap_path);
+        if let ProjectedSpec::Updated(content) = proj {
+            index_spec_scenarios(content, cap_path, &mut projected_index);
+        }
+    }
+
+    // Scan source backlinks through the same boundary the audit uses.
+    let backlinks = scan_source_files(project_root, duckspec_root, config)?;
+
+    let mut orphans = Vec::new();
+    for bl in &backlinks {
+        let key = ScenarioKey {
+            cap_path: bl.cap_path.clone(),
+            requirement: bl.requirement.clone(),
+            scenario: bl.scenario.clone(),
+        };
+        // Resolved before but not after = an orphan the archive causes.
+        if current.contains_key(&key) && !projected_index.contains_key(&key) {
+            orphans.push(UnresolvedBacklink {
+                source_file: bl.file.clone(),
+                line: bl.line,
+                key,
+            });
+        }
+    }
+
+    Ok(orphans)
 }
 
 fn backlink_key_set(backlinks: &[SourceBacklink]) -> HashSet<ScenarioKey> {
@@ -1050,6 +1180,105 @@ fn read_dir(dir: &Path) -> Result<std::fs::ReadDir, AuditError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Write `contents` to `path`, creating parent directories as needed.
+    fn write_source(path: &Path, contents: &str) {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        std::fs::write(path, contents).unwrap();
+    }
+
+    const BACKLINK: &str = "// @spec foo Bar: Baz\nfn t() {}\n";
+
+    /// @spec audit/scan-boundary Scan roots: Configured test_paths scope the scan
+    #[test]
+    fn configured_test_paths_scope_the_scan() {
+        let project = tempfile::tempdir().unwrap();
+        let root = project.path();
+        std::fs::create_dir_all(root.join("duckspec")).unwrap();
+
+        write_source(&root.join("tests/inside.rs"), BACKLINK);
+        write_source(&root.join("other/outside.rs"), BACKLINK);
+
+        let config = Config {
+            test_paths: vec![PathBuf::from("tests")],
+            ..Default::default()
+        };
+        let backlinks = scan_source_files(root, &root.join("duckspec"), &config).unwrap();
+
+        assert_eq!(backlinks.len(), 1, "only the in-scope backlink is returned");
+        assert!(backlinks[0].file.ends_with("tests/inside.rs"));
+    }
+
+    /// @spec audit/scan-boundary Scan roots: Empty test_paths scans from the project root
+    #[test]
+    fn empty_test_paths_scans_from_project_root() {
+        let project = tempfile::tempdir().unwrap();
+        let root = project.path();
+        std::fs::create_dir_all(root.join("duckspec")).unwrap();
+
+        write_source(&root.join("deep/nested/code.rs"), BACKLINK);
+
+        let config = Config::default();
+        let backlinks = scan_source_files(root, &root.join("duckspec"), &config).unwrap();
+
+        assert_eq!(backlinks.len(), 1, "the backlink under the root is returned");
+        assert!(backlinks[0].file.ends_with("deep/nested/code.rs"));
+    }
+
+    /// @spec audit/scan-boundary Excluded paths: Excluded file and excluded directory subtree contribute no backlinks
+    #[test]
+    fn excluded_file_and_directory_subtree_contribute_no_backlinks() {
+        let project = tempfile::tempdir().unwrap();
+        let root = project.path();
+        std::fs::create_dir_all(root.join("duckspec")).unwrap();
+
+        write_source(&root.join("references/design.md"), BACKLINK);
+        write_source(&root.join("excluded_dir/sub/code.rs"), BACKLINK);
+        write_source(&root.join("src/real.rs"), BACKLINK);
+
+        let config = Config {
+            exclude: vec![
+                PathBuf::from("references/design.md"),
+                PathBuf::from("excluded_dir"),
+            ],
+            ..Default::default()
+        };
+        let backlinks = scan_source_files(root, &root.join("duckspec"), &config).unwrap();
+
+        assert_eq!(
+            backlinks.len(),
+            1,
+            "only the non-excluded backlink is returned, got: {:?}",
+            backlinks.iter().map(|b| &b.file).collect::<Vec<_>>()
+        );
+        assert!(backlinks[0].file.ends_with("src/real.rs"));
+    }
+
+    /// @spec audit/scan-boundary Nested duckspec projects: A nested project is skipped while the enclosing project is still scanned
+    #[test]
+    fn nested_project_is_skipped_while_enclosing_is_scanned() {
+        let project = tempfile::tempdir().unwrap();
+        let root = project.path();
+        std::fs::create_dir_all(root.join("duckspec/caps")).unwrap();
+
+        // A nested, self-governing project: it owns its own duckspec/caps/.
+        std::fs::create_dir_all(root.join("vendor/nested/duckspec/caps")).unwrap();
+        write_source(&root.join("vendor/nested/src/code.rs"), BACKLINK);
+        write_source(&root.join("src/real.rs"), BACKLINK);
+
+        let config = Config::default();
+        let backlinks = scan_source_files(root, &root.join("duckspec"), &config).unwrap();
+
+        assert_eq!(
+            backlinks.len(),
+            1,
+            "the nested project's backlink is dropped, the enclosing one kept, got: {:?}",
+            backlinks.iter().map(|b| &b.file).collect::<Vec<_>>()
+        );
+        assert!(backlinks[0].file.ends_with("src/real.rs"));
+    }
 
     fn find<'a>(spec: &'a Spec, req_name: &str, scn_name: &str) -> (&'a Requirement, &'a Scenario) {
         let req = spec

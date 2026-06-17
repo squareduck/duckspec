@@ -57,6 +57,10 @@ enum Command {
         /// Preview the archive without writing.
         #[arg(long)]
         dry: bool,
+        /// Proceed even if the archive would orphan live `@spec` backlinks,
+        /// downgrading the refusal to a warning.
+        #[arg(long)]
+        allow_orphans: bool,
     },
     /// Print artifact tree with summaries.
     Index {
@@ -99,7 +103,11 @@ fn main() -> anyhow::Result<()> {
         Command::Check { path } => cmd::check::run(path),
         Command::Format { path, dry } => cmd::format::run(path, dry),
         Command::Sync { dry } => cmd::sync::run(dry),
-        Command::Archive { name, dry } => cmd::archive::run(name, dry),
+        Command::Archive {
+            name,
+            dry,
+            allow_orphans,
+        } => cmd::archive::run(name, dry, allow_orphans),
         Command::Index {
             caps,
             codex,

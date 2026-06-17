@@ -1,13 +1,16 @@
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+use duckpond::audit::{self, ProjectedSpec, UnresolvedBacklink};
 use duckpond::check::{self, CheckContext, DuckspecState, LoadedFile};
+use duckpond::config::Config;
 use duckpond::layout::{self, ArtifactKind};
-use duckpond::merge;
+use duckpond::merge::{self, Merged};
 use owo_colors::OwoColorize;
 
 use super::common::{collect_files, find_duckspec_root, resolve_path};
 
-pub fn run(name: String, dry: bool) -> anyhow::Result<()> {
+pub fn run(name: String, dry: bool, allow_orphans: bool) -> anyhow::Result<()> {
     let duckspec_root = find_duckspec_root()?;
     let canonical_root = duckspec_root.canonicalize()?;
 
@@ -53,6 +56,38 @@ pub fn run(name: String, dry: bool) -> anyhow::Result<()> {
 
     // Step 3: Execute the plan — collect results in memory first.
     let results = execute_plan(&duckspec_root, &plan)?;
+
+    // Step 3b: Guard against orphaning live `@spec` backlinks. This runs
+    // before any write, so a refusal leaves the working tree untouched.
+    let project_root = duckspec_root
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("duckspec/ has no parent directory"))?
+        .to_path_buf();
+    let config = Config::load(&duckspec_root).map_err(|e| anyhow::anyhow!("{e}"))?;
+    let projected = projected_specs(&results);
+    let orphans = audit::would_be_orphaned(&project_root, &duckspec_root, &config, &projected)
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    if !orphans.is_empty() {
+        if allow_orphans {
+            eprintln!(
+                "  {} archive orphans {} live @spec backlink(s):",
+                "!".yellow(),
+                orphans.len()
+            );
+            print_orphans(&orphans, &project_root);
+        } else {
+            eprintln!(
+                "  {} archive would orphan {} live @spec backlink(s):",
+                "×".red(),
+                orphans.len()
+            );
+            print_orphans(&orphans, &project_root);
+            anyhow::bail!(
+                "aborting archive — fix the backlinks or re-run with --allow-orphans \
+                 (nothing was written)"
+            );
+        }
+    }
 
     // Step 4: Write results and move to archive.
     // We write to a temp archive dir first, then do the swap, so we can
@@ -225,6 +260,15 @@ struct ArchiveResult {
     originals: Vec<(PathBuf, Option<String>)>,
 }
 
+/// Collapse a validated merge outcome to the rendered markdown to write, or
+/// `None` when the delta deletes the whole artifact.
+fn rendered<A>(merged: Merged<A>) -> Option<String> {
+    match merged {
+        Merged::Updated { rendered, .. } => Some(rendered),
+        Merged::Deleted => None,
+    }
+}
+
 fn execute_plan(duckspec_root: &Path, plan: &ArchivePlan) -> anyhow::Result<ArchiveResult> {
     let caps_dir = duckspec_root.join("caps");
     let mut writes = Vec::new();
@@ -260,22 +304,22 @@ fn execute_plan(duckspec_root: &Path, plan: &ArchivePlan) -> anyhow::Result<Arch
 
         originals.push((op.target_relative.clone(), Some(source.clone())));
 
-        let merged = merge::apply_delta(&source, &delta).map_err(|errs| {
-            anyhow::anyhow!(
-                "merge failed for caps/{}: {}",
-                op.target_relative.display(),
-                errs.iter()
-                    .map(|e| e.to_string())
-                    .collect::<Vec<_>>()
-                    .join("; ")
-            )
-        })?;
+        // Validate through the kind-matched wrapper: a spec delta must re-parse
+        // as a spec, a doc delta as a document. Abort on either a merge failure
+        // or a post-merge parse failure.
+        let is_spec =
+            op.target_relative.file_name().and_then(|n| n.to_str()) == Some("spec.md");
+        let merged = if is_spec {
+            merge::merge_spec_delta(&source, &delta).map(rendered)
+        } else {
+            merge::merge_doc_delta(&source, &delta).map(rendered)
+        }
+        .map_err(|e| anyhow::anyhow!("merge failed for caps/{}: {e}", op.target_relative.display()))?;
 
         match merged {
             Some(content) => writes.push((op.target_relative.clone(), content)),
             None => {
-                // Delta deletes the file — record it but write nothing.
-                // For now, we don't support file deletion via archive.
+                // Delta deletes the file — not supported via archive.
                 anyhow::bail!(
                     "delta would delete caps/{} — not supported via archive",
                     op.target_relative.display()
@@ -285,6 +329,53 @@ fn execute_plan(duckspec_root: &Path, plan: &ArchivePlan) -> anyhow::Result<Arch
     }
 
     Ok(ArchiveResult { writes, originals })
+}
+
+// ---------------------------------------------------------------------------
+// Orphan guard
+// ---------------------------------------------------------------------------
+
+/// Build the projected post-archive spec map (cap path → new content) from the
+/// plan's `spec.md` writes. Doc writes are ignored — they never affect backlink
+/// resolution. `execute_plan` rejects whole-file deletions, so every projection
+/// is an `Updated`.
+fn projected_specs(results: &ArchiveResult) -> HashMap<String, ProjectedSpec> {
+    let mut projected = HashMap::new();
+    for (rel, content) in &results.writes {
+        if rel.file_name().and_then(|n| n.to_str()) != Some("spec.md") {
+            continue;
+        }
+        if let Some(cap_path) = cap_path_of(rel) {
+            projected.insert(cap_path, ProjectedSpec::Updated(content.clone()));
+        }
+    }
+    projected
+}
+
+/// The cap path (`/`-joined) for a caps-relative file like `auth/two-factor/spec.md`.
+fn cap_path_of(rel: &Path) -> Option<String> {
+    let parent = rel.parent()?;
+    let parts: Vec<&str> = parent
+        .components()
+        .filter_map(|c| c.as_os_str().to_str())
+        .collect();
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join("/"))
+    }
+}
+
+/// Print each orphaned backlink with its source file (relative to the project
+/// root when possible) and the scenario it points at.
+fn print_orphans(orphans: &[UnresolvedBacklink], project_root: &Path) {
+    for o in orphans {
+        let display = o
+            .source_file
+            .strip_prefix(project_root)
+            .unwrap_or(&o.source_file);
+        eprintln!("    {}:{} → {}", display.display(), o.line, o.key.display());
+    }
 }
 
 fn apply_results(duckspec_root: &Path, results: &ArchiveResult) -> anyhow::Result<()> {

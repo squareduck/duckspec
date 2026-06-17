@@ -1,0 +1,4 @@
+# Files and directories omitted from the `@spec` backlink scan. Paths are
+# relative to the project root. Use this for files that contain illustrative
+# or example `@spec` markers that are not real backlinks.
+exclude = ["references/duckspec.md"]

@@ -1,7 +1,76 @@
 use crate::artifact::delta::*;
 use crate::artifact::doc::*;
-use crate::error::MergeError;
+use crate::artifact::spec::Spec;
+use crate::error::{MergeError, ParseError};
 use crate::parse::{self, Span};
+
+// ---------------------------------------------------------------------------
+// Validated merge wrappers
+// ---------------------------------------------------------------------------
+
+/// A validated merge outcome. `A` is the parsed artifact (`Spec` or
+/// [`Document`]).
+#[derive(Debug)]
+pub enum Merged<A> {
+    /// The delta updated the artifact; `rendered` is the new markdown and
+    /// `artifact` is the re-parsed, schema-valid result.
+    Updated { rendered: String, artifact: A },
+    /// The delta deleted the whole artifact (`-` on H1).
+    Deleted,
+}
+
+/// A merge that either failed to apply or produced output that did not
+/// re-parse against the artifact's schema.
+#[derive(Debug, thiserror::Error)]
+pub enum MergeValidateError {
+    #[error("merge failed: {}", summarize_errors(.0))]
+    Merge(Vec<MergeError>),
+    #[error("merged result did not parse: {}", summarize_errors(.0))]
+    Parse(Vec<ParseError>),
+}
+
+/// Render a multi-error failure as one readable line: the first message plus
+/// an "(and N more)" count when more errors follow.
+pub fn summarize_errors<E: std::fmt::Display>(errors: &[E]) -> String {
+    match errors.split_first() {
+        None => String::new(),
+        Some((first, rest)) if rest.is_empty() => first.to_string(),
+        Some((first, rest)) => format!("{first} (and {} more)", rest.len()),
+    }
+}
+
+/// Apply a spec delta and validate the merged result with the spec parser.
+///
+/// Returns [`Merged::Updated`] carrying the rendered markdown and the
+/// re-parsed [`Spec`], [`Merged::Deleted`] when the delta removes the whole
+/// artifact, or a [`MergeValidateError`] distinguishing a merge failure from
+/// a post-merge parse failure.
+pub fn merge_spec_delta(source: &str, delta: &str) -> Result<Merged<Spec>, MergeValidateError> {
+    match apply_delta(source, delta).map_err(MergeValidateError::Merge)? {
+        None => Ok(Merged::Deleted),
+        Some(rendered) => {
+            let elements = parse::parse_elements(&rendered);
+            let artifact =
+                parse::spec::parse_spec(&elements).map_err(MergeValidateError::Parse)?;
+            Ok(Merged::Updated { rendered, artifact })
+        }
+    }
+}
+
+/// Apply a doc delta and validate the merged result with the document parser.
+///
+/// Behaves like [`merge_spec_delta`] but produces a [`Document`].
+pub fn merge_doc_delta(source: &str, delta: &str) -> Result<Merged<Document>, MergeValidateError> {
+    match apply_delta(source, delta).map_err(MergeValidateError::Merge)? {
+        None => Ok(Merged::Deleted),
+        Some(rendered) => {
+            let elements = parse::parse_elements(&rendered);
+            let artifact =
+                parse::doc::parse_document(&elements).map_err(MergeValidateError::Parse)?;
+            Ok(Merged::Updated { rendered, artifact })
+        }
+    }
+}
 
 /// Apply a delta to a source document, producing the merged result.
 ///

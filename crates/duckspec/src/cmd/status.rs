@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 
 use duckpond::artifact::spec::TestMarkerKind;
 use duckpond::layout::{self, ArtifactKind};
-use duckpond::merge;
+use duckpond::merge::{self, Merged};
 use duckpond::parse;
 use owo_colors::OwoColorize;
 
@@ -473,16 +473,25 @@ fn delta_new_coverage(
     let mut orig_scenarios = std::collections::HashSet::new();
     collect_scenario_names(source, &mut orig_scenarios);
 
-    let merged = match merge::apply_delta(source, delta_source) {
-        Ok(Some(m)) => m,
-        _ => return (Vec::new(), 0, 0),
+    // Validate the merge; reuse the parsed spec rather than re-parsing. A
+    // failure surfaces as one visible line and the dashboard keeps rendering.
+    let merged_spec = match merge::merge_spec_delta(source, delta_source) {
+        Ok(Merged::Updated { artifact, .. }) => artifact,
+        Ok(Merged::Deleted) => return (Vec::new(), 0, 0),
+        Err(e) => {
+            eprintln!(
+                "    {} delta merge failed for caps/{cap_path}/spec.md: {e}",
+                "×".red()
+            );
+            return (Vec::new(), 0, 0);
+        }
     };
 
     let mut all_needs = Vec::new();
     let mut all_covered = 0usize;
     let mut all_total = 0usize;
-    collect_spec_coverage(
-        &merged,
+    spec_coverage(
+        &merged_spec,
         cap_path,
         &mut all_needs,
         &mut all_covered,
@@ -613,7 +622,18 @@ fn collect_spec_coverage(
     let Ok(spec) = parse::spec::parse_spec(&elements) else {
         return;
     };
+    spec_coverage(&spec, cap_path, needs_backlink, covered, total);
+}
 
+/// Coverage tally over an already-parsed spec — lets callers that hold the
+/// parsed artifact (e.g. a validated merge) avoid re-parsing.
+fn spec_coverage(
+    spec: &duckpond::artifact::spec::Spec,
+    cap_path: &str,
+    needs_backlink: &mut Vec<String>,
+    covered: &mut usize,
+    total: &mut usize,
+) {
     for req in &spec.requirements {
         for scn in &req.scenarios {
             let is_test_code = scn

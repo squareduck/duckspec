@@ -137,6 +137,16 @@ fn print_report(report: &AuditReport, project_root: &Path) {
             r.key.display()
         );
     }
+
+    for e in &report.change_merge_errors {
+        eprintln!(
+            "  {} {} ({}): {}",
+            "×".red(),
+            e.target.display(),
+            e.change_name,
+            e.error
+        );
+    }
 }
 
 fn report_parse_errors(errors: &[ParseError], source: NamedSource<String>) {
