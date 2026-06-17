@@ -375,6 +375,10 @@ enum Message {
     // Animation tick for the streaming indicator; only fires while a session
     // is streaming (see `subscription`).
     StreamTick,
+    // ~60fps tick that advances every terminal whose drag is auto-scrolling
+    // past an edge. Only fires while a drag holds the pointer past an edge
+    // (see `subscription` / `any_terminal_autoscrolling`).
+    TerminalAutoscrollTick,
 }
 
 // ── Update ───────────────────────────────────────────────────────────────────
@@ -1582,6 +1586,15 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
         Message::StreamTick => {
             widget::streaming_indicator::bump_tick();
         }
+        Message::TerminalAutoscrollTick => {
+            for ix in state.interactions.values_mut() {
+                for tt in &mut ix.terminals {
+                    if tt.state.is_drag_autoscrolling() {
+                        tt.state.drag_autoscroll_step();
+                    }
+                }
+            }
+        }
         Message::KeyPress(key, mods, text) => {
             // Disarm any pending dirty-tab close on the next keypress.
             // Snapshot first so Cmd-W can still consult the previously
@@ -2220,6 +2233,38 @@ fn take_pending_chat_snap(state: &mut State) -> Task<Message> {
     }
 }
 
+/// True when any chat session has an accumulated edge auto-scroll delta from a
+/// drag that ran past the chat fold, awaiting drain into a `scroll_to`.
+fn has_pending_chat_autoscroll(state: &State) -> bool {
+    state
+        .interactions
+        .values()
+        .any(|ix| ix.sessions.iter().any(|ax| ax.pending_chat_autoscroll.is_some()))
+}
+
+/// Drain each session's pending chat auto-scroll delta into an absolute scroll
+/// on the chat scrollable. The delta advances `last_chat_offset_y` so the
+/// scroll-preservation replay stays consistent with the new position.
+fn take_pending_chat_autoscroll(state: &mut State) -> Task<Message> {
+    let mut task = Task::none();
+    for ix in state.interactions.values_mut() {
+        for ax in &mut ix.sessions {
+            if let Some(dy) = ax.pending_chat_autoscroll.take() {
+                let y = (ax.last_chat_offset_y.unwrap_or(0.0) + dy).max(0.0);
+                ax.last_chat_offset_y = Some(y);
+                task = Task::batch([
+                    task,
+                    iced::widget::operation::scroll_to(
+                        widget::agent_chat::CHAT_SCROLLABLE_ID,
+                        iced::widget::scrollable::AbsoluteOffset { x: 0.0, y },
+                    ),
+                ]);
+            }
+        }
+    }
+    task
+}
+
 /// Snapshot of the active chat session's scroll intent — captured before
 /// `update` runs and replayed afterwards to neutralize layout-driven
 /// resets. Iced 0.14's `Scrollable` re-clamps offset on bounds/content
@@ -2314,6 +2359,12 @@ fn update_with_scroll_preservation(state: &mut State, message: Message) -> Task<
     if state.chat_scroll_overridden {
         state.chat_scroll_overridden = false;
         return task;
+    }
+    // A chat-fold drag accumulated a deliberate scroll this tick. Issue it and
+    // skip the snapshot replay — replaying the pre-update offset would undo the
+    // scroll every frame the drag holds past the edge.
+    if has_pending_chat_autoscroll(state) {
+        return Task::batch([task, take_pending_chat_autoscroll(state)]);
     }
     match snapshot {
         Some(snap) => Task::batch([task, replay_chat_scroll(snap)]),
@@ -4771,7 +4822,26 @@ fn subscription(state: &State) -> Subscription<Message> {
         );
     }
 
+    // ~60fps tick driving terminal edge auto-scroll. Only subscribed while a
+    // terminal drag holds the pointer past an edge, so the render loop stays
+    // idle otherwise.
+    if any_terminal_autoscrolling(state) {
+        subs.push(
+            iced::time::every(std::time::Duration::from_millis(16))
+                .map(|_| Message::TerminalAutoscrollTick),
+        );
+    }
+
     Subscription::batch(subs)
+}
+
+/// True if any terminal across all interaction panels is currently drag
+/// auto-scrolling (drag active and pointer past a vertical edge).
+fn any_terminal_autoscrolling(state: &State) -> bool {
+    state
+        .interactions
+        .values()
+        .any(|ix| ix.terminals.iter().any(|tt| tt.state.is_drag_autoscrolling()))
 }
 
 /// True if any session across all interaction panels is actively streaming.

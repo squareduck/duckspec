@@ -382,6 +382,10 @@ pub struct AgentSession {
     /// `AgentEvent` can't help. Drained by `main` after the dispatch returns
     /// to issue a one-shot `snap_to_end` task.
     pub pending_snap_to_bottom: bool,
+    /// Accumulated edge auto-scroll delta (logical px) from a chat message
+    /// whose drag ran past the chat fold. Drained by `main` into a
+    /// `scroll_to` on the outer chat scrollable. `None` when idle.
+    pub pending_chat_autoscroll: Option<f32>,
     /// Selection-context attachments kept across messages. Built by Cmd-K
     /// (pin tentative) and cleared by Cmd-R (reset).
     pub selection_pinned: Vec<SelectionContext>,
@@ -441,6 +445,7 @@ impl AgentSession {
             stick_to_bottom: true,
             last_chat_offset_y: None,
             pending_snap_to_bottom: false,
+            pending_chat_autoscroll: None,
             selection_pinned: Vec::new(),
             selection_tentative: None,
             chat_input_focused: false,
@@ -886,6 +891,16 @@ fn handle_agent_chat(
             ax.chat_completion.visible = false;
         }
         agent_chat::Msg::ChatAction(idx, action) => {
+            // A chat message editor that fits its content but is clipped by
+            // the outer chat fold can't scroll itself; it emits AutoScroll so
+            // the host moves the outer scrollable. Accumulate the delta and
+            // drop stick-to-bottom so a later streaming snap can't fight the
+            // deliberate scroll.
+            if let text_edit::EditorAction::AutoScroll { dy } = action {
+                ax.pending_chat_autoscroll = Some(ax.pending_chat_autoscroll.unwrap_or(0.0) + dy);
+                ax.stick_to_bottom = false;
+                return;
+            }
             // Focus moved off the chat input. Also enforce single-source
             // selection: clear anchors in OTHER chat editors so the most
             // recent gesture wins the tentative slot.

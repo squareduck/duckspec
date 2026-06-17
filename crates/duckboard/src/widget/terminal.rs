@@ -28,6 +28,7 @@ use linkify::LinkFinder;
 use crate::path_link::{self, LinkTarget};
 
 use crate::theme;
+use crate::widget::autoscroll;
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
@@ -399,6 +400,15 @@ fn default_ansi_colors() -> alacritty_terminal::term::color::Colors {
 
 // ── Terminal state ───────────────────────────────────────────────────────────
 
+/// Last drag pointer in canvas-local px + the viewport height it was measured
+/// against, so the tick can recompute velocity without a fresh mouse event.
+#[derive(Clone, Copy)]
+struct DragPointer {
+    x: f32,
+    y: f32,
+    viewport_height: f32,
+}
+
 /// Owns the alacritty_terminal and all associated state.
 pub struct TerminalState {
     term: Term<Listener>,
@@ -417,6 +427,8 @@ pub struct TerminalState {
     pending_scroll: Cell<isize>,
     /// Selection event queued by Canvas update(). Applied in next feed().
     pending_selection: Cell<Option<PendingSelection>>,
+    /// Live drag pointer for continuous edge auto-scroll; None when no drag.
+    drag_pointer: Cell<Option<DragPointer>>,
     /// The portable-pty master handle, needed for resize signals.
     pty_master: Option<Box<dyn portable_pty::MasterPty + Send>>,
 }
@@ -461,6 +473,7 @@ impl TerminalState {
             pending_resize: Cell::new(None),
             pending_scroll: Cell::new(0),
             pending_selection: Cell::new(None),
+            drag_pointer: Cell::new(None),
             pty_master: None,
         })
     }
@@ -556,6 +569,50 @@ impl TerminalState {
         let (pt, side) = self.point_from_canvas(px, py);
         self.pending_selection
             .set(Some(PendingSelection::Update(pt, side)));
+    }
+
+    /// Record (or clear with None) the live drag pointer. Called from canvas
+    /// update() on CursorMoved while dragging, and with None on ButtonReleased.
+    pub fn set_drag_pointer(&self, pointer: Option<(f32, f32, f32)>) {
+        self.drag_pointer.set(pointer.map(|(x, y, viewport_height)| DragPointer {
+            x,
+            y,
+            viewport_height,
+        }));
+    }
+
+    /// Drag active *and* pointer past a vertical edge — gates the subscription.
+    pub fn is_drag_autoscrolling(&self) -> bool {
+        self.drag_pointer.get().is_some_and(|dp| {
+            autoscroll::edge_velocity(dp.y, 0.0, dp.viewport_height) != 0.0
+        })
+    }
+
+    /// Advance one frame: scroll the display toward the edge and re-extend the
+    /// selection. `edge_velocity` is positive past the *bottom*; the terminal
+    /// reveals lines below via a *negative* display delta, so invert; round
+    /// away from zero so each frame moves ≥1 line. Returns whether it scrolled.
+    pub fn drag_autoscroll_step(&mut self) -> bool {
+        let Some(dp) = self.drag_pointer.get() else {
+            return false;
+        };
+        let velocity = autoscroll::edge_velocity(dp.y, 0.0, dp.viewport_height);
+        if velocity == 0.0 {
+            return false;
+        }
+        let raw = -(velocity / cell_height());
+        let lines = if raw >= 0.0 {
+            raw.ceil()
+        } else {
+            raw.floor()
+        } as isize;
+        if lines == 0 {
+            return false;
+        }
+        self.request_scroll(lines);
+        self.queue_selection_update(dp.x, dp.y);
+        self.apply_scroll();
+        true
     }
 
     /// Return the currently selected text, if any.
@@ -990,17 +1047,10 @@ impl<'a> canvas::Program<TerminalEvent> for TerminalCanvas<'a> {
                 if state.dragging.get()
                     && let Some(pos) = cursor.position_from(bounds.position())
                 {
-                    // Auto-scroll when the user drags past the top or bottom
-                    // of the canvas so selection can extend beyond the visible
-                    // viewport.
-                    let ch = cell_height();
-                    if pos.y < 0.0 {
-                        let overshoot = ((-pos.y) / ch).ceil().max(1.0) as isize;
-                        self.state.request_scroll(overshoot);
-                    } else if pos.y > bounds.height {
-                        let overshoot = ((pos.y - bounds.height) / ch).ceil().max(1.0) as isize;
-                        self.state.request_scroll(-overshoot);
-                    }
+                    // Record the live pointer so the app tick can keep
+                    // scrolling past an edge while the mouse is held still.
+                    self.state
+                        .set_drag_pointer(Some((pos.x, pos.y, bounds.height)));
                     self.state.queue_selection_update(pos.x, pos.y);
                     return Some(canvas::Action::publish(TerminalEvent::Redraw).and_capture());
                 }
@@ -1022,6 +1072,8 @@ impl<'a> canvas::Program<TerminalEvent> for TerminalCanvas<'a> {
             canvas::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) => {
                 if state.dragging.get() {
                     state.dragging.set(false);
+                    // Stop the continuous edge auto-scroll the tick is driving.
+                    self.state.set_drag_pointer(None);
                     return Some(canvas::Action::publish(TerminalEvent::Redraw).and_capture());
                 }
                 None

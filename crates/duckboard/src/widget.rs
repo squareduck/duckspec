@@ -1,4 +1,5 @@
 pub mod agent_chat;
+pub mod autoscroll;
 pub mod collapsible;
 pub mod diff_view;
 pub mod file_finder;

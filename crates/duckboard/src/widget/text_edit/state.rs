@@ -374,6 +374,11 @@ impl EditorState {
                 // bytes in the per-session attachment side table and then
                 // dispatches a `Paste` of the markdown link.
             }
+            EditorAction::AutoScroll { .. } => {
+                // No-op: editors that emit this fit their content and have no
+                // overflow of their own to move — the host scrolls the outer
+                // container (see `pending_chat_autoscroll`).
+            }
         }
 
         mutates
@@ -920,6 +925,10 @@ pub enum EditorAction {
         media_type: String,
         bytes: Vec<u8>,
     },
+    /// Drag ran past an edge of an editor that fits its content inside an
+    /// *outer* scrollable (a chat message body). `dy` is logical px to move
+    /// that outer container; positive scrolls toward the end.
+    AutoScroll { dy: f32 },
 }
 
 impl EditorAction {

@@ -10,7 +10,7 @@ use iced::keyboard::key::Named;
 use iced::mouse;
 use iced::{
     Border, Color, Element, Event, Length, Pixels, Point, Rectangle, Size, Theme, alignment,
-    keyboard,
+    keyboard, window,
 };
 
 use linkify::LinkFinder;
@@ -21,6 +21,7 @@ use super::state::{
 };
 use crate::path_link::{self, LinkTarget};
 use crate::theme;
+use crate::widget::autoscroll;
 use crate::widget::terminal::current_modifiers;
 
 // ── Layout constants ───────────────────────────────────────────────────────
@@ -51,6 +52,15 @@ struct InternalState {
     /// underline overlay and the pointer cursor; cleared when modifiers
     /// release or the mouse moves off the link.
     link_hover: Option<LinkHover>,
+    /// Last frame instant we stepped on. iced re-dispatches the *same*
+    /// RedrawRequested(Instant) several times per real frame; step once per
+    /// distinct instant or we scroll multiple steps/frame and trip iced's
+    /// layout-invalidation guard.
+    last_autoscroll_frame: Option<std::time::Instant>,
+    /// Whether the drag is currently auto-scrolling. We must re-request a
+    /// redraw on *every* dispatch while true — not only the one that steps —
+    /// or the loop stalls the instant the mouse stops.
+    autoscrolling: bool,
 }
 
 /// A URL or file-path reference found at a click/hover position in the
@@ -342,6 +352,100 @@ impl<'a, M> TextEdit<'a, M> {
         self.static_viewport = v;
         self
     }
+
+    /// Extend the drag-selection to the (viewport-clamped) pointer line and,
+    /// when the pointer sits past a vertical edge with room to move, emit a
+    /// scroll and re-request a redraw so the loop keeps running with the mouse
+    /// held still. The edge is measured against the *visible* rectangle —
+    /// `bounds ∩ viewport` — so it works both for a self-scrolling file editor
+    /// (viewport ≈ the window) and a chat message clipped by an outer
+    /// scrollable (viewport = the on-screen slice). Returns whether it
+    /// scrolled.
+    fn drag_frame(
+        &self,
+        pos: Point,
+        bounds: Rectangle,
+        viewport: Rectangle,
+        internal: &InternalState,
+        wrap: Option<&WrapLayout>,
+        shell: &mut Shell<'_, M>,
+    ) -> bool {
+        let cell_w = if internal.cell_width > 0.0 {
+            internal.cell_width
+        } else {
+            7.8
+        };
+        let content_height = wrap
+            .map_or(self.state.lines.len() as f32, |w| {
+                w.total_visual_rows as f32
+            })
+            * LINE_HEIGHT
+            + CONTENT_PAD_Y * 2.0;
+
+        // Edge against the actually-visible span (layout bounds ∩ clip viewport).
+        let top = bounds.y.max(viewport.y);
+        let bottom = (bounds.y + bounds.height).min(viewport.y + viewport.height);
+        let velocity = autoscroll::edge_velocity(pos.y, top, bottom);
+
+        // Selection always tracks the edge line: clamp the drag target into the
+        // visible span so a big overshoot doesn't snap selection to the doc end.
+        let drag_pos = pixel_to_pos_wrapped(
+            Point::new(pos.x, pos.y.clamp(top, bottom)),
+            bounds,
+            internal,
+            self.state,
+            wrap,
+            content_height,
+        );
+        shell.publish((self.on_action)(EditorAction::Drag(drag_pos)));
+
+        if velocity == 0.0 || self.static_viewport {
+            return false;
+        }
+
+        if content_height > bounds.height {
+            // The editor owns the hidden content: self-scroll in pixels, but
+            // only while there is room to move in the pointer's direction so
+            // the loop stops at the content's end instead of spinning forever.
+            let max_scroll = (content_height - bounds.height).max(0.0);
+            let scroll_y = self.state.scroll_y.clamp(0.0, max_scroll);
+            let has_room = if velocity > 0.0 {
+                scroll_y < max_scroll
+            } else {
+                scroll_y > 0.0
+            };
+            if !has_room {
+                return false;
+            }
+            let content_width = if self.word_wrap {
+                0.0
+            } else {
+                let max_chars = self
+                    .state
+                    .lines
+                    .iter()
+                    .map(|l| l.chars().count())
+                    .max()
+                    .unwrap_or(0);
+                max_chars as f32 * cell_w + CONTENT_PAD * 2.0
+            };
+            shell.publish((self.on_action)(EditorAction::Scroll {
+                dy: velocity,
+                dx: 0.0,
+                viewport_height: bounds.height,
+                content_height,
+                viewport_width: bounds.width - internal.gutter_width,
+                content_width,
+            }));
+        } else {
+            // The editor fits its content but is clipped by an outer scrollable
+            // (a chat message body): it has no overflow of its own to move, so
+            // the host scrolls the outer container.
+            shell.publish((self.on_action)(EditorAction::AutoScroll { dy: velocity }));
+        }
+        shell.request_redraw();
+        true
+    }
 }
 
 impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for TextEdit<'a, M> {
@@ -412,7 +516,7 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for TextEdit<'a, M> {
         renderer: &iced::Renderer,
         clipboard: &mut dyn Clipboard,
         shell: &mut Shell<'_, M>,
-        _viewport: &Rectangle,
+        viewport: &Rectangle,
     ) {
         let bounds = layout.bounds();
         let internal = tree.state.downcast_mut::<InternalState>();
@@ -500,19 +604,15 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for TextEdit<'a, M> {
                 }
             }
             Event::Mouse(mouse::Event::CursorMoved { .. }) => {
+                // `cursor.land().position()` so a pointer dragged past an
+                // enclosing scrollable's fold (arrives Levitating, with
+                // `position() == None`) still yields a point — exactly when a
+                // nested chat message needs to auto-scroll.
                 if internal.dragging
                     && internal.focused
-                    && let Some(pos) = cursor.position()
+                    && let Some(pos) = cursor.land().position()
                 {
-                    let drag_pos = pixel_to_pos_wrapped(
-                        pos,
-                        bounds,
-                        internal,
-                        self.state,
-                        wrap.as_ref(),
-                        content_height,
-                    );
-                    shell.publish((self.on_action)(EditorAction::Drag(drag_pos)));
+                    self.drag_frame(pos, bounds, *viewport, internal, wrap.as_ref(), shell);
                 } else {
                     // Hover detection while cmd is held.
                     let new_hover = if current_modifiers().command()
@@ -706,6 +806,28 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for TextEdit<'a, M> {
                 // handlers (agent chat, etc.) don't also react to them.
                 if handled {
                     shell.capture_event();
+                }
+            }
+            Event::Window(window::Event::RedrawRequested(now)) => {
+                // Self-driven auto-scroll loop: step the drag once per distinct
+                // frame instant (iced re-dispatches the same instant several
+                // times per real frame), then re-request a redraw on *every*
+                // dispatch while auto-scrolling so the loop keeps spinning with
+                // the mouse held still.
+                if internal.dragging
+                    && internal.focused
+                    && let Some(pos) = cursor.land().position()
+                {
+                    if internal.last_autoscroll_frame != Some(*now) {
+                        internal.last_autoscroll_frame = Some(*now);
+                        internal.autoscrolling =
+                            self.drag_frame(pos, bounds, *viewport, internal, wrap.as_ref(), shell);
+                    }
+                    if internal.autoscrolling {
+                        shell.request_redraw();
+                    }
+                } else {
+                    internal.autoscrolling = false;
                 }
             }
             _ => {}
