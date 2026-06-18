@@ -2,9 +2,14 @@ name: Release
 
 # On `v*` tag push (e.g. `v0.1.0`), build release artifacts and attach
 # them to a GitHub Release:
-#   - ds-<version>-aarch64-apple-darwin.tar.gz    (ds CLI, macOS ARM64)
-#   - ds-<version>-x86_64-unknown-linux-gnu.tar.gz (ds CLI, Linux x86_64)
-#   - Duckboard-<version>.dmg                     (duckboard GUI, macOS ARM64)
+#   - ds-aarch64-apple-darwin.tar.gz     (ds CLI, macOS ARM64)
+#   - ds-x86_64-unknown-linux-gnu.tar.gz (ds CLI, Linux x86_64)
+#   - Duckboard-<version>.dmg            (duckboard GUI, macOS ARM64)
+#
+# The `ds` tarballs are intentionally version-less so a stable URL —
+#   https://github.com/squareduck/duckspec/releases/latest/download/ds-<target>.tar.gz
+# — always resolves to the newest release (copy-paste install in the README).
+# Provenance comes from the release tag itself.
 #
 # Cut a release with: `just release 0.2.0` (bumps workspace version,
 # commits, pushes, and tags). Tag push triggers this workflow.
@@ -60,7 +65,7 @@ jobs:
         id: ds
         run: |
           mkdir -p dist
-          ARCHIVE="ds-${{ steps.version.outputs.version }}-${TARGET}.tar.gz"
+          ARCHIVE="ds-${TARGET}.tar.gz"
           tar -C target/release -czf "dist/${ARCHIVE}" ds
           echo "archive=dist/${ARCHIVE}" >> "$GITHUB_OUTPUT"
 
@@ -125,7 +130,7 @@ jobs:
         id: ds
         run: |
           mkdir -p dist
-          ARCHIVE="ds-${{ steps.version.outputs.version }}-${TARGET}.tar.gz"
+          ARCHIVE="ds-${TARGET}.tar.gz"
           tar -C target/release -czf "dist/${ARCHIVE}" ds
           echo "archive=dist/${ARCHIVE}" >> "$GITHUB_OUTPUT"
 
