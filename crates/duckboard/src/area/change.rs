@@ -706,12 +706,32 @@ fn compute_obvious_command(state: &State, project: &ProjectData) -> Option<Strin
     obvious_command_from_artifacts(selected, project)
 }
 
-/// Inspect a change directory's artifact state and return the suggested
-/// next /ds-* command. Pure function over `project` — independent of
-/// `state.selected_change`, so it can refresh any change session (e.g.
+/// A change's lifecycle position, derived from its artifact and step state.
+/// Drives both the `obvious_command` placeholder and the per-session scope
+/// orientation blurb, so the two never disagree about where a change stands.
+#[derive(Debug, Clone)]
+pub struct ChangeScopeFacts {
+    /// Human phase label, e.g. "specs drafted, steps not yet written".
+    pub phase: &'static str,
+    /// How many steps are complete, and how many there are. `step_count == 0`
+    /// means the change has no steps yet.
+    pub steps_done: usize,
+    pub step_count: usize,
+    /// Task tally `(done, total)` for the one in-progress (`Partial`) step, if
+    /// any. `StepCompletion::Done` does not carry its total, so a full task
+    /// aggregate is not recoverable — this reports only the active step.
+    pub active_step_tasks: Option<(usize, usize)>,
+    /// Suggested next `/ds-*` command (without the leading slash).
+    pub next_command: Option<String>,
+}
+
+/// Inspect a change directory's artifact and step state and return its
+/// lifecycle facts. Pure function over `project` — independent of
+/// `state.selected_change`, so it can describe any change session (e.g.
 /// freshly-promoted idea sessions where the user is still in the Ideas
-/// area and the Changes area's selection hasn't moved).
-fn obvious_command_from_artifacts(name: &str, project: &ProjectData) -> Option<String> {
+/// area and the Changes area's selection hasn't moved). Returns `None` for
+/// archived or unknown changes, which have no next stage.
+pub fn change_scope_facts(name: &str, project: &ProjectData) -> Option<ChangeScopeFacts> {
     if project.archived_changes.iter().any(|c| c.name == name) {
         return None;
     }
@@ -720,34 +740,70 @@ fn obvious_command_from_artifacts(name: &str, project: &ProjectData) -> Option<S
 
     // Steps exist → either apply (unfinished) or archive (all done).
     if !change.steps.is_empty() {
-        let all_done = change
+        let steps_done = change
             .steps
             .iter()
-            .all(|s| matches!(s.completion, StepCompletion::Done));
-        return Some(if all_done {
-            "ds-archive".into()
-        } else {
-            "ds-apply".into()
+            .filter(|s| matches!(s.completion, StepCompletion::Done))
+            .count();
+        let all_done = steps_done == change.steps.len();
+        let active_step_tasks = change.steps.iter().find_map(|s| match s.completion {
+            StepCompletion::Partial(done, total) => Some((done, total)),
+            _ => None,
+        });
+        return Some(ChangeScopeFacts {
+            phase: if all_done {
+                "all steps complete"
+            } else {
+                "implementing steps"
+            },
+            steps_done,
+            step_count: change.steps.len(),
+            active_step_tasks,
+            next_command: Some(if all_done { "ds-archive" } else { "ds-apply" }.into()),
         });
     }
 
     // Caps exist → feature flow needs steps next; refinement/doc-only is ready to archive.
     if !change.cap_tree.is_empty() {
-        return Some(if change.has_design {
-            "ds-step".into()
+        let (phase, next) = if change.has_design {
+            ("specs drafted, steps not yet written", "ds-step")
         } else {
-            "ds-archive".into()
+            ("refinement specced, ready to archive", "ds-archive")
+        };
+        return Some(ChangeScopeFacts {
+            phase,
+            steps_done: 0,
+            step_count: 0,
+            active_step_tasks: None,
+            next_command: Some(next.into()),
         });
     }
 
     // No caps yet — walk the feature-flow ladder.
-    if change.has_design {
-        return Some("ds-spec".into());
-    }
-    if change.has_proposal {
-        return Some("ds-design".into());
-    }
-    Some("ds-propose".into())
+    let (phase, next) = if change.has_design {
+        ("design drafted, specs not yet written", "ds-spec")
+    } else if change.has_proposal {
+        ("proposal drafted, design not yet written", "ds-design")
+    } else {
+        ("newly created, no artifacts yet", "ds-propose")
+    };
+    Some(ChangeScopeFacts {
+        phase,
+        steps_done: 0,
+        step_count: 0,
+        active_step_tasks: None,
+        next_command: Some(next.into()),
+    })
+}
+
+/// Suggested next `/ds-*` command for a change, derived from its lifecycle
+/// facts. Thin caller over `change_scope_facts` so the placeholder and the
+/// scope orientation share one source of truth. Production paths derive the
+/// command inline from already-computed facts in `refresh_obvious_command`;
+/// this wrapper exists for the test-only `compute_obvious_command`.
+#[cfg(test)]
+fn obvious_command_from_artifacts(name: &str, project: &ProjectData) -> Option<String> {
+    change_scope_facts(name, project).and_then(|f| f.next_command)
 }
 
 /// Refresh the `obvious_command` on every session of every change /
@@ -760,13 +816,21 @@ pub fn refresh_obvious_command(
     project: &ProjectData,
 ) {
     for (scope, ix) in interactions.iter_mut() {
+        // Facts are computed once per change scope; non-change scopes carry
+        // none. The placeholder command derives from the same facts so the two
+        // never disagree.
+        let facts = match scope {
+            Scope::Change(name) => change_scope_facts(name, project),
+            Scope::Exploration(_) | Scope::Caps | Scope::Codex => None,
+        };
         let cmd = match scope {
             Scope::Exploration(_) => Some("ds-explore".into()),
-            Scope::Change(name) => obvious_command_from_artifacts(name, project),
+            Scope::Change(_) => facts.as_ref().and_then(|f| f.next_command.clone()),
             Scope::Caps | Scope::Codex => continue,
         };
         for ax in ix.sessions.iter_mut() {
             ax.obvious_command = cmd.clone();
+            ax.scope_facts = facts.clone();
         }
     }
 }
@@ -1894,6 +1958,49 @@ mod breadcrumb_tests {
             compute_obvious_command(&state, &project).as_deref(),
             Some("ds-archive")
         );
+    }
+
+    /// @spec session/scope Lifecycle reflection: A change with unfinished steps reports remaining work and the apply next-stage
+    #[test]
+    fn facts_unfinished_steps_report_remaining_work_and_apply() {
+        let mut project = make_project(&["foo"], &[]);
+        set_change(&mut project, "foo", |c| {
+            c.has_proposal = true;
+            c.has_design = true;
+            c.cap_tree = vec![tree_node("caps/auth")];
+            c.steps = vec![step(false), step(true)];
+        });
+        let facts = change_scope_facts("foo", &project).expect("active change has facts");
+        assert!(
+            facts.steps_done < facts.step_count,
+            "progress should not be complete"
+        );
+        assert_eq!(facts.next_command.as_deref(), Some("ds-apply"));
+    }
+
+    /// @spec session/scope Lifecycle reflection: A change with all steps complete reports completion and the archive next-stage
+    #[test]
+    fn facts_all_steps_complete_report_completion_and_archive() {
+        let mut project = make_project(&["foo"], &[]);
+        set_change(&mut project, "foo", |c| {
+            c.has_proposal = true;
+            c.has_design = true;
+            c.cap_tree = vec![tree_node("caps/auth")];
+            c.steps = vec![step(true), step(true)];
+        });
+        let facts = change_scope_facts("foo", &project).expect("active change has facts");
+        assert_eq!(facts.steps_done, facts.step_count);
+        assert!(facts.step_count > 0, "completion is over real steps");
+        assert_eq!(facts.next_command.as_deref(), Some("ds-archive"));
+    }
+
+    /// @spec session/scope Lifecycle reflection: A change with only a proposal reports the design next-stage
+    #[test]
+    fn facts_proposal_only_reports_design() {
+        let mut project = make_project(&["foo"], &[]);
+        set_change(&mut project, "foo", |c| c.has_proposal = true);
+        let facts = change_scope_facts("foo", &project).expect("active change has facts");
+        assert_eq!(facts.next_command.as_deref(), Some("ds-design"));
     }
 }
 

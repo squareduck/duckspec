@@ -355,6 +355,10 @@ pub struct AgentSession {
     /// Suggested /ds-* command for the current stage (without the leading slash).
     /// Used as the "press Enter on empty input" shortcut and for placeholder text.
     pub obvious_command: Option<String>,
+    /// Lifecycle facts for this session's change scope (phase, step progress,
+    /// next stage). Refreshed alongside `obvious_command`; `None` for
+    /// non-change scopes. Feeds the first-turn scope orientation blurb.
+    pub scope_facts: Option<crate::area::change::ChangeScopeFacts>,
     /// Pending message staged while the agent is streaming. Sent automatically
     /// when the current turn ends (either naturally or via user-triggered
     /// interrupt). `None` means the queue is empty.
@@ -440,6 +444,7 @@ impl AgentSession {
             agent_output_tokens: 0,
             agent_context_window: 200_000,
             obvious_command: None,
+            scope_facts: None,
             queue_editor: None,
             idea_description: None,
             stick_to_bottom: true,
@@ -543,6 +548,69 @@ impl InteractionState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Build the scope orientation blurb the way `send_prompt_text` does, so
+    /// the priming-body tests assert against the real hook output.
+    fn scope_blurb(kind: ScopeKind, key: &str) -> String {
+        use duckchat::ContextHook;
+        crate::scope::CurrentScopeHook
+            .compute(&crate::scope::SessionScope {
+                kind,
+                scope_key: key.into(),
+                change_facts: None,
+            })
+            .expect("scope hook always produces orientation")
+            .text
+    }
+
+    /// @spec session/scope Reliable first-turn delivery: The first turn's message body carries the scope orientation
+    #[test]
+    fn priming_body_carries_scope_orientation() {
+        let blurb = scope_blurb(ScopeKind::Change, "foo");
+        let body = assemble_priming_body(Some("AGENTS conventions"), Some(&blurb));
+        assert!(
+            body.contains(&blurb),
+            "first-turn body must carry the scope orientation: {body}"
+        );
+        assert!(
+            body.contains("single dot"),
+            "priming body keeps the single-dot-ack instruction: {body}"
+        );
+        // A brand-new session is the one that gets primed.
+        assert!(should_prime(None, false));
+    }
+
+    /// @spec session/scope Reliable first-turn delivery: Orientation is present when the project has no AGENTS.md
+    #[test]
+    fn priming_body_present_without_agents_md() {
+        let blurb = scope_blurb(ScopeKind::Change, "foo");
+        // No AGENTS.md → still primed, and the orientation still rides the body.
+        let body = assemble_priming_body(None, Some(&blurb));
+        assert!(
+            body.contains(&blurb),
+            "orientation must be present even with no AGENTS.md: {body}"
+        );
+        assert!(
+            body.contains(PATH_REFERENCE_NOTE),
+            "path-reference note keeps the body non-empty without AGENTS.md: {body}"
+        );
+        assert!(
+            should_prime(None, false),
+            "a fresh session is primed regardless of AGENTS.md presence"
+        );
+    }
+
+    /// @spec session/scope Reliable first-turn delivery: A resumed session does not repeat the orientation
+    #[test]
+    fn resumed_session_is_not_re_primed() {
+        // A resumable Claude session id means the orientation is already in the
+        // session's history — do not prime again.
+        assert!(!should_prime(Some("claude-session-123"), false));
+        // Likewise a session that already has prior messages.
+        assert!(!should_prime(None, true));
+        // Only the brand-new session (no id, no messages) is primed.
+        assert!(should_prime(None, false));
+    }
 
     #[test]
     fn render_skips_empty_list() {
@@ -1081,6 +1149,36 @@ fn make_queue_editor(text: &str, highlighter: &SyntaxHighlighter) -> EditorState
     editor
 }
 
+/// Whether a session's first turn should carry an orientation priming turn. A
+/// session is primed only when it is brand-new — no resumable Claude session id
+/// and no prior messages. A resumed session already carries its orientation in
+/// history, so re-priming would repeat it.
+fn should_prime(claude_session_id: Option<&str>, has_prior_messages: bool) -> bool {
+    claude_session_id.is_none() && !has_prior_messages
+}
+
+/// Assemble the first-turn priming body from the available orientation parts:
+/// AGENTS.md conventions (if present), the scope orientation blurb (if any),
+/// and the always-present path-reference note — joined and closed with the
+/// single-dot-ack instruction. All orientation rides this message body so it
+/// survives the CLI's silently-dropped `--append-system-prompt` channel; the
+/// path note alone keeps the body non-empty even when no `AGENTS.md` exists.
+fn assemble_priming_body(agents_md: Option<&str>, scope_blurb: Option<&str>) -> String {
+    let mut parts: Vec<&str> = Vec::new();
+    if let Some(t) = agents_md {
+        parts.push(t);
+    }
+    if let Some(t) = scope_blurb {
+        parts.push(t);
+    }
+    parts.push(PATH_REFERENCE_NOTE);
+    format!(
+        "{}\n\nDo not respond to this message — reply with a single dot \
+         (\".\") and wait for my actual instructions.",
+        parts.join("\n\n"),
+    )
+}
+
 /// Send `text` as a new user turn on the active agent handle. Pushes the user
 /// message into the session, marks streaming, clears the input, and rebuilds
 /// the chat editor blocks. No-op if no agent handle is attached.
@@ -1091,32 +1189,41 @@ pub fn send_prompt_text(ax: &mut AgentSession, text: String, highlighter: &Synta
         return;
     };
 
-    // Two-turn priming for AGENTS.md.
+    // First-turn orientation priming.
     //
     // Claude Code's CLI silently drops `--append-system-prompt` content
     // (model can't see it via introspection, and recent CLI versions ignore
-    // the flag entirely), so AGENTS.md needs to ride the message channel.
-    // Inlining it ahead of the user's text breaks slash-command parsing —
-    // `/ds-step` no longer starts the message — so we send AGENTS.md as a
-    // standalone first user turn and stash the user's actual text for
-    // dispatch when that turn completes. The priming body tells the model
-    // not to respond substantively (single-dot ack) so the round-trip cost
-    // is minimal.
+    // the flag entirely), so all orientation — AGENTS.md conventions, the
+    // scope blurb, and the path-reference note — has to ride the message
+    // channel. Inlining it ahead of the user's text breaks slash-command
+    // parsing (`/ds-step` no longer starts the message), so we send the
+    // orientation as a standalone first user turn and stash the user's actual
+    // text for dispatch when that turn completes. The priming body tells the
+    // model not to respond substantively (single-dot ack) so the round-trip
+    // cost is minimal.
     //
     // Gated on a brand-new session (no `claude_session_id` *and* no prior
     // messages) so legacy sessions with history but no resume id keep
     // hitting the `build_history_preamble` path below instead of getting
     // re-primed mid-conversation.
-    if ax.session.claude_session_id.is_none()
-        && ax.session.messages.is_empty()
-        && let Some(out) =
-            crate::scope::AgentsMarkdownHook.compute(&handle.working_dir().to_path_buf())
-    {
-        let priming_text = format!(
-            "{0}\n\nDo not respond to this message — reply with a single dot \
-             (\".\") and wait for my actual instructions.",
-            out.text
-        );
+    if should_prime(
+        ax.session.claude_session_id.as_deref(),
+        !ax.session.messages.is_empty(),
+    ) {
+        // Resolve every orientation part. AGENTS.md is optional; the scope
+        // blurb and path note are always present, so the assembled body is
+        // non-empty for any fresh session — we now prime even in projects
+        // without an `AGENTS.md`.
+        let agents_md = crate::scope::AgentsMarkdownHook
+            .compute(&handle.working_dir().to_path_buf())
+            .map(|o| o.text);
+        let scope = crate::scope::SessionScope {
+            kind: ax.scope_kind,
+            scope_key: ax.session.scope.clone(),
+            change_facts: ax.scope_facts.clone(),
+        };
+        let scope_blurb = crate::scope::CurrentScopeHook.compute(&scope).map(|o| o.text);
+        let priming_text = assemble_priming_body(agents_md.as_deref(), scope_blurb.as_deref());
 
         ax.session.messages.push(crate::chat_store::ChatMessage {
             role: crate::chat_store::Role::User,
@@ -1133,21 +1240,10 @@ pub fn send_prompt_text(ax: &mut AgentSession, text: String, highlighter: &Synta
         ax.priming_in_flight = true;
         ax.pending_followup_prompt = Some(text);
 
-        // Scope orientation blurb still rides `--append-system-prompt` —
-        // small, scope-specific, and we accept the flakiness. AGENTS.md is
-        // already in the message channel via the priming body above.
-        let mut additions = Vec::new();
-        let scope = crate::scope::SessionScope {
-            kind: ax.scope_kind,
-            scope_key: ax.session.scope.clone(),
-        };
-        if let Some(scope_out) = crate::scope::CurrentScopeHook.compute(&scope) {
-            additions.push(scope_out.text);
-        }
-        additions.push(PATH_REFERENCE_NOTE.to_string());
-
         let mut req = TurnRequest::new(priming_text, handle.working_dir().to_path_buf());
-        req.system_additions = additions;
+        // All orientation now rides the message body above; `system_additions`
+        // (the dropped `--append-system-prompt` channel) stays at its empty
+        // default.
         // Per-chat pin wins; otherwise fall back to the project default
         // (which may itself be unset → CLI picks). Prime on the same model so
         // the resumed session stays consistent.
@@ -1186,6 +1282,7 @@ pub fn send_prompt_text(ax: &mut AgentSession, text: String, highlighter: &Synta
         let scope = crate::scope::SessionScope {
             kind: ax.scope_kind,
             scope_key: ax.session.scope.clone(),
+            change_facts: ax.scope_facts.clone(),
         };
         if let Some(out) = crate::scope::CurrentScopeHook.compute(&scope) {
             system_additions.push(out.text);

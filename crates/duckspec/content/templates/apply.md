@@ -20,7 +20,10 @@ redesign it.
 
 ## Context
 
-1. Run `ds status` to identify the active change and its current step.
+1. Act on the change named in this session's scope orientation, using
+   `ds status` only to disambiguate when no scope orientation is given or the
+   user names a different change. Run `ds status` to find that change's current
+   step.
 2. Read the current step file — the first step (lowest `NN`) with unchecked
    tasks.
 3. Read the step's `## Prerequisites` if present. Check that referenced steps

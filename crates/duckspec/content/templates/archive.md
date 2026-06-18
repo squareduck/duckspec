@@ -17,7 +17,9 @@ process — validate, apply, report.
 
 ## Context
 
-1. Run `ds status` to identify the change to archive.
+1. Act on the change named in this session's scope orientation. Only run
+   `ds status` to disambiguate when no scope orientation is given, or when the
+   user names a different change to archive.
 2. Read the change's contents to understand what will be applied.
 3. If the change has specs or deltas, check which capabilities will be created
    or modified in top-level `caps/`.

@@ -1541,6 +1541,9 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                 let scope_input = scope::SessionScope {
                     kind: scope_kind,
                     scope_key: scope_key.clone(),
+                    // Title generation only needs the scope name, not full
+                    // lifecycle facts — keep the hint terse.
+                    change_facts: None,
                 };
                 if let Some(out) = scope::CurrentScopeHook.compute(&scope_input) {
                     hints.push(out.text);
