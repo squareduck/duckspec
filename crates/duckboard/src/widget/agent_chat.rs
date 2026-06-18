@@ -6,6 +6,10 @@ use iced::widget::{
 
 pub const CHAT_SCROLLABLE_ID: &str = "agent-chat-scroll";
 pub const CHAT_INPUT_ID: &str = "agent-chat-input";
+/// Cap the auto-growing chat input at this many visual rows; past it the
+/// input scrolls internally to keep the caret visible instead of pushing the
+/// chat history (and the caret) off the top of the window.
+const CHAT_INPUT_MAX_ROWS: usize = 20;
 /// Pixels of slack at the bottom edge that still count as "stuck to bottom".
 /// Small enough that one wheel notch unsticks the view, large enough to
 /// absorb sub-pixel layout rounding during streaming rebuilds.
@@ -495,6 +499,7 @@ pub fn view<'a>(
         .show_gutter(false)
         .word_wrap(true)
         .fit_content(true)
+        .max_rows(CHAT_INPUT_MAX_ROWS)
         .transparent_bg(true)
         .on_submit(Msg::SendPressed);
     if let Some(cmd) = obvious_command {

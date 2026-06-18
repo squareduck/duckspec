@@ -61,6 +61,13 @@ struct InternalState {
     /// redraw on *every* dispatch while true — not only the one that steps —
     /// or the loop stalls the instant the mouse stops.
     autoscrolling: bool,
+    /// Caret position observed on the previous event, used by the capped
+    /// input's caret-follow to detect that a keyboard action moved the caret.
+    last_cursor: Option<Pos>,
+    /// Set when a keyboard action that may move the caret was just dispatched;
+    /// consumed on the next event to nudge `scroll_y`. Mouse clicks never set
+    /// it, so clicking a scrolled input doesn't yank the view to the caret.
+    follow_after_key: bool,
 }
 
 /// A URL or file-path reference found at a click/hover position in the
@@ -248,6 +255,11 @@ pub struct TextEdit<'a, M> {
     on_action: Box<dyn Fn(EditorAction) -> M + 'a>,
     show_gutter: bool,
     fit_content: bool,
+    /// When set (with `fit_content`), the editor grows to at most this many
+    /// visual rows, then clips and scrolls internally to keep the cursor in
+    /// view. Used by the auto-growing chat input so a long prompt doesn't
+    /// push the caret off the bottom of the window.
+    max_rows: Option<usize>,
     read_only: bool,
     word_wrap: bool,
     placeholder: Option<String>,
@@ -274,6 +286,7 @@ impl<'a, M> TextEdit<'a, M> {
             on_action: Box::new(on_action),
             show_gutter: true,
             fit_content: false,
+            max_rows: None,
             read_only: false,
             word_wrap: false,
             placeholder: None,
@@ -313,6 +326,14 @@ impl<'a, M> TextEdit<'a, M> {
 
     pub fn fit_content(mut self, fit: bool) -> Self {
         self.fit_content = fit;
+        self
+    }
+
+    /// Cap the auto-grown height at `rows` visual rows. Beyond that the editor
+    /// clips and scrolls internally, keeping the cursor visible. Only meaningful
+    /// together with `fit_content`.
+    pub fn max_rows(mut self, rows: usize) -> Self {
+        self.max_rows = Some(rows);
         self
     }
 
@@ -361,6 +382,52 @@ impl<'a, M> TextEdit<'a, M> {
     /// (viewport ≈ the window) and a chat message clipped by an outer
     /// scrollable (viewport = the on-screen slice). Returns whether it
     /// scrolled.
+    /// Vertical scroll offset to render and hit-test at — the single source of
+    /// truth so the painted frame and the click math never disagree. It is the
+    /// user/keyboard-driven `scroll_y` clamped to range. The caret is kept in
+    /// view by *persisting* nudges to `scroll_y` on keyboard edits (see the
+    /// caret-follow block in `update`), never by re-deriving the offset here —
+    /// otherwise a mouse click, which moves the caret, would yank the view.
+    fn resolved_scroll_y(&self, viewport_height: f32, content_height: f32) -> f32 {
+        let max_scroll = (content_height - viewport_height).max(0.0);
+        self.state.scroll_y.clamp(0.0, max_scroll)
+    }
+
+    /// Once the caret has moved (via keyboard) past the visible window of a
+    /// capped input, the persisted `scroll_y` it should hold to bring the
+    /// caret's visual row back into view. Returns `None` when no change is
+    /// needed (caret already visible, or input not capped/overflowing).
+    fn caret_follow_scroll_y(
+        &self,
+        viewport_height: f32,
+        content_height: f32,
+        wrap: Option<&WrapLayout>,
+    ) -> Option<f32> {
+        if self.max_rows.is_none() {
+            return None;
+        }
+        let max_scroll = (content_height - viewport_height).max(0.0);
+        if max_scroll <= 0.0 {
+            return None;
+        }
+        let cursor_vrow = match wrap {
+            Some(w) => cursor_visual_pos(self.state, w).0,
+            None => self.state.cursor.line,
+        };
+        let cursor_top = cursor_vrow as f32 * LINE_HEIGHT + CONTENT_PAD_Y;
+        let cursor_bottom = cursor_top + LINE_HEIGHT;
+        let cur = self.state.scroll_y.clamp(0.0, max_scroll);
+        let target = if cursor_top < cur {
+            cursor_top
+        } else if cursor_bottom > cur + viewport_height {
+            cursor_bottom - viewport_height
+        } else {
+            return None;
+        };
+        let target = target.clamp(0.0, max_scroll);
+        ((target - cur).abs() > 0.5).then_some(target)
+    }
+
     fn drag_frame(
         &self,
         pos: Point,
@@ -386,6 +453,7 @@ impl<'a, M> TextEdit<'a, M> {
         let top = bounds.y.max(viewport.y);
         let bottom = (bounds.y + bounds.height).min(viewport.y + viewport.height);
         let velocity = autoscroll::edge_velocity(pos.y, top, bottom);
+        let scroll_y = self.resolved_scroll_y(bounds.height, content_height);
 
         // Selection always tracks the edge line: clamp the drag target into the
         // visible span so a big overshoot doesn't snap selection to the doc end.
@@ -395,7 +463,7 @@ impl<'a, M> TextEdit<'a, M> {
             internal,
             self.state,
             wrap,
-            content_height,
+            scroll_y,
         );
         shell.publish((self.on_action)(EditorAction::Drag(drag_pos)));
 
@@ -408,7 +476,6 @@ impl<'a, M> TextEdit<'a, M> {
             // only while there is room to move in the pointer's direction so
             // the loop stops at the content's end instead of spinning forever.
             let max_scroll = (content_height - bounds.height).max(0.0);
-            let scroll_y = self.state.scroll_y.clamp(0.0, max_scroll);
             let has_room = if velocity > 0.0 {
                 scroll_y < max_scroll
             } else {
@@ -479,7 +546,10 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for TextEdit<'a, M> {
             } else {
                 self.state.line_count()
             };
-            let height = row_count.max(1) as f32 * LINE_HEIGHT + CONTENT_PAD_Y * 2.0;
+            // Cap the reported height so a tall prompt stops growing and
+            // instead scrolls internally (see `resolved_scroll_y`).
+            let rows = self.max_rows.map_or(row_count, |m| row_count.min(m.max(1)));
+            let height = rows.max(1) as f32 * LINE_HEIGHT + CONTENT_PAD_Y * 2.0;
             let limits = limits.width(Length::Fill);
             layout::Node::new(limits.resolve(Length::Fill, Length::Fixed(height), Size::ZERO))
         } else {
@@ -556,6 +626,32 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for TextEdit<'a, M> {
         } else {
             self.state.lines.len() as f32 * LINE_HEIGHT + CONTENT_PAD_Y * 2.0
         };
+        // Caret-follow for a capped input: when a keyboard action moved the
+        // caret last frame, persist a scroll nudge so the caret stays visible.
+        // Gated on `follow_after_key` so mouse clicks (which also move the
+        // caret) never trigger it — that would yank the view and desync the
+        // click/drag hit-test, producing a phantom selection.
+        if internal.follow_after_key && internal.last_cursor != Some(self.state.cursor) {
+            if let Some(target) =
+                self.caret_follow_scroll_y(bounds.height, content_height, wrap.as_ref())
+            {
+                shell.publish((self.on_action)(EditorAction::Scroll {
+                    dy: target - self.state.scroll_y,
+                    dx: 0.0,
+                    viewport_height: bounds.height,
+                    content_height,
+                    viewport_width: bounds.width - internal.gutter_width,
+                    content_width: 0.0,
+                }));
+                shell.request_redraw();
+            }
+            internal.follow_after_key = false;
+        }
+        internal.last_cursor = Some(self.state.cursor);
+
+        // Same resolved offset the draw path uses, so click math lands on the
+        // line the user actually sees in a scrolled, capped input.
+        let scroll_y = self.resolved_scroll_y(bounds.height, content_height);
 
         match event {
             Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => {
@@ -571,7 +667,7 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for TextEdit<'a, M> {
                             internal,
                             self.state,
                             wrap.as_ref(),
-                            content_height,
+                            scroll_y,
                             &hover,
                         )
                     {
@@ -593,7 +689,7 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for TextEdit<'a, M> {
                         internal,
                         self.state,
                         wrap.as_ref(),
-                        content_height,
+                        scroll_y,
                     );
 
                     internal.dragging = true;
@@ -625,7 +721,7 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for TextEdit<'a, M> {
                             internal,
                             self.state,
                             wrap.as_ref(),
-                            content_height,
+                            scroll_y,
                         );
                         detect_link_at(self.state, click_pos)
                     } else {
@@ -805,6 +901,13 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for TextEdit<'a, M> {
                 // Mark events we consumed as captured so app-level keyboard
                 // handlers (agent chat, etc.) don't also react to them.
                 if handled {
+                    // A consumed key may have moved the caret; arm the
+                    // caret-follow (capped input only) so next frame nudges
+                    // scroll if the caret left view.
+                    if self.max_rows.is_some() {
+                        internal.follow_after_key = true;
+                        shell.request_redraw();
+                    }
                     shell.capture_event();
                 }
             }
@@ -892,9 +995,9 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for TextEdit<'a, M> {
             .map_or(self.state.line_count(), |w| w.total_visual_rows);
         let content_height = total_visual_rows as f32 * LINE_HEIGHT + CONTENT_PAD_Y * 2.0;
 
-        // Clamp scroll so we don't render past the content.
-        let max_scroll = (content_height - bounds.height).max(0.0);
-        let scroll_y = self.state.scroll_y.clamp(0.0, max_scroll);
+        // Resolve the vertical offset — the user/keyboard-driven `scroll_y`
+        // clamped to range (see `resolved_scroll_y`).
+        let scroll_y = self.resolved_scroll_y(bounds.height, content_height);
 
         // Horizontal scroll (only when not word-wrapping).
         let scroll_x = if self.word_wrap {
@@ -1436,10 +1539,12 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for TextEdit<'a, M> {
             }
 
             // Scrollbars — thin overlaid indicators matching the list-column
-            // rail. Skipped in `fit_content` mode because such editors never
-            // overflow internally; their parent scrollable handles scrolling.
+            // rail. Skipped in plain `fit_content` mode because such editors
+            // never overflow internally; their parent scrollable handles
+            // scrolling. A capped auto-grow input (`max_rows`) is the
+            // exception — it does overflow internally, so it gets the rail.
             // Also skipped in `static_viewport` mode (search-stack slices).
-            if !self.fit_content && !self.static_viewport {
+            if (!self.fit_content || self.max_rows.is_some()) && !self.static_viewport {
                 let scroller_color = theme::text_muted();
 
                 if content_height > bounds.height && bounds.height > 0.0 {
@@ -1568,7 +1673,7 @@ fn pixel_to_pos_wrapped(
     internal: &InternalState,
     state: &EditorState,
     wrap: Option<&WrapLayout>,
-    content_height: f32,
+    scroll_y: f32,
 ) -> Pos {
     let cell_w = if internal.cell_width > 0.0 {
         internal.cell_width
@@ -1577,8 +1682,6 @@ fn pixel_to_pos_wrapped(
     };
     let gutter_w = internal.gutter_width;
     let content_x = bounds.x + gutter_w + CONTENT_PAD;
-    let max_scroll = (content_height - bounds.height).max(0.0);
-    let scroll_y = state.scroll_y.clamp(0.0, max_scroll);
     let scroll_x = if wrap.is_some() {
         0.0
     } else {
@@ -1652,10 +1755,10 @@ fn pos_in_hover(
     internal: &InternalState,
     state: &EditorState,
     wrap: Option<&WrapLayout>,
-    content_height: f32,
+    scroll_y: f32,
     hover: &LinkHover,
 ) -> bool {
-    let pos = pixel_to_pos_wrapped(point, bounds, internal, state, wrap, content_height);
+    let pos = pixel_to_pos_wrapped(point, bounds, internal, state, wrap, scroll_y);
     pos.line == hover.line && pos.col >= hover.char_start && pos.col < hover.char_end
 }
 
