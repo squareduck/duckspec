@@ -31,7 +31,13 @@ Run checks appropriate to the current state:
    against their schemas. Report any structural issues.
 2. **Cross-artifact integrity.** Run `ds audit` to check backlinks, scenario
    coverage, and consistency between specs and source code. Report any integrity
-   issues.
+   issues. This full audit is in-flight-tolerant: it does not fault an active
+   change's scenarios for lacking backlinks yet.
+   - To gauge a *single* active change's progress instead, run
+     `ds audit <change>`. That scoped form is a per-change progress/completeness
+     gate: it splits the change's unimplemented `test: code` scenarios into
+     pending (expected, in-progress) and error (a checked-off step task with no
+     resolving backlink), and is clean only when the change is ready to archive.
 3. **Active change validation.** If there are active changes, run
    `ds check duckspec/changes/` to validate their contents specifically.
 4. **Sync check.** Run `ds sync --dry` to see if any backlinks need updating.

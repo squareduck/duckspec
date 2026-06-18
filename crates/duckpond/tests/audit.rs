@@ -305,3 +305,190 @@ fn backlink_to_unknown_scenario_still_fails() {
         "expected exactly one unresolved backlink for an unknown scenario"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Change-scoped progress classification — pending vs error
+// ---------------------------------------------------------------------------
+
+/// Build a change cap spec for a new capability `foo` whose requirement
+/// "Behavior" holds the named scenarios, all inheriting `test: code`.
+fn change_spec(scenarios: &[&str]) -> String {
+    let mut s = String::from(
+        "# Foo\n\nA new capability.\n\n## Requirement: Behavior\n\nThe system SHALL behave.\n\n> test: code\n",
+    );
+    for name in scenarios {
+        s.push_str(&format!(
+            "\n### Scenario: {name}\n\n- **WHEN** x happens\n- **THEN** y follows\n"
+        ));
+    }
+    s
+}
+
+/// Build a step body whose Tasks section holds one `@spec foo Behavior: <name>`
+/// task per entry, checked according to the bool. The H1 slug ("implement")
+/// matches the `01-implement.md` filename used by the tests below.
+fn step_body(refs: &[(&str, bool)]) -> String {
+    let mut s = String::from("# Implement\n\nDo the work.\n\n## Tasks\n");
+    for (name, checked) in refs {
+        let mark = if *checked { "x" } else { " " };
+        s.push_str(&format!("- [{mark}] @spec foo Behavior: {name}\n"));
+    }
+    s
+}
+
+/// A source backlink for `foo Behavior: <scenario>`, written with `\n` escapes
+/// so the marker never sits on its own physical line in this file.
+fn backlink_source(scenario: &str) -> String {
+    format!("// @spec foo Behavior: {scenario}\nfn t() {{}}\n")
+}
+
+/// Whether any key in the set names the given scenario.
+fn contains(keys: &[audit::ScenarioKey], scenario: &str) -> bool {
+    keys.iter().any(|k| k.scenario == scenario)
+}
+
+/// Set up a change `add-foo` with the given spec scenarios and step refs,
+/// then run a change-scoped audit. `backlinked` lists scenarios that get a
+/// real source backlink.
+fn scoped_report(
+    spec_scenarios: &[&str],
+    step_refs: &[(&str, bool)],
+    backlinked: &[&str],
+) -> audit::AuditReport {
+    let project = tempfile::tempdir().unwrap();
+    let duckspec = project.path().join("duckspec");
+
+    write(
+        &duckspec.join("changes/add-foo/caps/foo/spec.md"),
+        &change_spec(spec_scenarios),
+    );
+    write(
+        &duckspec.join("changes/add-foo/steps/01-implement.md"),
+        &step_body(step_refs),
+    );
+    for (i, scenario) in backlinked.iter().enumerate() {
+        write(
+            &project.path().join(format!("tests/foo_{i}.rs")),
+            &backlink_source(scenario),
+        );
+    }
+
+    let config = Config::load(&duckspec).unwrap();
+    audit::run_audit(
+        &duckspec,
+        project.path(),
+        &config,
+        AuditScope::Change("add-foo".to_string()),
+    )
+    .expect("audit runs")
+}
+
+/// @spec audit/change-progress Classify unlinked scenarios by step completion: Unchecked referencing task is pending
+#[test]
+fn unchecked_referencing_task_is_pending() {
+    let report = scoped_report(&["Alpha"], &[("Alpha", false)], &[]);
+
+    assert!(
+        contains(&report.pending_backlink_scenarios, "Alpha"),
+        "an unlinked scenario whose only step task is unchecked is pending"
+    );
+    assert!(
+        !contains(&report.missing_backlink_scenarios, "Alpha"),
+        "pending scenarios are not errors"
+    );
+}
+
+/// @spec audit/change-progress Classify unlinked scenarios by step completion: Checked referencing task is an error
+#[test]
+fn checked_referencing_task_is_an_error() {
+    let report = scoped_report(&["Alpha"], &[("Alpha", true)], &[]);
+
+    assert!(
+        contains(&report.missing_backlink_scenarios, "Alpha"),
+        "an unlinked scenario claimed by a checked task is an error"
+    );
+    assert!(
+        !contains(&report.pending_backlink_scenarios, "Alpha"),
+        "a claimed scenario is not pending"
+    );
+}
+
+/// @spec audit/change-progress Classify unlinked scenarios by step completion: A scenario claimed by any checked task is an error
+#[test]
+fn scenario_claimed_by_any_checked_task_is_an_error() {
+    // Two tasks reference Alpha — one checked, one not. Any checked claim wins.
+    let report = scoped_report(&["Alpha"], &[("Alpha", false), ("Alpha", true)], &[]);
+
+    assert!(
+        contains(&report.missing_backlink_scenarios, "Alpha"),
+        "any checked referencing task claims the scenario, making it an error"
+    );
+    assert!(!contains(&report.pending_backlink_scenarios, "Alpha"));
+}
+
+/// @spec audit/change-progress Classify unlinked scenarios by step completion: A backlinked scenario is neither pending nor an error
+#[test]
+fn backlinked_scenario_is_neither_pending_nor_an_error() {
+    let report = scoped_report(&["Alpha"], &[("Alpha", true)], &["Alpha"]);
+
+    assert!(!contains(&report.missing_backlink_scenarios, "Alpha"));
+    assert!(!contains(&report.pending_backlink_scenarios, "Alpha"));
+    assert!(
+        report.unresolved_backlinks.is_empty(),
+        "the backlink resolves against the change scenario"
+    );
+}
+
+/// @spec audit/change-progress Pending scenarios do not fail the audit: A change with only pending scenarios reports no errors
+#[test]
+fn change_with_only_pending_scenarios_reports_no_errors() {
+    let report = scoped_report(
+        &["Alpha", "Beta"],
+        &[("Alpha", false), ("Beta", false)],
+        &[],
+    );
+
+    assert_eq!(
+        report.total_errors(),
+        0,
+        "a change whose unlinked scenarios are all pending has no errors"
+    );
+    assert!(
+        !report.pending_backlink_scenarios.is_empty(),
+        "the pending scenarios are still reported"
+    );
+}
+
+/// @spec audit/change-progress Pending scenarios do not fail the audit: A checked-but-unlinked scenario makes the audit report an error
+#[test]
+fn checked_but_unlinked_scenario_makes_the_audit_report_an_error() {
+    let report = scoped_report(&["Alpha"], &[("Alpha", true)], &[]);
+
+    assert!(
+        report.total_errors() >= 1,
+        "a claimed-but-unlinked scenario is counted as an error"
+    );
+}
+
+/// @spec audit/change-progress Classification is scoped to the change audit: Full audit reports an unlinked caps scenario as an error, not pending
+#[test]
+fn full_audit_reports_unlinked_caps_scenario_as_error_not_pending() {
+    let project = tempfile::tempdir().unwrap();
+    let duckspec = project.path().join("duckspec");
+
+    // A main-caps test:code scenario with no source backlink anywhere.
+    write(&duckspec.join("caps/foo/spec.md"), &change_spec(&["Alpha"]));
+
+    let config = Config::load(&duckspec).unwrap();
+    let report = audit::run_audit(&duckspec, project.path(), &config, AuditScope::Full)
+        .expect("audit runs");
+
+    assert!(
+        contains(&report.missing_backlink_scenarios, "Alpha"),
+        "a full audit treats an unlinked caps scenario as an error"
+    );
+    assert!(
+        report.pending_backlink_scenarios.is_empty(),
+        "a full audit never produces pending scenarios"
+    );
+}

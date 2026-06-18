@@ -55,6 +55,29 @@ bullet — not just after `**THEN**`.
   from the parent requirement.
 - Test marker prefixes: `test: code`, `manual: <reason>`, `skip: <reason>`.
 
+## Test markers and backlinks
+
+A scenario's test marker declares how it is verified:
+
+- `test: code` — verified by an automated test. The test is the contract's
+  enforcement; this marker is a standing commitment to keep one.
+- `manual: <reason>` — verified by a human; the reason says how/why.
+- `skip: <reason>` — intentionally unverified; the reason says why.
+
+A `test: code` scenario is linked to its test by a **source backlink**: a
+single-line `@spec <capability-path> <Requirement>: <Scenario>` comment placed
+directly above the test, in the source language's comment syntax. The backlink
+lives in the code, not the spec — `ds audit` resolves it by scanning source
+files, and reports any `test: code` scenario that no backlink resolves to. Write
+the comment as one unbroken line; a wrapped comment is invisible to the scan.
+
+`ds sync` records the resolved `path:line` of each backlink into the scenario's
+`test: code` marker in `caps/`, as living coverage documentation. This is
+bookkeeping derived from the source comments — never hand-edit those paths, and
+note that `ds sync` only touches `caps/`, so it has an effect only after a change
+is archived (while a change is in flight, its scenarios still live in the change
+folder).
+
 ## Quality
 
 **Requirements:**

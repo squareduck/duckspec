@@ -42,7 +42,16 @@ pub fn run(change: Option<String>) -> anyhow::Result<()> {
         std::process::exit(1);
     }
 
-    eprintln!("  {} audit ok", "✓".green());
+    let pending = report.pending_backlink_scenarios.len();
+    if pending > 0 {
+        eprintln!(
+            "  {} audit ok — {} scenario(s) pending implementation",
+            "✓".green(),
+            pending
+        );
+    } else {
+        eprintln!("  {} audit ok", "✓".green());
+    }
     Ok(())
 }
 
@@ -112,8 +121,16 @@ fn print_report(report: &AuditReport, project_root: &Path) {
 
     for key in &report.missing_backlink_scenarios {
         eprintln!(
-            "  {} scenario marked test:code has no backlink: {}",
+            "  {} {} — step task checked off but no backlink resolves",
             "×".red(),
+            key.display()
+        );
+    }
+
+    for key in &report.pending_backlink_scenarios {
+        eprintln!(
+            "  {} pending — not yet implemented: {}",
+            "·".dimmed(),
             key.display()
         );
     }

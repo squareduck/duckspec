@@ -22,6 +22,9 @@ orphans.
 - **WHEN** the guard evaluates the projected archive
 - **THEN** the guard reports the backlink, naming its source file
 
+> test: code
+> - crates/duckpond/tests/audit.rs:197
+
 ### Scenario: An archive that preserves every backlinked scenario reports no orphans
 
 - **GIVEN** a change whose archive adds or renames capabilities but keeps every scenario
@@ -31,12 +34,18 @@ orphans.
 
 - **THEN** the guard reports no orphans
 
+> test: code
+> - crates/duckpond/tests/audit.rs:224
+
 ### Scenario: A backlink already unresolved before the archive is not attributed to it
 
 - **GIVEN** a source backlink that does not resolve against the current capabilities
 - **AND** a change whose archive does not introduce the scenario it points to
 - **WHEN** the guard evaluates the projected archive
 - **THEN** the guard does not report that backlink
+
+> test: code
+> - crates/duckpond/tests/audit.rs:254
 
 ## Requirement: Refusal and override
 
@@ -55,9 +64,15 @@ the refusal to a warning and allow the archive to complete.
 - **AND** the capability files are unchanged
 - **AND** the change still exists under changes rather than archive
 
+> test: code
+> - crates/duckspec/tests/archive.rs:80
+
 ### Scenario: allow-orphans completes the archive with a warning
 
 - **GIVEN** a change whose archive would orphan a live backlink
 - **WHEN** `ds archive` runs with `--allow-orphans`
 - **THEN** a warning naming the offending source files is emitted
 - **AND** the archive completes
+
+> test: code
+> - crates/duckspec/tests/archive.rs:113

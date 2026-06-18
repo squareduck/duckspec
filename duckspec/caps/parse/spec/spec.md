@@ -30,11 +30,17 @@ short-circuit on the first problem.
 
 - **AND** the `requirements` list contains one entry
 
+> test: code
+> - crates/duckpond/tests/parse_spec.rs:14
+
 ### Scenario: Spec with multi-paragraph description parses successfully
 
 - **GIVEN** a source with multiple paragraphs between the summary and the first H2
 - **WHEN** the spec is parsed
 - **THEN** the description elements are captured on the `Spec` artifact in source order
+
+> test: code
+> - crates/duckpond/tests/parse_spec.rs:35
 
 ### Scenario: Content before H1 raises ContentBeforeH1
 
@@ -42,11 +48,17 @@ short-circuit on the first problem.
 - **WHEN** the spec is parsed
 - **THEN** parsing fails with `ParseError::ContentBeforeH1`
 
+> test: code
+> - crates/duckpond/tests/parse_spec.rs:51
+
 ### Scenario: Missing H1 raises MissingH1
 
 - **GIVEN** an empty source
 - **WHEN** the spec is parsed
 - **THEN** parsing fails with `ParseError::MissingH1`
+
+> test: code
+> - crates/duckpond/tests/parse_spec.rs:58
 
 ### Scenario: Missing summary raises MissingSummary
 
@@ -54,11 +66,17 @@ short-circuit on the first problem.
 - **WHEN** the spec is parsed
 - **THEN** parsing fails with `ParseError::MissingSummary`
 
+> test: code
+> - crates/duckpond/tests/parse_spec.rs:65
+
 ### Scenario: Headings deeper than H3 raise HeadingTooDeep
 
 - **GIVEN** a source containing an H4 heading anywhere in the document
 - **WHEN** the spec is parsed
 - **THEN** parsing fails with `ParseError::HeadingTooDeep`
+
+> test: code
+> - crates/duckpond/tests/parse_spec.rs:72
 
 ## Requirement: Requirement section structure
 
@@ -75,11 +93,17 @@ normative prose, scenarios, or both — empty requirements are rejected.
 - **THEN** three `Requirement` entries are produced in source order
 - **AND** each entry's scenarios appear in source order
 
+> test: code
+> - crates/duckpond/tests/parse_spec.rs:21
+
 ### Scenario: H2 without 'Requirement: ' prefix raises InvalidRequirementPrefix
 
 - **GIVEN** a source containing an H2 whose content does not begin with `Requirement: `
 - **WHEN** the spec is parsed
 - **THEN** parsing fails with `ParseError::InvalidRequirementPrefix`
+
+> test: code
+> - crates/duckpond/tests/parse_spec.rs:79
 
 ### Scenario: Requirement name containing a colon raises RequirementNameColon
 
@@ -90,11 +114,17 @@ normative prose, scenarios, or both — empty requirements are rejected.
 
 - **THEN** parsing fails with `ParseError::RequirementNameColon`
 
+> test: code
+> - crates/duckpond/tests/parse_spec.rs:86
+
 ### Scenario: Requirement with neither prose nor scenarios raises EmptyRequirement
 
 - **GIVEN** a source containing a requirement with no prose and no scenarios
 - **WHEN** the spec is parsed
 - **THEN** parsing fails with `ParseError::EmptyRequirement`
+
+> test: code
+> - crates/duckpond/tests/parse_spec.rs:93
 
 ## Requirement: Scenario section structure
 
@@ -110,6 +140,9 @@ optionally followed by a test marker blockquote — no other content is permitte
 - **WHEN** the spec is parsed
 - **THEN** parsing fails with `ParseError::InvalidScenarioPrefix`
 
+> test: code
+> - crates/duckpond/tests/parse_spec.rs:100
+
 ### Scenario: Scenario missing WHEN or THEN raises MissingWhen and MissingThen
 
 - **GIVEN** a source containing one scenario with only a `GIVEN` clause and another with
@@ -121,6 +154,9 @@ optionally followed by a test marker blockquote — no other content is permitte
 
 - **AND** parsing fails with `ParseError::MissingThen` for the second scenario
 
+> test: code
+> - crates/duckpond/tests/parse_spec.rs:107
+
 ### Scenario: Non-GWT content inside scenario body raises UnexpectedScenarioContent
 
 - **GIVEN** a source containing a scenario whose body includes a paragraph or other
@@ -129,6 +165,9 @@ optionally followed by a test marker blockquote — no other content is permitte
 - **WHEN** the spec is parsed
 
 - **THEN** parsing fails with `ParseError::UnexpectedScenarioContent`
+
+> test: code
+> - crates/duckpond/tests/parse_spec.rs:114
 
 ## Requirement: GWT phase machine
 
@@ -150,6 +189,9 @@ keywords on a list item SHALL be rejected.
 - **THEN** parsing fails with `ParseError::GwtClauseOutOfOrder` for each invalid
   transition
 
+> test: code
+> - crates/duckpond/tests/parse_spec.rs:121
+
 ### Scenario: Unrecognized GWT keyword raises InvalidGwtKeyword
 
 - **GIVEN** a source containing a list item beginning with a `**KEYWORD**` that is not
@@ -158,6 +200,9 @@ keywords on a list item SHALL be rejected.
 - **WHEN** the spec is parsed
 
 - **THEN** parsing fails with `ParseError::InvalidGwtKeyword`
+
+> test: code
+> - crates/duckpond/tests/parse_spec.rs:128
 
 ## Requirement: Test markers
 
@@ -181,11 +226,17 @@ any recognized prefix is rejected.
 
 - **AND** the scenario with its own marker keeps its own value
 
+> test: code
+> - crates/duckpond/tests/parse_spec.rs:28
+
 ### Scenario: Test code marker carries backlinks
 
 - **GIVEN** a source containing `> test: code` followed by `> -` backlink lines
 - **WHEN** the spec is parsed
 - **THEN** the test marker's `Code` variant carries the backlink paths in source order
+
+> test: code
+> - crates/duckpond/tests/parse_spec.rs:42
 
 ### Scenario: Unrecognized test marker prefix raises InvalidTestMarker
 
@@ -196,6 +247,9 @@ any recognized prefix is rejected.
 
 - **THEN** parsing fails with `ParseError::InvalidTestMarker`
 
+> test: code
+> - crates/duckpond/tests/parse_spec.rs:135
+
 ### Scenario: Scenario with no marker and requirement with no marker raises UnresolvedTestMarker
 
 - **GIVEN** a source containing a scenario without a test marker whose parent requirement
@@ -204,3 +258,6 @@ any recognized prefix is rejected.
 - **WHEN** the spec is parsed
 
 - **THEN** parsing fails with `ParseError::UnresolvedTestMarker`
+
+> test: code
+> - crates/duckpond/tests/parse_spec.rs:142

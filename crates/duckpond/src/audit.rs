@@ -55,8 +55,15 @@ pub struct AuditReport {
     pub change_errors: Vec<ChangeErrorGroup>,
     /// Source-file `@spec` backlinks that do not resolve to any known scenario.
     pub unresolved_backlinks: Vec<UnresolvedBacklink>,
-    /// `test:code` scenarios with no source backlink.
+    /// `test:code` scenarios with no source backlink whose implementation is
+    /// claimed done — at least one step task referencing them is checked off.
+    /// A genuine error: the work is marked complete but no backlink resolves.
     pub missing_backlink_scenarios: Vec<ScenarioKey>,
+    /// Change-introduced `test:code` scenarios with no source backlink that are
+    /// not yet claimed — no referencing step task is checked. Informational
+    /// (in-progress work), not counted by [`AuditReport::total_errors`]. Only
+    /// populated by a change-scoped audit.
+    pub pending_backlink_scenarios: Vec<ScenarioKey>,
     /// Per-change: `test:code` scenarios not covered by a step task.
     pub missing_step_coverage: Vec<MissingStepCoverage>,
     /// Step `@spec` task refs that do not resolve to any known scenario.
@@ -472,13 +479,27 @@ fn audit_change(
     let backlinks = scan_source_files(project_root, duckspec_root, config)?;
     let backlink_keys = backlink_key_set(&backlinks);
 
-    // 5. Every test:code scenario introduced by this change must have a
-    //    source backlink.
+    let step_refs = collect_step_refs(duckspec_root, canonical_root, change_name)?;
+
+    // 5. Every test:code scenario introduced by this change must have a source
+    //    backlink. Classify the ones that don't by step completion: a scenario
+    //    a checked step task claims is an error; one no checked task references
+    //    is pending (in-progress, not yet implemented).
+    let claimed: HashSet<&ScenarioKey> = step_refs
+        .iter()
+        .filter(|r| r.checked)
+        .map(|r| &r.key)
+        .collect();
     for s in &change_scenarios {
         if s.test_code && !backlink_keys.contains(&s.key) {
-            report.missing_backlink_scenarios.push(s.key.clone());
+            if claimed.contains(&s.key) {
+                report.missing_backlink_scenarios.push(s.key.clone());
+            } else {
+                report.pending_backlink_scenarios.push(s.key.clone());
+            }
         }
     }
+    report.pending_backlink_scenarios.sort_by_key(|k| k.display());
 
     // 6. Every test:code scenario must be covered by a step task.
     let test_code: Vec<ScenarioKey> = change_scenarios
@@ -486,7 +507,6 @@ fn audit_change(
         .filter(|s| s.test_code)
         .map(|s| s.key.clone())
         .collect();
-    let step_refs = collect_step_refs(duckspec_root, canonical_root, change_name)?;
     if !test_code.is_empty() {
         let ref_set: HashSet<&ScenarioKey> = step_refs.iter().map(|r| &r.key).collect();
         let missing: Vec<ScenarioKey> = test_code
@@ -1059,6 +1079,8 @@ struct StepRef {
     key: ScenarioKey,
     step_file: PathBuf,
     line: usize,
+    /// Whether the task or subtask that holds this reference is checked off.
+    checked: bool,
 }
 
 fn collect_step_refs(
@@ -1111,6 +1133,7 @@ fn collect_step_refs(
                     },
                     step_file: relative.clone(),
                     line: offset_to_line(&source, task.span.offset),
+                    checked: task.checked,
                 });
             }
             for sub in &task.subtasks {
@@ -1128,6 +1151,7 @@ fn collect_step_refs(
                         },
                         step_file: relative.clone(),
                         line: offset_to_line(&source, sub.span.offset),
+                        checked: sub.checked,
                     });
                 }
             }

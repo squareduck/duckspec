@@ -22,12 +22,18 @@ H1), it SHALL return a deletion outcome carrying no rendered text.
 - **THEN** the result is an update carrying the rendered markdown
 - **AND** the result carries the re-parsed spec
 
+> test: code
+> - crates/duckpond/tests/merge.rs:127
+
 ### Scenario: A delta that deletes the artifact yields a deletion outcome
 
 - **GIVEN** a delta whose H1 carries the remove marker for the artifact's title
 - **WHEN** the delta is merged
 - **THEN** the result is a deletion outcome
 - **AND** no rendered text is produced
+
+> test: code
+> - crates/duckpond/tests/merge.rs:162
 
 ### Scenario: A doc merge is validated with the document parser
 
@@ -39,6 +45,9 @@ H1), it SHALL return a deletion outcome carrying no rendered text.
 - **WHEN** the doc delta is merged
 
 - **THEN** the result is an update carrying the rendered markdown and the parsed document
+
+> test: code
+> - crates/duckpond/tests/merge.rs:173
 
 ## Requirement: Failure classification
 
@@ -56,6 +65,9 @@ remaining errors.
 - **WHEN** the delta is merged
 - **THEN** the merge returns a merge error
 
+> test: code
+> - crates/duckpond/tests/merge.rs:196
+
 ### Scenario: Merged text that violates its schema returns a parse error
 
 - **GIVEN** a delta that applies cleanly but whose merged result no longer satisfies the
@@ -65,6 +77,9 @@ remaining errors.
 
 - **THEN** the merge returns a parse error
 
+> test: code
+> - crates/duckpond/tests/merge.rs:218
+
 ### Scenario: A multi-error failure renders as one summarized line
 
 - **GIVEN** a failure carrying several underlying errors
@@ -73,3 +88,6 @@ remaining errors.
 
 - **THEN** the rendering is the first error's message followed by a count of the remaining
   errors
+
+> test: code
+> - crates/duckpond/tests/merge.rs:241

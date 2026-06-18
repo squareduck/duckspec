@@ -28,11 +28,17 @@ order.
 - **AND** the entries list contains one `Add` entry
 - **AND** the entry's children are `Content` sections
 
+> test: code
+> - crates/duckpond/tests/parse_delta.rs:14
+
 ### Scenario: Delta with mixed-marker entries is sorted into canonical order
 
 - **GIVEN** a source whose H2 entries appear in non-canonical order (for example `@ + =`)
 - **WHEN** the delta is parsed
 - **THEN** the entries list is sorted into canonical order (`=` → `-` → `~` → `@` → `+`)
+
+> test: code
+> - crates/duckpond/tests/parse_delta.rs:21
 
 ### Scenario: Delta with rename and anchor entries parses with new-name extraction
 
@@ -44,6 +50,9 @@ order.
 - **THEN** the rename entry's `rename_to` field is populated with the new name
 
 - **AND** the anchor entry's children are `Operations`
+
+> test: code
+> - crates/duckpond/tests/parse_delta.rs:30
 
 ## Requirement: Marker rules
 
@@ -64,11 +73,17 @@ appear on H3; children of `~` and `+` entries SHALL NOT carry markers.
 
 - **THEN** parsing fails with `ParseError::MarkerMissingSpace`
 
+> test: code
+> - crates/duckpond/tests/parse_delta.rs:37
+
 ### Scenario: Add marker on H1 raises AddOnH1
 
 - **GIVEN** a source whose H1 heading carries the `+` marker
 - **WHEN** the delta is parsed
 - **THEN** parsing fails with `ParseError::AddOnH1`
+
+> test: code
+> - crates/duckpond/tests/parse_delta.rs:44
 
 ### Scenario: H2 without a marker raises MissingDeltaMarker
 
@@ -76,11 +91,17 @@ appear on H3; children of `~` and `+` entries SHALL NOT carry markers.
 - **WHEN** the delta is parsed
 - **THEN** parsing fails with `ParseError::MissingDeltaMarker`
 
+> test: code
+> - crates/duckpond/tests/parse_delta.rs:51
+
 ### Scenario: Anchor marker on H3 raises AnchorOnH3
 
 - **GIVEN** a source whose H3 heading under an anchor entry carries the `@` marker
 - **WHEN** the delta is parsed
 - **THEN** parsing fails with `ParseError::AnchorOnH3`
+
+> test: code
+> - crates/duckpond/tests/parse_delta.rs:58
 
 ### Scenario: Marker on a content child raises MarkerOnContentChild
 
@@ -90,6 +111,9 @@ appear on H3; children of `~` and `+` entries SHALL NOT carry markers.
 - **WHEN** the delta is parsed
 
 - **THEN** parsing fails with `ParseError::MarkerOnContentChild`
+
+> test: code
+> - crates/duckpond/tests/parse_delta.rs:65
 
 ## Requirement: Per-marker entry semantics
 
@@ -117,3 +141,6 @@ Each marker imposes specific structural rules on its entry's body and children:
 - **THEN** parsing fails with `ParseError::NonEmptyRemoveBody` for the remove entry
 
 - **AND** parsing fails with `ParseError::InvalidRenameEntry` for the rename entry
+
+> test: code
+> - crates/duckpond/tests/parse_delta.rs:72

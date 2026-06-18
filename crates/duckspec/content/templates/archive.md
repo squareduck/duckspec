@@ -34,6 +34,13 @@ process — validate, apply, report.
 4. **Archive.** Run `ds archive <name>` to apply and archive.
 5. **Verify.** Run `ds check` on the affected capabilities under `caps/` to
    confirm the result is clean.
+6. **Sync backlinks.** Run `ds sync`. The change's scenarios now live in `caps/`,
+   so this is the point where their resolved `path:line` backlinks get stamped
+   into the capability specs' `test: code` markers. (Before archive, `ds sync`
+   had nothing to do for these scenarios — they were still in the change
+   folder.)
+7. **Full audit.** Run `ds audit` (no change argument) for whole-project
+   integrity now that the change is part of the main tree.
 
 ## Write gate
 
@@ -57,9 +64,9 @@ Before archiving, present what will happen:
 
 After archiving:
 
-- Suggest running `ds audit` to verify project integrity: "Archived. Run
-  `ds audit` to confirm everything is consistent."
-- If this was a proposal-only or doc-only archive, no further action is needed:
-  "Archived. No code changes involved."
+- Report the post-archive `ds sync` and full `ds audit` results: "Archived,
+  backlinks synced, full audit clean."
+- If this was a proposal-only or doc-only archive, `ds sync` is a no-op and a
+  full `ds audit` is still worth running: "Archived. No code changes involved."
 
 ## After write

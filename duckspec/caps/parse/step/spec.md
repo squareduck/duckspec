@@ -27,6 +27,9 @@ SHALL be rejected.
 
 - **AND** the `slug` field carries the slugified title
 
+> test: code
+> - crates/duckpond/tests/parse_step.rs:14
+
 ### Scenario: Step with prerequisites parses successfully
 
 - **GIVEN** a source containing a Prerequisites section followed by a Tasks section
@@ -34,11 +37,17 @@ SHALL be rejected.
 - **THEN** the `prerequisites` field is populated with the parsed items
 - **AND** the `tasks` field is populated
 
+> test: code
+> - crates/duckpond/tests/parse_step.rs:21
+
 ### Scenario: Step with context parses successfully
 
 - **GIVEN** a source containing a Context section followed by a Tasks section
 - **WHEN** the step is parsed
 - **THEN** the `context` field carries the section's body elements
+
+> test: code
+> - crates/duckpond/tests/parse_step.rs:28
 
 ### Scenario: Unknown section heading raises UnknownStepSection
 
@@ -48,6 +57,9 @@ SHALL be rejected.
 - **WHEN** the step is parsed
 
 - **THEN** parsing fails with `ParseError::UnknownStepSection`
+
+> test: code
+> - crates/duckpond/tests/parse_step.rs:56
 
 ## Requirement: Tasks section
 
@@ -72,6 +84,9 @@ parsing.
 - **THEN** the task's `content` is `TaskContent::SpecRef` with the capability,
   requirement, and scenario fields populated
 
+> test: code
+> - crates/duckpond/tests/parse_step.rs:35
+
 ### Scenario: Task checkboxes and numeric prefixes are recognized and stripped
 
 - **GIVEN** a source whose Tasks section contains items with mixed checkbox states (`[x]`,
@@ -84,6 +99,9 @@ parsing.
 - **AND** each task's content is the text after the checkbox with the numeric prefix
   stripped
 
+> test: code
+> - crates/duckpond/tests/parse_step.rs:49
+
 ### Scenario: Missing or empty Tasks section raises the relevant error
 
 - **GIVEN** a source missing the Tasks section entirely, and a separate source with a
@@ -95,11 +113,17 @@ parsing.
 
 - **AND** the empty-Tasks source fails with `ParseError::EmptyTasksSection`
 
+> test: code
+> - crates/duckpond/tests/parse_step.rs:63
+
 ### Scenario: Subtask indented beyond four spaces raises SubtaskTooDeep
 
 - **GIVEN** a source containing a subtask whose indent exceeds four spaces
 - **WHEN** the step is parsed
 - **THEN** parsing fails with `ParseError::SubtaskTooDeep`
+
+> test: code
+> - crates/duckpond/tests/parse_step.rs:71
 
 ## Requirement: Prerequisites section
 
@@ -123,3 +147,6 @@ raw text.
 - **AND** other items produce `PrerequisiteKind::Freeform` with the raw text
 
 - **AND** each item's `checked` field reflects its checkbox state
+
+> test: code
+> - crates/duckpond/tests/parse_step.rs:42

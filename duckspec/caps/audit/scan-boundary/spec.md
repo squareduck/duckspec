@@ -20,12 +20,18 @@ than cause an error.
 - **WHEN** the source scan runs
 - **THEN** only the backlink inside the configured directory is returned
 
+> test: code
+> - crates/duckpond/src/audit.rs:1218
+
 ### Scenario: Empty test_paths scans from the project root
 
 - **GIVEN** a project whose config sets no `test_paths`
 - **AND** a source backlink anywhere under the project root
 - **WHEN** the source scan runs
 - **THEN** the backlink is returned
+
+> test: code
+> - crates/duckpond/src/audit.rs:1238
 
 ## Requirement: Excluded paths
 
@@ -48,11 +54,17 @@ empty when absent; a non-array value SHALL fail config loading with
 
 - **THEN** only the backlink in the non-excluded location is returned
 
+> test: code
+> - crates/duckpond/src/audit.rs:1254
+
 ### Scenario: Non-array exclude raises BadExclude
 
 - **GIVEN** a `config.toml` whose `exclude` key is a string rather than an array
 - **WHEN** the config is loaded
 - **THEN** loading fails with `ConfigError::BadExclude`
+
+> test: code
+> - crates/duckpond/src/config.rs:179
 
 ## Requirement: Nested duckspec projects
 
@@ -75,3 +87,6 @@ nested projects SHALL NOT suppress backlinks elsewhere in the enclosing project.
 - **THEN** the backlink in the nested project is not returned
 
 - **AND** the backlink in the enclosing project is returned
+
+> test: code
+> - crates/duckpond/src/audit.rs:1283

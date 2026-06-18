@@ -21,6 +21,9 @@ never makes the agent ask which change to act on.
 - **AND** it states that change-acting commands target that change by default
 - **AND** it directs disambiguation to the case where the user names a different change
 
+> test: code
+> - crates/duckboard/src/scope.rs:216
+
 ## Requirement: Lifecycle reflection
 
 For a change scope, the orientation SHALL report the change's step progress and a
@@ -37,6 +40,9 @@ report completion.
 - **THEN** it reports progress that is not yet complete
 - **AND** it suggests the apply stage as the next step
 
+> test: code
+> - crates/duckboard/src/area/change.rs:1968
+
 ### Scenario: A change with all steps complete reports completion and the archive next-stage
 
 - **GIVEN** a change scope whose steps are all complete
@@ -44,11 +50,17 @@ report completion.
 - **THEN** it reports the steps as complete
 - **AND** it suggests the archive stage as the next step
 
+> test: code
+> - crates/duckboard/src/area/change.rs:1986
+
 ### Scenario: A change with only a proposal reports the design next-stage
 
 - **GIVEN** a change scope that has a proposal but no design, specs, or steps
 - **WHEN** the orientation is produced
 - **THEN** it suggests the design stage as the next step
+
+> test: code
+> - crates/duckboard/src/area/change.rs:2002
 
 ## Requirement: Non-change scope orientation
 
@@ -64,12 +76,18 @@ scope and SHALL NOT report change progress or a change next-stage.
 - **THEN** it describes the scope as early-stage exploration
 - **AND** it does not report change progress or a change next-stage
 
+> test: code
+> - crates/duckboard/src/scope.rs:245
+
 ### Scenario: A capability-tree scope carries no change facts
 
 - **GIVEN** a session scoped to the capability tree
 - **WHEN** the orientation is produced
 - **THEN** it describes the capability-tree scope
 - **AND** it does not report change progress or a change next-stage
+
+> test: code
+> - crates/duckboard/src/scope.rs:268
 
 ## Requirement: Reliable first-turn delivery
 
@@ -85,14 +103,23 @@ the same session.
 - **WHEN** the first turn is dispatched
 - **THEN** the orientation is part of the message body sent on that turn
 
+> test: code
+> - crates/duckboard/src/area/interaction.rs:566
+
 ### Scenario: Orientation is present when the project has no AGENTS.md
 
 - **GIVEN** a new session in a project with no `AGENTS.md`
 - **WHEN** the first turn is dispatched
 - **THEN** the orientation is part of the message body sent on that turn
 
+> test: code
+> - crates/duckboard/src/area/interaction.rs:583
+
 ### Scenario: A resumed session does not repeat the orientation
 
 - **GIVEN** a session that has already had its first turn
 - **WHEN** a subsequent turn is dispatched
 - **THEN** the orientation is not included again
+
+> test: code
+> - crates/duckboard/src/area/interaction.rs:603

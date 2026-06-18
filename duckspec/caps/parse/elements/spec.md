@@ -26,6 +26,9 @@ raising errors.
 - **WHEN** the source string is empty
 - **THEN** the resulting element sequence is empty
 
+> test: code
+> - crates/duckpond/src/parse.rs:510
+
 ### Scenario: Mixed content produces an ordered sequence of distinct kinds
 
 - **GIVEN** a source containing a heading, a paragraph, list items, a block quote, and a
@@ -37,12 +40,18 @@ raising errors.
 
 - **AND** each construct produces its corresponding `Element` variant
 
+> test: code
+> - crates/duckpond/src/parse.rs:661
+
 ### Scenario: Element spans match byte offsets in the source
 
 - **GIVEN** a source with a heading followed by a blank line and a paragraph
 - **WHEN** the source is parsed
 - **THEN** each element's `span.offset` equals its starting byte offset in the source
 - **AND** `span.length` covers the element's bytes including its trailing newline
+
+> test: code
+> - crates/duckpond/src/parse.rs:718
 
 ### Scenario: Unclosed code block is flushed at end of input
 
@@ -52,6 +61,9 @@ raising errors.
 
 - **THEN** a single `Block(CodeBlock)` is emitted with content collected from the opening
   fence through end of input
+
+> test: code
+> - crates/duckpond/src/parse.rs:881
 
 ## Requirement: ATX heading classification
 
@@ -74,11 +86,17 @@ paragraph aggregator. A heading line SHALL terminate any pending paragraph or li
 
 - **AND** each element's content is the heading text without the leading hashes
 
+> test: code
+> - crates/duckpond/src/parse.rs:525
+
 ### Scenario: Hashes without a following space become paragraphs
 
 - **GIVEN** a source line `#hashtag`
 - **WHEN** the source is parsed
 - **THEN** the line becomes a `Block(Paragraph)`, not a `Heading`
+
+> test: code
+> - crates/duckpond/src/parse.rs:734
 
 ### Scenario: A heading terminates the preceding paragraph
 
@@ -86,6 +104,9 @@ paragraph aggregator. A heading line SHALL terminate any pending paragraph or li
 - **WHEN** the source is parsed
 - **THEN** a `Block(Paragraph)` element is emitted before the `Heading`
 - **AND** both elements appear in the resulting sequence
+
+> test: code
+> - crates/duckpond/src/parse.rs:702
 
 ## Requirement: Paragraph aggregation
 
@@ -102,11 +123,17 @@ fence line SHALL terminate the current paragraph.
 - **THEN** a single `Block(Paragraph)` element is produced
 - **AND** its content is the three source lines joined by newlines
 
+> test: code
+> - crates/duckpond/src/parse.rs:546
+
 ### Scenario: Blank line separates paragraphs
 
 - **GIVEN** two paragraphs separated by a single blank line
 - **WHEN** the source is parsed
 - **THEN** two distinct `Block(Paragraph)` elements are produced
+
+> test: code
+> - crates/duckpond/src/parse.rs:557
 
 ## Requirement: Fenced code blocks
 
@@ -125,12 +152,18 @@ verbatim in the resulting `Block(CodeBlock)` content.
 - **THEN** one `Block(CodeBlock)` element is produced
 - **AND** its content is the input including both fences and the info string
 
+> test: code
+> - crates/duckpond/src/parse.rs:571
+
 ### Scenario: Code block preserves blank lines and info strings
 
 - **GIVEN** a fenced code block with an info string and an internal blank line
 - **WHEN** the source is parsed
 - **THEN** one `Block(CodeBlock)` element is produced
 - **AND** the info string and the internal blank line appear in its content
+
+> test: code
+> - crates/duckpond/src/parse.rs:893
 
 ## Requirement: List item recognition
 
@@ -153,6 +186,9 @@ version numbers) SHALL fall through to paragraph aggregation.
 - **THEN** one `ListItem` is produced with `Bullet` marker
 - **AND** one `ListItem` is produced with `Numbered` marker
 
+> test: code
+> - crates/duckpond/src/parse.rs:867
+
 ### Scenario: Indent records nesting level
 
 - **GIVEN** a source `- Outer` followed by `  - Inner`
@@ -160,6 +196,9 @@ version numbers) SHALL fall through to paragraph aggregation.
 - **THEN** two `ListItem` elements are produced
 - **AND** the first has `indent` 0
 - **AND** the second has `indent` 2
+
+> test: code
+> - crates/duckpond/src/parse.rs:608
 
 ### Scenario: Continuation lines aligned with content are absorbed
 
@@ -172,11 +211,17 @@ version numbers) SHALL fall through to paragraph aggregation.
 
 - **AND** its content includes both the first line and the continuation
 
+> test: code
+> - crates/duckpond/src/parse.rs:622
+
 ### Scenario: Loose lists produce one ListItem per item
 
 - **GIVEN** three list items separated by blank lines
 - **WHEN** the source is parsed
 - **THEN** three distinct `ListItem` elements are produced
+
+> test: code
+> - crates/duckpond/src/parse.rs:764
 
 ### Scenario: Double-digit numbered markers are recognized
 
@@ -184,11 +229,17 @@ version numbers) SHALL fall through to paragraph aggregation.
 - **WHEN** the source is parsed
 - **THEN** two `ListItem` elements with `Numbered` marker are produced
 
+> test: code
+> - crates/duckpond/src/parse.rs:821
+
 ### Scenario: List look-alikes fall back to paragraphs
 
 - **GIVEN** a source line such as `1.no space` or `1.0 version`
 - **WHEN** the source is parsed
 - **THEN** the line becomes a `Block(Paragraph)`, not a `ListItem`
+
+> test: code
+> - crates/duckpond/src/parse.rs:836
 
 ## Requirement: Block quote recognition
 
@@ -205,6 +256,9 @@ A block-quote line SHALL terminate any pending paragraph or list item.
 - **WHEN** the source is parsed
 - **THEN** two distinct `BlockQuoteItem` elements are produced
 
+> test: code
+> - crates/duckpond/src/parse.rs:633
+
 ### Scenario: Block-quote-formatted list-like content stays a block quote
 
 - **GIVEN** a source with a block-quote line followed by a block-quote line whose content
@@ -216,8 +270,14 @@ A block-quote line SHALL terminate any pending paragraph or list item.
 
 - **AND** no `ListItem` is produced
 
+> test: code
+> - crates/duckpond/src/parse.rs:647
+
 ### Scenario: A block quote terminates a list item
 
 - **GIVEN** a list item line immediately followed by a block-quote line
 - **WHEN** the source is parsed
 - **THEN** a `ListItem` is produced followed by a `BlockQuoteItem`
+
+> test: code
+> - crates/duckpond/src/parse.rs:904

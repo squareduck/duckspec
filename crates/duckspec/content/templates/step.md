@@ -92,5 +92,9 @@ When all steps are written and validated:
   task. Want to add them before proceeding?"
 - If step ordering seems unclear, suggest resolving dependencies before
   proceeding.
+- Don't run `ds audit <change>` now. The change-scoped audit is a progress
+  check for `/ds-apply` — before any step is implemented it only reports every
+  `test: code` scenario as pending, which is the expected pre-implementation
+  state, not a finding to act on.
 
 ## After write

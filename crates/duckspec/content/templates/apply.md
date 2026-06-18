@@ -68,6 +68,19 @@ Work through the current step's `## Tasks` list in order:
    syntax, broken markers, schema violations from in-progress edits), fix them
    before handoff. Run `ds format <step-file>` if the report hints at it.
 
+6. **Then run `ds audit <change>` as a progress check.** This scoped audit
+   classifies the change's `test: code` scenarios by what's implemented so far:
+   - **pending** (`·`) — a scenario whose step tasks aren't checked yet. These
+     belong to later steps and are *expected* while the change is in progress;
+     they do not fail the audit. A clean run still lists them as a count.
+   - **error** (`×`) — a scenario whose step task you just checked off, but no
+     `@spec` backlink resolves to it in the source. This means the test is
+     missing, mis-typed, or its comment was wrapped across lines. **Fix these
+     before handoff** — they are this step's unfinished work, not a later
+     step's.
+   A scoped audit with zero errors and zero pending means every scenario is
+   implemented and linked: the change is ready to archive.
+
 ## Write gate
 
 No write gate. The step's tasks have already been reviewed and approved during
@@ -82,9 +95,12 @@ batch checkboxes.
 When all tasks in the current step are checked:
 
 - If there are more steps with unchecked tasks: "Step NN is complete. The next
-  step is NN+1: `<name>`. Run `/ds-apply` in a new session to continue."
+  step is NN+1: `<name>`. Run `/ds-apply` in a new session to continue." The
+  scoped audit's remaining pending scenarios are that upcoming work — expected,
+  not a problem.
 - If all steps are complete: "All steps are done. Ready to archive with
-  `/ds-archive`?"
+  `/ds-archive`?" Confirm the scoped audit is clean (no errors, no pending)
+  first — that's what archive-ready looks like.
 - **Only add `## Outcomes` if there's something new and valuable for the next
   session or the user to know** — an unexpected discovery, a deviation from
   the design, a follow-up that didn't fit, or a non-obvious decision a later

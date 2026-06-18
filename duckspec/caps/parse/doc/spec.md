@@ -27,6 +27,9 @@ valid.
 - **THEN** a `Document` artifact is produced
 - **AND** the `sections` list is empty
 
+> test: code
+> - crates/duckpond/tests/parse_doc.rs:14
+
 ## Requirement: Section tree
 
 Headings at H2 or deeper SHALL produce `Section` nodes carrying their heading text, level,
@@ -43,6 +46,9 @@ level SHALL close the current section and attach to the appropriate ancestor.
 - **THEN** the `sections` list contains one entry per H2
 - **AND** each section's `children` list is empty
 
+> test: code
+> - crates/duckpond/tests/parse_doc.rs:21
+
 ### Scenario: Document with nested headings produces a parent-child section tree
 
 - **GIVEN** a source with an H2 followed by H3 children, then another H2 with H3 children
@@ -50,9 +56,15 @@ level SHALL close the current section and attach to the appropriate ancestor.
 - **THEN** each H2 appears in the top-level `sections` list
 - **AND** each H3 appears as a child of the preceding H2
 
+> test: code
+> - crates/duckpond/tests/parse_doc.rs:28
+
 ### Scenario: Section tree captures headings nested four levels deep
 
 - **GIVEN** a source containing an H2 → H3 → H4 → H5 chain
 - **WHEN** the document is parsed
 - **THEN** the section tree contains the full chain as nested `children`
 - **AND** each level's `level` field matches its heading level
+
+> test: code
+> - crates/duckpond/tests/parse_doc.rs:35
