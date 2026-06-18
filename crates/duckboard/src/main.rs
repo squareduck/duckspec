@@ -172,7 +172,9 @@ impl State {
         };
         self.codex = area::codex::State::default();
         self.ideas = area::ideas::State::for_project(self.project.project_root.as_deref());
-        idea_store::reconcile(&mut self.ideas.ideas, &self.project);
+        // At project open there are no open tabs or selection to follow, so the
+        // reported relocations are discarded.
+        let _ = idea_store::reconcile(&mut self.ideas.ideas, &self.project);
         // Drop interactions / tabs from the prior project; reseed singletons.
         self.tabs = tab_bar::TabState::default();
         self.armed_tab_close = None;
@@ -2920,6 +2922,17 @@ fn reload_and_reconcile(state: &mut State) -> bool {
             );
             archived_any = true;
         }
+    }
+
+    let moves = idea_store::reconcile(&mut state.ideas.ideas, &state.project);
+    for mv in moves {
+        area::ideas::refresh_after_move(
+            &mut state.ideas,
+            &mut state.tabs,
+            &mv.old_path,
+            &mv.new_path,
+            &mv.title,
+        );
     }
 
     area::change::refresh_obvious_command(&mut state.interactions, &state.project);

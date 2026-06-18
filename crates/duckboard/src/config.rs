@@ -104,7 +104,27 @@ impl Default for FontConfig {
     }
 }
 
+#[cfg(test)]
+thread_local! {
+    /// Per-thread redirect for `config_dir`, set by tests so that everything
+    /// derived from it (`data_dir`, `ideas_root`, …) lands in a temp directory
+    /// instead of the real `~/.config/duckboard`. Thread-local keeps parallel
+    /// tests isolated without a serialization dependency.
+    static CONFIG_DIR_OVERRIDE: std::cell::RefCell<Option<PathBuf>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Test-only: redirect `config_dir()` to `dir` for the current thread.
+#[cfg(test)]
+pub fn set_config_dir_override(dir: PathBuf) {
+    CONFIG_DIR_OVERRIDE.with(|c| *c.borrow_mut() = Some(dir));
+}
+
 pub fn config_dir() -> PathBuf {
+    #[cfg(test)]
+    if let Some(dir) = CONFIG_DIR_OVERRIDE.with(|c| c.borrow().clone()) {
+        return dir;
+    }
     dirs::home_dir()
         .expect("home directory must exist")
         .join(".config")

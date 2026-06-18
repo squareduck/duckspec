@@ -515,24 +515,47 @@ pub fn delete_idea(idea: &Idea, project_root: Option<&Path>) {
 
 // ── Reconcile against project state ──────────────────────────────────────────
 
+/// A relocation performed by [`reconcile`]: an idea's file moved from
+/// `old_path` to `new_path`. `title` is the idea's post-move display title,
+/// used to refresh any tab labelled with it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IdeaMove {
+    pub old_path: PathBuf,
+    pub new_path: PathBuf,
+    pub title: String,
+}
+
 /// Detect drift in change-state ideas: when the attached change has been
 /// archived externally (via `/ds-archive`) or removed entirely, move the idea
 /// into the archive state with the appropriate sub-kind. Performs file moves
 /// in place; updates `ideas` to reflect new paths and frontmatter. Reads
 /// each drifted idea's body from disk to round-trip it through `save_idea`.
-pub fn reconcile(ideas: &mut [Idea], project: &ProjectData) {
+/// Returns the relocations performed so callers can follow moved ideas (e.g.
+/// re-point a selection or open tab).
+pub fn reconcile(ideas: &mut [Idea], project: &ProjectData) -> Vec<IdeaMove> {
     let project_root = project.project_root.as_deref();
+    let mut moves = Vec::new();
     for idea in ideas.iter_mut() {
         let Some((new_state, archived)) = drift_target(idea, project) else {
             continue;
         };
         idea.state = new_state;
         idea.frontmatter.archived = archived;
+        let prev_path = idea.abs_path.clone();
         let body = read_body(&idea.abs_path).unwrap_or_default();
         if let Err(e) = save_idea(idea, &body, project_root) {
             tracing::warn!("failed to reconcile idea: {e}");
+            continue;
+        }
+        if idea.abs_path != prev_path {
+            moves.push(IdeaMove {
+                old_path: prev_path,
+                new_path: idea.abs_path.clone(),
+                title: idea.display_title(),
+            });
         }
     }
+    moves
 }
 
 fn drift_target(idea: &Idea, project: &ProjectData) -> Option<(IdeaState, Option<ArchiveKind>)> {
@@ -753,6 +776,142 @@ mod tests {
         let body = read_body(&p).unwrap();
         assert!(body.contains("# Big"));
         cleanup(tmp);
+    }
+
+    // ── Reconcile ─────────────────────────────────────────────────────────
+
+    fn change_data(name: &str) -> crate::data::ChangeData {
+        crate::data::ChangeData {
+            name: name.into(),
+            prefix: String::new(),
+            has_proposal: false,
+            has_design: false,
+            cap_tree: vec![],
+            steps: vec![],
+        }
+    }
+
+    /// A change-state idea linked to `change`, with no I/O performed.
+    fn change_idea(change: &str) -> Idea {
+        Idea {
+            abs_path: PathBuf::new(),
+            state: IdeaState::Change,
+            primary_tag_path: vec![],
+            frontmatter: Frontmatter {
+                title: "An idea".into(),
+                created: "2026-01-01T00:00:00+00:00".into(),
+                change: Some(change.into()),
+                ..Default::default()
+            },
+        }
+    }
+
+    /// Redirect `config_dir` to a fresh temp dir for this thread and return a
+    /// `ProjectData` whose ideas therefore live under it.
+    fn temp_project() -> (PathBuf, ProjectData) {
+        let dir = tempdir();
+        crate::config::set_config_dir_override(dir.clone());
+        (dir, ProjectData::default())
+    }
+
+    /// Materialize a change-state idea on disk under the temp ideas root.
+    fn seed_change_idea(project: &ProjectData, change: &str) -> Idea {
+        let mut idea = change_idea(change);
+        let body = "# An idea\n\nbody\n";
+        save_idea(&mut idea, body, project.project_root.as_deref()).unwrap();
+        idea
+    }
+
+    /// @spec ideas/reconcile Change-linked drift classification: Linked change archived classifies the idea as via-change
+    #[test]
+    fn drift_archived_change_is_via_change() {
+        let idea = change_idea("my-change");
+        let project = ProjectData {
+            archived_changes: vec![change_data("2026-01-01-01-my-change")],
+            ..Default::default()
+        };
+        assert_eq!(
+            drift_target(&idea, &project),
+            Some((IdeaState::Archive, Some(ArchiveKind::ViaChange)))
+        );
+    }
+
+    /// @spec ideas/reconcile Change-linked drift classification: Linked change gone classifies the idea as orphaned
+    #[test]
+    fn drift_vanished_change_is_orphaned() {
+        let idea = change_idea("ghost-change");
+        let project = ProjectData::default();
+        assert_eq!(
+            drift_target(&idea, &project),
+            Some((IdeaState::Archive, Some(ArchiveKind::Orphaned)))
+        );
+    }
+
+    /// @spec ideas/reconcile Change-linked drift classification: Active linked change leaves the idea unchanged
+    #[test]
+    fn drift_active_change_is_none() {
+        let idea = change_idea("my-change");
+        let project = ProjectData {
+            active_changes: vec![change_data("my-change")],
+            ..Default::default()
+        };
+        assert_eq!(drift_target(&idea, &project), None);
+    }
+
+    /// @spec ideas/reconcile Change-linked drift classification: Already-archived idea keeps its archive reason
+    #[test]
+    fn drift_already_archived_keeps_reason() {
+        let mut idea = change_idea("my-change");
+        idea.state = IdeaState::Archive;
+        idea.frontmatter.archived = Some(ArchiveKind::Manual);
+        // Even though the change is archived externally, an already-archived
+        // idea is not reclassified.
+        let project = ProjectData {
+            archived_changes: vec![change_data("2026-01-01-01-my-change")],
+            ..Default::default()
+        };
+        assert_eq!(drift_target(&idea, &project), None);
+
+        let moves = reconcile(std::slice::from_mut(&mut idea), &project);
+        assert!(moves.is_empty());
+        assert_eq!(idea.frontmatter.archived, Some(ArchiveKind::Manual));
+    }
+
+    /// @spec ideas/reconcile Relocation reporting: An archiving relocation is reported with source and destination
+    #[test]
+    fn reconcile_reports_archiving_relocation() {
+        let (dir, mut project) = temp_project();
+        project.archived_changes = vec![change_data("2026-01-01-01-my-change")];
+        let mut idea = seed_change_idea(&project, "my-change");
+        let old_path = idea.abs_path.clone();
+
+        let moves = reconcile(std::slice::from_mut(&mut idea), &project);
+
+        assert_eq!(moves.len(), 1);
+        let mv = &moves[0];
+        assert_eq!(mv.old_path, old_path);
+        assert_eq!(mv.new_path, idea.abs_path);
+        // The relocation lands the file in the archive subtree as via-change.
+        assert!(mv.new_path.starts_with(ideas_root(None).join("archive")));
+        assert!(mv.new_path.exists());
+        assert!(!old_path.exists());
+        assert_eq!(idea.frontmatter.archived, Some(ArchiveKind::ViaChange));
+        cleanup(dir);
+    }
+
+    /// @spec ideas/reconcile Relocation reporting: A no-op reconciliation reports no relocations
+    #[test]
+    fn reconcile_reports_nothing_when_no_drift() {
+        let (dir, mut project) = temp_project();
+        project.active_changes = vec![change_data("my-change")];
+        let mut idea = seed_change_idea(&project, "my-change");
+        let path = idea.abs_path.clone();
+
+        let moves = reconcile(std::slice::from_mut(&mut idea), &project);
+
+        assert!(moves.is_empty());
+        assert_eq!(idea.abs_path, path);
+        cleanup(dir);
     }
 
     fn tempdir() -> PathBuf {

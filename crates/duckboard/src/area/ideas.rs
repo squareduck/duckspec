@@ -1105,3 +1105,46 @@ pub fn breadcrumbs(state: &State) -> Vec<String> {
     }
     crumbs
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// @spec ideas/reconcile Selection and editor follow relocations: The selected idea stays selected after relocation
+    #[test]
+    fn selection_follows_relocation() {
+        let old_path = PathBuf::from("/ideas/change/my-idea.md");
+        let new_path = PathBuf::from("/ideas/archive/my-idea.md");
+
+        let mut state = State::default();
+        state.selected = Some(old_path.clone());
+        let mut tabs = tab_bar::TabState::default();
+
+        refresh_after_move(&mut state, &mut tabs, &old_path, &new_path, "My idea");
+
+        assert_eq!(state.selected, Some(new_path));
+    }
+
+    /// @spec ideas/reconcile Selection and editor follow relocations: The open idea editor tracks the idea after relocation
+    #[test]
+    fn open_editor_tracks_relocation() {
+        let old_path = PathBuf::from("/ideas/change/my-idea.md");
+        let new_path = PathBuf::from("/ideas/archive/my-idea.md");
+
+        let mut state = State::default();
+        state.selected = Some(old_path.clone());
+        let mut tabs = tab_bar::TabState::default();
+        tabs.open_preview(
+            pinned_tab_id(&old_path),
+            "Old title".to_string(),
+            String::new(),
+            Some(old_path.clone()),
+        );
+
+        refresh_after_move(&mut state, &mut tabs, &old_path, &new_path, "New title");
+
+        let preview = tabs.preview.expect("preview tab present");
+        assert_eq!(preview.id, pinned_tab_id(&new_path));
+        assert_eq!(preview.title, "New title");
+    }
+}
