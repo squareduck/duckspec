@@ -763,19 +763,20 @@ pub fn change_scope_facts(name: &str, project: &ProjectData) -> Option<ChangeSco
         });
     }
 
-    // Caps exist → feature flow needs steps next; refinement/doc-only is ready to archive.
+    // Caps specced but no steps yet → implementation comes next. Design is
+    // optional (a change can go proposal → spec → step), so its presence can't
+    // tell a feature change apart from a spec-refinement-only one — the two are
+    // structurally identical on disk. We suggest `ds-step` for both: it's the
+    // common case, and when it's wrong the `/ds-step` agent redirects a no-code
+    // change to archive. Suggesting `ds-archive` here would instead risk
+    // archiving unimplemented specs — the spec drift duckspec exists to prevent.
     if !change.cap_tree.is_empty() {
-        let (phase, next) = if change.has_design {
-            ("specs drafted, steps not yet written", "ds-step")
-        } else {
-            ("refinement specced, ready to archive", "ds-archive")
-        };
         return Some(ChangeScopeFacts {
-            phase,
+            phase: "specs drafted, steps not yet written",
             steps_done: 0,
             step_count: 0,
             active_step_tasks: None,
-            next_command: Some(next.into()),
+            next_command: Some("ds-step".into()),
         });
     }
 
@@ -1847,15 +1848,19 @@ mod breadcrumb_tests {
     }
 
     #[test]
-    fn obvious_refinement_with_caps_suggests_archive() {
+    fn obvious_caps_without_design_still_suggests_step() {
+        // Design is optional: a feature change can go proposal → spec → step
+        // with no design.md. Caps-but-no-steps must suggest `ds-step`, never
+        // `ds-archive`, regardless of whether a design exists.
         let state = make_state("foo", &[]);
         let mut project = make_project(&["foo"], &[]);
         set_change(&mut project, "foo", |c| {
+            c.has_proposal = true;
             c.cap_tree = vec![tree_node("caps/auth")];
         });
         assert_eq!(
             compute_obvious_command(&state, &project).as_deref(),
-            Some("ds-archive")
+            Some("ds-step")
         );
     }
 
