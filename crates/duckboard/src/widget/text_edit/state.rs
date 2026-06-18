@@ -413,6 +413,15 @@ impl EditorState {
     }
 
     fn text_in_range(&self, start: Pos, end: Pos) -> String {
+        // Clamp the line index to current bounds before indexing. A selection
+        // anchor/cursor is clamped to the lines that existed when it was set
+        // (see `clamp_pos` on Click/Drag), but a streaming chat rebuild can
+        // replace the block with fewer lines while the selection is still
+        // held — reading it then would index a line that no longer exists.
+        // `clamp_pos` also snaps the col to a char boundary, so the slicing
+        // below stays valid.
+        let start = clamp_pos(start, &self.lines);
+        let end = clamp_pos(end, &self.lines);
         // Snap cols to char boundaries — `pixel_to_pos_wrapped` produces a
         // character count in the wrap path, but col is treated as a byte
         // index by the editing path. Slicing mid-multibyte panics; round
@@ -453,6 +462,10 @@ impl EditorState {
     }
 
     fn delete_range(&mut self, start: Pos, end: Pos) {
+        // Same guard as `text_in_range`: clamp to current bounds so a stale
+        // selection (held across a content shrink) can't index a missing line.
+        let start = clamp_pos(start, &self.lines);
+        let end = clamp_pos(end, &self.lines);
         let s_start = snap_col(&self.lines[start.line], start.col);
         let s_end = snap_col(&self.lines[end.line], end.col);
         let lines = Arc::make_mut(&mut self.lines);
@@ -849,6 +862,32 @@ mod tests {
         ed.apply_action(EditorAction::Backspace);
         assert_eq!(ed.cursor, Pos::new(0, 0));
         assert_eq!(ed.lines[0], "");
+    }
+
+    #[test]
+    fn selection_read_survives_content_shrink_under_stream() {
+        // Regression: drag-select in a chat block while the agent streams. The
+        // selection sets anchor/cursor against the block's current lines, then
+        // a streaming rebuild replaces the block content with FEWER lines. The
+        // held selection now points past the new end; `selection_text()` /
+        // `delete_selection()` must clamp instead of byte-slicing an
+        // out-of-range line (which panicked at `self.lines[start.line]`).
+        let mut ed = EditorState::new("line0\nline1\nline2\nline3\nline4");
+        // Establish a multi-line selection via the real input path (clamped).
+        ed.apply_action(EditorAction::Click(Pos::new(1, 0)));
+        ed.apply_action(EditorAction::Drag(Pos::new(4, 3)));
+        assert_eq!(ed.selection_range(), Some((Pos::new(1, 0), Pos::new(4, 3))));
+
+        // Streaming rebuild shrinks the block's content underneath the live
+        // selection (e.g. tool output collapsed, or pending text replaced by a
+        // shorter flushed message). The held anchor/cursor are NOT revisited.
+        let lines = Arc::make_mut(&mut ed.lines);
+        lines.clear();
+        lines.push("short".to_string());
+
+        // Both the read and the delete paths must clamp, not panic.
+        let _ = ed.selection_text();
+        let _ = ed.delete_selection();
     }
 
     #[test]
