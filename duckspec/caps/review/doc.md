@@ -6,10 +6,17 @@ permanent part of that change's record.
 ## What a review is
 
 A review is a document-schema artifact — the same shape as a proposal or a design: an H1
-title, a summary, and freeform body. Its content is a critique of the change it belongs
-to: findings, their severity, and recommended actions. The document structure is
-conventional, not enforced by a schema beyond the document rules; a review is free to
-organize its findings however suits the critique.
+title, a summary, and a body. Its content is the judgment that static verification can't
+make: `ds audit` and `ds check` prove a change is well-*formed*, while a review judges
+whether it is well-*conceived* and well-*made*. The body is conventional, not enforced
+beyond the document rules, but `ds schema review` prescribes its shape — findings tagged
+by lens and severity, any open questions, and an aggregate verdict.
+
+A review reads *down* a change's chain — `proposal → design → caps → code` — to the
+deepest artifact that exists, so it applies at any stage, from a proposal-only plan to a
+fully-implemented change. It judges along three lenses: **soundness** (is each artifact
+right on its own terms?), **fidelity** (does each layer faithfully realize the one above
+it?), and **quality** (is the work simple, idiomatic, well-made?).
 
 Reviews are advisory. They record judgment a reader or agent can act on, but they decide
 nothing on their own — nothing in the system blocks or gates on a review.
