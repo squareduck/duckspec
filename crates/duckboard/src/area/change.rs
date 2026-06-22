@@ -88,6 +88,7 @@ impl State {
         sections.insert("picker".to_string());
         sections.insert("overview".to_string());
         sections.insert("capabilities".to_string());
+        sections.insert("reviews".to_string());
         sections.insert("steps".to_string());
         sections.insert("changed_files".to_string());
         let (explorations, exploration_counter) =
@@ -723,6 +724,10 @@ pub struct ChangeScopeFacts {
     pub active_step_tasks: Option<(usize, usize)>,
     /// Suggested next `/ds-*` command (without the leading slash).
     pub next_command: Option<String>,
+    /// The change's current review — the highest-numbered review filename
+    /// (`NN-<slug>.md`), or `None` when the change has no reviews. Advisory:
+    /// surfaced in the orientation but never affects `phase`/`next_command`.
+    pub current_review: Option<String>,
 }
 
 /// Inspect a change directory's artifact and step state and return its
@@ -737,6 +742,12 @@ pub fn change_scope_facts(name: &str, project: &ProjectData) -> Option<ChangeSco
     }
 
     let change = project.active_changes.iter().find(|c| c.name == name)?;
+
+    // The current review is the highest-numbered review (reviews are sorted
+    // ascending). Computed before the phase branches and set in every arm so
+    // it surfaces at any lifecycle stage — including a pre-implementation
+    // review under a proposal-only change. It never gates phase/next_command.
+    let current_review = change.reviews.last().cloned();
 
     // Steps exist → either apply (unfinished) or archive (all done).
     if !change.steps.is_empty() {
@@ -760,6 +771,7 @@ pub fn change_scope_facts(name: &str, project: &ProjectData) -> Option<ChangeSco
             step_count: change.steps.len(),
             active_step_tasks,
             next_command: Some(if all_done { "ds-archive" } else { "ds-apply" }.into()),
+            current_review,
         });
     }
 
@@ -777,6 +789,7 @@ pub fn change_scope_facts(name: &str, project: &ProjectData) -> Option<ChangeSco
             step_count: 0,
             active_step_tasks: None,
             next_command: Some("ds-step".into()),
+            current_review,
         });
     }
 
@@ -794,6 +807,7 @@ pub fn change_scope_facts(name: &str, project: &ProjectData) -> Option<ChangeSco
         step_count: 0,
         active_step_tasks: None,
         next_command: Some(next.into()),
+        current_review,
     })
 }
 
@@ -908,6 +922,9 @@ fn parse_change_inner(path: &str) -> Vec<String> {
     }
     if let Some(rest) = path.strip_prefix("steps/") {
         return vec!["Steps".into(), rest.into()];
+    }
+    if let Some(rest) = path.strip_prefix("reviews/") {
+        return vec!["Reviews".into(), rest.into()];
     }
     path.split('/').map(str::to_string).collect()
 }
@@ -1049,6 +1066,7 @@ pub fn view_list<'a>(
             .unwrap_or_default();
         list_col = list_col.push(view_overview_section(tabs, state, change, &error_ids));
         list_col = list_col.push(view_caps_section(tabs, state, change, &error_ids));
+        list_col = list_col.push(view_reviews_section(tabs, state, change, &error_ids));
         list_col = list_col.push(view_steps_section(tabs, state, change, &error_ids));
     }
 
@@ -1148,6 +1166,35 @@ fn view_caps_section<'a>(
         state.expanded_sections.contains("capabilities"),
         Message::ToggleSection("capabilities".to_string()),
         content,
+    )
+}
+
+fn view_reviews_section<'a>(
+    tabs: &'a tab_bar::TabState,
+    state: &'a State,
+    change: &'a ChangeData,
+    error_ids: &HashSet<String>,
+) -> Element<'a, Message> {
+    let active_id = tabs.active_tab().map(|t| t.id.as_str());
+    let rows: Vec<ListRow<'a, Message>> = change
+        .reviews
+        .iter()
+        .map(|filename| {
+            let id = format!("{}/reviews/{}", change.prefix, filename);
+            let has_err = error_ids.contains(&id);
+            ListRow::new(filename.as_str())
+                .icon(ICON_DOC)
+                .selected(active_id == Some(id.as_str()))
+                .errored(has_err)
+                .on_press(Message::SelectItem(id))
+        })
+        .collect();
+
+    collapsible::view(
+        "Reviews",
+        state.expanded_sections.contains("reviews"),
+        Message::ToggleSection("reviews".to_string()),
+        list_view::view(rows, Some("No reviews")),
     )
 }
 
@@ -1689,6 +1736,7 @@ mod breadcrumb_tests {
             has_design: false,
             cap_tree: vec![],
             steps: vec![],
+            reviews: vec![],
         };
         ProjectData {
             active_changes: active.iter().map(|n| mk(n, "changes")).collect(),
@@ -2006,6 +2054,83 @@ mod breadcrumb_tests {
         set_change(&mut project, "foo", |c| c.has_proposal = true);
         let facts = change_scope_facts("foo", &project).expect("active change has facts");
         assert_eq!(facts.next_command.as_deref(), Some("ds-design"));
+    }
+
+    /// Produce the first-turn orientation text for a change scope, exercising
+    /// the full data → facts → render path the session hook uses in production.
+    fn orientation_for(name: &str, project: &ProjectData) -> String {
+        use duckchat::ContextHook;
+        let scope = crate::scope::SessionScope {
+            kind: crate::scope::ScopeKind::Change,
+            scope_key: name.to_string(),
+            change_facts: change_scope_facts(name, project),
+        };
+        crate::scope::CurrentScopeHook
+            .compute(&scope)
+            .expect("change scope always produces orientation")
+            .text
+    }
+
+    // @spec session/scope Current review in orientation: Orientation reports the highest-numbered review as the current review
+    #[test]
+    fn orientation_reports_highest_numbered_review() {
+        let mut project = make_project(&["foo"], &[]);
+        set_change(&mut project, "foo", |c| {
+            c.has_proposal = true;
+            c.reviews = vec!["01-initial.md".into(), "02-post-implementation.md".into()];
+        });
+        let facts = change_scope_facts("foo", &project).expect("active change has facts");
+        assert_eq!(facts.current_review.as_deref(), Some("02-post-implementation.md"));
+
+        let text = orientation_for("foo", &project);
+        assert!(
+            text.contains("reviews/02-post-implementation.md"),
+            "orientation must report the highest-numbered review: {text}"
+        );
+        assert!(
+            !text.contains("reviews/01-initial.md"),
+            "orientation must not report a lower-numbered review as current: {text}"
+        );
+    }
+
+    // @spec session/scope Current review in orientation: A change with no reviews reports no current review
+    #[test]
+    fn orientation_with_no_reviews_reports_none() {
+        let mut project = make_project(&["foo"], &[]);
+        set_change(&mut project, "foo", |c| c.has_proposal = true);
+        let facts = change_scope_facts("foo", &project).expect("active change has facts");
+        assert_eq!(facts.current_review, None);
+
+        let text = orientation_for("foo", &project);
+        assert!(
+            !text.contains("Current review:"),
+            "orientation must not report a current review when none exist: {text}"
+        );
+    }
+
+    // @spec session/scope Current review in orientation: Adding a review does not change the suggested next stage
+    #[test]
+    fn adding_a_review_does_not_change_next_stage() {
+        // Two changes with identical artifact/step state; only `bar` has reviews.
+        let mut project = make_project(&["foo", "bar"], &[]);
+        set_change(&mut project, "foo", |c| c.has_proposal = true);
+        set_change(&mut project, "bar", |c| {
+            c.has_proposal = true;
+            c.reviews = vec!["01-a-look.md".into()];
+        });
+
+        let foo = change_scope_facts("foo", &project).expect("facts");
+        let bar = change_scope_facts("bar", &project).expect("facts");
+        assert_eq!(
+            foo.next_command, bar.next_command,
+            "reviews must not affect the suggested next stage"
+        );
+
+        // The orientations agree on the suggested next stage even though only
+        // one carries a current-review report.
+        let next = " Suggested next stage: /ds-design.";
+        assert!(orientation_for("foo", &project).contains(next));
+        assert!(orientation_for("bar", &project).contains(next));
     }
 }
 

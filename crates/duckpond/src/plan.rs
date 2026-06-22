@@ -37,6 +37,9 @@ pub enum PlanError {
     #[error("step '--after {slug}' not found in change")]
     AfterStepNotFound { slug: String },
 
+    #[error("review slug '{slug}' already exists in change")]
+    ReviewSlugExists { slug: String },
+
     #[error("unknown stage '{stage}'")]
     UnknownStage { stage: String },
 
@@ -47,7 +50,7 @@ pub enum PlanError {
 /// Known stage names for hooks.
 pub const STAGES: &[&str] = &[
     "explore", "backfill", "propose", "design", "spec", "step", "apply", "archive", "verify",
-    "codex",
+    "review", "codex",
 ];
 
 /// Position of a hook relative to the stage.
@@ -238,7 +241,7 @@ pub fn create_step(
     check_change_exists(change, active_changes)?;
 
     let slug = slugify(name);
-    let parsed = parse_steps(existing_steps);
+    let parsed = parse_nn_slug(existing_steps);
 
     // Check slug uniqueness.
     if parsed.iter().any(|s| s.slug == slug) {
@@ -278,6 +281,41 @@ pub fn create_step(
     }
 
     Ok(Plan { creates, renames })
+}
+
+/// Plan the creation of a review file in a change.
+///
+/// Reviews are an append-only chronological log: the new review is numbered one
+/// above the highest existing review, existing reviews are never renamed, and
+/// there is no `--after` insertion (unlike steps).
+///
+/// `active_changes` — names of directories under `changes/`.
+/// `existing_reviews` — filenames in `changes/<change>/reviews/`, each
+///   following the `NN-<slug>.md` pattern.
+/// `name` — human name for the review (will be slugified).
+pub fn create_review(
+    name: &str,
+    change: &str,
+    active_changes: &[String],
+    existing_reviews: &[String],
+) -> Result<Plan, PlanError> {
+    check_change_exists(change, active_changes)?;
+
+    let slug = slugify(name);
+    let parsed = parse_nn_slug(existing_reviews);
+
+    // Check slug uniqueness.
+    if parsed.iter().any(|r| r.slug == slug) {
+        return Err(PlanError::ReviewSlugExists { slug });
+    }
+
+    // Append: next number after the highest existing.
+    let next_nn = parsed.last().map_or(1, |r| r.nn + 1);
+
+    Ok(Plan {
+        creates: vec![review_path(change, next_nn, &slug)],
+        renames: vec![],
+    })
 }
 
 /// Plan the creation of a hook file.
@@ -359,33 +397,32 @@ fn slugify(name: &str) -> String {
         .join("-")
 }
 
-struct ParsedStep {
+/// A parsed `NN-<slug>.md` filename, shared by steps and reviews.
+struct ParsedNnSlug {
     nn: u32,
     slug: String,
 }
 
-fn parse_steps(filenames: &[String]) -> Vec<ParsedStep> {
-    let mut steps: Vec<ParsedStep> = filenames
+fn parse_nn_slug(filenames: &[String]) -> Vec<ParsedNnSlug> {
+    let mut parsed: Vec<ParsedNnSlug> = filenames
         .iter()
         .filter_map(|f| {
-            let stem = f.strip_suffix(".md")?;
-            let (nn_str, slug) = stem.split_once('-')?;
-            if nn_str.len() == 2 && nn_str.chars().all(|c| c.is_ascii_digit()) {
-                Some(ParsedStep {
-                    nn: nn_str.parse().ok()?,
-                    slug: slug.to_string(),
-                })
-            } else {
-                None
-            }
+            // `layout::parse_nn_slug` is the single source of truth for the
+            // `NN-<slug>` rule, shared with steps, reviews, and duckboard.
+            let (nn, slug) = crate::layout::parse_nn_slug(f)?;
+            Some(ParsedNnSlug { nn, slug })
         })
         .collect();
-    steps.sort_by_key(|s| s.nn);
-    steps
+    parsed.sort_by_key(|p| p.nn);
+    parsed
 }
 
 fn step_path(change: &str, nn: u32, slug: &str) -> PathBuf {
     PathBuf::from(format!("changes/{change}/steps/{nn:02}-{slug}.md"))
+}
+
+fn review_path(change: &str, nn: u32, slug: &str) -> PathBuf {
+    PathBuf::from(format!("changes/{change}/reviews/{nn:02}-{slug}.md"))
 }
 
 #[cfg(test)]
@@ -640,6 +677,52 @@ mod tests {
         )
         .unwrap_err();
         assert!(matches!(err, PlanError::AfterStepNotFound { .. }));
+    }
+
+    // -- create_review --------------------------------------------------------
+
+    // @spec review Sequential numbering: The first review in a change is numbered 01
+    #[test]
+    fn review_first_is_numbered_01() {
+        let plan = create_review("post implementation", "add-oauth", &[s("add-oauth")], &[]).unwrap();
+        assert_eq!(
+            plan.creates,
+            vec![PathBuf::from(
+                "changes/add-oauth/reviews/01-post-implementation.md"
+            )]
+        );
+        assert!(plan.renames.is_empty());
+    }
+
+    // @spec review Sequential numbering: A new review is numbered above the highest existing review
+    #[test]
+    fn review_numbered_above_highest() {
+        let plan = create_review(
+            "third pass",
+            "add-oauth",
+            &[s("add-oauth")],
+            &ss(&["01-initial.md", "02-mid-implementation.md"]),
+        )
+        .unwrap();
+        assert_eq!(
+            plan.creates,
+            vec![PathBuf::from("changes/add-oauth/reviews/03-third-pass.md")]
+        );
+        // Existing reviews are left unchanged — no renames.
+        assert!(plan.renames.is_empty());
+    }
+
+    // @spec review Sequential numbering: A review whose slug already exists is rejected
+    #[test]
+    fn review_slug_conflict() {
+        let err = create_review(
+            "initial",
+            "add-oauth",
+            &[s("add-oauth")],
+            &ss(&["01-initial.md"]),
+        )
+        .unwrap_err();
+        assert!(matches!(err, PlanError::ReviewSlugExists { .. }));
     }
 
     // -- strip_archive_prefix -------------------------------------------------

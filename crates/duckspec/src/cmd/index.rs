@@ -41,6 +41,7 @@ fn extract_title_summary(source: &str, kind: &ArtifactKind) -> Option<(String, S
         | ArtifactKind::Proposal
         | ArtifactKind::Design
         | ArtifactKind::Codex
+        | ArtifactKind::Review
         | ArtifactKind::Project => {
             let doc = parse::doc::parse_document(&elements).ok()?;
             Some((doc.title, doc.summary))

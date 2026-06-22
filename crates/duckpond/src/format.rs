@@ -59,6 +59,7 @@ pub fn format_artifact(
         | ArtifactKind::Proposal
         | ArtifactKind::Design
         | ArtifactKind::Codex
+        | ArtifactKind::Review
         | ArtifactKind::Project => {
             let doc =
                 parse::doc::parse_document(&elements).map_err(|errors| FormatError::Parse {
@@ -96,7 +97,7 @@ pub fn format_artifact(
                 .and_then(|f| f.to_str())
                 .unwrap_or("");
             let ctx = CheckContext {
-                filename_slug: layout::extract_step_slug(filename),
+                filename_slug: layout::extract_nn_slug(filename),
             };
             let mut slug_errs = Vec::new();
             check::validate_step_slug(&step, &ctx, &mut slug_errs);

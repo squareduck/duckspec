@@ -24,7 +24,7 @@ particular, an already-archived idea SHALL retain its existing archive reason.
 - **AND** its recorded archive reason is via-change
 
 > test: code
-> - crates/duckboard/src/idea_store.rs:825
+> - crates/duckboard/src/idea_store.rs:826
 
 ### Scenario: Linked change gone classifies the idea as orphaned
 
@@ -35,7 +35,7 @@ particular, an already-archived idea SHALL retain its existing archive reason.
 - **AND** its recorded archive reason is orphaned
 
 > test: code
-> - crates/duckboard/src/idea_store.rs:839
+> - crates/duckboard/src/idea_store.rs:840
 
 ### Scenario: Active linked change leaves the idea unchanged
 
@@ -45,7 +45,7 @@ particular, an already-archived idea SHALL retain its existing archive reason.
 - **THEN** the idea remains a change-state idea
 
 > test: code
-> - crates/duckboard/src/idea_store.rs:850
+> - crates/duckboard/src/idea_store.rs:851
 
 ### Scenario: Already-archived idea keeps its archive reason
 
@@ -55,7 +55,7 @@ particular, an already-archived idea SHALL retain its existing archive reason.
 - **AND** its recorded archive reason is still manual
 
 > test: code
-> - crates/duckboard/src/idea_store.rs:861
+> - crates/duckboard/src/idea_store.rs:862
 
 ## Requirement: Relocation reporting
 
@@ -72,7 +72,7 @@ the new location. A reconciliation that relocates no idea SHALL report no reloca
 - **AND** it names the idea's former location and its new location
 
 > test: code
-> - crates/duckboard/src/idea_store.rs:880
+> - crates/duckboard/src/idea_store.rs:881
 
 ### Scenario: A no-op reconciliation reports no relocations
 
@@ -81,7 +81,7 @@ the new location. A reconciliation that relocates no idea SHALL report no reloca
 - **THEN** no relocations are reported
 
 > test: code
-> - crates/duckboard/src/idea_store.rs:902
+> - crates/duckboard/src/idea_store.rs:903
 
 ## Requirement: Selection and editor follow relocations
 

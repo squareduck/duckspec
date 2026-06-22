@@ -52,6 +52,14 @@ pub enum CreateCommand {
         #[arg(long)]
         after: Option<String>,
     },
+    /// Create a review file in a change.
+    Review {
+        /// Name for the review (will be slugified).
+        name: String,
+        /// Change to create the review in.
+        #[arg(long = "in")]
+        change: String,
+    },
     /// Create a hook file for a stage.
     Hook {
         /// Stage name (explore, propose, design, spec, step, apply, archive, verify, codex).
@@ -68,13 +76,18 @@ pub enum CreateCommand {
 pub fn run(cmd: CreateCommand) -> anyhow::Result<()> {
     let duckspec_root = find_duckspec_root()?;
 
-    // Capture hook info before cmd is consumed.
-    let hook_content = if let CreateCommand::Hook { ref stage, pre, .. } = cmd {
-        let pos = if pre { "Pre" } else { "Post" };
-        let title = capitalize(stage);
-        Some(format!("# {title} - {pos}\n"))
-    } else {
-        None
+    // Capture the seed content for files whose placeholder can't be inferred
+    // from the filename, before `cmd` is consumed. Hooks carry a stage/position
+    // skeleton; reviews share the `NN-<slug>.md` shape with steps, so their
+    // `# Review` title must be threaded from the command rather than sniffed.
+    let forced_content = match &cmd {
+        CreateCommand::Hook { stage, pre, .. } => {
+            let pos = if *pre { "Pre" } else { "Post" };
+            let title = capitalize(stage);
+            Some(format!("# {title} - {pos}\n"))
+        }
+        CreateCommand::Review { .. } => Some("# Review\n".to_string()),
+        _ => None,
     };
 
     let plan = match cmd {
@@ -137,6 +150,12 @@ pub fn run(cmd: CreateCommand) -> anyhow::Result<()> {
             let existing_steps = list_files(&steps_dir)?;
             duckpond::plan::create_step(&name, &change, &active, &existing_steps, after.as_deref())?
         }
+        CreateCommand::Review { name, change } => {
+            let active = list_subdirs(&duckspec_root.join("changes"))?;
+            let reviews_dir = duckspec_root.join("changes").join(&change).join("reviews");
+            let existing_reviews = list_files(&reviews_dir)?;
+            duckpond::plan::create_review(&name, &change, &active, &existing_reviews)?
+        }
         CreateCommand::Hook { stage, pre, post } => {
             let position = if pre {
                 duckpond::plan::HookPosition::Pre
@@ -166,7 +185,7 @@ pub fn run(cmd: CreateCommand) -> anyhow::Result<()> {
             // for artifacts so editors that require a non-empty Read
             // before Write don't trip on a fresh create.
             let filename = abs.file_name().and_then(|f| f.to_str()).unwrap_or_default();
-            let content = hook_content
+            let content = forced_content
                 .clone()
                 .unwrap_or_else(|| placeholder_for(filename));
             fs::write(&abs, content)?;

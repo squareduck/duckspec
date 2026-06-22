@@ -120,9 +120,16 @@ change.";
         None => String::new(),
     };
 
+    // Advisory: surface the current review as an openable pointer when one
+    // exists. Never alters progress or the suggested next stage.
+    let review = match &facts.current_review {
+        Some(r) => format!(" Current review: `reviews/{r}` (latest)."),
+        None => String::new(),
+    };
+
     format!(
         "Current duckspec scope: change `{name}`. Change artifacts live under \
-`changes/{name}/`. {progress}{next} {authority}"
+`changes/{name}/`. {progress}{next}{review} {authority}"
     )
 }
 
@@ -225,6 +232,7 @@ mod tests {
                 step_count: 3,
                 active_step_tasks: Some((2, 5)),
                 next_command: Some("ds-apply".into()),
+                current_review: None,
             }),
         };
         let text = orientation(&scope);

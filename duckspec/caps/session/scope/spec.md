@@ -22,7 +22,7 @@ never makes the agent ask which change to act on.
 - **AND** it directs disambiguation to the case where the user names a different change
 
 > test: code
-> - crates/duckboard/src/scope.rs:216
+> - crates/duckboard/src/scope.rs:223
 
 ## Requirement: Lifecycle reflection
 
@@ -41,7 +41,7 @@ report completion.
 - **AND** it suggests the apply stage as the next step
 
 > test: code
-> - crates/duckboard/src/area/change.rs:1968
+> - crates/duckboard/src/area/change.rs:2016
 
 ### Scenario: A change with all steps complete reports completion and the archive next-stage
 
@@ -51,7 +51,7 @@ report completion.
 - **AND** it suggests the archive stage as the next step
 
 > test: code
-> - crates/duckboard/src/area/change.rs:1986
+> - crates/duckboard/src/area/change.rs:2034
 
 ### Scenario: A change with only a proposal reports the design next-stage
 
@@ -60,7 +60,7 @@ report completion.
 - **THEN** it suggests the design stage as the next step
 
 > test: code
-> - crates/duckboard/src/area/change.rs:2002
+> - crates/duckboard/src/area/change.rs:2050
 
 ## Requirement: Non-change scope orientation
 
@@ -77,7 +77,7 @@ scope and SHALL NOT report change progress or a change next-stage.
 - **AND** it does not report change progress or a change next-stage
 
 > test: code
-> - crates/duckboard/src/scope.rs:245
+> - crates/duckboard/src/scope.rs:253
 
 ### Scenario: A capability-tree scope carries no change facts
 
@@ -87,7 +87,7 @@ scope and SHALL NOT report change progress or a change next-stage.
 - **AND** it does not report change progress or a change next-stage
 
 > test: code
-> - crates/duckboard/src/scope.rs:268
+> - crates/duckboard/src/scope.rs:276
 
 ## Requirement: Reliable first-turn delivery
 
@@ -123,3 +123,40 @@ the same session.
 
 > test: code
 > - crates/duckboard/src/area/interaction.rs:603
+
+## Requirement: Current review in orientation
+
+For a change scope, the orientation SHALL report the change's current review — the
+highest-numbered review in the change — when the change has at least one review, and SHALL
+omit any current-review report when the change has none. The presence or absence of
+reviews SHALL NOT affect the change's reported progress or its suggested next stage.
+
+> test: code
+
+### Scenario: Orientation reports the highest-numbered review as the current review
+
+- **GIVEN** a change scope whose change has more than one review
+- **WHEN** the orientation is produced
+- **THEN** it reports the highest-numbered review as the current review
+
+> test: code
+> - crates/duckboard/src/area/change.rs:2074
+
+### Scenario: A change with no reviews reports no current review
+
+- **GIVEN** a change scope whose change has no reviews
+- **WHEN** the orientation is produced
+- **THEN** it does not report a current review
+
+> test: code
+> - crates/duckboard/src/area/change.rs:2096
+
+### Scenario: Adding a review does not change the suggested next stage
+
+- **GIVEN** two change scopes with identical artifact and step state
+- **AND** one of them additionally has reviews
+- **WHEN** the orientation is produced for each
+- **THEN** both report the same suggested next stage
+
+> test: code
+> - crates/duckboard/src/area/change.rs:2111

@@ -147,6 +147,7 @@ mod tests {
                 has_design: false,
                 cap_tree: vec![],
                 steps,
+                reviews: vec![],
             }],
             ..Default::default()
         }

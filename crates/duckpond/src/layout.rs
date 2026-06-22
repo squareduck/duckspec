@@ -22,6 +22,8 @@ pub enum ArtifactKind {
     Design,
     /// `changes/<name>/steps/NN-<slug>.md`
     Step,
+    /// `changes/<name>/reviews/NN-<slug>.md`
+    Review,
     /// `codex/<path>.md`
     Codex,
     /// `project.md`
@@ -98,6 +100,7 @@ fn classify_change(rest: &[&str]) -> Option<ArtifactKind> {
     match within_change[0] {
         "caps" => classify_change_caps(&within_change[1..]),
         "steps" => classify_step(&within_change[1..]),
+        "reviews" => classify_review(&within_change[1..]),
         _ => None,
     }
 }
@@ -131,26 +134,57 @@ fn classify_step(rest: &[&str]) -> Option<ArtifactKind> {
     }
 }
 
-/// Extract the slug portion from a step filename.
+/// Classify a path under `changes/<name>/reviews/`.
 ///
-/// Step filenames follow the pattern `NN-<slug>.md`. Returns the slug
-/// portion, or `None` if the filename doesn't match the pattern.
-///
-/// ```
-/// use duckpond::layout::extract_step_slug;
-/// assert_eq!(extract_step_slug("01-scaffold.md"), Some("scaffold".into()));
-/// assert_eq!(extract_step_slug("02-implement-enrollment.md"), Some("implement-enrollment".into()));
-/// assert_eq!(extract_step_slug("proposal.md"), None);
-/// ```
-pub fn extract_step_slug(filename: &str) -> Option<String> {
-    let stem = filename.strip_suffix(".md")?;
-    let (nn, slug) = stem.split_once('-')?;
-    // NN must be exactly two digits.
-    if nn.len() == 2 && nn.chars().all(|c| c.is_ascii_digit()) && !slug.is_empty() {
-        Some(slug.to_string())
+/// Mirrors `classify_step`: a single `.md` child, no nesting.
+fn classify_review(rest: &[&str]) -> Option<ArtifactKind> {
+    if rest.len() != 1 {
+        return None;
+    }
+    let filename = rest[0];
+    if filename.ends_with(".md") {
+        Some(ArtifactKind::Review)
     } else {
         None
     }
+}
+
+/// Parse an `NN-<slug>.md` filename into its number and slug.
+///
+/// Step and review filenames share the pattern `NN-<slug>.md`, where `NN` is
+/// exactly two digits and `<slug>` is non-empty. Returns `(number, slug)`, or
+/// `None` if the filename doesn't match. This is the single source of truth for
+/// the `NN-<slug>` rule, shared by steps and reviews across crates.
+///
+/// ```
+/// use duckpond::layout::parse_nn_slug;
+/// assert_eq!(parse_nn_slug("01-scaffold.md"), Some((1, "scaffold".into())));
+/// assert_eq!(parse_nn_slug("12-implement-enrollment.md"), Some((12, "implement-enrollment".into())));
+/// assert_eq!(parse_nn_slug("proposal.md"), None);
+/// ```
+pub fn parse_nn_slug(filename: &str) -> Option<(u32, String)> {
+    let stem = filename.strip_suffix(".md")?;
+    let (nn, slug) = stem.split_once('-')?;
+    // NN must be exactly two digits and the slug must be non-empty.
+    if nn.len() == 2 && nn.chars().all(|c| c.is_ascii_digit()) && !slug.is_empty() {
+        Some((nn.parse().ok()?, slug.to_string()))
+    } else {
+        None
+    }
+}
+
+/// Extract the slug portion from an `NN-<slug>.md` filename.
+///
+/// Thin wrapper over [`parse_nn_slug`] that keeps only the slug.
+///
+/// ```
+/// use duckpond::layout::extract_nn_slug;
+/// assert_eq!(extract_nn_slug("01-scaffold.md"), Some("scaffold".into()));
+/// assert_eq!(extract_nn_slug("02-implement-enrollment.md"), Some("implement-enrollment".into()));
+/// assert_eq!(extract_nn_slug("proposal.md"), None);
+/// ```
+pub fn extract_nn_slug(filename: &str) -> Option<String> {
+    parse_nn_slug(filename).map(|(_, slug)| slug)
 }
 
 #[cfg(test)]
@@ -318,35 +352,71 @@ mod tests {
 
     #[test]
     fn extract_slug_basic() {
-        assert_eq!(extract_step_slug("01-scaffold.md"), Some("scaffold".into()));
+        assert_eq!(extract_nn_slug("01-scaffold.md"), Some("scaffold".into()));
     }
 
     #[test]
     fn extract_slug_multi_segment() {
         assert_eq!(
-            extract_step_slug("02-implement-enrollment.md"),
+            extract_nn_slug("02-implement-enrollment.md"),
             Some("implement-enrollment".into())
         );
     }
 
     #[test]
     fn extract_slug_not_a_step() {
-        assert_eq!(extract_step_slug("proposal.md"), None);
+        assert_eq!(extract_nn_slug("proposal.md"), None);
     }
 
     #[test]
     fn extract_slug_no_md_extension() {
-        assert_eq!(extract_step_slug("01-scaffold.txt"), None);
+        assert_eq!(extract_nn_slug("01-scaffold.txt"), None);
     }
 
     #[test]
     fn extract_slug_single_digit_prefix() {
         // NN must be exactly two digits.
-        assert_eq!(extract_step_slug("1-scaffold.md"), None);
+        assert_eq!(extract_nn_slug("1-scaffold.md"), None);
     }
 
     #[test]
     fn extract_slug_three_digit_prefix() {
-        assert_eq!(extract_step_slug("001-scaffold.md"), None);
+        assert_eq!(extract_nn_slug("001-scaffold.md"), None);
+    }
+
+    #[test]
+    fn parse_nn_slug_basic() {
+        assert_eq!(parse_nn_slug("01-scaffold.md"), Some((1, "scaffold".into())));
+    }
+
+    #[test]
+    fn parse_nn_slug_multi_segment() {
+        assert_eq!(
+            parse_nn_slug("12-implement-enrollment.md"),
+            Some((12, "implement-enrollment".into()))
+        );
+    }
+
+    #[test]
+    fn parse_nn_slug_single_digit_prefix() {
+        // NN must be exactly two digits.
+        assert_eq!(parse_nn_slug("1-scaffold.md"), None);
+    }
+
+    #[test]
+    fn parse_nn_slug_three_digit_prefix() {
+        assert_eq!(parse_nn_slug("001-scaffold.md"), None);
+    }
+
+    #[test]
+    fn parse_nn_slug_empty_slug() {
+        // The slug portion must be non-empty.
+        assert_eq!(parse_nn_slug("01-.md"), None);
+    }
+
+    #[test]
+    fn parse_nn_slug_not_an_nn_file() {
+        assert_eq!(parse_nn_slug("proposal.md"), None);
+        assert_eq!(parse_nn_slug("01-scaffold.txt"), None);
     }
 }

@@ -537,7 +537,7 @@ fn build_context(kind: &ArtifactKind, relative: &Path) -> CheckContext {
     if *kind == ArtifactKind::Step {
         let filename = relative.file_name().and_then(|f| f.to_str()).unwrap_or("");
         CheckContext {
-            filename_slug: layout::extract_step_slug(filename),
+            filename_slug: layout::extract_nn_slug(filename),
         }
     } else {
         CheckContext::default()

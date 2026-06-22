@@ -65,3 +65,13 @@ The orientation rides the body of the session's first turn, so it reaches the ag
 reliably. It is present on that first turn whether or not the project has an `AGENTS.md`
 file. Once the first turn has been sent, the orientation is not repeated — later turns in
 the same session already carry it in their history.
+
+## Current review
+
+A change scope's orientation also reports the change's current review — the
+highest-numbered review the change holds. When the change has no reviews, the orientation
+says nothing about a current review.
+
+The current review is informational orientation only. It points the agent at the latest
+critique on record; it does not affect the reported step progress or the suggested next
+stage, both of which are derived solely from the change's artifacts and step state.

@@ -788,6 +788,7 @@ mod tests {
             has_design: false,
             cap_tree: vec![],
             steps: vec![],
+            reviews: vec![],
         }
     }
 

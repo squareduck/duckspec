@@ -72,6 +72,7 @@ fn summarize_change(change_dir: &Path, canonical_root: &Path) -> anyhow::Result<
     let mut delta_cap_dirs: HashSet<PathBuf> = HashSet::new();
     let mut new_cap_dirs: HashSet<PathBuf> = HashSet::new();
     let mut steps = 0usize;
+    let mut reviews = 0usize;
     let mut has_proposal = false;
     let mut has_design = false;
 
@@ -97,6 +98,7 @@ fn summarize_change(change_dir: &Path, canonical_root: &Path) -> anyhow::Result<
                 }
             }
             ArtifactKind::Step => steps += 1,
+            ArtifactKind::Review => reviews += 1,
             ArtifactKind::Proposal => has_proposal = true,
             ArtifactKind::Design => has_design = true,
             _ => {}
@@ -128,6 +130,12 @@ fn summarize_change(change_dir: &Path, canonical_root: &Path) -> anyhow::Result<
         parts.push(format!(
             "{steps} {}",
             if steps == 1 { "step" } else { "steps" }
+        ));
+    }
+    if reviews > 0 {
+        parts.push(format!(
+            "{reviews} {}",
+            if reviews == 1 { "review" } else { "reviews" }
         ));
     }
 
@@ -217,6 +225,7 @@ fn status_change(
     let mut deltas = 0usize;
     let mut new_caps = 0usize;
     let mut step_files = Vec::new();
+    let mut review_files = Vec::new();
     let mut has_proposal = false;
     let mut has_design = false;
     let mut spec_files = Vec::new();
@@ -239,6 +248,7 @@ fn status_change(
             }
             ArtifactKind::ChangeCapDoc => new_caps += 1,
             ArtifactKind::Step => step_files.push((file_path.clone(), relative.to_path_buf())),
+            ArtifactKind::Review => review_files.push((file_path.clone(), relative.to_path_buf())),
             ArtifactKind::Proposal => has_proposal = true,
             ArtifactKind::Design => has_design = true,
             _ => {}
@@ -348,6 +358,31 @@ fn status_change(
         }
     }
 
+    // Reviews — advisory, never gate the change; purely informational.
+    if !review_files.is_empty() {
+        eprintln!();
+        eprintln!("    {}", "reviews:".bold());
+        review_files.sort_by(|a, b| a.1.cmp(&b.1));
+        for (file_path, relative) in &review_files {
+            print_review_summary(file_path, relative, "      ")?;
+        }
+    }
+
+    Ok(())
+}
+
+fn print_review_summary(file_path: &Path, relative: &Path, indent: &str) -> anyhow::Result<()> {
+    let filename = relative.file_name().and_then(|f| f.to_str()).unwrap_or("?");
+    let source = std::fs::read_to_string(file_path)?;
+    let elements = parse::parse_elements(&source);
+    match parse::doc::parse_document(&elements) {
+        Ok(doc) => eprintln!(
+            "{indent}{} {}",
+            filename.bold(),
+            format!("— {}", doc.title).dimmed()
+        ),
+        Err(_) => eprintln!("{indent}{} {}", filename.bold(), "(parse error)".red()),
+    }
     Ok(())
 }
 

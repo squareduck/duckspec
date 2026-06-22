@@ -97,6 +97,10 @@ pub struct ChangeData {
     pub has_design: bool,
     pub cap_tree: Vec<TreeNode>,
     pub steps: Vec<StepInfo>,
+    /// Review filenames (`NN-<slug>.md`), sorted ascending by number. The
+    /// last entry is the current (highest-numbered) review. Reviews are
+    /// advisory — they never affect phase or next-stage derivation.
+    pub reviews: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -319,6 +323,7 @@ fn build_changes(dir: &Path, dir_prefix: &str) -> Vec<ChangeData> {
         let has_design = full.join("design.md").exists();
         let cap_tree = build_tree(&full.join("caps"), &format!("{}/caps", prefix));
         let steps = build_steps(&full.join("steps"), &prefix);
+        let reviews = build_reviews(&full.join("reviews"));
 
         changes.push(ChangeData {
             name,
@@ -327,33 +332,51 @@ fn build_changes(dir: &Path, dir_prefix: &str) -> Vec<ChangeData> {
             has_design,
             cap_tree,
             steps,
+            reviews,
         });
     }
     changes
 }
 
-fn build_steps(dir: &Path, change_prefix: &str) -> Vec<StepInfo> {
-    let entries = read_sorted_dir(dir);
-    let mut steps = vec![];
+/// Collect a change's review filenames (`NN-<slug>.md`), sorted ascending by
+/// number. Recognition uses `duckpond::layout::parse_nn_slug` — the canonical
+/// `NN-<slug>` rule — and entries are ordered by the parsed number, so the last
+/// entry is the highest-numbered review.
+fn build_reviews(dir: &Path) -> Vec<String> {
+    let mut reviews: Vec<(u32, String)> = read_sorted_dir(dir)
+        .into_iter()
+        .filter_map(|entry| {
+            let name = entry.file_name().to_string_lossy().to_string();
+            let (nn, _) = duckpond::layout::parse_nn_slug(&name)?;
+            Some((nn, name))
+        })
+        .collect();
+    reviews.sort_by_key(|(nn, _)| *nn);
+    reviews.into_iter().map(|(_, name)| name).collect()
+}
 
-    for entry in entries {
-        let name = entry.file_name().to_string_lossy().to_string();
-        if !name.ends_with(".md") {
-            continue;
-        }
-        let stem = name.trim_end_matches(".md");
-        if let Some((num_str, _)) = stem.split_once('-')
-            && num_str.parse::<u32>().is_ok()
-        {
+/// Collect a change's steps (`NN-<slug>.md`), ordered ascending by the parsed
+/// number via the canonical `duckpond::layout::parse_nn_slug` rule.
+fn build_steps(dir: &Path, change_prefix: &str) -> Vec<StepInfo> {
+    let mut steps: Vec<(u32, StepInfo)> = read_sorted_dir(dir)
+        .into_iter()
+        .filter_map(|entry| {
+            let name = entry.file_name().to_string_lossy().to_string();
+            let (nn, _) = duckpond::layout::parse_nn_slug(&name)?;
             let completion = compute_step_completion(&entry.path());
-            steps.push(StepInfo {
-                id: format!("{}/steps/{}", change_prefix, name),
-                label: name.clone(),
-                completion,
-            });
-        }
-    }
-    steps
+            let id = format!("{}/steps/{}", change_prefix, name);
+            Some((
+                nn,
+                StepInfo {
+                    id,
+                    label: name,
+                    completion,
+                },
+            ))
+        })
+        .collect();
+    steps.sort_by_key(|(nn, _)| *nn);
+    steps.into_iter().map(|(_, step)| step).collect()
 }
 
 fn compute_step_completion(path: &Path) -> StepCompletion {

@@ -43,6 +43,7 @@ pub fn check_artifact(source: &str, kind: &ArtifactKind, ctx: &CheckContext) -> 
         | ArtifactKind::Proposal
         | ArtifactKind::Design
         | ArtifactKind::Codex
+        | ArtifactKind::Review
         | ArtifactKind::Project => parse::doc::parse_document(&elements)
             .err()
             .unwrap_or_default(),
@@ -276,7 +277,7 @@ pub fn check_change(
                 .and_then(|f| f.to_str())
                 .unwrap_or("");
             CheckContext {
-                filename_slug: crate::layout::extract_step_slug(filename),
+                filename_slug: crate::layout::extract_nn_slug(filename),
             }
         } else {
             CheckContext::default()
