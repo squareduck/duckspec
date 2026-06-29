@@ -366,18 +366,30 @@ fn format_tool_summary(name: &str, input: &str) -> String {
 
         let pattern = map.get("pattern").and_then(|v| v.as_str());
         if let Some(pat) = pattern {
-            let truncated = if pat.len() > 40 { &pat[..40] } else { pat };
+            let truncated = truncate_chars(pat, 40);
             return format!("{name} \"{truncated}\"");
         }
 
         let command = map.get("command").and_then(|v| v.as_str());
         if let Some(cmd) = command {
-            let truncated = if cmd.len() > 50 { &cmd[..50] } else { cmd };
+            let truncated = truncate_chars(cmd, 50);
             return format!("{name} `{truncated}`");
         }
     }
 
     name.to_string()
+}
+
+/// Truncate a string to at most `max` characters, on char boundaries.
+///
+/// Slicing with a byte index (`&s[..n]`) panics when the index falls inside a
+/// multibyte UTF-8 character, so we count by `char` instead. Returns the whole
+/// string when it is already short enough.
+fn truncate_chars(s: &str, max: usize) -> &str {
+    match s.char_indices().nth(max) {
+        Some((byte_idx, _)) => &s[..byte_idx],
+        None => s,
+    }
 }
 
 // ── View ────────────────────────────────────────────────────────────────────
@@ -988,5 +1000,37 @@ mod tests {
             truncate_output(raw),
             vec!["File has not been read yet.".to_string()],
         );
+    }
+
+    #[test]
+    fn truncate_chars_keeps_short_strings() {
+        assert_eq!(truncate_chars("short", 40), "short");
+        assert_eq!(truncate_chars("", 40), "");
+    }
+
+    #[test]
+    fn truncate_chars_never_splits_multibyte() {
+        // A run of multibyte chars whose byte length exceeds the limit: a byte
+        // slice at `max` would land mid-character and panic. We must cut on a
+        // char boundary and keep exactly `max` chars.
+        let s = "日".repeat(60); // 60 three-byte chars
+        let out = truncate_chars(&s, 40);
+        assert_eq!(out.chars().count(), 40);
+        assert!(s.starts_with(out));
+    }
+
+    #[test]
+    fn tool_summary_handles_multibyte_pattern_and_command() {
+        // Regression: these previously byte-sliced at 40/50 and aborted the
+        // app when a multibyte char straddled the boundary.
+        let long_pat = "—".repeat(60); // em-dash is 3 bytes each
+        let input = format!(r#"{{"pattern":"{long_pat}"}}"#);
+        let summary = format_tool_summary("Grep", &input);
+        assert!(summary.starts_with("Grep \"—"));
+
+        let long_cmd = "é".repeat(60); // 2 bytes each
+        let input = format!(r#"{{"command":"{long_cmd}"}}"#);
+        let summary = format_tool_summary("Bash", &input);
+        assert!(summary.starts_with("Bash `é"));
     }
 }
