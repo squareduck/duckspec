@@ -2343,6 +2343,24 @@ fn is_chat_scroll_message(msg: &Message) -> bool {
 /// dispatch and replays it after — preventing layout-driven resets
 /// (modal open/close, content column appearing/disappearing, etc.) from
 /// silently jumping the chat to the top.
+/// Whether a message opens an artifact / file into the content column from a
+/// list click. Used to re-expand a collapsed content column even when the
+/// click re-selects the file already shown (so no active-tab change occurs).
+fn message_opens_content(message: &Message) -> bool {
+    match message {
+        Message::Change(m) => matches!(
+            m,
+            area::change::Message::SelectItem(_)
+                | area::change::Message::SelectChangedFile(_)
+                | area::change::Message::SelectExplorerFile(_)
+        ),
+        Message::Caps(m) => matches!(m, area::caps::Message::SelectItem(_)),
+        Message::Codex(m) => matches!(m, area::codex::Message::SelectItem(_)),
+        Message::Ideas(m) => matches!(m, area::ideas::Message::SelectIdea(_)),
+        _ => false,
+    }
+}
+
 fn update_with_scroll_preservation(state: &mut State, message: Message) -> Task<Message> {
     let snapshot = if is_chat_scroll_message(&message) {
         None
@@ -2351,12 +2369,25 @@ fn update_with_scroll_preservation(state: &mut State, message: Message) -> Task<
     };
     state.chat_scroll_overridden = false;
     let tab_before = state.tabs.active_tab().map(|t| t.id.clone());
+    // A list click that opens content re-expands the content column even when
+    // it re-selects the already-active file (no tab change to observe).
+    let opens_content = message_opens_content(&message);
     let task = update(state, message);
     // Whenever this tick changed the active tab — regardless of which route
     // did it (tab bar, file finder, search, cmd-click, tab close) — reveal
     // the newly active file in the Files explorer.
     let tab_after = state.tabs.active_tab().map(|t| t.id.as_str());
-    let task = if tab_before.as_deref() != tab_after {
+    let tab_changed = tab_before.as_deref() != tab_after;
+    // Opening or switching to a content tab re-expands the content column if
+    // the door had been dragged fully open over it — clicking a file in the
+    // list brings the content back.
+    if (opens_content || (tab_changed && tab_after.is_some()))
+        && let Some(scope) = state.active_scope()
+        && let Some(ix) = state.interactions.get_mut(&scope)
+    {
+        ix.content_collapsed = false;
+    }
+    let task = if tab_changed {
         Task::batch([task, reveal_active_file_in_explorer(state)])
     } else {
         task
@@ -4547,7 +4578,12 @@ fn view_area_three_column(state: &State) -> Element<'_, Message> {
         divider,
     ];
 
-    if !is_exploration || has_tabs {
+    let content_collapsed = ix.is_some_and(|i| i.content_collapsed);
+    // The content column shows unless we're in tab-less exploration or the
+    // door has been dragged fully open over it.
+    let show_content = (!is_exploration || has_tabs) && !content_collapsed;
+
+    if show_content {
         row_items = row_items.push(container(content).width(Length::Fill).height(Length::Fill));
     }
 
@@ -4555,7 +4591,7 @@ fn view_area_three_column(state: &State) -> Element<'_, Message> {
     let width = ix.map_or(theme::INTERACTION_COLUMN_WIDTH, |i| i.width);
 
     if !is_exploration || has_tabs {
-        let toggle = widget::interaction_toggle::view(visible, width, |m| {
+        let toggle = widget::interaction_toggle::view(visible, content_collapsed, width, |m| {
             Message::Interaction(interaction::Msg::Handle(m))
         });
         row_items = row_items.push(toggle);
@@ -4586,7 +4622,7 @@ fn view_area_three_column(state: &State) -> Element<'_, Message> {
         let col = container(interaction_col)
             .height(Length::Fill)
             .style(theme::surface);
-        let col = if !is_exploration || has_tabs {
+        let col = if show_content {
             col.width(ix.width)
         } else {
             col.width(Length::Fill)

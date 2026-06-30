@@ -1,7 +1,13 @@
-//! Draggable divider strip that toggles or resizes the interaction column.
+//! Draggable divider strip between the content and interaction columns.
 //!
-//! Click (press + release without significant horizontal movement) → toggle.
-//! Drag horizontally → resize the interaction column.
+//! The strip behaves like a sliding door with three resting points and three
+//! affordances stacked top-to-bottom:
+//!
+//! - **Top chevron** — toggles the chat/terminal panel closed ↔ open (the
+//!   door's near end). Click only.
+//! - **Middle grip (`⋮`)** — drag to resize the panel continuously.
+//! - **Bottom chevron** — snaps the door fully open (content collapses, panel
+//!   fills) and back. Click only; flips `‹` → `›` once content is collapsed.
 
 use iced::advanced::layout;
 use iced::advanced::mouse as adv_mouse;
@@ -10,18 +16,27 @@ use iced::advanced::svg;
 use iced::advanced::widget::{self, Tree, Widget};
 use iced::advanced::{Clipboard, Layout, Shell};
 use iced::mouse;
-use iced::{Border, Element, Event, Length, Rectangle, Size, Theme};
+use iced::{Border, Color, Element, Event, Length, Rectangle, Size, Theme};
 
 use crate::theme;
 
 const HANDLE_WIDTH: f32 = 16.0;
 const CHEVRON_SIZE: f32 = 12.0;
-/// Horizontal inset centers the chevron in the strip.
+/// Horizontal inset centers a chevron in the strip.
 const CHEVRON_INSET_X: f32 = (HANDLE_WIDTH - CHEVRON_SIZE) / 2.0;
-/// Top inset sits the chevron a bit further down so it has some breathing
-/// room from the window chrome above.
+/// Vertical breathing room between a chevron and the nearest strip edge.
 const CHEVRON_INSET_Y: f32 = 6.0;
+/// Height of the click-only button zones at the top and bottom of the strip.
+const BUTTON_ZONE_H: f32 = CHEVRON_SIZE + CHEVRON_INSET_Y * 2.0;
 const DRAG_THRESHOLD: f32 = 4.0;
+
+/// Grip dots drawn in the middle zone to signal "drag me".
+const GRIP_DOT: f32 = 3.0;
+const GRIP_DOT_GAP: f32 = 3.0;
+const GRIP_DOT_COUNT: usize = 3;
+
+const MIN_PANEL_WIDTH: f32 = 200.0;
+const MAX_PANEL_WIDTH: f32 = 800.0;
 
 const ICON_CHEVRON_RIGHT: &[u8] = include_bytes!("../../assets/icon_chevron_right.svg");
 const ICON_CHEVRON_LEFT: &[u8] = include_bytes!("../../assets/icon_chevron_left.svg");
@@ -29,14 +44,26 @@ const ICON_CHEVRON_LEFT: &[u8] = include_bytes!("../../assets/icon_chevron_left.
 /// Messages produced by the divider handle.
 #[derive(Debug, Clone)]
 pub enum HandleMsg {
+    /// Toggle the panel closed ↔ open (top chevron / middle click).
     Toggle,
-    /// Set the panel width to this absolute value.
+    /// Set the panel width to this absolute value. Implies content is shown.
     SetWidth(f32),
+    /// Collapse the content column (`true`, panel fills) or restore it
+    /// (`false`, panel returns to its remembered width).
+    SetCollapsed(bool),
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum Zone {
+    Top,
+    Middle,
+    Bottom,
 }
 
 struct DragState {
     start_x: f32,
     base_width: f32,
+    zone: Zone,
     dragging: bool,
 }
 
@@ -46,22 +73,39 @@ struct HandleState {
     hovered: bool,
 }
 
-const MIN_PANEL_WIDTH: f32 = 200.0;
-const MAX_PANEL_WIDTH: f32 = 800.0;
-
 /// The divider handle widget.
 pub struct InteractionHandle<'a, M> {
+    /// Whether the panel is currently open.
     expanded: bool,
+    /// Whether the content column is collapsed (panel filling its space).
+    collapsed: bool,
     current_width: f32,
     on_event: Box<dyn Fn(HandleMsg) -> M + 'a>,
 }
 
 impl<'a, M> InteractionHandle<'a, M> {
-    pub fn new(expanded: bool, current_width: f32, on_event: impl Fn(HandleMsg) -> M + 'a) -> Self {
+    pub fn new(
+        expanded: bool,
+        collapsed: bool,
+        current_width: f32,
+        on_event: impl Fn(HandleMsg) -> M + 'a,
+    ) -> Self {
         Self {
             expanded,
+            collapsed,
             current_width,
             on_event: Box::new(on_event),
+        }
+    }
+
+    /// Classify a cursor y-coordinate (absolute) into a strip zone.
+    fn zone_at(bounds: Rectangle, y: f32) -> Zone {
+        if y <= bounds.y + BUTTON_ZONE_H {
+            Zone::Top
+        } else if y >= bounds.y + bounds.height - BUTTON_ZONE_H {
+            Zone::Bottom
+        } else {
+            Zone::Middle
         }
     }
 }
@@ -122,6 +166,7 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for InteractionHandle<'a, M>
                     widget_state.drag = Some(DragState {
                         start_x: pos.x,
                         base_width: self.current_width,
+                        zone: Self::zone_at(bounds, pos.y),
                         dragging: false,
                     });
                 }
@@ -133,7 +178,9 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for InteractionHandle<'a, M>
                         state.dragging = true;
                     }
                     if state.dragging {
-                        // Negative dx (drag left) = grow panel.
+                        // Negative dx (drag left) = grow panel. Clamped to a
+                        // fixed range — collapsing the content column is a
+                        // deliberate click on the bottom chevron, never a drag.
                         let new_width =
                             (state.base_width - dx).clamp(MIN_PANEL_WIDTH, MAX_PANEL_WIDTH);
                         shell.publish((self.on_event)(HandleMsg::SetWidth(new_width)));
@@ -144,7 +191,12 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for InteractionHandle<'a, M>
                 if let Some(state) = widget_state.drag.take()
                     && !state.dragging
                 {
-                    shell.publish((self.on_event)(HandleMsg::Toggle));
+                    // A click (no drag): the zone decides the action.
+                    let msg = match state.zone {
+                        Zone::Bottom => HandleMsg::SetCollapsed(!self.collapsed),
+                        Zone::Top | Zone::Middle => HandleMsg::Toggle,
+                    };
+                    shell.publish((self.on_event)(msg));
                 }
             }
             _ => {}
@@ -163,8 +215,12 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for InteractionHandle<'a, M>
         if widget_state.drag.is_some() {
             return mouse::Interaction::ResizingHorizontally;
         }
-        if cursor.is_over(layout.bounds()) {
-            mouse::Interaction::ResizingHorizontally
+        let bounds = layout.bounds();
+        if let Some(pos) = cursor.position_over(bounds) {
+            match Self::zone_at(bounds, pos.y) {
+                Zone::Middle => mouse::Interaction::ResizingHorizontally,
+                Zone::Top | Zone::Bottom => mouse::Interaction::Pointer,
+            }
         } else {
             mouse::Interaction::default()
         }
@@ -232,26 +288,86 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for InteractionHandle<'a, M>
             sep_color,
         );
 
-        // Chevron icon — top-aligned, with equal padding on top / left /
-        // right so the icon's optical whitespace matches the strip width.
-        let chevron_bytes = if self.expanded {
+        let icon_color = theme::text_muted();
+
+        // Top chevron — toggles the panel. Points "in" (right) when the panel
+        // is open (click to close), "out" (left) when closed (click to open).
+        let top_icon = if self.expanded {
             ICON_CHEVRON_RIGHT
         } else {
             ICON_CHEVRON_LEFT
         };
-        let chevron_bounds = Rectangle {
-            x: bounds.x + CHEVRON_INSET_X,
-            y: bounds.y + CHEVRON_INSET_Y,
-            width: CHEVRON_SIZE,
-            height: CHEVRON_SIZE,
-        };
-        <iced::Renderer as svg::Renderer>::draw_svg(
+        draw_chevron(
             renderer,
-            svg::Svg::new(svg::Handle::from_memory(chevron_bytes)).color(theme::text_muted()),
-            chevron_bounds,
+            top_icon,
+            icon_color,
             bounds,
+            bounds.y + CHEVRON_INSET_Y,
+        );
+
+        // Middle grip — vertical "⋮" dots signalling the strip is draggable.
+        let total_h = GRIP_DOT_COUNT as f32 * GRIP_DOT + (GRIP_DOT_COUNT as f32 - 1.0) * GRIP_DOT_GAP;
+        let dot_x = bounds.x + (HANDLE_WIDTH - GRIP_DOT) / 2.0;
+        let mut dot_y = bounds.y + (bounds.height - total_h) / 2.0;
+        for _ in 0..GRIP_DOT_COUNT {
+            renderer::Renderer::fill_quad(
+                renderer,
+                renderer::Quad {
+                    bounds: Rectangle {
+                        x: dot_x,
+                        y: dot_y,
+                        width: GRIP_DOT,
+                        height: GRIP_DOT,
+                    },
+                    border: Border {
+                        radius: (GRIP_DOT / 2.0).into(),
+                        ..Border::default()
+                    },
+                    ..renderer::Quad::default()
+                },
+                icon_color,
+            );
+            dot_y += GRIP_DOT + GRIP_DOT_GAP;
+        }
+
+        // Bottom chevron — snaps the door fully open. Points "out" (left,
+        // `‹`) to expand fully; flips "in" (right, `›`) once content is
+        // collapsed, to give the content back.
+        let bottom_icon = if self.collapsed {
+            ICON_CHEVRON_RIGHT
+        } else {
+            ICON_CHEVRON_LEFT
+        };
+        draw_chevron(
+            renderer,
+            bottom_icon,
+            icon_color,
+            bounds,
+            bounds.y + bounds.height - CHEVRON_INSET_Y - CHEVRON_SIZE,
         );
     }
+}
+
+/// Draw a chevron SVG centered horizontally at the given top y.
+fn draw_chevron(
+    renderer: &mut iced::Renderer,
+    bytes: &'static [u8],
+    color: Color,
+    bounds: Rectangle,
+    top_y: f32,
+) {
+    let icon_bounds = Rectangle {
+        x: bounds.x + CHEVRON_INSET_X,
+        y: top_y,
+        width: CHEVRON_SIZE,
+        height: CHEVRON_SIZE,
+    };
+    <iced::Renderer as svg::Renderer>::draw_svg(
+        renderer,
+        svg::Svg::new(svg::Handle::from_memory(bytes)).color(color),
+        icon_bounds,
+        bounds,
+    );
 }
 
 impl<'a, M: Clone + 'a> From<InteractionHandle<'a, M>> for Element<'a, M> {
@@ -263,8 +379,9 @@ impl<'a, M: Clone + 'a> From<InteractionHandle<'a, M>> for Element<'a, M> {
 /// Convenience constructor.
 pub fn view<'a, M: Clone + 'a>(
     expanded: bool,
+    collapsed: bool,
     current_width: f32,
     on_event: impl Fn(HandleMsg) -> M + 'a,
 ) -> Element<'a, M> {
-    InteractionHandle::new(expanded, current_width, on_event).into()
+    InteractionHandle::new(expanded, collapsed, current_width, on_event).into()
 }

@@ -469,6 +469,10 @@ pub struct InteractionState {
     /// so the underlying PTY / agent subscriptions survive the rename.
     pub instance_id: u64,
     pub visible: bool,
+    /// True when the content column is collapsed and this panel fills its
+    /// space (the door dragged fully open). `width` still holds the remembered
+    /// split width to restore to.
+    pub content_collapsed: bool,
     pub width: f32,
     /// Currently selected tab.
     pub active_tab: ActiveTab,
@@ -494,6 +498,7 @@ impl Default for InteractionState {
         Self {
             instance_id: NEXT_INSTANCE_ID.fetch_add(1, Ordering::Relaxed),
             visible: false,
+            content_collapsed: false,
             width: theme::INTERACTION_COLUMN_WIDTH,
             active_tab: ActiveTab::Chat,
             terminals: Vec::new(),
@@ -828,10 +833,24 @@ pub fn update(state: &mut InteractionState, msg: Msg, highlighter: &SyntaxHighli
         Msg::Handle(hmsg) => match hmsg {
             interaction_toggle::HandleMsg::Toggle => {
                 state.visible = !state.visible;
+                // Closing the panel always returns the content column.
+                if !state.visible {
+                    state.content_collapsed = false;
+                }
                 just_opened = state.visible;
             }
             interaction_toggle::HandleMsg::SetWidth(w) => {
                 state.width = w;
+                // A width drag means the content column is showing again.
+                state.content_collapsed = false;
+            }
+            interaction_toggle::HandleMsg::SetCollapsed(collapsed) => {
+                state.content_collapsed = collapsed;
+                // A collapsed content column needs the panel open to fill it.
+                if collapsed && !state.visible {
+                    state.visible = true;
+                    just_opened = true;
+                }
             }
         },
         Msg::SelectTab(tab) => {
