@@ -101,6 +101,17 @@ When all tasks in the current step are checked:
 - If all steps are complete: "All steps are done. Ready to archive with
   `/ds-archive`?" Confirm the scoped audit is clean (no errors, no pending)
   first — that's what archive-ready looks like.
+- **If applying this step changed the ground a later step stands on, append a
+  note to that step's `## Context`.** When an outcome here invalidates or
+  shifts what a downstream step assumed — a design assumption that moved, a
+  file or interface that came out different than planned, a decision that
+  constrains later work — write a brief note into the affected step's
+  `## Context` section so the next session reads it where it looks for
+  background. A step's `## Outcomes` records what happened *here*; a later
+  step's `## Context` is where the next implementer actually looks before
+  starting, so propagate forward rather than relying on them to find it. Add
+  context only — don't touch a later step's `## Tasks` without confirmation,
+  and if nothing downstream is affected, skip this.
 - **Only add `## Outcomes` if there's something new and valuable for the next
   session or the user to know** — an unexpected discovery, a deviation from
   the design, a follow-up that didn't fit, or a non-obvious decision a later
