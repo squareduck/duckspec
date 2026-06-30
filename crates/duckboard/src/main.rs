@@ -1126,6 +1126,10 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                     &state.project,
                     &state.highlighter,
                 );
+                // SelectIdea spawns the exploration session with
+                // `obvious_command: None`; refresh so the chat input renders
+                // its `/ds-explore` placeholder hint (mirrors ideas.rs).
+                area::change::refresh_obvious_command(&mut state.interactions, &state.project);
                 return focus_chat_input();
             }
             if let area::ideas::Message::OpenChange(ref change_name) = msg {
