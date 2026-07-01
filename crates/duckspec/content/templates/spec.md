@@ -30,11 +30,15 @@ must be tested and maintained.
    section lists the capabilities to spec.
 2. If a design exists at `duckspec/changes/<name>/design.md`, read it — it
    informs the technical shape of requirements.
-3. Run `ds index --caps` to see all existing capabilities and their structure.
+3. If the change has reviews, read the latest one under
+   `duckspec/changes/<name>/reviews/` — when a review finding calls for new or
+   changed behavior, its recommended action is the contract you are specifying.
+   Use only the highest-numbered review; earlier ones are superseded.
+4. Run `ds index --caps` to see all existing capabilities and their structure.
    Read the full spec for any capability the proposal touches, and skim anything
    that looks adjacent — overlap and natural parents are easier to spot before
    you start drafting than after.
-4. Load `duckspec/project.md` if it exists.
+5. Load `duckspec/project.md` if it exists.
 
 ## Instructions
 

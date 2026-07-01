@@ -64,10 +64,10 @@ different change.
 
 ## Instructions
 
-This template has **two movements**. Do the first; do the second only when the
-user is ready.
-
-### Movement 1 — write the review
+You do one thing here: judge the change and present the critique. Writing the
+review is the whole job — turning findings into work belongs to the stages that
+own it (`/ds-spec` for new or changed behavior, `/ds-step` for the rest). You
+name the next command; you don't run it.
 
 1. **Critique along the three lenses, down the chain.** Reason first; assign tags
    after.
@@ -111,68 +111,44 @@ user is ready.
    accepted as done.
 4. Run `ds format <path>` on the review, then `ds check <path>` to validate it
    against the document schema.
+5. **Present the critique as a triage.** Once the file validates, surface it in
+   the chat so the user can act on it — a structured triage, not a prose
+   paragraph. Render a findings table: one row per finding, with columns for
+   severity, lens, a short finding title, and the command that would address it —
+   `/ds-spec` when the finding calls for new or changed behavior (its cap change
+   comes first), `/ds-step` when it only restructures existing code. Follow the
+   table with the aggregate verdict and the review's filename.
 
-### Movement 2 — turn findings into fix-steps (only when the user is ready)
+   ```
+   Review: Post-implementation — auth/google          verdict: not ready
 
-A review decides nothing on its own. When — and only when — the user wants to act
-on it, turn the chosen findings into review-sourced fix-steps:
+   sev       lens        finding                                  → next
+   ────────────────────────────────────────────────────────────────────────
+   critical  soundness   State comparison inverted on callback    /ds-spec
+   major     quality     Token exchange reimplements retry helper /ds-step
+   minor     fidelity    Auth logic split across two modules      /ds-step
 
-1. Confirm with the user which findings to turn into work. Not every finding
-   becomes a step; the user chooses.
-2. Group the chosen findings into work units, each sized for one agent session —
-   aim for 3-7 tasks per step. Order the steps by dependency: infrastructure
-   before logic, logic before tests. Steps continue the change's existing
-   sequence; `ds create step` assigns the next number for you.
-3. Load the step format with `ds schema step`. For each work unit, run
-   `ds create step "<name>" --in <change>` and write the step's tasks as a
-   numbered checklist. In each step's `## Context`, cite the originating review
-   (e.g. "Addresses findings in `reviews/02-post-implementation.md`.") so the
-   applying agent can trace the work back to the critique.
-4. **If a finding requires new or changed behavior, that is a cap change — make
-   it first.** A finding the specs don't yet describe (a missing scenario, a
-   requirement the design now needs) means editing the change's capabilities, not
-   just adding tasks. Add or amend the requirement and its `test: code` scenarios
-   in the change's cap under `duckspec/changes/<name>/caps/<path>/` — a full
-   `spec.md`/`doc.md` for a brand-new capability, or a `spec.delta.md`/
-   `doc.delta.md` to modify an existing one — following `ds schema spec`. The
-   scenario must exist in the spec before any step references it. Findings that
-   only restructure existing code need no spec change; skip this step for them.
-5. Cover every newly-required `test: code` scenario with an `@spec` task in the
-   appropriate step, leaving no scenario orphaned. Write each `@spec` and `@step`
-   reference on a single unbroken line, no matter how long the scenario name —
-   **never wrap a reference across line breaks**, as `ds audit` only resolves
-   single-line references.
-6. Run `ds format <path>` on each new step, then `ds check` on the steps
-   directory.
+   Verdict: flow is sound and matches the design, but the inverted state
+   check is a foundational bug — resolve before accepting.
+   reviews/02-post-implementation.md
+   ```
 
 ## Write gate
 
-Movement 1 needs no gate — write the review directly; it is advisory and changes
-nothing else. **Before Movement 2**, stop and present the findings you propose to
-turn into steps:
-
-> ### Fix-steps from `reviews/NN-<slug>.md`
->
-> **01 — <Step name>** (<N> tasks) — addresses <finding>
->
-> Confirm, reject, or give feedback.
-
-Only create steps after the user confirms. If the user just wanted the review,
-stop after Movement 1.
+None. A review is advisory and changes nothing else, so write it directly. You
+never create steps or edit caps here — that happens in `/ds-step` and `/ds-spec`
+once the user decides which findings to act on.
 
 ## Handoff
 
-After Movement 1:
-
-- Summarize the verdict and the headline findings in one or two sentences, and
-  name the review file.
-- Offer Movement 2 without pushing: "I can turn these findings into fix-steps
-  whenever you're ready — say the word."
+- Lead with the triage you presented — the verdict and the findings table,
+  naming the review file.
+- Point at the next stage without pushing. If any finding calls for new or
+  changed behavior, name `/ds-spec` — its cap change comes first; otherwise name
+  `/ds-step`. Both read the latest review and cite it as they turn findings into
+  work. Offer once; if the user doesn't take it, drop it — sometimes the review
+  is the whole value.
 - A review never changes the suggested next stage. If the change was mid-flow, it
   still is.
-
-After Movement 2:
-
-- Point at implementation: "The fix-steps are ready. Run `/ds-apply` to start."
 
 ## After write

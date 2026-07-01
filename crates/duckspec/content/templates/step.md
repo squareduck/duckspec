@@ -25,8 +25,12 @@ concrete, ordered, and independently completable.
 2. If a design exists at `duckspec/changes/<name>/design.md`, read it — the
    component sections map to steps.
 3. Read the proposal if it exists — it provides motivation and scope context.
-4. Load `duckspec/project.md` if it exists.
-5. Read relevant source code to understand what already exists and where new
+4. If the change has reviews, read the latest one under
+   `duckspec/changes/<name>/reviews/` — when steps exist to act on a review, its
+   findings are the work you are planning. Use only the highest-numbered review;
+   earlier ones are superseded.
+5. Load `duckspec/project.md` if it exists.
+6. Read relevant source code to understand what already exists and where new
    code should land.
 
 ## Instructions
@@ -47,6 +51,10 @@ concrete, ordered, and independently completable.
      implements, skip Context. Include it only when there's no design, or when
      the design leaves gaps the applying agent needs (specific file paths,
      gotchas, project-specific details).
+   - **Cite the review for review-sourced steps.** When a step exists to act on
+     the latest review's findings, name that review in the step's `## Context`
+     (e.g. "Addresses findings in `reviews/02-post-implementation.md`.") so the
+     applying agent can trace the work back to the critique.
 
 ## Formatting
 
