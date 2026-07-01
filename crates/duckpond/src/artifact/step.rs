@@ -59,23 +59,6 @@ pub enum TaskContent {
 }
 
 // ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-/// Convert a step title to a slug (kebab-case).
-pub fn slugify(title: &str) -> String {
-    title
-        .to_lowercase()
-        .chars()
-        .map(|c| if c.is_alphanumeric() { c } else { '-' })
-        .collect::<String>()
-        .split('-')
-        .filter(|s| !s.is_empty())
-        .collect::<Vec<_>>()
-        .join("-")
-}
-
-// ---------------------------------------------------------------------------
 // Debug impls
 // ---------------------------------------------------------------------------
 

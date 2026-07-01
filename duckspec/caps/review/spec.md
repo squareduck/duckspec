@@ -57,7 +57,7 @@ Creation SHALL be rejected when a review with the same slug already exists in th
 - **THEN** the new review file is numbered `01`
 
 > test: code
-> - crates/duckpond/src/plan.rs:684
+> - crates/duckpond/src/plan.rs:689
 
 ### Scenario: A new review is numbered above the highest existing review
 
@@ -67,7 +67,7 @@ Creation SHALL be rejected when a review with the same slug already exists in th
 - **AND** the existing reviews are left unchanged
 
 > test: code
-> - crates/duckpond/src/plan.rs:697
+> - crates/duckpond/src/plan.rs:702
 
 ### Scenario: A review whose slug already exists is rejected
 
@@ -76,4 +76,33 @@ Creation SHALL be rejected when a review with the same slug already exists in th
 - **THEN** creation is rejected
 
 > test: code
-> - crates/duckpond/src/plan.rs:715
+> - crates/duckpond/src/plan.rs:720
+
+## Requirement: Filename slug
+
+A review's filename slug SHALL be derived from its title by the canonical slug rule.
+Creation SHALL be rejected when the title yields an empty slug.
+
+> test: code
+
+### Scenario: A punctuated title produces a dash-normalized slug
+
+- **GIVEN** a change and a review title containing punctuation, such as
+  `Post-impl: soundness & fidelity`
+
+- **WHEN** the review is created
+
+- **THEN** the new review file's slug is `post-impl-soundness-fidelity`
+
+> test: code
+> - crates/duckpond/src/plan.rs:794
+
+### Scenario: A title with no alphanumeric characters is rejected
+
+- **GIVEN** a change and a review title with no alphanumeric characters
+- **WHEN** the review is created
+- **THEN** creation is rejected
+- **AND** no review file is written
+
+> test: code
+> - crates/duckpond/src/plan.rs:812

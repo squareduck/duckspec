@@ -40,6 +40,9 @@ pub enum PlanError {
     #[error("review slug '{slug}' already exists in change")]
     ReviewSlugExists { slug: String },
 
+    #[error("cannot derive a slug from title '{title}': no alphanumeric characters")]
+    EmptySlug { title: String },
+
     #[error("unknown stage '{stage}'")]
     UnknownStage { stage: String },
 
@@ -240,7 +243,12 @@ pub fn create_step(
 ) -> Result<Plan, PlanError> {
     check_change_exists(change, active_changes)?;
 
-    let slug = slugify(name);
+    let slug = crate::slug::slugify(name);
+    if slug.is_empty() {
+        return Err(PlanError::EmptySlug {
+            title: name.to_string(),
+        });
+    }
     let parsed = parse_nn_slug(existing_steps);
 
     // Check slug uniqueness.
@@ -301,7 +309,12 @@ pub fn create_review(
 ) -> Result<Plan, PlanError> {
     check_change_exists(change, active_changes)?;
 
-    let slug = slugify(name);
+    let slug = crate::slug::slugify(name);
+    if slug.is_empty() {
+        return Err(PlanError::EmptySlug {
+            title: name.to_string(),
+        });
+    }
     let parsed = parse_nn_slug(existing_reviews);
 
     // Check slug uniqueness.
@@ -387,14 +400,6 @@ fn strip_archive_prefix(entry: &str) -> Option<&str> {
         }
     }
     None
-}
-
-/// Convert a step name to a kebab-case slug.
-fn slugify(name: &str) -> String {
-    name.to_lowercase()
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join("-")
 }
 
 /// A parsed `NN-<slug>.md` filename, shared by steps and reviews.
@@ -766,15 +771,48 @@ mod tests {
         assert!(matches!(err, PlanError::HookExists { .. }));
     }
 
-    // -- slugify --------------------------------------------------------------
+    // -- empty slug rejection -------------------------------------------------
 
     #[test]
-    fn slugify_basic() {
-        assert_eq!(slugify("Implement Auth"), "implement-auth");
+    fn step_empty_slug_rejected() {
+        let err = create_step("!!! ---", "add-oauth", &[s("add-oauth")], &[], None).unwrap_err();
+        assert!(matches!(err, PlanError::EmptySlug { .. }));
     }
 
     #[test]
-    fn slugify_extra_spaces() {
-        assert_eq!(slugify("  set  up   database  "), "set-up-database");
+    fn create_step_punctuated_title_is_dash_normalized() {
+        let plan =
+            create_step("Fix: parser & lexer", "add-oauth", &[s("add-oauth")], &[], None).unwrap();
+        assert_eq!(
+            plan.creates,
+            vec![PathBuf::from(
+                "changes/add-oauth/steps/01-fix-parser-lexer.md"
+            )]
+        );
+    }
+
+    // @spec review Filename slug: A punctuated title produces a dash-normalized slug
+    #[test]
+    fn review_punctuated_title_is_dash_normalized() {
+        let plan = create_review(
+            "Post-impl: soundness & fidelity",
+            "add-oauth",
+            &[s("add-oauth")],
+            &[],
+        )
+        .unwrap();
+        assert_eq!(
+            plan.creates,
+            vec![PathBuf::from(
+                "changes/add-oauth/reviews/01-post-impl-soundness-fidelity.md"
+            )]
+        );
+    }
+
+    // @spec review Filename slug: A title with no alphanumeric characters is rejected
+    #[test]
+    fn review_empty_slug_rejected() {
+        let err = create_review("!!! ---", "add-oauth", &[s("add-oauth")], &[]).unwrap_err();
+        assert!(matches!(err, PlanError::EmptySlug { .. }));
     }
 }

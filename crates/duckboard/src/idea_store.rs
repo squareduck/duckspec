@@ -157,29 +157,15 @@ pub fn ideas_root(project_root: Option<&Path>) -> PathBuf {
     crate::config::data_dir(project_root).join("ideas")
 }
 
-/// Slugify a title for use as a filename. Lowercases, replaces non-alphanumerics
-/// with `-`, collapses runs, and trims leading/trailing `-`. Returns `"idea"`
-/// for inputs that produce an empty slug (all-whitespace, all-punctuation).
-pub fn slugify(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    let mut prev_dash = false;
-    for ch in s.chars() {
-        let c = ch.to_ascii_lowercase();
-        if c.is_ascii_alphanumeric() {
-            out.push(c);
-            prev_dash = false;
-        } else if !prev_dash && !out.is_empty() {
-            out.push('-');
-            prev_dash = true;
-        }
-    }
-    while out.ends_with('-') {
-        out.pop();
-    }
-    if out.is_empty() {
+/// Slugify an idea title for use as a filename, falling back to `"idea"` when
+/// the title has no alphanumeric characters and would otherwise slugify to an
+/// empty string.
+fn idea_slug(title: &str) -> String {
+    let raw = duckpond::slug::slugify(title);
+    if raw.is_empty() {
         "idea".to_string()
     } else {
-        out
+        raw
     }
 }
 
@@ -191,7 +177,8 @@ fn primary_tag_segments(tags: &[String]) -> Vec<String> {
         .split('/')
         .map(str::trim)
         .filter(|s| !s.is_empty())
-        .map(slugify)
+        .map(duckpond::slug::slugify)
+        .filter(|s| !s.is_empty())
         .collect()
 }
 
@@ -422,7 +409,7 @@ pub fn save_idea(idea: &mut Idea, body: &str, project_root: Option<&Path>) -> an
 
     let root = ideas_root(project_root);
     let target_segments = primary_tag_segments(&idea.frontmatter.tags);
-    let slug = slugify(&idea.frontmatter.title);
+    let slug = idea_slug(&idea.frontmatter.title);
 
     let candidate = idea_path(&root, idea.state, &target_segments, &slug);
     let final_path = if !candidate.exists() || candidate == idea.abs_path {
@@ -584,16 +571,18 @@ mod tests {
     use super::*;
 
     #[test]
-    fn slugify_basic() {
+    fn idea_slug_basic() {
         assert_eq!(
-            slugify("Fix overflow on long input"),
+            idea_slug("Fix overflow on long input"),
             "fix-overflow-on-long-input"
         );
-        assert_eq!(slugify("  Hello,  World! "), "hello-world");
-        assert_eq!(slugify("Spëcial-Chårs"), "sp-cial-ch-rs");
-        assert_eq!(slugify("---"), "idea");
-        assert_eq!(slugify(""), "idea");
-        assert_eq!(slugify("Already-kebab-case"), "already-kebab-case");
+        assert_eq!(idea_slug("  Hello,  World! "), "hello-world");
+        assert_eq!(idea_slug("Already-kebab-case"), "already-kebab-case");
+        // Unicode alphanumerics are preserved, not folded away.
+        assert_eq!(idea_slug("Spëcial Chårs"), "spëcial-chårs");
+        // A title with no alphanumeric characters falls back to "idea".
+        assert_eq!(idea_slug("---"), "idea");
+        assert_eq!(idea_slug(""), "idea");
     }
 
     #[test]
@@ -637,6 +626,11 @@ mod tests {
         assert_eq!(
             primary_tag_segments(&["Cool Stuff/sub item".into()]),
             vec!["cool-stuff".to_string(), "sub-item".into()]
+        );
+        // A segment that slugifies to empty is dropped, not kept as "".
+        assert_eq!(
+            primary_tag_segments(&["parser/!!!/spec".into()]),
+            vec!["parser".to_string(), "spec".into()]
         );
     }
 

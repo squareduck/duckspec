@@ -28,7 +28,7 @@ pub fn parse_step(elements: &[Element]) -> Result<Step, Vec<ParseError>> {
         }
     };
 
-    let slug = slugify(&title);
+    let slug = crate::slug::slugify(&title);
 
     // -- Summary paragraph ---------------------------------------------------
     let (summary, summary_span) = match elements.get(cursor) {

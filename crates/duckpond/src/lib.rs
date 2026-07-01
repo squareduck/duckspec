@@ -10,3 +10,4 @@ pub mod merge;
 pub mod parse;
 pub mod plan;
 pub mod render;
+pub mod slug;
