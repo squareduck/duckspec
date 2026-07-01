@@ -1360,6 +1360,16 @@ pub fn send_prompt_text(ax: &mut AgentSession, text: String, highlighter: &Synta
     });
     ax.session.is_streaming = true;
     ax.session.pending_text.clear();
+    // Persist the transcript the moment the user turn is added, not just on
+    // `TurnComplete`. Otherwise closing the app mid-turn drops the in-flight
+    // message: the only prior checkpoint is the last completed turn, and on a
+    // fresh session that's the synthetic priming turn — so the whole real
+    // conversation is lost while the resumable `claude_session_id` survives.
+    // `handle.working_dir()` is the project root the agent was spawned with,
+    // which is exactly the `project_root` every other save/load site uses.
+    if let Err(e) = crate::chat_store::save_session(&ax.session, Some(handle.working_dir())) {
+        tracing::error!("failed to persist chat session on send: {e}");
+    }
     // The user's message just grew the transcript. If they were stuck to the
     // bottom we want them to see it land there immediately — without this
     // flag the next auto-snap waits for the first `AgentEvent`.
