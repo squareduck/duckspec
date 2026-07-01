@@ -68,18 +68,29 @@ well-made? Say plainly what should improve before this is accepted as done.>
 ## Severity
 
 Severity measures how much a finding hurts the codebase long-term if it is frozen
-as-is. It is **independent of lens** — a quality finding can be `critical` (a core
-abstraction that's badly wrong) and a fidelity finding can be `minor`.
+as-is — the drag it leaves, not whether it breaks today. It is **independent of
+lens**: a quality finding earns `critical` on its own merits, exactly as a
+soundness one does. A cleanup is **not** automatically minor — duplication or
+accidental complexity in load-bearing code is `major` or worse, because it
+compounds every time that code is touched.
 
-- **critical** — undermines the change at its foundation: a wrong design decision,
-  code that contradicts its spec, a core abstraction that doesn't hold. Address
-  before this is accepted as done.
-- **major** — a real problem that leaves lasting drag if frozen, but the change is
-  not fundamentally broken.
-- **minor** — a small improvement, cleanup, or nit.
+- **critical** — leaves lasting structural harm: a wrong design decision, code
+  that contradicts its spec, a core abstraction that doesn't hold, or a
+  duplication / complexity / coupling failure that will force scattered edits and
+  compound for the life of the code. Address before this is accepted as done.
+- **major** — a real problem that leaves durable drag if frozen: duplicated logic,
+  needless indirection, a function doing several jobs, logic in the wrong layer —
+  something a future maintainer pays for repeatedly, even though the change still
+  works.
+- **minor** — genuinely low-cost: a localized nit, a naming choice, a small polish
+  whose absence a maintainer would never feel. Reserve this for findings that
+  truly don't compound — not for real cleanup you'd rather not rank higher.
 
-Reserve `critical` for what genuinely breaks the change's foundation. Inflated
-severity trains readers to ignore you.
+Rate by lasting harm, not by lens. Simplicity and long-term maintainability are
+primary acceptance criteria, so a finding that erodes them is never discounted for
+being "just" craft. Still reserve `critical` for genuine structural harm — inflated
+severity trains readers to ignore you, and grading every nit as `major` does the
+same.
 
 ## Rules
 
