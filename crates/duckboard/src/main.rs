@@ -1344,6 +1344,10 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                 Option<String>,
             );
             let mut title_task_input: Option<TitleTaskInput> = None;
+            // Staged `(folder-slug, exploration-id)` from a `ds create change`
+            // tool call, committed to `pending_bindings` once the `ax` borrow
+            // below is released.
+            let mut staged_binding: Option<(String, String)> = None;
             {
                 let Some(ax) = state.agent_session_mut(&key) else {
                     return Task::none();
@@ -1366,6 +1370,14 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                         ax.session.pending_text.push_str(&text);
                     }
                     AgentEvent::ToolUse { id, name, input } => {
+                        // Attribute a change folder to this session at the
+                        // causal moment: an exploration whose agent runs
+                        // `ds create change` owns the folder it creates.
+                        if ax.scope_kind == scope::ScopeKind::Exploration
+                            && let Some(slug) = parse_create_change(&name, &input)
+                        {
+                            staged_binding = Some((slug, ax.session.scope.clone()));
+                        }
                         flush_pending_text(&mut ax.session);
                         ax.session.messages.push(chat_store::ChatMessage {
                             role: chat_store::Role::Assistant,
@@ -1478,6 +1490,9 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                         ax.pending_followup_prompt = None;
                     }
                 }
+            }
+            if let Some((slug, exploration_id)) = staged_binding {
+                state.change.pending_bindings.insert(slug, exploration_id);
             }
             let State {
                 interactions,
@@ -2836,6 +2851,112 @@ fn rehighlight_all(state: &mut State) -> Task<Message> {
     Task::batch(tasks)
 }
 
+/// Parse a `ToolUse` event into the change-folder slug it will create, or
+/// `None` when the call is not a `ds create change` Bash command. The tool
+/// input is JSON; for Bash that is `{"command": "…"}`. The extracted argument
+/// is slugified with the shared rule so the result equals the directory the
+/// CLI creates. Anything unrecognized yields `None`, which declines to bind
+/// rather than risk mis-attributing.
+fn parse_create_change(name: &str, input: &str) -> Option<String> {
+    if name != "Bash" {
+        return None;
+    }
+    let command = serde_json::from_str::<serde_json::Value>(input)
+        .ok()?
+        .get("command")?
+        .as_str()?
+        .to_string();
+    let arg = extract_create_change_arg(&command)?;
+    let slug = duckpond::slug::slugify(&arg);
+    (!slug.is_empty()).then_some(slug)
+}
+
+/// Locate a `ds create change` invocation in a shell command line and return
+/// its argument. Takes the next shell token after `change`, honoring a single
+/// quoted (single- or double-) multi-word argument, and stops at a shell
+/// separator (`&&`, `;`, `|`, newline). Returns `None` when the invocation is
+/// absent or has no argument.
+fn extract_create_change_arg(command: &str) -> Option<String> {
+    let marker = "ds create change";
+    let start = command.find(marker)? + marker.len();
+    let rest = command[start..].trim_start();
+
+    // A quoted argument runs to its closing quote, spaces included.
+    let mut chars = rest.chars();
+    if let Some(quote @ ('"' | '\'')) = chars.clone().next() {
+        chars.next();
+        let arg: String = chars.take_while(|&c| c != quote).collect();
+        return (!arg.is_empty()).then_some(arg);
+    }
+
+    // Otherwise the argument is the first whitespace-delimited token, cut short
+    // by a shell separator so `… change foo && …` yields just `foo`.
+    let token: String = rest
+        .chars()
+        .take_while(|&c| !c.is_whitespace() && c != '&' && c != ';' && c != '|')
+        .collect();
+    (!token.is_empty()).then_some(token)
+}
+
+/// Promote the exploration `exp_id` into the real change `new_name`, choosing
+/// the correct promotion by whether the exploration is idea-owned. This is the
+/// single dispatch point shared by binding-driven and fallback attribution, so
+/// the idea-vs-change decision lives in exactly one place.
+fn route_promotion(state: &mut State, exp_id: &str, new_name: &str) {
+    let root = state.project.project_root.clone();
+    let idea_path = state
+        .change
+        .explorations
+        .iter()
+        .find(|e| e.id == exp_id)
+        .and_then(|e| e.idea_path.clone());
+
+    match idea_path {
+        None => area::change::promote_exploration(
+            &mut state.change,
+            &mut state.interactions,
+            exp_id,
+            new_name,
+            root.as_deref(),
+        ),
+        Some(p) => {
+            promote_idea_exploration(state, Path::new(&p), new_name);
+            state.change.explorations.retain(|e| e.id != exp_id);
+            chat_store::save_explorations(
+                &state.change.explorations,
+                state.change.exploration_counter,
+                root.as_deref(),
+            );
+        }
+    }
+}
+
+/// Attribute a new change folder when no `pending_bindings` entry exists:
+/// resolve the exploration the active area currently points at, if any.
+fn fallback_exploration_id(state: &State) -> Option<String> {
+    match state.active_area {
+        Area::Change => state
+            .change
+            .is_exploration_selected()
+            .then(|| state.change.selected_change.clone())
+            .flatten(),
+        Area::Ideas => {
+            let idea_path = state.ideas.selected.as_deref()?;
+            let idea = state
+                .ideas
+                .ideas
+                .iter()
+                .find(|i| i.abs_path.as_path() == idea_path)?;
+            idea.frontmatter
+                .change
+                .is_none()
+                .then(|| idea.frontmatter.exploration.clone())
+                .flatten()
+        }
+        _ => None,
+    }
+}
+
 /// Reload `ProjectData` and reconcile duckboard-local state: promote a selected
 /// exploration if a new change appeared, migrate subscriptions when a change
 /// was archived externally, and refresh the obvious-command hint. Returns
@@ -2859,70 +2980,29 @@ fn reload_and_reconcile(state: &mut State) -> bool {
 
     state.project.reload();
 
-    // Detect new change directories and promote exploration if active.
-    if state.change.is_exploration_selected() {
-        let new_change = state
-            .project
-            .active_changes
-            .iter()
-            .find(|c| !old_change_names.contains(&c.name))
-            .map(|c| c.name.clone());
-
-        if let Some(new_name) = new_change
-            && let Some(exploration_id) = state.change.selected_change.clone()
-        {
+    // Detect a new change directory and attribute it to the exploration that
+    // created it. The binding recorded when the session ran `ds create change`
+    // is authoritative; when none exists (out-of-band creation), fall back to
+    // the exploration the active area points at.
+    if let Some(new_name) = state
+        .project
+        .active_changes
+        .iter()
+        .find(|c| !old_change_names.contains(&c.name))
+        .map(|c| c.name.clone())
+    {
+        let exploration_id = state
+            .change
+            .pending_bindings
+            .remove(&new_name)
+            .or_else(|| fallback_exploration_id(state));
+        if let Some(exploration_id) = exploration_id {
             tracing::info!(
                 from = exploration_id,
                 to = new_name.as_str(),
                 "promoting exploration to real change"
             );
-            area::change::promote_exploration(
-                &mut state.change,
-                &mut state.interactions,
-                &exploration_id,
-                &new_name,
-                state.project.project_root.as_deref(),
-            );
-        }
-    } else if let Some(idea_path) = state.ideas.selected.clone() {
-        // Idea-owned exploration promotion. Same heuristic as the Changes
-        // area: if the selected idea has an unpromoted exploration and a
-        // new change directory appeared, bind it.
-        let idea_needs_change = state
-            .ideas
-            .ideas
-            .iter()
-            .find(|i| i.abs_path == idea_path)
-            .map(|i| i.frontmatter.exploration.is_some() && i.frontmatter.change.is_none())
-            .unwrap_or(false);
-        if idea_needs_change
-            && let Some(new_name) = state
-                .project
-                .active_changes
-                .iter()
-                .find(|c| !old_change_names.contains(&c.name))
-                .map(|c| c.name.clone())
-        {
-            let exploration_id = state
-                .ideas
-                .ideas
-                .iter()
-                .find(|i| i.abs_path == idea_path)
-                .and_then(|i| i.frontmatter.exploration.clone());
-            tracing::info!(
-                idea = %idea_path.display(),
-                to = new_name.as_str(),
-                "promoting idea-owned exploration to real change"
-            );
-            promote_idea_exploration(state, &idea_path, &new_name);
-            if let Some(exp_id) = exploration_id {
-                state.change.explorations.retain(|e| e.id != exp_id);
-                chat_store::save_explorations(
-                    &state.change.explorations,
-                    state.change.exploration_counter,
-                    state.project.project_root.as_deref(),
-                );
-            }
+            route_promotion(state, &exploration_id, &new_name);
         }
     }
 
@@ -5065,5 +5145,54 @@ fn handle_key_event(
             ))
         }
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bash(command: &str) -> String {
+        serde_json::json!({ "command": command }).to_string()
+    }
+
+    #[test]
+    fn parses_plain_create_change() {
+        assert_eq!(
+            parse_create_change("Bash", &bash("ds create change my-thing")),
+            Some("my-thing".to_string())
+        );
+    }
+
+    #[test]
+    fn parses_quoted_multiword_title() {
+        assert_eq!(
+            parse_create_change("Bash", &bash("ds create change \"My Thing\"")),
+            Some("my-thing".to_string())
+        );
+    }
+
+    #[test]
+    fn parses_cd_prefixed_and_compound_command() {
+        assert_eq!(
+            parse_create_change(
+                "Bash",
+                &bash("cd /repo && ds create change my-thing && ds status")
+            ),
+            Some("my-thing".to_string())
+        );
+    }
+
+    #[test]
+    fn ignores_non_bash_tool() {
+        assert_eq!(
+            parse_create_change("Write", &bash("ds create change my-thing")),
+            None
+        );
+    }
+
+    #[test]
+    fn ignores_command_without_create_change() {
+        assert_eq!(parse_create_change("Bash", &bash("ds status")), None);
     }
 }

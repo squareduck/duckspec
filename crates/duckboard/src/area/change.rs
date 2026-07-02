@@ -80,6 +80,11 @@ pub struct State {
     pub armed_remove_exploration: Option<String>,
     /// Vertical scroll offset for the list column.
     pub list_scroll: f32,
+    /// Folder-slug → originating exploration id, recorded when an exploration
+    /// session's agent runs `ds create change`. Consumed by
+    /// `reload_and_reconcile` to attribute the new folder to the session that
+    /// created it. Not persisted; not cleaned up (changes are infrequent).
+    pub pending_bindings: HashMap<String, String>,
 }
 
 impl State {
@@ -107,6 +112,7 @@ impl State {
             hovered_exploration: None,
             armed_remove_exploration: None,
             list_scroll: 0.0,
+            pending_bindings: HashMap::new(),
         }
     }
 
@@ -1725,6 +1731,7 @@ mod breadcrumb_tests {
             armed_remove_exploration: None,
             list_scroll: 0.0,
             known_file_dirs: HashSet::new(),
+            pending_bindings: HashMap::new(),
         }
     }
 
@@ -1823,6 +1830,7 @@ mod breadcrumb_tests {
             armed_remove_exploration: None,
             list_scroll: 0.0,
             known_file_dirs: HashSet::new(),
+            pending_bindings: HashMap::new(),
         };
         let project = make_project(&[], &[]);
         assert_eq!(compute_obvious_command(&state, &project), None);
