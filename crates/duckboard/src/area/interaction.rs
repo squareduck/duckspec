@@ -7,8 +7,10 @@ use iced::Element;
 
 use duckchat::Attachment;
 
+use std::path::Path;
+
 use crate::agent::{AgentHandle, SlashCommand};
-use crate::chat_store::ChatSession;
+use crate::chat_store::{ChatMessage, ChatSession, ContentBlock, Role};
 use crate::highlight::SyntaxHighlighter;
 use crate::scope::ScopeKind;
 use crate::theme;
@@ -415,6 +417,11 @@ pub struct AgentSession {
     /// Cleared on cancel/error so a backed-out priming doesn't strand a
     /// phantom command.
     pub pending_followup_prompt: Option<String>,
+    /// True when messages have been streamed into this session since its last
+    /// persist. Set by the message-mutating `AgentEvent`s, cleared by the
+    /// coalesced eager flush and the turn-boundary save. Transient — never
+    /// persisted.
+    pub needs_flush: bool,
 }
 
 impl AgentSession {
@@ -456,6 +463,7 @@ impl AgentSession {
             chat_input_focused: false,
             priming_in_flight: false,
             pending_followup_prompt: None,
+            needs_flush: false,
         }
     }
 }
@@ -1755,6 +1763,79 @@ pub fn ensure_sessions_with_label(
         reconcile_display_names(&mut state.sessions, scope_label);
     }
     state.active_session = 0;
+}
+
+/// Persist a single session, folding any in-flight `pending_text` into a
+/// trailing assistant message so streamed prose survives a crash even though
+/// it hasn't been committed to `messages` yet. The in-memory session is left
+/// untouched — a clone is persisted. Returns whether the write succeeded.
+pub fn persist_session_snapshot(session: &ChatSession, project_root: Option<&Path>) -> bool {
+    let mut snapshot = session.clone();
+    if !snapshot.pending_text.is_empty() {
+        let text = std::mem::take(&mut snapshot.pending_text);
+        snapshot.messages.push(ChatMessage {
+            role: Role::Assistant,
+            content: vec![ContentBlock::Text(text)],
+            timestamp: String::new(),
+            is_priming: false,
+        });
+    }
+    crate::chat_store::save_session(&snapshot, project_root).is_ok()
+}
+
+/// Flush-before-mutate: persist every session an interaction holds before its
+/// in-memory state is migrated, replaced, or dropped. This is the guarantee
+/// that makes an in-flight turn impossible to lose to a promotion or scope
+/// migration, regardless of attribution.
+pub fn flush_sessions(ix: &InteractionState, project_root: Option<&Path>) {
+    for ax in &ix.sessions {
+        persist_session_snapshot(&ax.session, project_root);
+    }
+}
+
+/// Persist the interaction's dirty sessions on the coalesced streaming flush
+/// tick, clearing each dirty flag on a successful write. Bounds mid-turn loss
+/// to roughly one tick interval rather than the whole send-to-turn-complete
+/// window.
+pub fn flush_dirty_sessions(ix: &mut InteractionState, project_root: Option<&Path>) {
+    for ax in ix.sessions.iter_mut() {
+        if ax.needs_flush && persist_session_snapshot(&ax.session, project_root) {
+            ax.needs_flush = false;
+        }
+    }
+}
+
+/// Fold `incoming` sessions into `into`, never overwriting a live session.
+/// Sessions whose id is already present are skipped, except on a same-id
+/// collision where the copy with more messages wins. `into.instance_id` — and
+/// thus its PTY/agent subscriptions — is left untouched so an in-flight stream
+/// survives the merge. Sessions are re-sorted newest-first (matching load
+/// order), the previously-active session is kept selected by id, and display
+/// names are reconciled against `scope_label`.
+pub fn merge_sessions(into: &mut InteractionState, incoming: Vec<AgentSession>, scope_label: &str) {
+    let active_id = into.active().map(|ax| ax.session.id.clone());
+    for inc in incoming {
+        match into
+            .sessions
+            .iter_mut()
+            .find(|s| s.session.id == inc.session.id)
+        {
+            Some(existing) => {
+                if inc.session.messages.len() > existing.session.messages.len() {
+                    *existing = inc;
+                }
+            }
+            None => into.sessions.push(inc),
+        }
+    }
+    into.sessions
+        .sort_by(|a, b| b.session.created_at_nanos.cmp(&a.session.created_at_nanos));
+    if let Some(id) = active_id
+        && let Some(idx) = into.find_session_index(&id)
+    {
+        into.active_session = idx;
+    }
+    reconcile_display_names(&mut into.sessions, scope_label);
 }
 
 /// Re-run display-name reconciliation on a slice of `AgentSession`.

@@ -318,6 +318,26 @@ pub fn load_sessions_for(scope: &str, project_root: Option<&Path>) -> Vec<ChatSe
     sessions
 }
 
+/// Write `data` to `path` atomically: write to a temp file beside the
+/// destination, then rename it into place (an atomic replace on the same
+/// filesystem — the temp file lives in the destination directory so the
+/// rename stays intra-filesystem). The prior contents at `path` remain
+/// intact until the rename succeeds, so an interrupted write never
+/// truncates them. On any failure the temp file is removed so no `.tmp`
+/// residue is left behind.
+fn write_atomic(path: &Path, data: &[u8]) -> std::io::Result<()> {
+    let tmp = path.with_extension("json.tmp");
+    if let Err(e) = std::fs::write(&tmp, data) {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(e);
+    }
+    if let Err(e) = std::fs::rename(&tmp, path) {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(e);
+    }
+    Ok(())
+}
+
 /// Save a session to disk under `chats/<scope>/<id>.json`.
 pub fn save_session(session: &ChatSession, project_root: Option<&Path>) -> anyhow::Result<()> {
     let dir = scope_dir(&session.scope, project_root);
@@ -333,7 +353,7 @@ pub fn save_session(session: &ChatSession, project_root: Option<&Path>) -> anyho
         selected_model: session.selected_model.clone(),
     };
     let data = serde_json::to_string_pretty(&persisted)?;
-    std::fs::write(path, data)?;
+    write_atomic(&path, data.as_bytes())?;
     Ok(())
 }
 
@@ -376,6 +396,77 @@ pub fn delete_project_data(project_root: &Path) {
         && e.kind() != std::io::ErrorKind::NotFound
     {
         tracing::warn!(path = %dir.display(), "failed to delete project data: {e}");
+    }
+}
+
+/// Message count of a persisted session file, or 0 when it is missing or
+/// unparseable. Used by `merge_scope` to pick the fuller copy on collision.
+fn persisted_message_count(path: &Path) -> usize {
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|data| serde_json::from_str::<PersistedSession>(&data).ok())
+        .map(|s| s.messages.len())
+        .unwrap_or(0)
+}
+
+/// Migrate every session file from scope `from` into scope `to` without ever
+/// overwriting or discarding one. For each `<id>.json` in the source: move it
+/// when the target has no session with that id; on a same-id collision keep the
+/// copy with more messages under `<id>.json` and set the loser aside as
+/// `<id>.json.orphan` rather than deleting it. The emptied source directory is
+/// removed once every session has been moved.
+pub fn merge_scope(from: &str, to: &str, project_root: Option<&Path>) {
+    let from_dir = scope_dir(from, project_root);
+    let to_dir = scope_dir(to, project_root);
+    let entries = match std::fs::read_dir(&from_dir) {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+    if let Err(e) = std::fs::create_dir_all(&to_dir) {
+        tracing::warn!(from, to, "failed to create target scope directory: {e}");
+        return;
+    }
+    for entry in entries.flatten() {
+        let src = entry.path();
+        if src.extension().is_none_or(|e| e != "json") {
+            continue;
+        }
+        let Some(file_name) = src.file_name() else {
+            continue;
+        };
+        let dst = to_dir.join(file_name);
+        if !dst.exists() {
+            // Target slot free — move the session straight over.
+            if let Err(e) = std::fs::rename(&src, &dst) {
+                tracing::warn!(from, to, "failed to move session file: {e}");
+            }
+            continue;
+        }
+        // Same-id collision: keep the fuller copy, preserve the loser as
+        // `<id>.json.orphan` (never delete it).
+        let orphan = dst.with_extension("json.orphan");
+        if persisted_message_count(&src) > persisted_message_count(&dst) {
+            // Source is fuller: set the target copy aside, then move source in.
+            if let Err(e) = std::fs::rename(&dst, &orphan) {
+                tracing::warn!(from, to, "failed to set aside displaced session: {e}");
+                continue;
+            }
+            if let Err(e) = std::fs::rename(&src, &dst) {
+                tracing::warn!(from, to, "failed to move fuller session: {e}");
+            }
+        } else {
+            // Target is fuller (or tied): preserve the source copy instead.
+            if let Err(e) = std::fs::rename(&src, &orphan) {
+                tracing::warn!(from, to, "failed to set aside source session: {e}");
+            }
+        }
+    }
+    // Remove the source directory once emptied. `remove_dir` fails if any
+    // residue remains, which is a benign warning, not data loss.
+    if let Err(e) = std::fs::remove_dir(&from_dir)
+        && e.kind() != std::io::ErrorKind::NotFound
+    {
+        tracing::warn!(from, "failed to remove emptied source scope directory: {e}");
     }
 }
 
@@ -602,57 +693,7 @@ mod tests {
 
     // ── session count / delete project data ─────────────────────────────
 
-    use std::sync::atomic::{AtomicU64, Ordering};
-    use std::time::{SystemTime, UNIX_EPOCH};
-
-    static FS_COUNTER: AtomicU64 = AtomicU64::new(0);
-
-    struct FsTmp(std::path::PathBuf);
-
-    impl FsTmp {
-        fn new() -> Self {
-            let nanos = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .map(|d| d.as_nanos())
-                .unwrap_or(0);
-            let counter = FS_COUNTER.fetch_add(1, Ordering::SeqCst);
-            let mut p = std::env::temp_dir();
-            p.push(format!("duckboard-chat-store-test-{nanos}-{counter}"));
-            std::fs::create_dir_all(&p).unwrap();
-            Self(p)
-        }
-        fn path(&self) -> &std::path::Path {
-            &self.0
-        }
-    }
-
-    impl Drop for FsTmp {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.0);
-        }
-    }
-
-    /// Set XDG-equivalent `HOME` so `config::data_dir` resolves under our
-    /// temp dir. Two tests run in parallel can collide if they share `HOME`;
-    /// each test serialises through the `HOME_LOCK` mutex.
-    static HOME_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
-    fn with_home<R>(home: &std::path::Path, f: impl FnOnce() -> R) -> R {
-        let _guard = HOME_LOCK.lock().unwrap_or_else(|p| p.into_inner());
-        let prev = std::env::var_os("HOME");
-        // SAFETY: tests serialise through HOME_LOCK so concurrent set_var is impossible.
-        unsafe { std::env::set_var("HOME", home) };
-        let out = f();
-        // SAFETY: same lock guarantees no concurrent reader observing the
-        // mutation race here.
-        unsafe {
-            match prev {
-                Some(v) => std::env::set_var("HOME", v),
-                None => std::env::remove_var("HOME"),
-            }
-        }
-        out
-    }
+    use crate::test_support::{FsTmp, with_home};
 
     #[test]
     fn count_sessions_empty_returns_zero() {
@@ -695,6 +736,184 @@ mod tests {
             assert!(!data.exists());
             // Second call after deletion: still a no-op.
             delete_project_data(&root);
+        });
+    }
+
+    /// @spec chat/persistence Atomic session writes: A failed save leaves the prior contents intact
+    #[test]
+    fn failed_save_leaves_prior_contents_intact() {
+        let tmp = FsTmp::new();
+        with_home(tmp.path(), || {
+            let root = tmp.path().join("project-atomic");
+            std::fs::create_dir_all(&root).unwrap();
+
+            // GIVEN a session already persisted to disk.
+            let mut session = ChatSession::new("atomic-scope".into());
+            session.id = "100".into();
+            session.messages = vec![user_msg("first")];
+            save_session(&session, Some(&root)).unwrap();
+
+            // Block the temp path so the next write fails partway: a directory
+            // sits where `write_atomic` needs to place `<id>.json.tmp`, so the
+            // temp write errors before the destination is ever renamed.
+            let dir = scope_dir("atomic-scope", Some(&root));
+            std::fs::create_dir_all(dir.join("100.json.tmp")).unwrap();
+
+            // WHEN a subsequent save of that session fails partway through.
+            session.messages = vec![user_msg("first"), user_msg("second")];
+            assert!(save_session(&session, Some(&root)).is_err());
+
+            // THEN the file on disk still parses as the previously-persisted
+            // session (one message, not two).
+            let reloaded = load_sessions_for("atomic-scope", Some(&root));
+            assert_eq!(reloaded.len(), 1);
+            assert_eq!(reloaded[0].messages.len(), 1);
+        });
+    }
+
+    /// @spec chat/persistence Non-destructive scope migration: Migration into an occupied scope keeps both scopes' sessions
+    #[test]
+    fn migration_into_occupied_scope_keeps_both_sessions() {
+        let tmp = FsTmp::new();
+        with_home(tmp.path(), || {
+            let root = tmp.path().join("project-merge");
+            std::fs::create_dir_all(&root).unwrap();
+
+            // GIVEN a source scope holding a session, AND a target scope
+            // already holding a different session.
+            let mut src = ChatSession::new("src-scope".into());
+            src.id = "1".into();
+            src.messages = vec![user_msg("from source")];
+            save_session(&src, Some(&root)).unwrap();
+
+            let mut tgt = ChatSession::new("dst-scope".into());
+            tgt.id = "2".into();
+            tgt.messages = vec![user_msg("from target")];
+            save_session(&tgt, Some(&root)).unwrap();
+
+            // WHEN the source scope is migrated into the target scope.
+            merge_scope("src-scope", "dst-scope", Some(&root));
+
+            // THEN the target scope afterward holds both sessions.
+            let sessions = load_sessions_for("dst-scope", Some(&root));
+            assert_eq!(sessions.len(), 2);
+            assert!(sessions.iter().any(|s| s.id == "1"));
+            assert!(sessions.iter().any(|s| s.id == "2"));
+        });
+    }
+
+    /// @spec chat/persistence Non-destructive scope migration: Same-id collision keeps the fuller session and preserves the other
+    #[test]
+    fn same_id_collision_keeps_fuller_and_preserves_other() {
+        let tmp = FsTmp::new();
+        with_home(tmp.path(), || {
+            let root = tmp.path().join("project-collision");
+            std::fs::create_dir_all(&root).unwrap();
+
+            // GIVEN a source and target scope each holding a session with the
+            // same id, AND the source copy has more messages than the target.
+            let mut src = ChatSession::new("src-scope".into());
+            src.id = "7".into();
+            src.messages = vec![user_msg("a"), user_msg("b"), user_msg("c")];
+            save_session(&src, Some(&root)).unwrap();
+
+            let mut tgt = ChatSession::new("dst-scope".into());
+            tgt.id = "7".into();
+            tgt.messages = vec![user_msg("a")];
+            save_session(&tgt, Some(&root)).unwrap();
+
+            // WHEN the source scope is migrated into the target scope.
+            merge_scope("src-scope", "dst-scope", Some(&root));
+
+            // THEN the target's session for that id has the fuller set of
+            // messages...
+            let sessions = load_sessions_for("dst-scope", Some(&root));
+            let kept = sessions.iter().find(|s| s.id == "7").unwrap();
+            assert_eq!(kept.messages.len(), 3);
+            // ...AND the displaced copy is preserved rather than deleted.
+            let orphan = scope_dir("dst-scope", Some(&root)).join("7.json.orphan");
+            assert!(orphan.exists());
+        });
+    }
+
+    /// @spec chat/persistence In-flight turn durability: An in-flight turn survives a promotion
+    #[test]
+    fn in_flight_turn_survives_promotion() {
+        use crate::area::change::{State, promote_exploration};
+        use crate::area::interaction::{AgentSession, InteractionState};
+        use crate::scope::{Scope, ScopeKind};
+        use std::collections::HashMap;
+
+        let tmp = FsTmp::new();
+        with_home(tmp.path(), || {
+            let root = tmp.path().join("project-promote");
+            std::fs::create_dir_all(&root).unwrap();
+
+            let mut state = State::new(Some(&root));
+            let exp_id = "exploration-1".to_string();
+            state.explorations.push(Exploration {
+                id: exp_id.clone(),
+                display_name: "Exp".into(),
+                idea_path: None,
+                session_count: 0,
+            });
+
+            // GIVEN a session with messages streamed since its last persist:
+            // the session lives only in memory (never saved to disk).
+            let mut ax = AgentSession::new(exp_id.clone(), ScopeKind::Exploration);
+            ax.session.id = "sess-1".into();
+            ax.session.messages = vec![user_msg("streamed one"), user_msg("streamed two")];
+            ax.needs_flush = true;
+            ax.session.is_streaming = true;
+            let mut ix = InteractionState::default();
+            ix.sessions.push(ax);
+            let mut interactions: HashMap<Scope, InteractionState> = HashMap::new();
+            interactions.insert(Scope::Exploration(exp_id.clone()), ix);
+
+            // WHEN the scope's in-memory state is migrated by a promotion.
+            promote_exploration(
+                &mut state,
+                &mut interactions,
+                &exp_id,
+                "real-change",
+                Some(&root),
+            );
+
+            // THEN the persisted session under the new scope includes those
+            // streamed messages.
+            let persisted = load_sessions_for("real-change", Some(&root));
+            let sess = persisted.iter().find(|s| s.id == "sess-1").unwrap();
+            assert_eq!(sess.messages.len(), 2);
+        });
+    }
+
+    /// @spec chat/persistence In-flight turn durability: Streamed messages are persisted before turn completion
+    #[test]
+    fn eager_flush_persists_streamed_messages_before_turn_completion() {
+        use crate::area::interaction::{AgentSession, InteractionState, flush_dirty_sessions};
+        use crate::scope::ScopeKind;
+
+        let tmp = FsTmp::new();
+        with_home(tmp.path(), || {
+            let root = tmp.path().join("project-eager");
+            std::fs::create_dir_all(&root).unwrap();
+
+            // GIVEN a turn that has streamed messages and has not yet completed.
+            let mut ax = AgentSession::new("eager-scope".into(), ScopeKind::Change);
+            ax.session.id = "sess-eager".into();
+            ax.session.messages = vec![user_msg("streamed so far")];
+            ax.session.is_streaming = true;
+            ax.needs_flush = true;
+            let mut ix = InteractionState::default();
+            ix.sessions.push(ax);
+
+            // WHEN an eager flush occurs.
+            flush_dirty_sessions(&mut ix, Some(&root));
+
+            // THEN the persisted session includes the messages streamed so far.
+            let persisted = load_sessions_for("eager-scope", Some(&root));
+            let sess = persisted.iter().find(|s| s.id == "sess-eager").unwrap();
+            assert_eq!(sess.messages.len(), 1);
         });
     }
 

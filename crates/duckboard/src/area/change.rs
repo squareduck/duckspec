@@ -324,19 +324,32 @@ pub fn promote_exploration(
     real_name: &str,
     project_root: Option<&Path>,
 ) {
+    // Flush-before-mutate: persist every session this exploration holds before
+    // its in-memory state is migrated, so an in-flight turn can't be lost by
+    // the promotion.
+    if let Some(ix) = interactions.get(&Scope::Exploration(exploration_id.to_string())) {
+        interaction::flush_sessions(ix, project_root);
+    }
     state.explorations.retain(|e| e.id != exploration_id);
     if let Some(mut ix) = interactions.remove(&Scope::Exploration(exploration_id.to_string())) {
         for ax in ix.sessions.iter_mut() {
             ax.session.scope = real_name.to_string();
             ax.scope_kind = ScopeKind::Change;
         }
-        interaction::reconcile_display_names(&mut ix.sessions, real_name);
-        interactions.insert(Scope::Change(real_name.to_string()), ix);
+        let target = Scope::Change(real_name.to_string());
+        if let Some(existing) = interactions.get_mut(&target) {
+            // Target scope is already live — fold the exploration's sessions in
+            // rather than overwrite, preserving the target's subscriptions.
+            interaction::merge_sessions(existing, ix.sessions, real_name);
+        } else {
+            interaction::reconcile_display_names(&mut ix.sessions, real_name);
+            interactions.insert(target, ix);
+        }
     }
     if state.selected_change.as_deref() == Some(exploration_id) {
         state.selected_change = Some(real_name.to_string());
     }
-    crate::chat_store::rename_scope(exploration_id, real_name, project_root);
+    crate::chat_store::merge_scope(exploration_id, real_name, project_root);
     crate::chat_store::save_explorations(
         &state.explorations,
         state.exploration_counter,

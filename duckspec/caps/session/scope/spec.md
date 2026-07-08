@@ -41,7 +41,7 @@ report completion.
 - **AND** it suggests the apply stage as the next step
 
 > test: code
-> - crates/duckboard/src/area/change.rs:2024
+> - crates/duckboard/src/area/change.rs:2037
 
 ### Scenario: A change with all steps complete reports completion and the archive next-stage
 
@@ -51,7 +51,7 @@ report completion.
 - **AND** it suggests the archive stage as the next step
 
 > test: code
-> - crates/duckboard/src/area/change.rs:2042
+> - crates/duckboard/src/area/change.rs:2055
 
 ### Scenario: A change with only a proposal reports the design next-stage
 
@@ -60,7 +60,7 @@ report completion.
 - **THEN** it suggests the design stage as the next step
 
 > test: code
-> - crates/duckboard/src/area/change.rs:2058
+> - crates/duckboard/src/area/change.rs:2071
 
 ## Requirement: Non-change scope orientation
 
@@ -104,7 +104,7 @@ the same session.
 - **THEN** the orientation is part of the message body sent on that turn
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:571
+> - crates/duckboard/src/area/interaction.rs:579
 
 ### Scenario: Orientation is present when the project has no AGENTS.md
 
@@ -113,7 +113,7 @@ the same session.
 - **THEN** the orientation is part of the message body sent on that turn
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:588
+> - crates/duckboard/src/area/interaction.rs:596
 
 ### Scenario: A resumed session does not repeat the orientation
 
@@ -122,7 +122,7 @@ the same session.
 - **THEN** the orientation is not included again
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:608
+> - crates/duckboard/src/area/interaction.rs:616
 
 ## Requirement: Current review in orientation
 
@@ -140,7 +140,7 @@ reviews SHALL NOT affect the change's reported progress or its suggested next st
 - **THEN** it reports the highest-numbered review as the current review
 
 > test: code
-> - crates/duckboard/src/area/change.rs:2082
+> - crates/duckboard/src/area/change.rs:2095
 
 ### Scenario: A change with no reviews reports no current review
 
@@ -149,7 +149,7 @@ reviews SHALL NOT affect the change's reported progress or its suggested next st
 - **THEN** it does not report a current review
 
 > test: code
-> - crates/duckboard/src/area/change.rs:2104
+> - crates/duckboard/src/area/change.rs:2117
 
 ### Scenario: Adding a review does not change the suggested next stage
 
@@ -159,4 +159,4 @@ reviews SHALL NOT affect the change's reported progress or its suggested next st
 - **THEN** both report the same suggested next stage
 
 > test: code
-> - crates/duckboard/src/area/change.rs:2119
+> - crates/duckboard/src/area/change.rs:2132

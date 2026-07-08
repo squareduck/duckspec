@@ -381,6 +381,12 @@ enum Message {
     // past an edge. Only fires while a drag holds the pointer past an edge
     // (see `subscription` / `any_terminal_autoscrolling`).
     TerminalAutoscrollTick,
+    // Coalesced ~1s tick while a session streams; persists dirty sessions so
+    // mid-turn loss is bounded to roughly one interval (see `subscription`).
+    FlushTick,
+    // The window received a close request. We persist every session before
+    // letting the window actually close (see `main`'s `exit_on_close_request`).
+    WindowCloseRequested(iced::window::Id),
 }
 
 // ── Update ───────────────────────────────────────────────────────────────────
@@ -1368,6 +1374,7 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                     }
                     AgentEvent::ContentDelta { text } => {
                         ax.session.pending_text.push_str(&text);
+                        ax.needs_flush = true;
                     }
                     AgentEvent::ToolUse { id, name, input } => {
                         // Attribute a change folder to this session at the
@@ -1385,6 +1392,7 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                             timestamp: String::new(),
                             is_priming: false,
                         });
+                        ax.needs_flush = true;
                     }
                     AgentEvent::ToolResult { id, name, output } => {
                         ax.session.messages.push(chat_store::ChatMessage {
@@ -1397,6 +1405,7 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                             timestamp: String::new(),
                             is_priming: false,
                         });
+                        ax.needs_flush = true;
                     }
                     AgentEvent::TurnComplete => {
                         flush_pending_text(&mut ax.session);
@@ -1415,6 +1424,9 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                         {
                             tracing::error!("failed to save chat session: {e}");
                         }
+                        // Turn-boundary flush is authoritative — the debounced
+                        // eager flag is now satisfied.
+                        ax.needs_flush = false;
                         // Kick off a one-shot title summary after the first
                         // turn whose user message isn't a bare slash command.
                         // Bare-command-only sessions defer summarisation
@@ -1507,6 +1519,14 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                 should_snap_to_bottom = ax.stick_to_bottom;
                 if !is_streaming {
                     ax.esc_count = 0;
+                    // An abrupt turn end (Error / ProcessExited) leaves
+                    // streamed messages dirty without a turn-boundary save —
+                    // persist them now so the turn's tail survives.
+                    if ax.needs_flush
+                        && interaction::persist_session_snapshot(&ax.session, proj_root.as_deref())
+                    {
+                        ax.needs_flush = false;
+                    }
                     // Order matters: dispatch the AGENTS.md priming follow-up
                     // before any queued message so the user's intended first
                     // turn lands ahead of anything they typed while priming
@@ -1618,6 +1638,23 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                     }
                 }
             }
+        }
+        Message::FlushTick => {
+            let proj_root = state.project.project_root.clone();
+            for ix in state.interactions.values_mut() {
+                interaction::flush_dirty_sessions(ix, proj_root.as_deref());
+            }
+        }
+        Message::WindowCloseRequested(id) => {
+            // Force a final flush of every session before the window closes so
+            // a clean quit never drops an in-flight turn, then let the window
+            // actually close (we suppressed the default via
+            // `exit_on_close_request(false)`).
+            let proj_root = state.project.project_root.clone();
+            for ix in state.interactions.values() {
+                interaction::flush_sessions(ix, proj_root.as_deref());
+            }
+            return iced::window::close(id);
         }
         Message::KeyPress(key, mods, text) => {
             // Disarm any pending dirty-tab close on the next keypress.
@@ -2931,29 +2968,24 @@ fn route_promotion(state: &mut State, exp_id: &str, new_name: &str) {
     }
 }
 
-/// Attribute a new change folder when no `pending_bindings` entry exists:
-/// resolve the exploration the active area currently points at, if any.
-fn fallback_exploration_id(state: &State) -> Option<String> {
-    match state.active_area {
-        Area::Change => state
-            .change
-            .is_exploration_selected()
-            .then(|| state.change.selected_change.clone())
-            .flatten(),
-        Area::Ideas => {
-            let idea_path = state.ideas.selected.as_deref()?;
-            let idea = state
-                .ideas
-                .ideas
-                .iter()
-                .find(|i| i.abs_path.as_path() == idea_path)?;
-            idea.frontmatter
-                .change
-                .is_none()
-                .then(|| idea.frontmatter.exploration.clone())
-                .flatten()
-        }
-        _ => None,
+/// Promote the exploration bound to a newly-detected change directory, if any.
+///
+/// The binding recorded when an exploration session's agent ran
+/// `ds create change <name>` (`pending_bindings`) is the sole authority for
+/// attribution, and it is *consumed* here. A change with no binding — an
+/// out-of-band creation, an unarchive, or a version-control reappearance of a
+/// directory that already existed — is left standalone: UI focus never
+/// attributes a change to an unrelated exploration. Because the binding is
+/// consumed, a later re-detection of the same directory finds none and does
+/// not promote again.
+fn promote_bound_exploration(state: &mut State, new_name: &str) {
+    if let Some(exploration_id) = state.change.pending_bindings.remove(new_name) {
+        tracing::info!(
+            from = exploration_id,
+            to = new_name,
+            "promoting exploration to real change"
+        );
+        route_promotion(state, &exploration_id, new_name);
     }
 }
 
@@ -2980,10 +3012,10 @@ fn reload_and_reconcile(state: &mut State) -> bool {
 
     state.project.reload();
 
-    // Detect a new change directory and attribute it to the exploration that
-    // created it. The binding recorded when the session ran `ds create change`
-    // is authoritative; when none exists (out-of-band creation), fall back to
-    // the exploration the active area points at.
+    // Detect a new change directory and promote the exploration that created
+    // it — but only on the authoritative `ds create change` binding. An unbound
+    // new directory (out-of-band creation, unarchive, VCS reappearance) is left
+    // standalone; focus never attributes it.
     if let Some(new_name) = state
         .project
         .active_changes
@@ -2991,19 +3023,7 @@ fn reload_and_reconcile(state: &mut State) -> bool {
         .find(|c| !old_change_names.contains(&c.name))
         .map(|c| c.name.clone())
     {
-        let exploration_id = state
-            .change
-            .pending_bindings
-            .remove(&new_name)
-            .or_else(|| fallback_exploration_id(state));
-        if let Some(exploration_id) = exploration_id {
-            tracing::info!(
-                from = exploration_id,
-                to = new_name.as_str(),
-                "promoting exploration to real change"
-            );
-            route_promotion(state, &exploration_id, &new_name);
-        }
+        promote_bound_exploration(state, &new_name);
     }
 
     // Detect new archived change directories and migrate subscriptions from
@@ -3093,6 +3113,14 @@ fn promote_idea_exploration(state: &mut State, idea_path: &Path, change_name: &s
         &new_title,
     );
 
+    // Flush-before-mutate: persist every session before the exploration's
+    // in-memory state is migrated, so an in-flight turn can't be lost.
+    if let Some(ix) = state
+        .interactions
+        .get(&scope::Scope::Exploration(exploration_id.clone()))
+    {
+        interaction::flush_sessions(ix, project_root.as_deref());
+    }
     if let Some(mut ix) = state
         .interactions
         .remove(&scope::Scope::Exploration(exploration_id.clone()))
@@ -3101,12 +3129,17 @@ fn promote_idea_exploration(state: &mut State, idea_path: &Path, change_name: &s
             ax.session.scope = change_name.to_string();
             ax.scope_kind = scope::ScopeKind::Change;
         }
-        interaction::reconcile_display_names(&mut ix.sessions, change_name);
-        state
-            .interactions
-            .insert(scope::Scope::Change(change_name.to_string()), ix);
+        let target = scope::Scope::Change(change_name.to_string());
+        if let Some(existing) = state.interactions.get_mut(&target) {
+            // Target scope is already live — fold the exploration's sessions in
+            // rather than overwrite, preserving the target's subscriptions.
+            interaction::merge_sessions(existing, ix.sessions, change_name);
+        } else {
+            interaction::reconcile_display_names(&mut ix.sessions, change_name);
+            state.interactions.insert(target, ix);
+        }
     }
-    chat_store::rename_scope(&exploration_id, change_name, project_root.as_deref());
+    chat_store::merge_scope(&exploration_id, change_name, project_root.as_deref());
 }
 
 /// Re-read content for all open text tabs from disk and enqueue async
@@ -4956,7 +4989,16 @@ fn subscription(state: &State) -> Subscription<Message> {
             ))
             .map(|_instant| Message::StreamTick),
         );
+        // Coalesced ~1s eager-persist tick, active only while streaming so idle
+        // chats don't wake the runtime. Bounds mid-turn crash loss to ~1s.
+        subs.push(
+            iced::time::every(std::time::Duration::from_secs(1)).map(|_instant| Message::FlushTick),
+        );
     }
+
+    // Intercept window-close so we can flush every session before the window
+    // goes away. Paired with `exit_on_close_request(false)` in `main`.
+    subs.push(iced::window::close_requests().map(Message::WindowCloseRequested));
 
     // ~60fps tick driving terminal edge auto-scroll. Only subscribed while a
     // terminal drag holds the pointer past an edge, so the render loop stays
@@ -5066,6 +5108,10 @@ fn main() -> iced::Result {
         .title("duckboard")
         .theme(theme_fn)
         .window_size((1200.0, 800.0))
+        // We flush every chat session on close before letting the window go
+        // away (see `Message::WindowCloseRequested`), so suppress the default
+        // close-on-request behavior.
+        .exit_on_close_request(false)
         .run()
 }
 
@@ -5148,12 +5194,201 @@ fn handle_key_event(
     }
 }
 
+/// Shared test harness for anything that resolves paths through
+/// `config::data_dir` (chats, explorations, project data). `HOME` is a
+/// process-global, and `std::env::set_var` races any concurrent reader — so
+/// **every** test that mutates `HOME` must serialise through the single
+/// `HOME_LOCK` here rather than a per-module lock, or two modules' tests can
+/// set `HOME` at the same time.
+#[cfg(test)]
+pub(crate) mod test_support {
+    use std::path::{Path, PathBuf};
+    use std::sync::Mutex;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    static FS_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    /// A unique temp directory, removed on drop.
+    pub(crate) struct FsTmp(PathBuf);
+
+    impl FsTmp {
+        pub(crate) fn new() -> Self {
+            let nanos = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0);
+            let counter = FS_COUNTER.fetch_add(1, Ordering::SeqCst);
+            let mut p = std::env::temp_dir();
+            p.push(format!("duckboard-test-{nanos}-{counter}"));
+            std::fs::create_dir_all(&p).unwrap();
+            Self(p)
+        }
+        pub(crate) fn path(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    impl Drop for FsTmp {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    /// The single lock guarding `HOME` mutation across all test modules.
+    static HOME_LOCK: Mutex<()> = Mutex::new(());
+
+    /// Run `f` with `HOME` set to `home` so `config::data_dir` resolves under
+    /// it, restoring the previous value afterward. Serialised through
+    /// `HOME_LOCK` so concurrent tests never race on the env var.
+    pub(crate) fn with_home<R>(home: &Path, f: impl FnOnce() -> R) -> R {
+        let _guard = HOME_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let prev = std::env::var_os("HOME");
+        // SAFETY: tests serialise through HOME_LOCK so concurrent set_var is impossible.
+        unsafe { std::env::set_var("HOME", home) };
+        let out = f();
+        // SAFETY: same lock guarantees no concurrent reader observing the
+        // mutation race here.
+        unsafe {
+            match prev {
+                Some(v) => std::env::set_var("HOME", v),
+                None => std::env::remove_var("HOME"),
+            }
+        }
+        out
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::{FsTmp, with_home};
 
     fn bash(command: &str) -> String {
         serde_json::json!({ "command": command }).to_string()
+    }
+
+    /// Register `id` as an exploration with one in-memory chat session
+    /// (`session_id`), so promotion has something to migrate.
+    fn seed_exploration(state: &mut State, id: &str, session_id: &str) {
+        state.change.explorations.push(chat_store::Exploration {
+            id: id.to_string(),
+            display_name: id.to_string(),
+            idea_path: None,
+            session_count: 0,
+        });
+        let mut ix = interaction::InteractionState::default();
+        let mut ax = interaction::AgentSession::new(id.to_string(), scope::ScopeKind::Exploration);
+        ax.session.id = session_id.to_string();
+        ix.sessions.push(ax);
+        state
+            .interactions
+            .insert(scope::Scope::Exploration(id.to_string()), ix);
+    }
+
+    /// @spec exploration/promotion Promotion requires an authoritative binding: Bound change adopts its originating exploration
+    #[test]
+    fn bound_change_adopts_originating_exploration() {
+        let tmp = FsTmp::new();
+        with_home(tmp.path(), || {
+            let mut state = State::new();
+            let exp_id = "exploration-1";
+            let new_name = "my-change";
+            seed_exploration(&mut state, exp_id, "sess-1");
+            // GIVEN the exploration's agent created the change → binding recorded.
+            state
+                .change
+                .pending_bindings
+                .insert(new_name.to_string(), exp_id.to_string());
+
+            // WHEN promotion is evaluated.
+            promote_bound_exploration(&mut state, new_name);
+
+            // THEN the exploration is promoted into the change AND its chat
+            // sessions are accessible under the change's scope.
+            let change_scope = scope::Scope::Change(new_name.to_string());
+            assert!(state.interactions.contains_key(&change_scope));
+            assert!(
+                !state
+                    .interactions
+                    .contains_key(&scope::Scope::Exploration(exp_id.to_string()))
+            );
+            let ix = state.interactions.get(&change_scope).unwrap();
+            assert!(ix.sessions.iter().any(|s| s.session.id == "sess-1"));
+        });
+    }
+
+    /// @spec exploration/promotion Promotion requires an authoritative binding: Unbound change adopts no exploration
+    #[test]
+    fn unbound_change_adopts_no_exploration() {
+        let tmp = FsTmp::new();
+        with_home(tmp.path(), || {
+            let mut state = State::new();
+            let exp_id = "exploration-unrelated";
+            seed_exploration(&mut state, exp_id, "sess-x");
+            // GIVEN an unrelated exploration is currently selected (UI focus).
+            state.active_area = Area::Change;
+            state.change.selected_change = Some(exp_id.to_string());
+            let new_name = "out-of-band";
+            // No binding exists for `new_name`.
+
+            // WHEN promotion is evaluated.
+            promote_bound_exploration(&mut state, new_name);
+
+            // THEN no exploration is promoted into the change AND the selected
+            // exploration's sessions remain under their own scope.
+            assert!(
+                !state
+                    .interactions
+                    .contains_key(&scope::Scope::Change(new_name.to_string()))
+            );
+            let ix = state
+                .interactions
+                .get(&scope::Scope::Exploration(exp_id.to_string()))
+                .unwrap();
+            assert!(ix.sessions.iter().any(|s| s.session.id == "sess-x"));
+        });
+    }
+
+    /// @spec exploration/promotion Bindings are single-use: A consumed binding does not re-promote on reappearance
+    #[test]
+    fn consumed_binding_does_not_repromote_on_reappearance() {
+        let tmp = FsTmp::new();
+        with_home(tmp.path(), || {
+            let mut state = State::new();
+            let exp_id = "exploration-2";
+            let new_name = "twice";
+            seed_exploration(&mut state, exp_id, "sess-2");
+            state
+                .change
+                .pending_bindings
+                .insert(new_name.to_string(), exp_id.to_string());
+
+            // First detection consumes the binding and promotes.
+            promote_bound_exploration(&mut state, new_name);
+            let change_scope = scope::Scope::Change(new_name.to_string());
+            assert!(state.interactions.contains_key(&change_scope));
+
+            // GIVEN the binding is now consumed. A second, unrelated exploration
+            // is selected in focus to prove focus still can't re-promote.
+            let other = "exploration-3";
+            seed_exploration(&mut state, other, "sess-3");
+            state.active_area = Area::Change;
+            state.change.selected_change = Some(other.to_string());
+
+            // WHEN the same change directory is detected as newly present again.
+            promote_bound_exploration(&mut state, new_name);
+
+            // THEN no exploration is promoted into the change again — the other
+            // exploration and its session stay under their own scope.
+            assert!(
+                state
+                    .interactions
+                    .contains_key(&scope::Scope::Exploration(other.to_string()))
+            );
+            let ix = state.interactions.get(&change_scope).unwrap();
+            assert!(!ix.sessions.iter().any(|s| s.session.id == "sess-3"));
+        });
     }
 
     #[test]
