@@ -15,11 +15,12 @@ pub mod request;
 pub mod worker;
 
 pub mod claude_code;
+pub mod grok;
 
 pub use cancel::CancelToken;
 pub use error::Error;
 pub use event::{AgentEvent, Usage};
 pub use hook::{ContextHook, HookOutput};
-pub use provider::{Capabilities, ModelInfo, Provider, SlashCommand};
+pub use provider::{Capabilities, ModelInfo, ModelRef, Provider, SlashCommand};
 pub use request::{Attachment, ReasoningMode, TitleRequest, ToolPolicy, TurnOutcome, TurnRequest};
 pub use worker::{AgentCommand, AgentHandle, spawn_worker};

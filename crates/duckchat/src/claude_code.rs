@@ -10,6 +10,10 @@ mod run;
 mod spawn;
 mod title;
 
+/// Project/plugin slash-command discovery. Re-exported for the grok harness,
+/// which loads the same `.claude` skills and commands.
+pub(crate) use discover::discover_commands;
+
 use std::path::Path;
 
 use async_trait::async_trait;
@@ -59,20 +63,28 @@ impl Provider for ClaudeCodeProvider {
         // bumping on every point release.
         vec![
             ModelInfo {
+                harness: self.id().to_string(),
                 id: "fable".to_string(),
                 display: "Fable 5".to_string(),
+                context_window: None,
             },
             ModelInfo {
+                harness: self.id().to_string(),
                 id: "opus".to_string(),
                 display: "Opus 4.8".to_string(),
+                context_window: None,
             },
             ModelInfo {
+                harness: self.id().to_string(),
                 id: "sonnet".to_string(),
                 display: "Sonnet 4.6".to_string(),
+                context_window: None,
             },
             ModelInfo {
+                harness: self.id().to_string(),
                 id: "haiku".to_string(),
                 display: "Haiku 4.5".to_string(),
+                context_window: None,
             },
         ]
     }

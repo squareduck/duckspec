@@ -16,6 +16,8 @@ const CHAT_INPUT_MAX_ROWS: usize = 20;
 pub const STICK_TO_BOTTOM_THRESHOLD: f32 = 16.0;
 use iced::{Element, Length};
 
+use duckchat::{ModelInfo, ModelRef};
+
 use crate::agent::SlashCommand;
 use crate::area::interaction::{self, SelectionContext};
 use crate::chat_store::{ChatSession, ContentBlock, Role};
@@ -54,19 +56,35 @@ pub enum Msg {
 
 // ── Model picker ─────────────────────────────────────────────────────────────
 
-/// One entry in the meta-row model `pick_list`. `id` is the `--model` value
-/// to pin (`None` = "use project default"). Equality is on `id` only so the
-/// selected entry can carry a richer label (e.g. the resolved model in
-/// parens) while still matching its plain option in the dropdown.
+/// One entry in the meta-row model `pick_list`. `id` is the `--model` value to
+/// pin and `harness` the backend that owns it (`None`/`None` = "use project
+/// default"). Equality is on `(harness, id)` so a picked model resolves to the
+/// right harness even when two backends share a bare model id — while the
+/// selected entry can still carry a richer label (e.g. the resolved model in
+/// parens) and match its plain option in the dropdown.
 #[derive(Debug, Clone)]
 pub struct ModelChoice {
+    /// The harness owning this model, e.g. `"claude-code"` | `"grok"`. `None`
+    /// on the "use default" sentinel, which pins no specific model.
+    pub harness: Option<String>,
     pub id: Option<String>,
     pub label: String,
 }
 
+impl ModelChoice {
+    /// The persisted model reference this choice selects, or `None` for the
+    /// "use default" sentinel (which carries neither harness nor id).
+    pub fn to_ref(&self) -> Option<ModelRef> {
+        match (&self.harness, &self.id) {
+            (Some(harness), Some(id)) => Some(ModelRef::new(harness.clone(), id.clone())),
+            _ => None,
+        }
+    }
+}
+
 impl PartialEq for ModelChoice {
     fn eq(&self, other: &Self) -> bool {
-        self.id == other.id
+        self.harness == other.harness && self.id == other.id
     }
 }
 
@@ -81,20 +99,18 @@ impl std::fmt::Display for ModelChoice {
 /// Picker options for a chat's model selector. The first entry (`id: None`)
 /// is the "use project default" sentinel; `project_default` lets its label
 /// name the model that default currently resolves to.
-pub fn chat_model_choices(project_default: Option<&str>) -> Vec<ModelChoice> {
-    let label = match project_default {
-        Some(id) => format!("Default ({})", model_display(id)),
-        None => "Default".to_string(),
-    };
-    let mut out = vec![ModelChoice { id: None, label }];
-    out.extend(model_entries());
-    out
+pub fn chat_model_choices() -> Vec<ModelChoice> {
+    // No "use default" sentinel: the chat selector always shows the concrete
+    // model the next turn will run (the resolved cascade), never the word
+    // "Default". `selected_model_choice` is fed that effective model.
+    model_entries()
 }
 
 /// Picker options for the project-level default selector in settings. The
 /// first entry (`id: None`) means "no default — let the CLI pick".
 pub fn project_model_choices() -> Vec<ModelChoice> {
     let mut out = vec![ModelChoice {
+        harness: None,
         id: None,
         label: "No default".to_string(),
     }];
@@ -103,43 +119,91 @@ pub fn project_model_choices() -> Vec<ModelChoice> {
 }
 
 fn model_entries() -> Vec<ModelChoice> {
-    crate::agent::available_models()
-        .into_iter()
-        .map(|m| ModelChoice {
-            id: Some(m.id),
-            label: m.display,
-        })
-        .collect()
+    group_choices(crate::agent::available_models())
 }
 
-/// Resolve which option is selected for a pinned `--model` value. `None`
-/// selects the first (sentinel) entry. An unknown id (e.g. a full model name
-/// not in the alias list) yields a synthetic choice so the picker still shows
-/// it rather than silently falling back to the sentinel.
-pub fn selected_model_choice(choices: &[ModelChoice], selected: Option<&str>) -> ModelChoice {
+/// Turn the aggregated model list into picker entries grouped by harness. Each
+/// harness's models are kept contiguous (in first-seen order) and every label
+/// is prefixed with its harness so the flat `pick_list` reads as harness
+/// sections rather than an undifferentiated list.
+fn group_choices(models: Vec<ModelInfo>) -> Vec<ModelChoice> {
+    let mut harness_order: Vec<String> = Vec::new();
+    for m in &models {
+        if !harness_order.contains(&m.harness) {
+            harness_order.push(m.harness.clone());
+        }
+    }
+    let mut out = Vec::with_capacity(models.len());
+    for harness in &harness_order {
+        for m in models.iter().filter(|m| &m.harness == harness) {
+            out.push(ModelChoice {
+                harness: Some(m.harness.clone()),
+                id: Some(m.id.clone()),
+                label: format!("{} · {}", harness_display(&m.harness), m.display),
+            });
+        }
+    }
+    out
+}
+
+/// Human-friendly name for a harness id, used to label and group picker
+/// entries. Unknown ids fall back to the raw id.
+fn harness_display(harness: &str) -> &str {
+    match harness {
+        "claude-code" => "Claude Code",
+        "grok" => "Grok",
+        other => other,
+    }
+}
+
+/// Resolve which option is selected for a pinned model reference. `None`
+/// selects the first (sentinel) entry. A ref not in the offered list (e.g. a
+/// full model name, or a harness that dropped out) yields a synthetic choice so
+/// the picker still shows it rather than silently falling back to the sentinel.
+pub fn selected_model_choice(choices: &[ModelChoice], selected: Option<&ModelRef>) -> ModelChoice {
     match selected {
         None => choices.first().cloned().unwrap_or(ModelChoice {
+            harness: None,
             id: None,
             label: "Default".to_string(),
         }),
-        Some(id) => choices
+        Some(model_ref) => choices
             .iter()
-            .find(|c| c.id.as_deref() == Some(id))
+            .find(|c| {
+                c.harness.as_deref() == Some(model_ref.harness.as_str())
+                    && c.id.as_deref() == Some(model_ref.model.as_str())
+            })
             .cloned()
             .unwrap_or(ModelChoice {
-                id: Some(id.to_string()),
-                label: id.to_string(),
+                harness: Some(model_ref.harness.clone()),
+                id: Some(model_ref.model.clone()),
+                label: format!(
+                    "{} · {}",
+                    harness_display(&model_ref.harness),
+                    model_ref.model
+                ),
             }),
     }
 }
 
-/// Friendly display for a `--model` value, falling back to the raw value.
-pub fn model_display(id: &str) -> String {
+/// The context window of a specific model, looked up by harness + id from the
+/// aggregated model list. `None` when the model is unknown or its harness
+/// reports no window — the usage meter then shows no fill.
+pub fn model_context_window(model: &ModelRef) -> Option<usize> {
     crate::agent::available_models()
         .into_iter()
-        .find(|m| m.id == id)
-        .map(|m| m.display)
-        .unwrap_or_else(|| id.to_string())
+        .find(|m| m.harness == model.harness && m.id == model.model)
+        .and_then(|m| m.context_window)
+}
+
+/// Fraction of the selected model's context window consumed by `tokens`. A
+/// `None` (or zero) window yields `None`: the usage meter shows no fill rather
+/// than computing against a wrong or assumed window.
+pub fn context_fill(tokens: usize, window: Option<usize>) -> Option<f32> {
+    match window {
+        Some(w) if w > 0 => Some(tokens as f32 / w as f32),
+        _ => None,
+    }
 }
 
 // ── Status bar info ────────────────────────────────────────────────────────
@@ -149,16 +213,18 @@ pub struct StatusInfo {
     pub is_streaming: bool,
     /// 0 = no esc pressed, 1 = one esc pressed (waiting for second).
     pub esc_count: u8,
-    /// Observed model reported by the CLI for the last turn. Empty when the
-    /// agent hasn't reported one yet. Shown as muted text alongside the
-    /// picker so "use project default" is never opaque about what ran.
-    pub model: String,
-    /// Picker options (Default sentinel + one per provider model).
+    /// Picker options — one per provider model, grouped by harness.
     pub model_choices: Vec<ModelChoice>,
-    /// The currently-selected picker entry (matched by `id`).
+    /// The currently-selected picker entry (matched by `(harness, id)`).
     pub selected_model: ModelChoice,
+    /// Whether the next turn resumes the agent-side session (a continuation) or
+    /// starts fresh and re-sends the transcript as history. Drives the meta-row
+    /// resume/fresh indicator.
+    pub will_resume: bool,
     pub context_tokens: usize,
-    pub context_max: usize,
+    /// The selected model's context window. `None` when the model reports no
+    /// window — the meter then shows the token count with no fill.
+    pub context_max: Option<usize>,
 }
 
 // ── Completion state ────────────────────────────────────────────────────────
@@ -529,17 +595,15 @@ pub fn view<'a>(
     // below the editor, blending into the "paper" surface (à la Zed). The
     // extra `SPACING_SM` horizontal padding lines the meta text up with the
     // input's own text (container XS + TextEdit CONTENT_PAD = 12px).
-    let ctx_pct = if status.context_max > 0 {
-        (status.context_tokens as f32 / status.context_max as f32 * 100.0) as usize
-    } else {
-        0
-    };
-    let ctx_color = if ctx_pct >= 90 {
-        theme::error()
-    } else if ctx_pct >= 75 {
-        theme::warning()
-    } else {
-        theme::text_muted()
+    // Fill is measured against the *selected* model's window (`context_max`).
+    // An unknown window yields no fill — the readout drops the denominator and
+    // percentage rather than guessing against an assumed size.
+    let ctx_pct = context_fill(status.context_tokens, status.context_max)
+        .map(|fill| (fill * 100.0) as usize);
+    let ctx_color = match ctx_pct {
+        Some(pct) if pct >= 90 => theme::error(),
+        Some(pct) if pct >= 75 => theme::warning(),
+        _ => theme::text_muted(),
     };
     let has_attachments = !pinned_selections.is_empty() || tentative_selection.is_some();
     let mut meta_inner = row![]
@@ -552,7 +616,20 @@ pub fn view<'a>(
                 .color(theme::text_muted()),
         );
     }
-    meta_inner = meta_inner.push(Space::new().width(Length::Fill)).push(
+    meta_inner = meta_inner.push(Space::new().width(Length::Fill));
+    // Fresh-session indicator. Only shown when the next send will NOT resume
+    // the agent-side session — i.e. a harness switch left no session to
+    // continue, so duckboard opens a new one and re-sends the whole transcript
+    // as context. Resume is the silent default; only the notable case is
+    // called out (accent), and the label says what actually happens.
+    if !status.will_resume {
+        meta_inner = meta_inner.push(
+            text("⟳ resends full history")
+                .size(theme::font_sm())
+                .color(theme::accent()),
+        );
+    }
+    meta_inner = meta_inner.push(
         pick_list(
             status.model_choices,
             Some(status.selected_model),
@@ -563,26 +640,17 @@ pub fn view<'a>(
         .style(theme::pick_list_style)
         .menu_style(theme::pick_list_menu),
     );
-    // Observed model (what the CLI actually ran) — only meaningful once a
-    // turn has reported it. Sits right of the picker so a "Default" selection
-    // still shows the resolved model.
-    if !status.model.is_empty() {
-        meta_inner = meta_inner.push(
-            text(status.model)
-                .size(theme::font_sm())
-                .color(theme::text_muted()),
-        );
-    }
-    meta_inner = meta_inner.push(
-        text(format!(
+    let ctx_label = match status.context_max {
+        Some(max) => format!(
             "{} / {} ({}%)",
             format_number(status.context_tokens),
-            format_number(status.context_max),
-            ctx_pct,
-        ))
-        .size(theme::font_sm())
-        .color(ctx_color),
-    );
+            format_number(max),
+            ctx_pct.unwrap_or(0),
+        ),
+        // No known window → show the raw token count with no fill.
+        None => format_number(status.context_tokens),
+    };
+    meta_inner = meta_inner.push(text(ctx_label).size(theme::font_sm()).color(ctx_color));
     let meta_row = container(meta_inner)
         .padding([0.0, theme::SPACING_SM])
         .width(Length::Fill);
@@ -968,6 +1036,67 @@ fn fuzzy_score(query: &str, target: &str) -> Option<i32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn model(harness: &str, id: &str, window: Option<usize>) -> ModelInfo {
+        ModelInfo {
+            harness: harness.to_string(),
+            id: id.to_string(),
+            display: id.to_string(),
+            context_window: window,
+        }
+    }
+
+    /// @spec harness/model-picker Harness-grouped choices: Choices present each model under its harness
+    #[test]
+    fn choices_present_each_model_under_its_harness() {
+        // GIVEN selectable models drawn from more than one harness.
+        let models = vec![
+            model("claude-code", "opus", None),
+            model("grok", "grok-4.5", Some(256_000)),
+            model("claude-code", "sonnet", None),
+        ];
+        // WHEN the picker choices are built.
+        let choices = group_choices(models);
+        // THEN each model appears under its owning harness — the choice carries
+        // its model's harness and its label is presented under that harness.
+        let opus = choices.iter().find(|c| c.id.as_deref() == Some("opus")).unwrap();
+        assert_eq!(opus.harness.as_deref(), Some("claude-code"));
+        assert!(opus.label.starts_with("Claude Code · "));
+        let grok = choices
+            .iter()
+            .find(|c| c.id.as_deref() == Some("grok-4.5"))
+            .unwrap();
+        assert_eq!(grok.harness.as_deref(), Some("grok"));
+        assert!(grok.label.starts_with("Grok · "));
+        // AND a harness's models stay contiguous rather than interleaved.
+        let harnesses: Vec<&str> = choices
+            .iter()
+            .map(|c| c.harness.as_deref().unwrap())
+            .collect();
+        assert_eq!(harnesses, ["claude-code", "claude-code", "grok"]);
+    }
+
+    /// @spec harness/model-picker Context fill from the active model's window: Fill is measured against the selected model's window
+    #[test]
+    fn fill_is_measured_against_the_selected_models_window() {
+        // GIVEN a selected model with a known context window AND a used-token count.
+        let window = Some(200_000);
+        let used = 50_000;
+        // WHEN the usage meter fill is computed.
+        let fill = context_fill(used, window);
+        // THEN the fill is the used tokens relative to that model's window.
+        assert_eq!(fill, Some(0.25));
+    }
+
+    /// @spec harness/model-picker Context fill from the active model's window: A model with no known window shows no fill
+    #[test]
+    fn a_model_with_no_known_window_shows_no_fill() {
+        // GIVEN a selected model with no known context window.
+        // WHEN the usage meter fill is computed.
+        let fill = context_fill(50_000, None);
+        // THEN the meter shows no fill.
+        assert_eq!(fill, None);
+    }
 
     #[test]
     fn strips_csi_color_codes() {

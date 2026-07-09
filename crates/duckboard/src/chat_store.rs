@@ -5,6 +5,7 @@
 
 use std::path::{Path, PathBuf};
 
+use duckchat::ModelRef;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
@@ -57,10 +58,15 @@ pub struct ChatSession {
     pub messages: Vec<ChatMessage>,
     pub is_streaming: bool,
     pub pending_text: String,
-    /// Claude Code CLI session id, used with `--resume` for multi-turn continuity.
-    /// Set after the first successful turn; persisted so conversations can be
-    /// resumed across app restarts.
-    pub claude_session_id: Option<String>,
+    /// Agent CLI session id, used to resume the same agent-side conversation
+    /// across turns. Set after the first successful turn; persisted so
+    /// conversations can be resumed across app restarts.
+    pub agent_session_id: Option<String>,
+    /// The harness that owns `agent_session_id`. A session id is
+    /// harness-specific — a Claude id can't `session/load` under grok and vice
+    /// versa — so this records which backend produced it. `None` on sessions
+    /// saved before harnesses existed (treated as `claude-code`).
+    pub session_harness: Option<String>,
     /// Short summary produced by the title hook after the first
     /// user/assistant exchange. `Some` for change sessions that have been
     /// summarised; `None` otherwise (including all exploration/caps/codex
@@ -71,10 +77,12 @@ pub struct ChatSession {
     /// Persisted so we only re-inject when the idea body actually changes
     /// between turns (first turn always injects when non-empty).
     pub last_seeded_description: Option<String>,
-    /// Model override for this chat, as a `--model` value (alias or full id).
-    /// `None` means "use the project default" (which itself may be unset, in
-    /// which case the CLI picks). Persisted so a pinned model survives resume.
-    pub selected_model: Option<String>,
+    /// Model override for this chat, as a harness-tagged `ModelRef`. `None`
+    /// means "use the project default" (which itself may be unset, in which
+    /// case the built-in default applies). Persisted so a pinned model survives
+    /// resume; a legacy bare-string value loads as the `claude-code` harness
+    /// via `ModelRef`'s deserialize shim.
+    pub selected_model: Option<ModelRef>,
 }
 
 impl ChatSession {
@@ -95,7 +103,8 @@ impl ChatSession {
             messages: Vec::new(),
             is_streaming: false,
             pending_text: String::new(),
-            claude_session_id: None,
+            agent_session_id: None,
+            session_harness: None,
             title: None,
             last_seeded_description: None,
             selected_model: None,
@@ -110,14 +119,17 @@ struct PersistedSession {
     id: String,
     created_at_nanos: i128,
     messages: Vec<ChatMessage>,
+    // `alias` keeps sessions written under the old field name loadable.
+    #[serde(default, alias = "claude_session_id")]
+    agent_session_id: Option<String>,
     #[serde(default)]
-    claude_session_id: Option<String>,
+    session_harness: Option<String>,
     #[serde(default)]
     title: Option<String>,
     #[serde(default)]
     last_seeded_description: Option<String>,
     #[serde(default)]
-    selected_model: Option<String>,
+    selected_model: Option<ModelRef>,
 }
 
 /// What the title summariser should summarise. A "bare slash command" turn
@@ -304,7 +316,8 @@ pub fn load_sessions_for(scope: &str, project_root: Option<&Path>) -> Vec<ChatSe
             messages: persisted.messages,
             is_streaming: false,
             pending_text: String::new(),
-            claude_session_id: persisted.claude_session_id,
+            agent_session_id: persisted.agent_session_id,
+            session_harness: persisted.session_harness,
             title: persisted.title,
             last_seeded_description: persisted.last_seeded_description,
             selected_model: persisted.selected_model,
@@ -347,7 +360,8 @@ pub fn save_session(session: &ChatSession, project_root: Option<&Path>) -> anyho
         id: session.id.clone(),
         created_at_nanos: session.created_at_nanos,
         messages: session.messages.clone(),
-        claude_session_id: session.claude_session_id.clone(),
+        agent_session_id: session.agent_session_id.clone(),
+        session_harness: session.session_harness.clone(),
         title: session.title.clone(),
         last_seeded_description: session.last_seeded_description.clone(),
         selected_model: session.selected_model.clone(),

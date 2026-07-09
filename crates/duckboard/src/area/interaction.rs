@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use iced::Element;
 
-use duckchat::Attachment;
+use duckchat::{Attachment, ModelRef};
 
 use std::path::Path;
 
@@ -342,18 +342,17 @@ pub struct AgentSession {
     pub chat_editors: Vec<EditorState>,
     pub chat_collapsed: Vec<bool>,
     pub esc_count: u8,
-    pub agent_model: String,
-    /// Resolved project-level default `--model` value for this session's
-    /// project. Transient (not persisted) — refreshed from `Config` by the
-    /// main loop. Used to render the picker's "Default (…)" label and to
-    /// resolve the effective model when `session.selected_model` is `None`.
-    pub project_model_default: Option<String>,
+    /// Resolved project-level default model (harness-tagged `ModelRef`) for
+    /// this session's project. Transient (not persisted) — refreshed from
+    /// `Config` by the main loop. Used to render the picker's "Default (…)"
+    /// label and to resolve the effective model when `session.selected_model`
+    /// is `None`.
+    pub project_model_default: Option<ModelRef>,
     /// Set when the user changes the per-chat model via the picker; consumed
     /// by `update_with_side_effects` to persist the session. Transient.
     pub model_dirty: bool,
     pub agent_input_tokens: usize,
     pub agent_output_tokens: usize,
-    pub agent_context_window: usize,
     /// Suggested /ds-* command for the current stage (without the leading slash).
     /// Used as the "press Enter on empty input" shortcut and for placeholder text.
     pub obvious_command: Option<String>,
@@ -444,12 +443,10 @@ impl AgentSession {
             chat_editors: Vec::new(),
             chat_collapsed: Vec::new(),
             esc_count: 0,
-            agent_model: String::new(),
             project_model_default: None,
             model_dirty: false,
             agent_input_tokens: 0,
             agent_output_tokens: 0,
-            agent_context_window: 200_000,
             obvious_command: None,
             scope_facts: None,
             queue_editor: None,
@@ -465,6 +462,33 @@ impl AgentSession {
             pending_followup_prompt: None,
             needs_flush: false,
         }
+    }
+
+    /// The harness this session's next turn dispatches to, resolved through the
+    /// model cascade (per-chat pin → project default → built-in default).
+    pub(crate) fn effective_harness(&self) -> String {
+        resolve_turn_model(
+            self.session.selected_model.as_ref(),
+            self.project_model_default.as_ref(),
+        )
+        .harness
+    }
+
+    /// The stored agent session id, but only when it belongs to the harness the
+    /// next turn will run on. Session ids are harness-specific — a Claude id
+    /// can't `session/load` under grok and vice versa — so when the chat has
+    /// been switched to a different harness this returns `None` and the turn
+    /// starts a fresh agent-side session (the transcript is re-fed as a history
+    /// preamble). Sessions saved before harnesses existed carry no owner and are
+    /// treated as `claude-code`.
+    pub(crate) fn resumable_session_id(&self) -> Option<&str> {
+        let id = self.session.agent_session_id.as_deref()?;
+        let owner = self
+            .session
+            .session_harness
+            .as_deref()
+            .unwrap_or("claude-code");
+        (owner == self.effective_harness()).then_some(id)
     }
 }
 
@@ -576,6 +600,29 @@ mod tests {
             .text
     }
 
+    /// @spec harness/selection Default model resolution: An empty cascade resolves to grok-4.5
+    #[test]
+    fn empty_cascade_resolves_to_grok_4_5() {
+        // GIVEN neither a per-chat pin nor a project default.
+        // WHEN the model for a turn is resolved.
+        let resolved = resolve_turn_model(None, None);
+        // THEN the resolved model is grok-4.5 on the grok harness.
+        assert_eq!(resolved.harness, "grok");
+        assert_eq!(resolved.model, "grok-4.5");
+    }
+
+    /// @spec harness/selection Default model resolution: A per-chat pin overrides a project default
+    #[test]
+    fn per_chat_pin_overrides_project_default() {
+        // GIVEN a per-chat pin and a different project default.
+        let pin = ModelRef::new("claude-code", "opus");
+        let project_default = ModelRef::new("grok", "grok-4.5");
+        // WHEN the model for a turn is resolved.
+        let resolved = resolve_turn_model(Some(&pin), Some(&project_default));
+        // THEN the resolved model is the per-chat pin.
+        assert_eq!(resolved, pin);
+    }
+
     /// @spec session/scope Reliable first-turn delivery: The first turn's message body carries the scope orientation
     #[test]
     fn priming_body_carries_scope_orientation() {
@@ -623,6 +670,33 @@ mod tests {
         assert!(!should_prime(None, true));
         // Only the brand-new session (no id, no messages) is primed.
         assert!(should_prime(None, false));
+    }
+
+    #[test]
+    fn session_id_resumable_only_for_the_owning_harness() {
+        let mut ax = AgentSession::new("foo".to_string(), ScopeKind::Change);
+        ax.session.agent_session_id = Some("sess-abc".to_string());
+        ax.session.session_harness = Some("claude-code".to_string());
+
+        // Pinned to the harness that produced the id → resume it.
+        ax.session.selected_model = Some(ModelRef::new("claude-code", "opus"));
+        assert_eq!(ax.resumable_session_id(), Some("sess-abc"));
+
+        // Switched to grok: the Claude id is foreign and would fail
+        // `session/load`, so the turn must start a fresh agent session.
+        ax.session.selected_model = Some(ModelRef::new("grok", "grok-4.5"));
+        assert_eq!(ax.resumable_session_id(), None);
+    }
+
+    #[test]
+    fn legacy_session_id_without_owner_is_claude_code() {
+        // A session saved before harnesses existed carries an id but no owner.
+        let mut ax = AgentSession::new("foo".to_string(), ScopeKind::Change);
+        ax.session.agent_session_id = Some("legacy-id".to_string());
+        ax.session.session_harness = None;
+        ax.session.selected_model = Some(ModelRef::new("claude-code", "opus"));
+        // It resumes under Claude Code, the only backend that could have made it.
+        assert_eq!(ax.resumable_session_id(), Some("legacy-id"));
     }
 
     #[test]
@@ -1092,9 +1166,11 @@ fn handle_agent_chat(
             ax.queue_editor = None;
         }
         agent_chat::Msg::ModelSelected(choice) => {
-            // `id == None` is the "use project default" sentinel, stored as
-            // `None` on the session. The actual model resolves at send time.
-            ax.session.selected_model = choice.id;
+            // The sentinel choice is the "use project default" option, stored as
+            // `None` on the session; the actual model resolves at send time. A
+            // real choice carries its own harness, so a picked grok model
+            // persists under the grok harness (not a hardcoded tag).
+            ax.session.selected_model = choice.to_ref();
             // Persisted by `update_with_side_effects`, which has `project_root`.
             ax.model_dirty = true;
         }
@@ -1180,8 +1256,8 @@ fn make_queue_editor(text: &str, highlighter: &SyntaxHighlighter) -> EditorState
 /// session is primed only when it is brand-new — no resumable Claude session id
 /// and no prior messages. A resumed session already carries its orientation in
 /// history, so re-priming would repeat it.
-fn should_prime(claude_session_id: Option<&str>, has_prior_messages: bool) -> bool {
-    claude_session_id.is_none() && !has_prior_messages
+fn should_prime(resumable_session_id: Option<&str>, has_prior_messages: bool) -> bool {
+    resumable_session_id.is_none() && !has_prior_messages
 }
 
 /// Assemble the first-turn priming body from the available orientation parts:
@@ -1229,14 +1305,11 @@ pub fn send_prompt_text(ax: &mut AgentSession, text: String, highlighter: &Synta
     // model not to respond substantively (single-dot ack) so the round-trip
     // cost is minimal.
     //
-    // Gated on a brand-new session (no `claude_session_id` *and* no prior
+    // Gated on a brand-new session (no resumable session id *and* no prior
     // messages) so legacy sessions with history but no resume id keep
     // hitting the `build_history_preamble` path below instead of getting
     // re-primed mid-conversation.
-    if should_prime(
-        ax.session.claude_session_id.as_deref(),
-        !ax.session.messages.is_empty(),
-    ) {
+    if should_prime(ax.resumable_session_id(), !ax.session.messages.is_empty()) {
         // Resolve every orientation part. AGENTS.md is optional; the scope
         // blurb and path note are always present, so the assembled body is
         // non-empty for any fresh session — we now prime even in projects
@@ -1271,14 +1344,16 @@ pub fn send_prompt_text(ax: &mut AgentSession, text: String, highlighter: &Synta
         // All orientation now rides the message body above; `system_additions`
         // (the dropped `--append-system-prompt` channel) stays at its empty
         // default.
-        // Per-chat pin wins; otherwise fall back to the project default
-        // (which may itself be unset → CLI picks). Prime on the same model so
-        // the resumed session stays consistent.
-        req.model = ax
-            .session
-            .selected_model
-            .clone()
-            .or_else(|| ax.project_model_default.clone());
+        // Per-chat pin wins; otherwise the project default, otherwise the
+        // built-in default (grok-4.5). Prime on the same model so the resumed
+        // session stays consistent.
+        req.model = Some(
+            resolve_turn_model(
+                ax.session.selected_model.as_ref(),
+                ax.project_model_default.as_ref(),
+            )
+            .model,
+        );
         // Selection / image attachments and idea-description blurb all
         // belong to the user's intended turn — leave them on `ax` so the
         // follow-up dispatch picks them up.
@@ -1295,7 +1370,7 @@ pub fn send_prompt_text(ax: &mut AgentSession, text: String, highlighter: &Synta
     // prepend the history as context so the agent isn't starting blind.
     // Happens for legacy sessions saved before session-id persistence, or if
     // the server-side session has been pruned.
-    let prompt = if ax.session.claude_session_id.is_none() && !ax.session.messages.is_empty() {
+    let prompt = if ax.resumable_session_id().is_none() && !ax.session.messages.is_empty() {
         build_history_preamble(&ax.session.messages) + &text
     } else {
         text.clone()
@@ -1305,7 +1380,7 @@ pub fn send_prompt_text(ax: &mut AgentSession, text: String, highlighter: &Synta
     // blurb so the agent doesn't have to ask which change/exploration/etc.
     // we're in. Subsequent turns ride `--resume` and skip this.
     let mut system_additions = Vec::new();
-    if ax.session.claude_session_id.is_none() {
+    if ax.resumable_session_id().is_none() {
         let scope = crate::scope::SessionScope {
             kind: ax.scope_kind,
             scope_key: ax.session.scope.clone(),
@@ -1372,7 +1447,7 @@ pub fn send_prompt_text(ax: &mut AgentSession, text: String, highlighter: &Synta
     // `TurnComplete`. Otherwise closing the app mid-turn drops the in-flight
     // message: the only prior checkpoint is the last completed turn, and on a
     // fresh session that's the synthetic priming turn — so the whole real
-    // conversation is lost while the resumable `claude_session_id` survives.
+    // conversation is lost while the resumable `agent_session_id` survives.
     // `handle.working_dir()` is the project root the agent was spawned with,
     // which is exactly the `project_root` every other save/load site uses.
     if let Err(e) = crate::chat_store::save_session(&ax.session, Some(handle.working_dir())) {
@@ -1387,14 +1462,16 @@ pub fn send_prompt_text(ax: &mut AgentSession, text: String, highlighter: &Synta
 
     let mut req = TurnRequest::new(prompt, handle.working_dir().to_path_buf());
     req.system_additions = system_additions;
-    // Per-chat pin wins; otherwise the project default (possibly unset → CLI
-    // default). On a resumed session this `--model` overrides the session's
-    // baked-in model for this turn.
-    req.model = ax
-        .session
-        .selected_model
-        .clone()
-        .or_else(|| ax.project_model_default.clone());
+    // Per-chat pin wins; otherwise the project default, otherwise the built-in
+    // default (grok-4.5). On a resumed session this model overrides the
+    // session's baked-in model for this turn.
+    req.model = Some(
+        resolve_turn_model(
+            ax.session.selected_model.as_ref(),
+            ax.project_model_default.as_ref(),
+        )
+        .model,
+    );
     req.attachments = std::mem::take(&mut ax.input_attachments);
     handle.send_turn(req);
 
@@ -1411,6 +1488,24 @@ pub fn send_prompt_text(ax: &mut AgentSession, text: String, highlighter: &Synta
 fn rehighlight_input(input: &mut EditorState, highlighter: &SyntaxHighlighter) {
     let syntax = highlighter.find_syntax("md");
     input.highlight_spans = Some(highlighter.highlight_lines(&input.lines, syntax));
+}
+
+/// The built-in default model — used when neither a per-chat pin nor a project
+/// default is set. See the `harness/selection` capability.
+pub(crate) fn builtin_default_model() -> ModelRef {
+    ModelRef::new("grok", "grok-4.5")
+}
+
+/// Resolve the model for a turn from the three-step cascade, most specific
+/// first: a per-chat `pin`, then the `project_default`, then the built-in
+/// default (grok-4.5). The first level that is set wins.
+pub(crate) fn resolve_turn_model(
+    pin: Option<&ModelRef>,
+    project_default: Option<&ModelRef>,
+) -> ModelRef {
+    pin.or(project_default)
+        .cloned()
+        .unwrap_or_else(builtin_default_model)
 }
 
 /// Render prior chat history as a text preamble for the agent. Used when we
@@ -1913,22 +2008,27 @@ pub fn view_column<'a, M: 'a + Clone>(
         }
         ActiveTab::Chat => {
             if let Some(ax) = state.active() {
-                let model_choices =
-                    agent_chat::chat_model_choices(ax.project_model_default.as_deref());
-                let selected_model = agent_chat::selected_model_choice(
-                    &model_choices,
-                    ax.session.selected_model.as_deref(),
+                let model_choices = agent_chat::chat_model_choices();
+                // The selector always reflects the concrete model the next turn
+                // will run (pin → project default → built-in), never a "Default"
+                // placeholder. The same effective model drives the meter's
+                // denominator (its own context window, not a stream value).
+                let effective_model = resolve_turn_model(
+                    ax.session.selected_model.as_ref(),
+                    ax.project_model_default.as_ref(),
                 );
+                let selected_model =
+                    agent_chat::selected_model_choice(&model_choices, Some(&effective_model));
                 let status = agent_chat::StatusInfo {
                     is_streaming: ax.session.is_streaming,
                     esc_count: ax.esc_count,
-                    // Observed model (what the CLI ran); empty until reported,
-                    // in which case the widget hides the readout.
-                    model: ax.agent_model.clone(),
                     model_choices,
                     selected_model,
+                    // Continuation when a session id for this harness survives;
+                    // otherwise the next turn opens fresh and re-sends history.
+                    will_resume: ax.resumable_session_id().is_some(),
                     context_tokens: ax.agent_input_tokens + ax.agent_output_tokens,
-                    context_max: ax.agent_context_window,
+                    context_max: agent_chat::model_context_window(&effective_model),
                 };
                 let w = wrap.clone();
                 let chat_view = agent_chat::view(

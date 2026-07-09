@@ -19,7 +19,7 @@ readable until a write completes in full.
 - **THEN** the session file on disk still parses as the previously-persisted session
 
 > test: code
-> - crates/duckboard/src/chat_store.rs:742
+> - crates/duckboard/src/chat_store.rs:756
 
 ## Requirement: Non-destructive scope migration
 
@@ -38,7 +38,7 @@ delete it.
 - **THEN** the target scope afterward holds both sessions
 
 > test: code
-> - crates/duckboard/src/chat_store.rs:774
+> - crates/duckboard/src/chat_store.rs:788
 
 ### Scenario: Same-id collision keeps the fuller session and preserves the other
 
@@ -49,7 +49,7 @@ delete it.
 - **AND** the displaced copy is preserved rather than deleted
 
 > test: code
-> - crates/duckboard/src/chat_store.rs:805
+> - crates/duckboard/src/chat_store.rs:819
 
 ## Requirement: In-flight turn durability
 
@@ -67,7 +67,7 @@ persisted during the turn, not only when the turn completes.
 - **THEN** the persisted session includes those streamed messages
 
 > test: code
-> - crates/duckboard/src/chat_store.rs:839
+> - crates/duckboard/src/chat_store.rs:853
 
 ### Scenario: Streamed messages are persisted before turn completion
 
@@ -76,4 +76,4 @@ persisted during the turn, not only when the turn completes.
 - **THEN** the persisted session includes the messages streamed so far
 
 > test: code
-> - crates/duckboard/src/chat_store.rs:890
+> - crates/duckboard/src/chat_store.rs:904

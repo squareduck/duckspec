@@ -391,9 +391,9 @@ enum Message {
 
 // ── Update ───────────────────────────────────────────────────────────────────
 
-/// Stamp every chat session with the current project's default `--model`
-/// value. Cheap (a handful of sessions) and run once per update tick so a
-/// freshly-created session or a default just changed in Settings is reflected
+/// Stamp every chat session with the current project's default model
+/// (`ModelRef`). Cheap (a handful of sessions) and run once per update tick so
+/// a freshly-created session or a default just changed in Settings is reflected
 /// before the next send. `Config` and `project_root` live here on the global
 /// state; the interaction layer can't reach them, so it reads the stamped
 /// value off `AgentSession::project_model_default` instead.
@@ -1337,10 +1337,12 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
         Message::AgentEvent(key, evt) => {
             use agent::AgentEvent;
             let proj_root = state.project.project_root.clone();
-            // `(working_dir, scope_key, scope_kind, target_msg, command_hint_source, idea_description)`.
+            // `(working_dir, scope_key, scope_kind, target_msg, command_hint_source, idea_description, harness)`.
             // `command_hint_source` is the user-message-form text of the most
             // recent slash command — fed to `title_hints::build_hint` even
-            // when the target message itself carries no command.
+            // when the target message itself carries no command. `harness` names
+            // the provider that runs the title summary (the session's resolved
+            // model harness).
             type TitleTaskInput = (
                 PathBuf,
                 String,
@@ -1348,6 +1350,7 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                 String,
                 Option<String>,
                 Option<String>,
+                String,
             );
             let mut title_task_input: Option<TitleTaskInput> = None;
             // Staged `(folder-slug, exploration-id)` from a `ds create change`
@@ -1360,9 +1363,12 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                 };
                 match evt {
                     AgentEvent::Ready(handle) => {
-                        // Seed the worker with a previously-persisted Claude session
-                        // id so the next prompt resumes that conversation.
-                        if let Some(sid) = ax.session.claude_session_id.clone() {
+                        // Seed the worker with a persisted session id so the next
+                        // prompt resumes that conversation — but only when the id
+                        // belongs to this turn's harness. After a harness switch
+                        // the stored id is foreign (a Claude id can't `session/load`
+                        // under grok), so we leave the worker to start fresh.
+                        if let Some(sid) = ax.resumable_session_id().map(str::to_string) {
                             handle.set_session_id(sid);
                         }
                         ax.agent_handle = Some(handle);
@@ -1373,6 +1379,14 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                         ax.chat_commands = commands;
                     }
                     AgentEvent::ContentDelta { text } => {
+                        ax.session.pending_text.push_str(&text);
+                        ax.needs_flush = true;
+                    }
+                    AgentEvent::ReasoningDelta { text } => {
+                        // Only the grok harness emits reasoning. Surface it in
+                        // the streaming buffer so it's visible rather than
+                        // dropped; a dedicated reasoning-block rendering is
+                        // left as later work.
                         ax.session.pending_text.push_str(&text);
                         ax.needs_flush = true;
                     }
@@ -1444,6 +1458,11 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                             && let Some(target) =
                                 chat_store::title_summarization_target(&ax.session)
                         {
+                            let harness = interaction::resolve_turn_model(
+                                ax.session.selected_model.as_ref(),
+                                ax.project_model_default.as_ref(),
+                            )
+                            .harness;
                             title_task_input = Some((
                                 handle.working_dir().to_path_buf(),
                                 ax.session.scope.clone(),
@@ -1451,6 +1470,7 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                                 target.message,
                                 target.command_hint_source,
                                 ax.idea_description.clone(),
+                                harness,
                             ));
                         }
                     }
@@ -1470,25 +1490,22 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                         });
                     }
                     AgentEvent::SessionIdUpdated { session_id } => {
-                        ax.session.claude_session_id = Some(session_id);
+                        // Stamp the id with the harness that produced it so a
+                        // later harness switch knows the id is foreign and starts
+                        // a fresh agent session instead of a doomed `session/load`.
+                        let harness = ax.effective_harness();
+                        ax.session.session_harness = Some(harness);
+                        ax.session.agent_session_id = Some(session_id);
                     }
                     AgentEvent::UsageUpdate {
-                        model,
                         input_tokens,
                         output_tokens,
-                        context_window,
                     } => {
-                        if let Some(m) = model {
-                            ax.agent_model = m;
-                        }
                         if input_tokens > 0 {
                             ax.agent_input_tokens = input_tokens;
                         }
                         if output_tokens > 0 {
                             ax.agent_output_tokens = output_tokens;
-                        }
-                        if let Some(cw) = context_window {
-                            ax.agent_context_window = cw;
                         }
                     }
                     AgentEvent::ProcessExited => {
@@ -1564,6 +1581,7 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                 user,
                 command_hint_source,
                 idea_description,
+                harness,
             )) = title_task_input
             {
                 use duckchat::ContextHook;
@@ -1595,11 +1613,21 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                 let route_key = key.clone();
                 let work = async move {
                     use duckchat::Provider;
-                    let provider = duckchat::claude_code::ClaudeCodeProvider::new();
-                    provider
-                        .title_summary(req, &working_dir)
-                        .await
-                        .map_err(|e| e.to_string())
+                    // Dispatch the summary on the session's harness — a grok
+                    // session's title model is grok-specific and vice versa.
+                    let result = match harness.as_str() {
+                        "grok" => {
+                            duckchat::grok::GrokProvider::new()
+                                .title_summary(req, &working_dir)
+                                .await
+                        }
+                        _ => {
+                            duckchat::claude_code::ClaudeCodeProvider::new()
+                                .title_summary(req, &working_dir)
+                                .await
+                        }
+                    };
+                    result.map_err(|e| e.to_string())
                 };
                 let title_task = Task::perform(work, move |result| Message::SessionTitleReady {
                     key: route_key.clone(),
@@ -4963,7 +4991,18 @@ fn subscription(state: &State) -> Subscription<Message> {
                           subs: &mut Vec<Subscription<Message>>| {
             for session in &ix.sessions {
                 let key = format!("agent:ix:{}/{}", ix.instance_id, session.session.id);
-                subs.push(agent::agent_subscription(key, root.clone()).map(tagged_agent));
+                // The worker runs on the provider named by the session's
+                // resolved model harness (per-chat pin → project default →
+                // built-in default). Folding it into the subscription respawns
+                // the worker on the new backend when the harness changes.
+                let harness = interaction::resolve_turn_model(
+                    session.session.selected_model.as_ref(),
+                    session.project_model_default.as_ref(),
+                )
+                .harness;
+                subs.push(
+                    agent::agent_subscription(key, root.clone(), harness).map(tagged_agent),
+                );
             }
         };
         for ix in state.interactions.values() {

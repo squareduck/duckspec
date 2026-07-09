@@ -62,7 +62,10 @@ pub fn update(
         }
         Message::ModelDefaultSelected(choice) => {
             if let Some(root) = project_root {
-                config.set_project_model_default(root, choice.id);
+                // A real choice carries its own harness, so a grok default
+                // persists under the grok harness; the sentinel maps to `None`.
+                let model = choice.to_ref();
+                config.set_project_model_default(root, model);
                 let _ = config::save(config);
             }
         }
@@ -153,7 +156,7 @@ fn model_section<'a>(config: &Config, root: &Path) -> Element<'a, Message> {
 
     let choices = agent_chat::project_model_choices();
     let current = config.project_model_default(root);
-    let selected = agent_chat::selected_model_choice(&choices, current.as_deref());
+    let selected = agent_chat::selected_model_choice(&choices, current.as_ref());
     let picker = pick_list(choices, Some(selected), Message::ModelDefaultSelected)
         .width(280)
         .style(theme::pick_list_style)

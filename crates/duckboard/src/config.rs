@@ -3,6 +3,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+use duckchat::ModelRef;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -11,11 +12,12 @@ pub struct Config {
     pub ui: FontConfig,
     pub content: FontConfig,
     pub projects: ProjectsConfig,
-    /// Default `--model` value (alias or full id) per project, keyed by
+    /// Default model (harness-tagged `ModelRef`) per project, keyed by
     /// `project_hash`. New chat sessions in a project inherit this default
-    /// when they haven't pinned a model of their own. Absent = let the CLI
-    /// pick.
-    pub model_defaults: HashMap<String, String>,
+    /// when they haven't pinned a model of their own. Absent = fall through to
+    /// the built-in default. Legacy bare-string values load as the
+    /// `claude-code` harness via `ModelRef`'s deserialize shim.
+    pub model_defaults: HashMap<String, ModelRef>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -53,15 +55,15 @@ impl Default for Config {
 }
 
 impl Config {
-    /// The default `--model` value for `project_root`, if one is set.
-    pub fn project_model_default(&self, project_root: &Path) -> Option<String> {
+    /// The default model for `project_root`, if one is set.
+    pub fn project_model_default(&self, project_root: &Path) -> Option<ModelRef> {
         self.model_defaults
             .get(&project_hash(project_root))
             .cloned()
     }
 
     /// Set (or, with `None`, clear) the default model for `project_root`.
-    pub fn set_project_model_default(&mut self, project_root: &Path, model: Option<String>) {
+    pub fn set_project_model_default(&mut self, project_root: &Path, model: Option<ModelRef>) {
         let key = project_hash(project_root);
         match model {
             Some(m) => {
