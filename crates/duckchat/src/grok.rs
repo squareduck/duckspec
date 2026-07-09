@@ -1,9 +1,10 @@
 //! Grok agent harness.
 //!
 //! Drives the `grok` CLI over ACP (Agent Client Protocol — JSON-RPC 2.0 over
-//! the child's stdio). Each turn spawns `grok agent --always-approve stdio`,
-//! runs the `initialize` handshake, opens a session (fresh or resumed), and
-//! sends one `session/prompt`, translating grok's `session/update` stream into
+//! the child's stdio). Each turn spawns
+//! `grok --no-ask-user agent --always-approve stdio`, runs the `initialize`
+//! handshake, opens a session (fresh or resumed), and sends one
+//! `session/prompt`, translating grok's `session/update` stream into
 //! provider-neutral [`crate::event::AgentEvent`]s.
 
 pub mod acp;

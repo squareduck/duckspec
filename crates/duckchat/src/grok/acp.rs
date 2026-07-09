@@ -5,9 +5,10 @@
 //! `session/prompt`. Requests carry an `id` and are answered by an `id`-matched
 //! response; `session/update` messages are notifications (the event stream);
 //! any agent→client request (e.g. a permission prompt) is auto-answered so the
-//! turn never deadlocks. The child is spawned `--always-approve`, so permission
-//! round-trips should not occur — the auto-answer is a safety net, and a real
-//! interactive permission bridge is deferred (see the design's risks).
+//! turn never deadlocks. The child is spawned `--no-ask-user --always-approve`,
+//! so structured question prompts and permission round-trips should not occur —
+//! the auto-answer is a safety net, and a real interactive permission bridge is
+//! deferred (see the design's risks).
 
 use std::path::Path;
 use std::pin::Pin;
@@ -69,22 +70,26 @@ pub struct PromptResult {
 }
 
 impl AcpTurn {
-    /// Spawn `grok agent --always-approve stdio` in `cwd` and wrap its stdio as
-    /// a JSON-RPC transport. Does not yet run the handshake — call
+    /// Spawn `grok --no-ask-user agent --always-approve stdio` in `cwd` and wrap
+    /// its stdio as a JSON-RPC transport. Does not yet run the handshake — call
     /// [`AcpTurn::initialize`] next.
     pub async fn spawn(cwd: &Path) -> Result<Self, Error> {
         Self::spawn_with(super::spawn::grok_command(), cwd).await
     }
 
     /// Like [`AcpTurn::spawn`] but over a caller-supplied base command, which
-    /// this appends the `agent --always-approve stdio` args and stdio wiring to
-    /// before spawning. The real path passes `spawn::grok_command()`; tests pass
-    /// a command pointing at a missing binary to exercise graceful spawn
-    /// failure without touching the environment.
+    /// this appends the `--no-ask-user agent --always-approve stdio` args and
+    /// stdio wiring to before spawning. `--no-ask-user` is a global flag (must
+    /// precede `agent`); duckboard has no structured-questions UI, so the tool
+    /// is disabled rather than rendered. The real path passes
+    /// `spawn::grok_command()`; tests pass a command pointing at a missing
+    /// binary to exercise graceful spawn failure without touching the
+    /// environment.
     pub async fn spawn_with(mut cmd: Command, cwd: &Path) -> Result<Self, Error> {
         use std::process::Stdio;
 
-        cmd.arg("agent")
+        cmd.arg("--no-ask-user")
+            .arg("agent")
             .arg("--always-approve")
             .arg("stdio")
             .current_dir(cwd)
@@ -293,8 +298,8 @@ impl AcpTurn {
     }
 
     /// Auto-answer an agent→client request with a null result. Since the child
-    /// runs `--always-approve`, permission requests should not arrive; this
-    /// keeps the loop from deadlocking if one does.
+    /// runs `--no-ask-user --always-approve`, question and permission requests
+    /// should not arrive; this keeps the loop from deadlocking if one does.
     async fn answer_request(&mut self, id: Value) -> Result<(), Error> {
         self.write_message(&json!({
             "jsonrpc": "2.0",
