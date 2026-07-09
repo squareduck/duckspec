@@ -1,5 +1,8 @@
 //! Iced widget implementation for the custom text editor.
 
+use std::cell::RefCell;
+use std::sync::Arc;
+
 use iced::advanced::layout;
 use iced::advanced::mouse as adv_mouse;
 use iced::advanced::renderer::{self, Renderer as _};
@@ -22,6 +25,7 @@ use super::state::{
 use crate::path_link::{self, LinkTarget};
 use crate::theme;
 use crate::widget::autoscroll;
+use crate::widget::md_table::{self, TableLayout};
 use crate::widget::terminal::current_modifiers;
 
 // ── Layout constants ───────────────────────────────────────────────────────
@@ -41,6 +45,37 @@ const SCROLLBAR_RADIUS: f32 = 2.0;
 const SCROLLBAR_MIN_SCROLLER: f32 = 20.0;
 
 // ── Widget internal state (in iced tree) ───────────────────────────────────
+
+/// Inputs that affect hybrid `EditorLayout`. Cache is valid only while this
+/// key matches the current call.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct HybridLayoutKey {
+    pane_chars: usize,
+    word_wrap: bool,
+    /// `Arc::as_ptr` of `EditorState::lines` — changes when the buffer Arc is
+    /// replaced (e.g. rebuild). In-place mutation keeps the ptr and bumps
+    /// `highlight_version` instead.
+    lines_ptr: usize,
+    highlight_version: u64,
+    line_count: usize,
+}
+
+impl HybridLayoutKey {
+    fn new(
+        lines: &Arc<Vec<String>>,
+        highlight_version: u64,
+        pane_chars: usize,
+        word_wrap: bool,
+    ) -> Self {
+        Self {
+            pane_chars: pane_chars.max(1),
+            word_wrap,
+            lines_ptr: Arc::as_ptr(lines) as usize,
+            highlight_version,
+            line_count: lines.len(),
+        }
+    }
+}
 
 #[derive(Debug, Default)]
 struct InternalState {
@@ -68,6 +103,10 @@ struct InternalState {
     /// consumed on the next event to nudge `scroll_y`. Mouse clicks never set
     /// it, so clicking a scrolled input doesn't yank the view to the caret.
     follow_after_key: bool,
+    /// Cached hybrid layout for the `md_tables` path. Shared by layout,
+    /// update, and draw via `RefCell` so draw can fill on a cold miss without
+    /// a mutable tree. Invalidated when `HybridLayoutKey` changes.
+    hybrid_layout: RefCell<Option<(HybridLayoutKey, EditorLayout)>>,
 }
 
 /// A URL or file-path reference found at a click/hover position in the
@@ -157,6 +196,44 @@ fn cursor_visual_pos(state: &EditorState, wrap: &WrapLayout) -> (usize, usize) {
     (visual_row, char_col - row_start)
 }
 
+/// Cursor visual placement when hybrid table layout is active.
+fn cursor_visual_pos_hybrid(state: &EditorState, ed: &EditorLayout) -> (usize, usize) {
+    let line = state.cursor.line.min(ed.line_kind.len().saturating_sub(1));
+    match ed.line_kind.get(line) {
+        Some(LineLayoutKind::TableRow { region, row }) => {
+            if let Some(tv) = md_table::source_to_visual(
+                &ed.tables,
+                state.cursor,
+            ) {
+                // Map region-local visual row to editor-global via the row's
+                // first source line cum_rows.
+                let row_line = ed.tables.regions[*region].rows[*row].source_line;
+                let base = ed.cum_rows.get(row_line).copied().unwrap_or(0);
+                let within_row = tv
+                    .visual_row_in_region
+                    .saturating_sub(ed.table_visual_row_in_region(*region, *row, 0));
+                (base + within_row, tv.char_col)
+            } else {
+                (ed.cum_rows.get(line).copied().unwrap_or(0), 0)
+            }
+        }
+        Some(LineLayoutKind::TableSeparator { .. }) => {
+            // Separator has no visual row; park on the next data row's start.
+            (ed.cum_rows.get(line).copied().unwrap_or(0), 0)
+        }
+        _ => {
+            let line_str = &state.lines[line];
+            let byte_col = state.cursor.col.min(line_str.len());
+            let char_col = line_str[..byte_col].chars().count();
+            let starts = ed.prose_row_starts.get(line).map(|s| s.as_slice()).unwrap_or(&[0]);
+            let sub_row = starts.iter().rposition(|&s| char_col >= s).unwrap_or(0);
+            let row_start = starts.get(sub_row).copied().unwrap_or(0);
+            let visual_row = ed.cum_rows.get(line).copied().unwrap_or(0) + sub_row;
+            (visual_row, char_col.saturating_sub(row_start))
+        }
+    }
+}
+
 /// Translate a visual sub-row + char column-within-row back to a logical
 /// `Pos` (byte-offset col), clamping to the row's visual width.
 fn visual_to_logical_pos(
@@ -217,35 +294,241 @@ fn visual_down_target(state: &EditorState, wrap: &WrapLayout) -> Option<Pos> {
     ))
 }
 
-/// Compute the character offsets where each visual row starts for a single line.
-fn wrap_line_starts(line: &str, max_chars: usize) -> Vec<usize> {
-    if max_chars == 0 {
-        return vec![0];
+/// Translate hybrid visual coordinates (prose wrap or table band) back to a
+/// source `Pos`, preserving preferred column within the visual row.
+fn hybrid_visual_to_pos(
+    state: &EditorState,
+    ed: &EditorLayout,
+    visual_row: usize,
+    col_in_row: usize,
+) -> Pos {
+    let (line_idx, sub_row) = ed.visual_to_logical(visual_row);
+    match ed.line_kind.get(line_idx) {
+        Some(LineLayoutKind::TableRow { region, row }) => {
+            let visual_in_region = ed.table_visual_row_in_region(*region, *row, sub_row);
+            md_table::visual_to_source(&ed.tables, *region, visual_in_region, col_in_row)
+                .unwrap_or_else(|| Pos::new(line_idx, 0))
+        }
+        Some(LineLayoutKind::TableSeparator { .. }) => Pos::new(line_idx, 0),
+        _ => {
+            let starts = ed
+                .prose_row_starts
+                .get(line_idx)
+                .map(|s| s.as_slice())
+                .unwrap_or(&[0]);
+            let char_start = starts.get(sub_row).copied().unwrap_or(0);
+            let char_end = if sub_row + 1 < starts.len() {
+                starts[sub_row + 1]
+            } else {
+                state
+                    .lines
+                    .get(line_idx)
+                    .map(|l| l.chars().count())
+                    .unwrap_or(0)
+            };
+            let col = (char_start + col_in_row).min(char_end);
+            let line = state.lines.get(line_idx).map(|s| s.as_str()).unwrap_or("");
+            let byte_col = line
+                .char_indices()
+                .nth(col)
+                .map(|(b, _)| b)
+                .unwrap_or(line.len());
+            Pos::new(line_idx, byte_col)
+        }
     }
-    let chars: Vec<char> = line.chars().collect();
-    let len = chars.len();
-    if len <= max_chars {
-        return vec![0];
+}
+
+/// Pos one visual row above the cursor under hybrid prose+table layout.
+fn visual_up_target_hybrid(state: &EditorState, ed: &EditorLayout) -> Option<Pos> {
+    let (visual_row, col_in_row) = cursor_visual_pos_hybrid(state, ed);
+    if visual_row == 0 {
+        return None;
+    }
+    Some(hybrid_visual_to_pos(state, ed, visual_row - 1, col_in_row))
+}
+
+/// Mirror of `visual_up_target_hybrid` for downward motion.
+fn visual_down_target_hybrid(state: &EditorState, ed: &EditorLayout) -> Option<Pos> {
+    let (visual_row, col_in_row) = cursor_visual_pos_hybrid(state, ed);
+    if visual_row + 1 >= ed.total_visual_rows {
+        return None;
+    }
+    Some(hybrid_visual_to_pos(state, ed, visual_row + 1, col_in_row))
+}
+
+/// Compute the character offsets where each visual row starts for a single line.
+/// Thin wrapper over the shared soft-wrap primitive used by table cells too.
+fn wrap_line_starts(line: &str, max_chars: usize) -> Vec<usize> {
+    md_table::soft_wrap_starts(line, max_chars)
+}
+
+// ── Hybrid prose + table layout ────────────────────────────────────────────
+
+/// How one logical source line participates in visual space.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LineLayoutKind {
+    /// Ordinary line: 1 visual row, or wrap sub-rows via `prose_row_starts`.
+    Prose,
+    /// Separator line inside a table: 0 visual rows (aligns only).
+    TableSeparator { region: usize },
+    /// Header/body row: height from the table kernel's `TableRow`.
+    TableRow { region: usize, row: usize },
+}
+
+/// Unified visual layout for one frame when `md_tables` is on.
+#[derive(Debug, Clone)]
+struct EditorLayout {
+    /// Total visual rows across prose + tables.
+    total_visual_rows: usize,
+    /// Max content width in chars (pane for wrapped prose; may be larger when
+    /// a table overflows at MIN_COL).
+    content_width_chars: usize,
+    /// Pane width in character cells used to build this layout.
+    pane_chars: usize,
+    /// Table kernel output (may be empty if no complete GFM tables).
+    tables: TableLayout,
+    /// For each logical line: how it participates in visual space.
+    line_kind: Vec<LineLayoutKind>,
+    /// Char-offset wrap starts for Prose lines; empty for table lines.
+    prose_row_starts: Vec<Vec<usize>>,
+    /// Cumulative visual row offset for each logical line.
+    cum_rows: Vec<usize>,
+}
+
+impl EditorLayout {
+    fn compute(lines: &[String], pane_chars: usize, word_wrap: bool) -> Self {
+        let tables = md_table::layout_tables(lines, pane_chars.max(1));
+        let mut line_kind = vec![LineLayoutKind::Prose; lines.len()];
+        for (ri, region) in tables.regions.iter().enumerate() {
+            for line in region.source_lines.clone() {
+                if line >= lines.len() {
+                    continue;
+                }
+                if let Some(row_i) = region.rows.iter().position(|r| r.source_line == line) {
+                    line_kind[line] = LineLayoutKind::TableRow {
+                        region: ri,
+                        row: row_i,
+                    };
+                } else {
+                    line_kind[line] = LineLayoutKind::TableSeparator { region: ri };
+                }
+            }
+        }
+
+        let mut prose_row_starts = Vec::with_capacity(lines.len());
+        let mut cum_rows = Vec::with_capacity(lines.len());
+        let mut total = 0usize;
+
+        for (i, line) in lines.iter().enumerate() {
+            cum_rows.push(total);
+            match line_kind[i] {
+                LineLayoutKind::TableSeparator { .. } => {
+                    prose_row_starts.push(Vec::new());
+                }
+                LineLayoutKind::TableRow { region, row } => {
+                    let h = tables.regions[region].rows[row].height.max(1);
+                    prose_row_starts.push(Vec::new());
+                    total += h;
+                }
+                LineLayoutKind::Prose => {
+                    let starts = if word_wrap {
+                        wrap_line_starts(line, pane_chars.max(1))
+                    } else {
+                        vec![0]
+                    };
+                    total += starts.len().max(1);
+                    prose_row_starts.push(starts);
+                }
+            }
+        }
+
+        // Prose content width: pane when wrapping, else longest line.
+        let mut content_width_chars = if word_wrap {
+            pane_chars
+        } else {
+            lines
+                .iter()
+                .map(|l| l.chars().count())
+                .max()
+                .unwrap_or(0)
+                .max(pane_chars)
+        };
+        for region in &tables.regions {
+            content_width_chars = content_width_chars.max(region.total_width_chars);
+        }
+
+        Self {
+            total_visual_rows: total.max(lines.len().min(1)),
+            content_width_chars,
+            pane_chars: pane_chars.max(1),
+            tables,
+            line_kind,
+            prose_row_starts,
+            cum_rows,
+        }
+    }
+}
+
+/// Get-or-compute hybrid layout, cached on `InternalState` until pane width,
+/// wrap flag, or lines identity/version changes. Used by layout, update, and
+/// draw so a frame only runs `layout_tables` once for matching keys.
+fn cached_hybrid_layout(
+    internal: &InternalState,
+    lines: &Arc<Vec<String>>,
+    highlight_version: u64,
+    pane_chars: usize,
+    word_wrap: bool,
+) -> EditorLayout {
+    let key = HybridLayoutKey::new(lines, highlight_version, pane_chars, word_wrap);
+    let mut cache = internal.hybrid_layout.borrow_mut();
+    if let Some((k, ed)) = cache.as_ref()
+        && *k == key
+    {
+        return ed.clone();
+    }
+    let ed = EditorLayout::compute(lines, pane_chars, word_wrap);
+    *cache = Some((key, ed.clone()));
+    ed
+}
+
+// Keep `EditorLayout` methods in a second impl block below.
+impl EditorLayout {
+
+    /// Convert a visual row index to (logical_line, sub_row within that line).
+    fn visual_to_logical(&self, visual_row: usize) -> (usize, usize) {
+        if self.cum_rows.is_empty() {
+            return (0, 0);
+        }
+        let line = match self.cum_rows.binary_search(&visual_row) {
+            Ok(i) => {
+                // Exact hit: skip zero-height lines (separators) that share
+                // this cumulative offset with a later non-empty line.
+                let mut i = i;
+                while i + 1 < self.cum_rows.len() && self.cum_rows[i + 1] == visual_row {
+                    i += 1;
+                }
+                i
+            }
+            Err(i) => i.saturating_sub(1),
+        };
+        let line = line.min(self.line_kind.len().saturating_sub(1));
+        let sub_row = visual_row.saturating_sub(self.cum_rows[line]);
+        (line, sub_row)
     }
 
-    let mut starts = vec![0usize];
-    let mut pos = 0;
-    while pos < len {
-        let remaining = len - pos;
-        if remaining <= max_chars {
-            break;
-        }
-        let end = pos + max_chars;
-        let break_at = (pos..end)
-            .rev()
-            .find(|&i| chars[i] == ' ')
-            .map(|i| i + 1)
-            .unwrap_or(end);
-        let break_at = if break_at <= pos { end } else { break_at };
-        starts.push(break_at);
-        pos = break_at;
+    /// Region-local visual row for a table data row + fragment sub-row.
+    fn table_visual_row_in_region(&self, region: usize, row: usize, sub_row: usize) -> usize {
+        let Some(reg) = self.tables.regions.get(region) else {
+            return sub_row;
+        };
+        let before: usize = reg.rows.iter().take(row).map(|r| r.height).sum();
+        before + sub_row
     }
-    starts
+}
+
+fn pane_chars_for(content_w: f32, cell_w: f32) -> usize {
+    let usable = (content_w - CONTENT_PAD).max(0.0);
+    (usable / cell_w.max(0.1)).floor().max(1.0) as usize
 }
 
 // ── Widget ─────────────────────────────────────────────────────────────────
@@ -262,6 +545,8 @@ pub struct TextEdit<'a, M> {
     max_rows: Option<usize>,
     read_only: bool,
     word_wrap: bool,
+    /// When true (typically with word_wrap), GFM tables use `TableLayout`.
+    md_tables: bool,
     placeholder: Option<String>,
     on_submit: Option<M>,
     transparent_bg: bool,
@@ -289,6 +574,7 @@ impl<'a, M> TextEdit<'a, M> {
             max_rows: None,
             read_only: false,
             word_wrap: false,
+            md_tables: false,
             placeholder: None,
             on_submit: None,
             transparent_bg: false,
@@ -347,6 +633,14 @@ impl<'a, M> TextEdit<'a, M> {
         self
     }
 
+    /// When true, complete GFM pipe tables are laid out as fit-to-pane grids
+    /// (hybrid with ordinary wrap for non-table lines). Default `false` so
+    /// file tabs stay line-faithful.
+    pub fn md_tables(mut self, enabled: bool) -> Self {
+        self.md_tables = enabled;
+        self
+    }
+
     /// Text shown in muted color when the editor is empty.
     pub fn placeholder(mut self, text: impl Into<String>) -> Self {
         self.placeholder = Some(text.into());
@@ -402,6 +696,7 @@ impl<'a, M> TextEdit<'a, M> {
         viewport_height: f32,
         content_height: f32,
         wrap: Option<&WrapLayout>,
+        hybrid: Option<&EditorLayout>,
     ) -> Option<f32> {
         if self.max_rows.is_none() {
             return None;
@@ -410,9 +705,13 @@ impl<'a, M> TextEdit<'a, M> {
         if max_scroll <= 0.0 {
             return None;
         }
-        let cursor_vrow = match wrap {
-            Some(w) => cursor_visual_pos(self.state, w).0,
-            None => self.state.cursor.line,
+        let cursor_vrow = if let Some(ed) = hybrid {
+            cursor_visual_pos_hybrid(self.state, ed).0
+        } else {
+            match wrap {
+                Some(w) => cursor_visual_pos(self.state, w).0,
+                None => self.state.cursor.line,
+            }
         };
         let cursor_top = cursor_vrow as f32 * LINE_HEIGHT + CONTENT_PAD_Y;
         let cursor_bottom = cursor_top + LINE_HEIGHT;
@@ -435,6 +734,7 @@ impl<'a, M> TextEdit<'a, M> {
         viewport: Rectangle,
         internal: &InternalState,
         wrap: Option<&WrapLayout>,
+        hybrid: Option<&EditorLayout>,
         shell: &mut Shell<'_, M>,
     ) -> bool {
         let cell_w = if internal.cell_width > 0.0 {
@@ -442,12 +742,13 @@ impl<'a, M> TextEdit<'a, M> {
         } else {
             7.8
         };
-        let content_height = wrap
-            .map_or(self.state.lines.len() as f32, |w| {
-                w.total_visual_rows as f32
-            })
-            * LINE_HEIGHT
-            + CONTENT_PAD_Y * 2.0;
+        let content_height = if let Some(ed) = hybrid {
+            ed.total_visual_rows as f32 * LINE_HEIGHT + CONTENT_PAD_Y * 2.0
+        } else {
+            wrap.map_or(self.state.lines.len() as f32, |w| w.total_visual_rows as f32)
+                * LINE_HEIGHT
+                + CONTENT_PAD_Y * 2.0
+        };
 
         // Edge against the actually-visible span (layout bounds ∩ clip viewport).
         let top = bounds.y.max(viewport.y);
@@ -463,6 +764,7 @@ impl<'a, M> TextEdit<'a, M> {
             internal,
             self.state,
             wrap,
+            hybrid,
             scroll_y,
         );
         shell.publish((self.on_action)(EditorAction::Drag(drag_pos)));
@@ -484,18 +786,7 @@ impl<'a, M> TextEdit<'a, M> {
             if !has_room {
                 return false;
             }
-            let content_width = if self.word_wrap {
-                0.0
-            } else {
-                let max_chars = self
-                    .state
-                    .lines
-                    .iter()
-                    .map(|l| l.chars().count())
-                    .max()
-                    .unwrap_or(0);
-                max_chars as f32 * cell_w + CONTENT_PAD * 2.0
-            };
+            let content_width = content_width_px(self.word_wrap, hybrid, self.state, cell_w);
             shell.publish((self.on_action)(EditorAction::Scroll {
                 dy: velocity,
                 dx: 0.0,
@@ -515,6 +806,33 @@ impl<'a, M> TextEdit<'a, M> {
     }
 }
 
+/// Horizontal content width in px for scroll math. Zero means "no x scroll"
+/// (classic word-wrap). Hybrid tables may exceed the pane and enable `scroll_x`
+/// even when word wrap is on.
+fn content_width_px(
+    word_wrap: bool,
+    hybrid: Option<&EditorLayout>,
+    state: &EditorState,
+    cell_w: f32,
+) -> f32 {
+    if let Some(ed) = hybrid {
+        if ed.content_width_chars > ed.pane_chars || !word_wrap {
+            return ed.content_width_chars as f32 * cell_w + CONTENT_PAD * 2.0;
+        }
+        return 0.0;
+    }
+    if word_wrap {
+        return 0.0;
+    }
+    let max_chars = state
+        .lines
+        .iter()
+        .map(|l| l.chars().count())
+        .max()
+        .unwrap_or(0);
+    max_chars as f32 * cell_w + CONTENT_PAD * 2.0
+}
+
 impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for TextEdit<'a, M> {
     fn size(&self) -> Size<Length> {
         let h = if self.fit_content {
@@ -527,22 +845,33 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for TextEdit<'a, M> {
 
     fn layout(
         &mut self,
-        _tree: &mut Tree,
+        tree: &mut Tree,
         _renderer: &iced::Renderer,
         limits: &layout::Limits,
     ) -> layout::Node {
         if self.fit_content {
-            let row_count = if self.word_wrap {
+            let row_count = if self.md_tables || self.word_wrap {
                 let max_w = limits.max().width;
                 // Match the cosmic-text measurement used by draw/update so the
                 // height we report to iced equals the height actually painted.
                 // A hardcoded 7.8 px/char overestimates rows for wider fonts,
                 // leaving phantom empty space below long wrapped messages.
                 let cell_w = theme::content_cell_width();
-                let content_w = max_w - if self.show_gutter { 50.0 } else { 0.0 } - CONTENT_PAD;
-                let cpr = (content_w / cell_w).floor().max(1.0) as usize;
-                let wrap = WrapLayout::compute(&self.state.lines, cpr);
-                wrap.total_visual_rows
+                let content_area = max_w - if self.show_gutter { 50.0 } else { 0.0 };
+                let cpr = pane_chars_for(content_area, cell_w);
+                if self.md_tables {
+                    let internal = tree.state.downcast_ref::<InternalState>();
+                    cached_hybrid_layout(
+                        internal,
+                        &self.state.lines,
+                        self.state.highlight_version,
+                        cpr,
+                        self.word_wrap,
+                    )
+                    .total_visual_rows
+                } else {
+                    WrapLayout::compute(&self.state.lines, cpr).total_visual_rows
+                }
             } else {
                 self.state.line_count()
             };
@@ -607,21 +936,38 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for TextEdit<'a, M> {
             0.0
         };
 
-        // Compute wrap layout if enabled.
+        // Compute wrap / hybrid layout if enabled (hybrid path is cached).
         let cell_w = if internal.cell_width > 0.0 {
             internal.cell_width
         } else {
             7.8
         };
-        let wrap = if self.word_wrap {
-            let content_w = bounds.width - internal.gutter_width - CONTENT_PAD;
-            let cpr = (content_w / cell_w).floor().max(1.0) as usize;
+        let content_area = bounds.width - internal.gutter_width;
+        let hybrid = if self.md_tables {
+            let cpr = pane_chars_for(content_area, cell_w);
+            Some(cached_hybrid_layout(
+                internal,
+                &self.state.lines,
+                self.state.highlight_version,
+                cpr,
+                self.word_wrap,
+            ))
+        } else {
+            None
+        };
+        let wrap = if self.md_tables {
+            // Hybrid owns visual geometry when tables are enabled.
+            None
+        } else if self.word_wrap {
+            let cpr = pane_chars_for(content_area, cell_w);
             Some(WrapLayout::compute(&self.state.lines, cpr))
         } else {
             None
         };
 
-        let content_height = if let Some(ref w) = wrap {
+        let content_height = if let Some(ref ed) = hybrid {
+            ed.total_visual_rows as f32 * LINE_HEIGHT + CONTENT_PAD_Y * 2.0
+        } else if let Some(ref w) = wrap {
             w.total_visual_rows as f32 * LINE_HEIGHT + CONTENT_PAD_Y * 2.0
         } else {
             self.state.lines.len() as f32 * LINE_HEIGHT + CONTENT_PAD_Y * 2.0
@@ -632,9 +978,12 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for TextEdit<'a, M> {
         // caret) never trigger it — that would yank the view and desync the
         // click/drag hit-test, producing a phantom selection.
         if internal.follow_after_key && internal.last_cursor != Some(self.state.cursor) {
-            if let Some(target) =
-                self.caret_follow_scroll_y(bounds.height, content_height, wrap.as_ref())
-            {
+            if let Some(target) = self.caret_follow_scroll_y(
+                bounds.height,
+                content_height,
+                wrap.as_ref(),
+                hybrid.as_ref(),
+            ) {
                 shell.publish((self.on_action)(EditorAction::Scroll {
                     dy: target - self.state.scroll_y,
                     dx: 0.0,
@@ -667,6 +1016,7 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for TextEdit<'a, M> {
                             internal,
                             self.state,
                             wrap.as_ref(),
+                            hybrid.as_ref(),
                             scroll_y,
                             &hover,
                         )
@@ -689,6 +1039,7 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for TextEdit<'a, M> {
                         internal,
                         self.state,
                         wrap.as_ref(),
+                        hybrid.as_ref(),
                         scroll_y,
                     );
 
@@ -708,7 +1059,15 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for TextEdit<'a, M> {
                     && internal.focused
                     && let Some(pos) = cursor.land().position()
                 {
-                    self.drag_frame(pos, bounds, *viewport, internal, wrap.as_ref(), shell);
+                    self.drag_frame(
+                        pos,
+                        bounds,
+                        *viewport,
+                        internal,
+                        wrap.as_ref(),
+                        hybrid.as_ref(),
+                        shell,
+                    );
                 } else {
                     // Hover detection while cmd is held.
                     let new_hover = if current_modifiers().command()
@@ -721,6 +1080,7 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for TextEdit<'a, M> {
                             internal,
                             self.state,
                             wrap.as_ref(),
+                            hybrid.as_ref(),
                             scroll_y,
                         );
                         detect_link_at(self.state, click_pos)
@@ -756,18 +1116,8 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for TextEdit<'a, M> {
                         }
                         mouse::ScrollDelta::Pixels { x, y } => (-*y, -*x),
                     };
-                    let content_w_px = if self.word_wrap {
-                        0.0
-                    } else {
-                        let max_chars = self
-                            .state
-                            .lines
-                            .iter()
-                            .map(|l| l.chars().count())
-                            .max()
-                            .unwrap_or(0);
-                        max_chars as f32 * cell_w + CONTENT_PAD * 2.0
-                    };
+                    let content_w_px =
+                        content_width_px(self.word_wrap, hybrid.as_ref(), self.state, cell_w);
                     let viewport_w = bounds.width - internal.gutter_width;
                     shell.publish((self.on_action)(EditorAction::Scroll {
                         dy,
@@ -804,7 +1154,11 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for TextEdit<'a, M> {
                         shell.publish((self.on_action)(EditorAction::MoveRight(shift)));
                     }
                     keyboard::Key::Named(Named::ArrowUp) => {
-                        let target = wrap.as_ref().and_then(|w| visual_up_target(self.state, w));
+                        let target = if let Some(ref ed) = hybrid {
+                            visual_up_target_hybrid(self.state, ed)
+                        } else {
+                            wrap.as_ref().and_then(|w| visual_up_target(self.state, w))
+                        };
                         let action = match target {
                             Some(pos) if shift => EditorAction::Drag(pos),
                             Some(pos) => EditorAction::Click(pos),
@@ -813,9 +1167,12 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for TextEdit<'a, M> {
                         shell.publish((self.on_action)(action));
                     }
                     keyboard::Key::Named(Named::ArrowDown) => {
-                        let target = wrap
-                            .as_ref()
-                            .and_then(|w| visual_down_target(self.state, w));
+                        let target = if let Some(ref ed) = hybrid {
+                            visual_down_target_hybrid(self.state, ed)
+                        } else {
+                            wrap.as_ref()
+                                .and_then(|w| visual_down_target(self.state, w))
+                        };
                         let action = match target {
                             Some(pos) if shift => EditorAction::Drag(pos),
                             Some(pos) => EditorAction::Click(pos),
@@ -923,8 +1280,15 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for TextEdit<'a, M> {
                 {
                     if internal.last_autoscroll_frame != Some(*now) {
                         internal.last_autoscroll_frame = Some(*now);
-                        internal.autoscrolling =
-                            self.drag_frame(pos, bounds, *viewport, internal, wrap.as_ref(), shell);
+                        internal.autoscrolling = self.drag_frame(
+                            pos,
+                            bounds,
+                            *viewport,
+                            internal,
+                            wrap.as_ref(),
+                            hybrid.as_ref(),
+                            shell,
+                        );
                     }
                     if internal.autoscrolling {
                         shell.request_redraw();
@@ -983,34 +1347,56 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for TextEdit<'a, M> {
         let content_x = bounds.x + gutter_w;
         let content_w = bounds.width - gutter_w;
 
-        // Compute wrap layout if needed.
-        let wrap = if self.word_wrap {
-            let cpr = ((content_w - CONTENT_PAD) / cell_w).floor().max(1.0) as usize;
+        // Compute wrap / hybrid layout if needed (hybrid path is cached).
+        let cpr = pane_chars_for(content_w, cell_w);
+        let hybrid = if self.md_tables {
+            Some(cached_hybrid_layout(
+                internal,
+                &self.state.lines,
+                self.state.highlight_version,
+                cpr,
+                self.word_wrap,
+            ))
+        } else {
+            None
+        };
+        let wrap = if self.md_tables {
+            None
+        } else if self.word_wrap {
             Some(WrapLayout::compute(&self.state.lines, cpr))
         } else {
             None
         };
-        let total_visual_rows = wrap
-            .as_ref()
-            .map_or(self.state.line_count(), |w| w.total_visual_rows);
+        let total_visual_rows = if let Some(ref ed) = hybrid {
+            ed.total_visual_rows
+        } else {
+            wrap.as_ref()
+                .map_or(self.state.line_count(), |w| w.total_visual_rows)
+        };
         let content_height = total_visual_rows as f32 * LINE_HEIGHT + CONTENT_PAD_Y * 2.0;
 
         // Resolve the vertical offset — the user/keyboard-driven `scroll_y`
         // clamped to range (see `resolved_scroll_y`).
         let scroll_y = self.resolved_scroll_y(bounds.height, content_height);
 
-        // Horizontal scroll (only when not word-wrapping).
-        let scroll_x = if self.word_wrap {
-            0.0
+        // Horizontal scroll: classic word-wrap locks x; hybrid tables may
+        // overflow at MIN_COL and enable scroll_x even with wrap on.
+        let total_content_w_chars = if let Some(ref ed) = hybrid {
+            ed.content_width_chars
+        } else if self.word_wrap {
+            0
         } else {
-            let max_chars = self
-                .state
+            self.state
                 .lines
                 .iter()
                 .map(|l| l.chars().count())
                 .max()
-                .unwrap_or(0);
-            let total_content_w = max_chars as f32 * cell_w + CONTENT_PAD * 2.0;
+                .unwrap_or(0)
+        };
+        let scroll_x = if total_content_w_chars == 0 {
+            0.0
+        } else {
+            let total_content_w = total_content_w_chars as f32 * cell_w + CONTENT_PAD * 2.0;
             let max_scroll_x = (total_content_w - content_w).max(0.0);
             self.state.scroll_x.clamp(0.0, max_scroll_x)
         };
@@ -1089,21 +1475,183 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for TextEdit<'a, M> {
             for vrow in first_vrow..last_vrow {
                 let y = bounds.y + CONTENT_PAD_Y + (vrow as f32) * LINE_HEIGHT - scroll_y;
 
-                // Map visual row to logical line + sub-row.
-                let (line_idx, sub_row, char_start, char_end) = if let Some(ref w) = wrap {
-                    let (li, sr) = w.visual_to_logical(vrow);
-                    let starts = &w.row_starts[li];
-                    let cs = starts[sr];
-                    let ce = if sr + 1 < starts.len() {
-                        starts[sr + 1]
+                // Map visual row to logical line + sub-row (+ prose char range).
+                let (line_idx, sub_row, char_start, char_end, table_paint) =
+                    if let Some(ref ed) = hybrid {
+                        let (li, sr) = ed.visual_to_logical(vrow);
+                        match ed.line_kind.get(li) {
+                            Some(LineLayoutKind::TableRow { region, row }) => {
+                                (li, sr, 0, 0, Some((*region, *row)))
+                            }
+                            Some(LineLayoutKind::TableSeparator { .. }) => {
+                                // Zero-height lines should not appear as visual rows.
+                                continue;
+                            }
+                            _ => {
+                                let starts = ed
+                                    .prose_row_starts
+                                    .get(li)
+                                    .map(|s| s.as_slice())
+                                    .unwrap_or(&[0]);
+                                let cs = starts.get(sr).copied().unwrap_or(0);
+                                let ce = if sr + 1 < starts.len() {
+                                    starts[sr + 1]
+                                } else {
+                                    self.state.lines.get(li).map(|l| l.chars().count()).unwrap_or(0)
+                                };
+                                (li, sr, cs, ce, None)
+                            }
+                        }
+                    } else if let Some(ref w) = wrap {
+                        let (li, sr) = w.visual_to_logical(vrow);
+                        let starts = &w.row_starts[li];
+                        let cs = starts[sr];
+                        let ce = if sr + 1 < starts.len() {
+                            starts[sr + 1]
+                        } else {
+                            self.state.lines[li].chars().count()
+                        };
+                        (li, sr, cs, ce, None)
                     } else {
-                        self.state.lines[li].chars().count()
+                        let len = self.state.lines[vrow].chars().count();
+                        (vrow, 0, 0, len, None)
                     };
-                    (li, sr, cs, ce)
-                } else {
-                    let len = self.state.lines[vrow].chars().count();
-                    (vrow, 0, 0, len)
-                };
+
+                // Table band: row bg → match highlights → selection → cell
+                // text → rules → link underline (no `|`).
+                if let (Some(ref ed), Some((region_i, row_i))) = (hybrid.as_ref(), table_paint) {
+                    if let Some(region) = ed.tables.regions.get(region_i)
+                        && let Some(trow) = region.rows.get(row_i)
+                    {
+                        let table_w =
+                            region.total_width_chars as f32 * cell_w;
+                        let table_x = content_x + CONTENT_PAD - scroll_x;
+
+                        // 1. Row background from role (header / zebra).
+                        if let Some(bg) = table_row_bg(trow.role) {
+                            renderer::Renderer::fill_quad(
+                                renderer,
+                                renderer::Quad {
+                                    bounds: Rectangle {
+                                        x: table_x,
+                                        y,
+                                        width: table_w.max(cell_w),
+                                        height: LINE_HEIGHT,
+                                    },
+                                    border: Border::default(),
+                                    ..renderer::Quad::default()
+                                },
+                                bg,
+                            );
+                        }
+
+                        // 2. Fragment-clipped find/search match highlights.
+                        paint_table_highlights(
+                            renderer,
+                            trow,
+                            region,
+                            sub_row,
+                            line_idx,
+                            &self.highlight_ranges,
+                            self.current_highlight.as_ref(),
+                            table_x,
+                            y,
+                            cell_w,
+                        );
+
+                        // 3. Fragment-clipped selection quads.
+                        if let Some((sel_start, sel_end)) = selection {
+                            paint_table_selection(
+                                renderer,
+                                trow,
+                                region,
+                                sub_row,
+                                line_idx,
+                                sel_start,
+                                sel_end,
+                                table_x,
+                                y,
+                                cell_w,
+                            );
+                        }
+
+                        // 4. Cell fragment text (aligned; no pipe glyphs).
+                        for (ci, cell) in trow.cells.iter().enumerate() {
+                            let Some(frag) = cell.fragments.get(sub_row) else {
+                                continue;
+                            };
+                            let frag_len = frag.char_end.saturating_sub(frag.char_start);
+                            if frag_len == 0 {
+                                continue;
+                            }
+                            let text: String = cell
+                                .text
+                                .chars()
+                                .skip(frag.char_start)
+                                .take(frag_len)
+                                .collect();
+                            if text.is_empty() {
+                                continue;
+                            }
+                            let col_w = region.col_widths.get(ci).copied().unwrap_or(0);
+                            let align = region
+                                .aligns
+                                .get(ci)
+                                .copied()
+                                .unwrap_or(md_table::ColAlign::Left);
+                            let pad = md_table::align_pad(align, col_w, frag_len);
+                            let origin = md_table::col_origin(&region.col_widths, ci);
+                            let tx = table_x + (origin + pad) as f32 * cell_w;
+                            let tw = frag_len as f32 * cell_w;
+                            renderer.fill_text(
+                                iced::advanced::Text {
+                                    content: text,
+                                    bounds: Size::new(tw + cell_w, LINE_HEIGHT),
+                                    size: Pixels(font_size()),
+                                    line_height: text::LineHeight::Absolute(Pixels(LINE_HEIGHT)),
+                                    font: theme::content_font(),
+                                    align_x: alignment::Horizontal::Left.into(),
+                                    align_y: alignment::Vertical::Top,
+                                    shaping: text::Shaping::Basic,
+                                    wrapping: text::Wrapping::None,
+                                },
+                                Point::new(tx, y),
+                                theme::text_primary(),
+                                content_clip,
+                            );
+                        }
+
+                        // 5. Column and row rules at cell edges.
+                        paint_table_rules(
+                            renderer,
+                            region,
+                            trow,
+                            row_i,
+                            sub_row,
+                            table_x,
+                            y,
+                            cell_w,
+                            table_w,
+                        );
+
+                        // 6. Cmd-hover link underline (same segments as prose).
+                        if let Some(hover) = link_hover {
+                            paint_table_link_underline(
+                                renderer,
+                                trow,
+                                region,
+                                sub_row,
+                                line_idx,
+                                &self.state.lines[line_idx],
+                                hover,
+                                table_x,
+                                y,
+                                cell_w,
+                            );
+                        }
+                    }
+                    continue;
+                }
 
                 // Block background.
                 if has_blocks
@@ -1457,7 +2005,13 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for TextEdit<'a, M> {
                 let line_str = &self.state.lines[cursor_line];
                 let byte_col = self.state.cursor.col.min(line_str.len());
                 let char_col = line_str[..byte_col].chars().count();
-                let (cy, cx) = if let Some(ref w) = wrap {
+                let (cy, cx) = if let Some(ref ed) = hybrid {
+                    let (vrow, col_in_row) = cursor_visual_pos_hybrid(self.state, ed);
+                    (
+                        bounds.y + CONTENT_PAD_Y + vrow as f32 * LINE_HEIGHT - scroll_y,
+                        content_x + CONTENT_PAD + col_in_row as f32 * cell_w - scroll_x,
+                    )
+                } else if let Some(ref w) = wrap {
                     let (vrow, col_in_row) = cursor_visual_pos(self.state, w);
                     (
                         bounds.y + CONTENT_PAD_Y + vrow as f32 * LINE_HEIGHT - scroll_y,
@@ -1504,7 +2058,9 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for TextEdit<'a, M> {
 
                 for vrow in first_vrow..last_vrow {
                     let y = bounds.y + CONTENT_PAD_Y + (vrow as f32) * LINE_HEIGHT - scroll_y;
-                    let (line_idx, sub_row) = if let Some(ref w) = wrap {
+                    let (line_idx, sub_row) = if let Some(ref ed) = hybrid {
+                        ed.visual_to_logical(vrow)
+                    } else if let Some(ref w) = wrap {
                         w.visual_to_logical(vrow)
                     } else {
                         (vrow, 0)
@@ -1577,15 +2133,28 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for TextEdit<'a, M> {
                     );
                 }
 
-                if !self.word_wrap && content_w > 0.0 {
-                    let max_chars = self
-                        .state
+                // Horizontal scrollbar when content is wider than the pane
+                // (unwrapped lines, or hybrid tables that overflow at MIN_COL).
+                let h_scroll_chars = if let Some(ref ed) = hybrid {
+                    if ed.content_width_chars > ed.pane_chars {
+                        ed.content_width_chars
+                    } else if !self.word_wrap {
+                        ed.content_width_chars
+                    } else {
+                        0
+                    }
+                } else if !self.word_wrap {
+                    self.state
                         .lines
                         .iter()
                         .map(|l| l.chars().count())
                         .max()
-                        .unwrap_or(0);
-                    let total_content_w = max_chars as f32 * cell_w + CONTENT_PAD * 2.0;
+                        .unwrap_or(0)
+                } else {
+                    0
+                };
+                if h_scroll_chars > 0 && content_w > 0.0 {
+                    let total_content_w = h_scroll_chars as f32 * cell_w + CONTENT_PAD * 2.0;
                     if total_content_w > content_w {
                         let track_w = content_w;
                         let ratio = (track_w / total_content_w).clamp(0.0, 1.0);
@@ -1628,6 +2197,370 @@ impl<'a, M: Clone + 'a> From<TextEdit<'a, M>> for Element<'a, M> {
 }
 
 // ── Helper functions ───────────────────────────────────────────────────────
+
+/// Background fill for a table row role. Header is stronger; zebra body rows
+/// alternate a light elevated tint; non-zebra body is transparent.
+fn table_row_bg(role: md_table::RowRole) -> Option<Color> {
+    match role {
+        md_table::RowRole::Header => {
+            let mut c = theme::bg_section_header();
+            c.a = 0.85;
+            Some(c)
+        }
+        md_table::RowRole::Body { zebra: true } => {
+            let mut c = theme::bg_elevated();
+            c.a = 0.45;
+            Some(c)
+        }
+        md_table::RowRole::Body { zebra: false } => None,
+    }
+}
+
+/// Char spans (from table left, width) for fragments on this visual sub-row
+/// whose source bytes intersect `[line_byte_start, line_byte_end)`.
+///
+/// Shared by selection, find-match highlights, and link underlines so paint
+/// and hit-test geometry stay aligned.
+fn table_byte_range_spans(
+    trow: &md_table::TableRow,
+    region: &md_table::TableRegion,
+    sub_row: usize,
+    line_byte_start: usize,
+    line_byte_end: usize,
+) -> Vec<(usize, usize)> {
+    let mut spans = Vec::new();
+    if line_byte_end <= line_byte_start {
+        return spans;
+    }
+    for (ci, cell) in trow.cells.iter().enumerate() {
+        let Some(frag) = cell.fragments.get(sub_row) else {
+            continue;
+        };
+        let frag_len = frag.char_end.saturating_sub(frag.char_start);
+        // Empty fragment still can hold a zero-width caret, but no fill.
+        if frag_len == 0 {
+            continue;
+        }
+
+        // Byte range of this fragment inside the source line.
+        let frag_byte_start = cell.source_byte.start
+            + cell
+                .text
+                .char_indices()
+                .nth(frag.char_start)
+                .map(|(b, _)| b)
+                .unwrap_or(0);
+        let frag_byte_end = cell.source_byte.start
+            + cell
+                .text
+                .char_indices()
+                .nth(frag.char_end)
+                .map(|(b, _)| b)
+                .unwrap_or(cell.text.len());
+
+        let ov_start = frag_byte_start.max(line_byte_start);
+        let ov_end = frag_byte_end.min(line_byte_end);
+        if ov_end <= ov_start {
+            continue;
+        }
+
+        // Map overlapping bytes back to char offsets within the fragment.
+        let cell_text = &cell.text;
+        let lo_byte = snap_byte_boundary(
+            cell_text,
+            ov_start.saturating_sub(cell.source_byte.start),
+        );
+        let hi_byte = snap_byte_boundary(
+            cell_text,
+            ov_end.saturating_sub(cell.source_byte.start),
+        );
+        let char_lo = cell_text[..lo_byte]
+            .chars()
+            .count()
+            .saturating_sub(frag.char_start);
+        let char_hi = cell_text[..hi_byte]
+            .chars()
+            .count()
+            .saturating_sub(frag.char_start)
+            .min(frag_len);
+        if char_hi <= char_lo {
+            continue;
+        }
+
+        let col_w = region.col_widths.get(ci).copied().unwrap_or(0);
+        let align = region
+            .aligns
+            .get(ci)
+            .copied()
+            .unwrap_or(md_table::ColAlign::Left);
+        let pad = md_table::align_pad(align, col_w, frag_len);
+        let origin = md_table::col_origin(&region.col_widths, ci);
+        spans.push((origin + pad + char_lo, char_hi - char_lo));
+    }
+    spans
+}
+
+/// Paint selection as quads clipped to the cell fragment(s) on this visual
+/// sub-row that intersect the source selection.
+fn paint_table_selection(
+    renderer: &mut iced::Renderer,
+    trow: &md_table::TableRow,
+    region: &md_table::TableRegion,
+    sub_row: usize,
+    line_idx: usize,
+    sel_start: Pos,
+    sel_end: Pos,
+    table_x: f32,
+    y: f32,
+    cell_w: f32,
+) {
+    // Line fully outside the ordered selection range → nothing.
+    if line_idx < sel_start.line || line_idx > sel_end.line {
+        return;
+    }
+    let line_sel_start = if line_idx == sel_start.line {
+        sel_start.col
+    } else {
+        0
+    };
+    let line_sel_end = if line_idx == sel_end.line {
+        sel_end.col
+    } else {
+        // Past end of cell text is enough; use a large sentinel so full
+        // intermediate lines select every fragment.
+        usize::MAX
+    };
+    let sel_color = Color {
+        a: 0.3,
+        ..theme::accent()
+    };
+    for (x_chars, w_chars) in
+        table_byte_range_spans(trow, region, sub_row, line_sel_start, line_sel_end)
+    {
+        renderer::Renderer::fill_quad(
+            renderer,
+            renderer::Quad {
+                bounds: Rectangle {
+                    x: table_x + x_chars as f32 * cell_w,
+                    y,
+                    width: w_chars as f32 * cell_w,
+                    height: LINE_HEIGHT,
+                },
+                border: Border::default(),
+                ..renderer::Quad::default()
+            },
+            sel_color,
+        );
+    }
+}
+
+/// Paint find/search match quads clipped to cell fragments on this visual
+/// sub-row. Mirrors the prose path: muted bg for every match, stronger accent
+/// fill (+ optional border) for the current candidate.
+fn paint_table_highlights(
+    renderer: &mut iced::Renderer,
+    trow: &md_table::TableRow,
+    region: &md_table::TableRegion,
+    sub_row: usize,
+    line_idx: usize,
+    ranges: &[HighlightRange],
+    current: Option<&HighlightRange>,
+    table_x: f32,
+    y: f32,
+    cell_w: f32,
+) {
+    let paint_range = |renderer: &mut iced::Renderer,
+                       range: &HighlightRange,
+                       bg: Color,
+                       border: Option<Color>| {
+        if range.line != line_idx {
+            return;
+        }
+        let border = border
+            .map(|c| Border {
+                color: c,
+                width: 1.0,
+                radius: 2.0.into(),
+            })
+            .unwrap_or_default();
+        for (x_chars, w_chars) in
+            table_byte_range_spans(trow, region, sub_row, range.byte_start, range.byte_end)
+        {
+            renderer::Renderer::fill_quad(
+                renderer,
+                renderer::Quad {
+                    bounds: Rectangle {
+                        x: table_x + x_chars as f32 * cell_w,
+                        y,
+                        width: w_chars as f32 * cell_w,
+                        height: LINE_HEIGHT,
+                    },
+                    border,
+                    ..renderer::Quad::default()
+                },
+                bg,
+            );
+        }
+    };
+
+    for range in ranges {
+        paint_range(renderer, range, theme::search_match_bg(), None);
+    }
+    if let Some(cur) = current {
+        paint_range(
+            renderer,
+            cur,
+            Color {
+                a: 0.55,
+                ..theme::accent()
+            },
+            Some(theme::accent()),
+        );
+    }
+}
+
+/// Draw cmd-hover link underline under fragment slices that overlap the
+/// hovered link's char range on this visual row.
+fn paint_table_link_underline(
+    renderer: &mut iced::Renderer,
+    trow: &md_table::TableRow,
+    region: &md_table::TableRegion,
+    sub_row: usize,
+    line_idx: usize,
+    line: &str,
+    hover: &LinkHover,
+    table_x: f32,
+    y: f32,
+    cell_w: f32,
+) {
+    if hover.line != line_idx || hover.char_end <= hover.char_start {
+        return;
+    }
+    // LinkHover stores char offsets; convert to line-local bytes so we share
+    // the same fragment intersection as selection/highlights.
+    let byte_start = line
+        .char_indices()
+        .nth(hover.char_start)
+        .map(|(b, _)| b)
+        .unwrap_or(line.len());
+    let byte_end = line
+        .char_indices()
+        .nth(hover.char_end)
+        .map(|(b, _)| b)
+        .unwrap_or(line.len());
+    if byte_end <= byte_start {
+        return;
+    }
+
+    let uy = y + LINE_HEIGHT - 2.0;
+    for (x_chars, w_chars) in table_byte_range_spans(trow, region, sub_row, byte_start, byte_end)
+    {
+        let ux = table_x + x_chars as f32 * cell_w;
+        let uw = w_chars as f32 * cell_w;
+        // Solid underline = direct open (URL or resolved path);
+        // dashed = unresolved path that opens the fuzzy finder.
+        for (dx, dw) in path_link::underline_segments(uw, hover.target.opens_directly()) {
+            renderer::Renderer::fill_quad(
+                renderer,
+                renderer::Quad {
+                    bounds: Rectangle {
+                        x: ux + dx,
+                        y: uy,
+                        width: dw,
+                        height: 1.0,
+                    },
+                    border: Border::default(),
+                    ..renderer::Quad::default()
+                },
+                theme::accent(),
+            );
+        }
+    }
+}
+
+/// Draw vertical column rules and a horizontal bottom edge for the current
+/// visual band of a table row.
+fn paint_table_rules(
+    renderer: &mut iced::Renderer,
+    region: &md_table::TableRegion,
+    trow: &md_table::TableRow,
+    row_i: usize,
+    sub_row: usize,
+    table_x: f32,
+    y: f32,
+    cell_w: f32,
+    table_w: f32,
+) {
+    let mut rule = theme::border_color();
+    rule.a = 0.55;
+
+    // Vertical rules at every column origin and the table right edge.
+    let mut xs = Vec::with_capacity(region.col_widths.len() + 1);
+    for ci in 0..region.col_widths.len() {
+        xs.push(md_table::col_origin(&region.col_widths, ci));
+    }
+    xs.push(region.total_width_chars);
+
+    for x_chars in xs {
+        let rx = table_x + x_chars as f32 * cell_w;
+        renderer::Renderer::fill_quad(
+            renderer,
+            renderer::Quad {
+                bounds: Rectangle {
+                    x: rx,
+                    y,
+                    width: 1.0,
+                    height: LINE_HEIGHT,
+                },
+                border: Border::default(),
+                ..renderer::Quad::default()
+            },
+            rule,
+        );
+    }
+
+    // Horizontal rule under the header band and between body rows (on the
+    // last visual fragment of each logical row so multi-line cells get one
+    // bottom edge).
+    let is_last_frag = sub_row + 1 >= trow.height;
+    let draw_h = matches!(trow.role, md_table::RowRole::Header) || is_last_frag;
+    // Always draw a top edge on the first visual row of the first data row
+    // (after header) is covered by header's bottom; first row of region
+    // (header) gets a top edge.
+    let is_first_band = row_i == 0 && sub_row == 0;
+    if is_first_band {
+        renderer::Renderer::fill_quad(
+            renderer,
+            renderer::Quad {
+                bounds: Rectangle {
+                    x: table_x,
+                    y,
+                    width: table_w.max(1.0),
+                    height: 1.0,
+                },
+                border: Border::default(),
+                ..renderer::Quad::default()
+            },
+            rule,
+        );
+    }
+    if draw_h {
+        renderer::Renderer::fill_quad(
+            renderer,
+            renderer::Quad {
+                bounds: Rectangle {
+                    x: table_x,
+                    y: y + LINE_HEIGHT - 1.0,
+                    width: table_w.max(1.0),
+                    height: 1.0,
+                },
+                border: Border::default(),
+                ..renderer::Quad::default()
+            },
+            rule,
+        );
+    }
+}
 
 /// Measure the width of a single monospace character using cosmic-text.
 fn measure_cell_width(_renderer: &iced::Renderer) -> f32 {
@@ -1673,6 +2606,7 @@ fn pixel_to_pos_wrapped(
     internal: &InternalState,
     state: &EditorState,
     wrap: Option<&WrapLayout>,
+    hybrid: Option<&EditorLayout>,
     scroll_y: f32,
 ) -> Pos {
     let cell_w = if internal.cell_width > 0.0 {
@@ -1682,10 +2616,14 @@ fn pixel_to_pos_wrapped(
     };
     let gutter_w = internal.gutter_width;
     let content_x = bounds.x + gutter_w + CONTENT_PAD;
-    let scroll_x = if wrap.is_some() {
-        0.0
-    } else {
-        state.scroll_x.max(0.0)
+    // Allow horizontal scroll when hybrid tables overflow the pane, even with
+    // word wrap. Classic wrap (no tables) still locks scroll_x at 0.
+    let scroll_x = match hybrid {
+        Some(ed) if ed.content_width_chars > ed.pane_chars || wrap.is_none() => {
+            state.scroll_x.max(0.0)
+        }
+        None if wrap.is_none() => state.scroll_x.max(0.0),
+        _ => 0.0,
     };
 
     let vrow = ((point.y - bounds.y - CONTENT_PAD_Y + scroll_y) / LINE_HEIGHT)
@@ -1698,7 +2636,43 @@ fn pixel_to_pos_wrapped(
         0
     };
 
-    if let Some(w) = wrap {
+    if let Some(ed) = hybrid {
+        let vrow = vrow.min(ed.total_visual_rows.saturating_sub(1));
+        let (line_idx, sub_row) = ed.visual_to_logical(vrow);
+        match ed.line_kind.get(line_idx) {
+            Some(LineLayoutKind::TableRow { region, row }) => {
+                let visual_in_region = ed.table_visual_row_in_region(*region, *row, sub_row);
+                md_table::visual_to_source(&ed.tables, *region, visual_in_region, col_in_row)
+                    .unwrap_or_else(|| Pos::new(line_idx, 0))
+            }
+            Some(LineLayoutKind::TableSeparator { .. }) => {
+                // No visual band; map to start of the separator source line.
+                Pos::new(line_idx, 0)
+            }
+            _ => {
+                let starts = ed
+                    .prose_row_starts
+                    .get(line_idx)
+                    .map(|s| s.as_slice())
+                    .unwrap_or(&[0]);
+                let char_start = starts.get(sub_row).copied().unwrap_or(0);
+                let char_end = if sub_row + 1 < starts.len() {
+                    starts[sub_row + 1]
+                } else {
+                    state.lines.get(line_idx).map(|l| l.chars().count()).unwrap_or(0)
+                };
+                let col = (char_start + col_in_row).min(char_end);
+                // Convert char index to byte col when possible.
+                let line = state.lines.get(line_idx).map(|s| s.as_str()).unwrap_or("");
+                let byte_col = line
+                    .char_indices()
+                    .nth(col)
+                    .map(|(b, _)| b)
+                    .unwrap_or(line.len());
+                Pos::new(line_idx, byte_col)
+            }
+        }
+    } else if let Some(w) = wrap {
         let vrow = vrow.min(w.total_visual_rows.saturating_sub(1));
         let (line_idx, sub_row) = w.visual_to_logical(vrow);
         let starts = &w.row_starts[line_idx];
@@ -1755,10 +2729,11 @@ fn pos_in_hover(
     internal: &InternalState,
     state: &EditorState,
     wrap: Option<&WrapLayout>,
+    hybrid: Option<&EditorLayout>,
     scroll_y: f32,
     hover: &LinkHover,
 ) -> bool {
-    let pos = pixel_to_pos_wrapped(point, bounds, internal, state, wrap, scroll_y);
+    let pos = pixel_to_pos_wrapped(point, bounds, internal, state, wrap, hybrid, scroll_y);
     pos.line == hover.line && pos.col >= hover.char_start && pos.col < hover.char_end
 }
 
@@ -1802,4 +2777,226 @@ fn read_paste_action() -> Option<EditorAction> {
         media_type: "image/png".to_string(),
         bytes,
     })
+}
+
+#[cfg(test)]
+mod hybrid_layout_tests {
+    use super::*;
+
+    fn lines(xs: &[&str]) -> Vec<String> {
+        xs.iter().map(|s| (*s).to_string()).collect()
+    }
+
+    #[test]
+    fn separator_contributes_zero_visual_rows() {
+        let src = lines(&[
+            "before",
+            "| A | B |",
+            "| - | - |",
+            "| 1 | 2 |",
+            "after",
+        ]);
+        let ed = EditorLayout::compute(&src, 80, true);
+        assert_eq!(ed.tables.regions.len(), 1);
+        // Line 2 is the separator.
+        assert!(matches!(
+            ed.line_kind[2],
+            LineLayoutKind::TableSeparator { .. }
+        ));
+        // Header + body each at least 1 visual row; separator 0; two prose lines.
+        // total = 1 (before) + 1 (header) + 0 (sep) + 1 (body) + 1 (after) = 4
+        assert_eq!(ed.total_visual_rows, 4);
+        assert_eq!(ed.cum_rows[2], ed.cum_rows[1] + 1); // sep shares offset with body start
+        assert_eq!(ed.cum_rows[3], ed.cum_rows[2]); // body starts where sep "starts"
+    }
+
+    #[test]
+    fn table_overflow_widens_content_width() {
+        let src = lines(&[
+            "| AAAAAAAAAA | BBBBBBBBBB | CCCCCCCCCC |",
+            "| ---------- | ---------- | ---------- |",
+            "| aaaaaaaaaa | bbbbbbbbbb | cccccccccc |",
+        ]);
+        let pane = md_table::MIN_COL_CHARS * 2; // too narrow for 3 min cols
+        let ed = EditorLayout::compute(&src, pane, true);
+        assert_eq!(ed.tables.regions.len(), 1);
+        assert!(ed.content_width_chars > pane);
+        assert!(ed.content_width_chars >= ed.tables.regions[0].total_width_chars);
+    }
+
+    #[test]
+    fn md_tables_false_path_unchanged_by_default() {
+        // Sanity: EditorLayout is only used when the flag is on; this just
+        // ensures compute is callable for prose-only docs.
+        let src = lines(&["hello world that wraps"]);
+        let ed = EditorLayout::compute(&src, 8, true);
+        assert!(ed.tables.regions.is_empty());
+        assert!(ed.total_visual_rows >= 2);
+        assert!(matches!(ed.line_kind[0], LineLayoutKind::Prose));
+    }
+
+    #[test]
+    fn hybrid_visual_up_from_body_lands_on_header() {
+        let text = "intro\n| A | B |\n| - | - |\n| 1 | 2 |\noutra";
+        let src = lines(&[
+            "intro",
+            "| A | B |",
+            "| - | - |",
+            "| 1 | 2 |",
+            "outra",
+        ]);
+        let ed = EditorLayout::compute(&src, 80, true);
+        // Body row is logical line 3; put cursor at start of first cell.
+        let body = &ed.tables.regions[0].rows[1];
+        let cell = &body.cells[0];
+        let mut state = EditorState::new(text);
+        state.cursor = Pos::new(body.source_line, cell.source_byte.start);
+
+        let up = visual_up_target_hybrid(&state, &ed).expect("up from body");
+        let header = &ed.tables.regions[0].rows[0];
+        assert_eq!(up.line, header.source_line);
+        assert!(
+            up.col >= header.cells[0].source_byte.start
+                && up.col <= header.cells[0].source_byte.end,
+            "up col {} not in header cell {:?}",
+            up.col,
+            header.cells[0].source_byte
+        );
+    }
+
+    #[test]
+    fn hybrid_visual_down_from_header_skips_separator() {
+        let text = "| A | B |\n| - | - |\n| 1 | 2 |";
+        let src = lines(&["| A | B |", "| - | - |", "| 1 | 2 |"]);
+        let ed = EditorLayout::compute(&src, 80, true);
+        let header = &ed.tables.regions[0].rows[0];
+        let cell = &header.cells[0];
+        let mut state = EditorState::new(text);
+        state.cursor = Pos::new(header.source_line, cell.source_byte.start);
+
+        let down = visual_down_target_hybrid(&state, &ed).expect("down from header");
+        let body = &ed.tables.regions[0].rows[1];
+        assert_eq!(down.line, body.source_line);
+        // Separator is line 1 and has zero visual height — never a target.
+        assert_ne!(down.line, 1);
+    }
+
+    #[test]
+    fn hybrid_pixel_to_pos_in_table_band_maps_to_cell() {
+        let src = lines(&[
+            "| Name | Value |",
+            "| ---- | ----- |",
+            "| alpha | beta |",
+        ]);
+        let ed = EditorLayout::compute(&src, 80, true);
+        let region = &ed.tables.regions[0];
+        let body = &region.rows[1];
+        // Visual row of the body row's first fragment.
+        let body_vrow = ed.cum_rows[body.source_line];
+        let origin = md_table::col_origin(&region.col_widths, 0);
+        // Click roughly on the second character of the first body cell.
+        let pos = md_table::visual_to_source(&ed.tables, 0, body_vrow, origin + 1)
+            .expect("visual_to_source");
+        assert_eq!(pos.line, body.source_line);
+        assert!(
+            pos.col >= body.cells[0].source_byte.start
+                && pos.col <= body.cells[0].source_byte.end
+        );
+    }
+
+    #[test]
+    fn table_byte_range_spans_clip_to_cell_fragment() {
+        // Body cell "alpha" should produce a non-empty span for a match
+        // covering those source bytes; a range on another line yields none.
+        let src = lines(&[
+            "| Name | Value |",
+            "| ---- | ----- |",
+            "| alpha | beta |",
+        ]);
+        let ed = EditorLayout::compute(&src, 80, true);
+        let region = &ed.tables.regions[0];
+        let body = &region.rows[1];
+        let cell = &body.cells[0];
+        assert_eq!(cell.text, "alpha");
+
+        let hit = table_byte_range_spans(
+            body,
+            region,
+            0,
+            cell.source_byte.start,
+            cell.source_byte.end,
+        );
+        assert_eq!(hit.len(), 1);
+        let (x_chars, w_chars) = hit[0];
+        assert_eq!(w_chars, 5); // "alpha"
+        // Span starts at the cell's padded origin.
+        let origin = md_table::col_origin(&region.col_widths, 0);
+        let pad = md_table::align_pad(
+            region.aligns[0],
+            region.col_widths[0],
+            5,
+        );
+        assert_eq!(x_chars, origin + pad);
+
+        // Partial: only last 2 chars of "alpha".
+        let mid = cell.source_byte.start + "alp".len();
+        let partial = table_byte_range_spans(body, region, 0, mid, cell.source_byte.end);
+        assert_eq!(partial.len(), 1);
+        assert_eq!(partial[0].1, 2);
+
+        // Byte range outside any cell (pipe between cells) → empty.
+        let pipe = cell.source_byte.end; // first byte past cell text (space or |)
+        let miss = table_byte_range_spans(body, region, 0, pipe, pipe + 1);
+        assert!(miss.is_empty() || miss.iter().all(|(_, w)| *w == 0));
+    }
+
+    #[test]
+    fn table_byte_range_spans_ignore_non_overlapping_line() {
+        let src = lines(&[
+            "| A | B |",
+            "| - | - |",
+            "| 1 | 2 |",
+        ]);
+        let ed = EditorLayout::compute(&src, 80, true);
+        let region = &ed.tables.regions[0];
+        let body = &region.rows[1];
+        // Selection-style full intermediate line uses 0..MAX.
+        let all = table_byte_range_spans(body, region, 0, 0, usize::MAX);
+        assert_eq!(all.len(), body.cells.len());
+        // Empty range → nothing.
+        assert!(table_byte_range_spans(body, region, 0, 5, 5).is_empty());
+    }
+
+    #[test]
+    fn cached_hybrid_layout_reuses_until_key_changes() {
+        let src = Arc::new(lines(&[
+            "| A | B |",
+            "| - | - |",
+            "| 1 | 2 |",
+        ]));
+        let internal = InternalState::default();
+        let a = cached_hybrid_layout(&internal, &src, 0, 80, true);
+        let b = cached_hybrid_layout(&internal, &src, 0, 80, true);
+        assert_eq!(a.total_visual_rows, b.total_visual_rows);
+        assert_eq!(a.tables.regions.len(), 1);
+        // Same key → single entry in the cache cell.
+        assert!(internal.hybrid_layout.borrow().is_some());
+
+        // Pane change invalidates.
+        let narrow = cached_hybrid_layout(&internal, &src, 0, 20, true);
+        assert_eq!(narrow.pane_chars, 20);
+
+        // Version bump invalidates even with the same Arc ptr.
+        let bumped = cached_hybrid_layout(&internal, &src, 1, 20, true);
+        assert_eq!(bumped.total_visual_rows, narrow.total_visual_rows);
+
+        // Direct compute still matches cached results.
+        let direct = EditorLayout::compute(&src, 80, true);
+        let via_cache = cached_hybrid_layout(&internal, &src, 0, 80, true);
+        assert_eq!(via_cache.total_visual_rows, direct.total_visual_rows);
+        assert_eq!(
+            via_cache.content_width_chars,
+            direct.content_width_chars
+        );
+    }
 }

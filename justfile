@@ -3,9 +3,9 @@ install:
     cargo install --path crates/duckspec
     cargo install --path crates/duckboard
 
-# Run duckboard from source (debug build).
+# Run duckboard from source (release build).
 run:
-    cargo run -p duckboard
+    cargo run --release -p duckboard
 
 # Push main bookmark to origin (jj).
 push:
