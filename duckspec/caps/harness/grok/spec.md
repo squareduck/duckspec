@@ -20,7 +20,7 @@ both cases the reported session id SHALL be surfaced for the caller to persist.
 - **AND** it surfaces the session id grok assigned
 
 > test: code
-> - crates/duckchat/src/grok/acp.rs:439
+> - crates/duckchat/src/grok/acp.rs:440
 
 ### Scenario: A turn with a prior session id resumes that session
 
@@ -29,7 +29,7 @@ both cases the reported session id SHALL be surfaced for the caller to persist.
 - **THEN** it opens the session by resuming that same id
 
 > test: code
-> - crates/duckchat/src/grok/acp.rs:479
+> - crates/duckchat/src/grok/acp.rs:480
 
 ## Requirement: Event translation
 
@@ -92,7 +92,7 @@ absent.
 - **AND** each returned model carries a context window
 
 > test: code
-> - crates/duckchat/src/grok.rs:296
+> - crates/duckchat/src/grok.rs:409
 
 ### Scenario: Title model falls back when the preferred fast model is absent
 
@@ -101,7 +101,7 @@ absent.
 - **THEN** it selects another available model rather than failing
 
 > test: code
-> - crates/duckchat/src/grok.rs:314
+> - crates/duckchat/src/grok.rs:427
 
 ## Requirement: Graceful unavailability
 
@@ -118,4 +118,62 @@ empty list and running a turn SHALL fail with a typed error rather than panickin
 - **AND** the turn fails with a typed error rather than panicking
 
 > test: code
-> - crates/duckchat/src/grok.rs:329
+> - crates/duckchat/src/grok.rs:442
+
+## Requirement: Prompt attachments
+
+When assembling a turn for `session/prompt`, the harness SHALL walk the folded prompt text
+for markdown links of the form `[label](attach:<id>)`, resolve each link against the
+turn's attachments map, and send a multi-block ACP `prompt` array. A resolved image
+attachment SHALL appear as an ACP image content block carrying that attachment's media
+type and payload. Surrounding text SHALL appear as text content blocks. A resolved
+non-image attachment SHALL appear as a text content block rather than an image block. An
+unresolved `attach:` link SHALL be left as its original literal markdown text.
+
+> test: code
+
+### Scenario: A resolved image attachment is sent as an ACP image block
+
+- **GIVEN** a turn whose prompt contains an `attach:` link
+- **AND** the turn's attachments map holds an image payload for that link's id
+- **WHEN** the harness assembles the prompt for the turn
+- **THEN** the `session/prompt` content includes an image content block
+- **AND** that block carries the attachment's media type and payload
+
+> test: code
+> - crates/duckchat/src/grok.rs:342
+
+### Scenario: Surrounding text is preserved as text blocks
+
+- **GIVEN** a prompt with text before and after a resolved image `attach:` marker
+
+- **WHEN** the harness assembles the prompt for the turn
+
+- **THEN** the text before the marker appears as a text content block before the image
+  block
+
+- **AND** the text after the marker appears as a text content block after the image block
+
+> test: code
+> - crates/duckchat/src/grok.rs:362
+
+### Scenario: A non-image attachment is represented as text
+
+- **GIVEN** a turn whose prompt contains an `attach:` link
+- **AND** the turn's attachments map holds a non-image payload for that link's id
+- **WHEN** the harness assembles the prompt for the turn
+- **THEN** the attachment is represented as a text content block
+- **AND** the content does not include an image content block for that attachment
+
+> test: code
+> - crates/duckchat/src/grok.rs:378
+
+### Scenario: An unresolved attach marker is left literal
+
+- **GIVEN** a turn whose prompt contains an `attach:` link
+- **AND** the turn's attachments map has no entry for that link's id
+- **WHEN** the harness assembles the prompt for the turn
+- **THEN** the original markdown link remains as text content
+
+> test: code
+> - crates/duckchat/src/grok.rs:400

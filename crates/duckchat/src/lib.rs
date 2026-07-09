@@ -6,6 +6,7 @@
 //! a plain `tokio::sync::mpsc` receiver; GUI integration (e.g. wrapping into an
 //! iced `Subscription`) is the caller's job.
 
+mod attach;
 pub mod cancel;
 pub mod error;
 pub mod event;

@@ -160,12 +160,13 @@ impl AcpTurn {
     /// `on_update` for every `session/update` notification. Returns the stop
     /// reason. Translating updates into agent events is the caller's job.
     ///
-    /// `cancel` is checked cooperatively between protocol lines: a flipped flag
-    /// kills the child and returns [`Error::Cancelled`].
+    /// `content` is the multi-block ACP prompt array (text and/or image
+    /// blocks). `cancel` is checked cooperatively between protocol lines: a
+    /// flipped flag kills the child and returns [`Error::Cancelled`].
     pub async fn prompt(
         &mut self,
         session_id: &str,
-        text: &str,
+        content: &[Value],
         model: &str,
         reasoning: Option<ReasoningMode>,
         on_update: &mut (dyn FnMut(&Value) + Send),
@@ -173,7 +174,7 @@ impl AcpTurn {
     ) -> Result<PromptResult, Error> {
         let mut params = json!({
             "sessionId": session_id,
-            "prompt": [ { "type": "text", "text": text } ],
+            "prompt": content,
         });
         if !model.is_empty() {
             params["model"] = json!(model);
@@ -207,7 +208,7 @@ impl AcpTurn {
     pub async fn prompt_events(
         &mut self,
         session_id: &str,
-        text: &str,
+        content: &[Value],
         model: &str,
         reasoning: Option<ReasoningMode>,
         context_window: Option<usize>,
@@ -219,7 +220,7 @@ impl AcpTurn {
                 let _ = events.try_send(event);
             }
         };
-        self.prompt(session_id, text, model, reasoning, &mut on_update, cancel)
+        self.prompt(session_id, content, model, reasoning, &mut on_update, cancel)
             .await
     }
 

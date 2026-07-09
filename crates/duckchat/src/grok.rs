@@ -14,9 +14,12 @@ use std::path::Path;
 use std::sync::{Arc, OnceLock};
 
 use async_trait::async_trait;
+use base64::Engine as _;
+use serde_json::{Value, json};
 use tokio::process::Command;
 use tokio::sync::mpsc;
 
+use crate::attach::{self, Segment};
 use crate::cancel::CancelToken;
 use crate::error::Error;
 use crate::event::AgentEvent;
@@ -162,11 +165,11 @@ impl Provider for GrokProvider {
             .find(|m| m.id == model)
             .and_then(|m| m.context_window);
 
-        let prompt = assemble_prompt(&req);
+        let content = assemble_content(&req);
         let result = turn
             .prompt_events(
                 &session_id,
-                &prompt,
+                &content,
                 &model,
                 req.reasoning,
                 context_window,
@@ -190,12 +193,12 @@ impl Provider for GrokProvider {
             .ok_or_else(|| Error::Other("grok advertised no models for title summary".into()))?;
 
         let session_id = turn.open(None, working_dir).await?;
-        let prompt = build_title_prompt(&req);
+        let content = text_prompt_content(&build_title_prompt(&req));
 
         // Collect the assistant text; reasoning and tool events are ignored for
         // a title. No resume, no cancellation — this is a short one-shot.
         let mut title = String::new();
-        turn.prompt(&session_id, &prompt, &model, None, &mut |params| {
+        turn.prompt(&session_id, &content, &model, None, &mut |params| {
             if let Some(AgentEvent::ContentDelta { text }) = map_update(params, None) {
                 title.push_str(&text);
             }
@@ -228,9 +231,16 @@ fn pick_title_model(models: &[AcpModel]) -> Option<String> {
     models.first().map(|m| m.id.clone())
 }
 
-/// Fold caller-supplied `system_additions` ahead of the prompt into the single
-/// text block grok's ACP `session/prompt` accepts. Blank additions are dropped.
-fn assemble_prompt(req: &TurnRequest) -> String {
+/// Fold system additions and the user prompt, walk attach markers, and encode
+/// ACP content blocks for `session/prompt`.
+fn assemble_content(req: &TurnRequest) -> Vec<Value> {
+    let text = fold_system_and_prompt(req);
+    encode_acp(&attach::walk(&text, &req.attachments))
+}
+
+/// Fold caller-supplied `system_additions` ahead of the prompt (blank-line
+/// separated). Blank additions are dropped.
+fn fold_system_and_prompt(req: &TurnRequest) -> String {
     let mut parts: Vec<&str> = req
         .system_additions
         .iter()
@@ -239,6 +249,29 @@ fn assemble_prompt(req: &TurnRequest) -> String {
         .collect();
     parts.push(req.prompt.as_str());
     parts.join("\n\n")
+}
+
+/// Encode neutral attach segments as ACP content blocks.
+fn encode_acp(segments: &[Segment]) -> Vec<Value> {
+    segments
+        .iter()
+        .map(|segment| match segment {
+            Segment::Text(text) => json!({ "type": "text", "text": text }),
+            Segment::Image { media_type, bytes } => {
+                let data = base64::engine::general_purpose::STANDARD.encode(bytes);
+                json!({
+                    "type": "image",
+                    "mimeType": media_type,
+                    "data": data,
+                })
+            }
+        })
+        .collect()
+}
+
+/// Wrap a plain string as a single-block ACP text prompt (titles, etc.).
+fn text_prompt_content(text: &str) -> Vec<Value> {
+    vec![json!({ "type": "text", "text": text })]
 }
 
 /// Instruction preamble that turns the one-shot prompt into a title generator.
@@ -284,6 +317,7 @@ fn clean_title(raw: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::request::Attachment;
 
     fn model(id: &str, window: Option<usize>) -> AcpModel {
         AcpModel {
@@ -291,6 +325,85 @@ mod tests {
             name: format!("{id} display"),
             context_window: window,
         }
+    }
+
+    fn img_att(label: &str) -> Attachment {
+        Attachment {
+            label: label.to_string(),
+            media_type: "image/png".to_string(),
+            bytes: vec![1, 2, 3, 4],
+        }
+    }
+
+    fn text_block(blocks: &[Value], i: usize) -> &str {
+        blocks[i]["text"].as_str().unwrap_or("")
+    }
+
+    /// @spec harness/grok Prompt attachments: A resolved image attachment is sent as an ACP image block
+    #[test]
+    fn resolved_image_attachment_is_sent_as_acp_image_block() {
+        let mut req = TurnRequest::new("see [clip.png](attach:a1)", std::env::temp_dir());
+        req.attachments.insert("a1".to_string(), img_att("clip.png"));
+
+        let blocks = assemble_content(&req);
+        let image = blocks
+            .iter()
+            .find(|b| b["type"] == "image")
+            .expect("image content block");
+        assert_eq!(image["mimeType"], "image/png");
+        assert_eq!(
+            image["data"].as_str().unwrap(),
+            base64::engine::general_purpose::STANDARD.encode([1, 2, 3, 4])
+        );
+        // ACP shape, not Anthropic's nested `source`.
+        assert!(image.get("source").is_none());
+    }
+
+    /// @spec harness/grok Prompt attachments: Surrounding text is preserved as text blocks
+    #[test]
+    fn surrounding_text_is_preserved_as_text_blocks() {
+        let mut req = TurnRequest::new(
+            "before [clip.png](attach:a1) after",
+            std::env::temp_dir(),
+        );
+        req.attachments.insert("a1".to_string(), img_att("clip.png"));
+
+        let blocks = assemble_content(&req);
+        assert_eq!(blocks.len(), 3);
+        assert_eq!(text_block(&blocks, 0), "before ");
+        assert_eq!(blocks[1]["type"], "image");
+        assert_eq!(text_block(&blocks, 2), " after");
+    }
+
+    /// @spec harness/grok Prompt attachments: A non-image attachment is represented as text
+    #[test]
+    fn non_image_attachment_is_represented_as_text() {
+        let mut req = TurnRequest::new("file [notes.txt](attach:f1) end", std::env::temp_dir());
+        req.attachments.insert(
+            "f1".to_string(),
+            Attachment {
+                label: "notes.txt".to_string(),
+                media_type: "text/plain".to_string(),
+                bytes: vec![9, 9],
+            },
+        );
+
+        let blocks = assemble_content(&req);
+        assert!(blocks.iter().all(|b| b["type"] != "image"));
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(
+            text_block(&blocks, 0),
+            "file [attachment: notes.txt (2 bytes)] end"
+        );
+    }
+
+    /// @spec harness/grok Prompt attachments: An unresolved attach marker is left literal
+    #[test]
+    fn unresolved_attach_marker_is_left_literal() {
+        let req = TurnRequest::new("see [thing](attach:missing)", std::env::temp_dir());
+        let blocks = assemble_content(&req);
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(text_block(&blocks, 0), "see [thing](attach:missing)");
     }
 
     /// @spec harness/grok Model discovery: Discovered models are tagged with the grok harness and a window
