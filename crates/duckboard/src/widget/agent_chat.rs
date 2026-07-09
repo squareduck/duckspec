@@ -68,7 +68,10 @@ pub struct ModelChoice {
     /// on the "use default" sentinel, which pins no specific model.
     pub harness: Option<String>,
     pub id: Option<String>,
+    /// Menu / list label — harness-prefixed so multi-backend choices stay grouped.
     pub label: String,
+    /// Short name for the closed control (model display only, no harness prefix).
+    pub closed_label: String,
 }
 
 impl ModelChoice {
@@ -113,6 +116,7 @@ pub fn project_model_choices() -> Vec<ModelChoice> {
         harness: None,
         id: None,
         label: "No default".to_string(),
+        closed_label: "No default".to_string(),
     }];
     out.extend(model_entries());
     out
@@ -140,6 +144,7 @@ fn group_choices(models: Vec<ModelInfo>) -> Vec<ModelChoice> {
                 harness: Some(m.harness.clone()),
                 id: Some(m.id.clone()),
                 label: format!("{} · {}", harness_display(&m.harness), m.display),
+                closed_label: m.display.clone(),
             });
         }
     }
@@ -166,6 +171,7 @@ pub fn selected_model_choice(choices: &[ModelChoice], selected: Option<&ModelRef
             harness: None,
             id: None,
             label: "Default".to_string(),
+            closed_label: "Default".to_string(),
         }),
         Some(model_ref) => choices
             .iter()
@@ -182,6 +188,7 @@ pub fn selected_model_choice(choices: &[ModelChoice], selected: Option<&ModelRef
                     harness_display(&model_ref.harness),
                     model_ref.model
                 ),
+                closed_label: model_ref.model.clone(),
             }),
     }
 }
@@ -206,6 +213,34 @@ pub fn context_fill(tokens: usize, window: Option<usize>) -> Option<f32> {
     }
 }
 
+/// Fill fraction at which the usage readout expands from percentage-only to
+/// full `used / max (%)`. Matches the existing warning color band.
+pub const USAGE_HOT_FILL: f32 = 0.75;
+
+/// Whether the composer footer shows the resend-history hint. True only when
+/// the next send would open fresh *and* there is transcript to resend.
+pub fn show_resend_history_hint(will_resume: bool, has_messages: bool) -> bool {
+    !will_resume && has_messages
+}
+
+/// Progressive context-usage string for a **known** window. Cool fill (< 75%)
+/// is percentage only; hot fill (≥ 75%) includes used, max, and percentage.
+/// Callers that lack a window should not use this (model-picker owns "no fill").
+pub fn format_usage_readout(tokens: usize, window: usize) -> String {
+    let fill = tokens as f32 / window as f32;
+    let pct = (fill * 100.0) as usize;
+    if fill < USAGE_HOT_FILL {
+        format!("{pct}%")
+    } else {
+        format!(
+            "{} / {} ({}%)",
+            format_number(tokens),
+            format_number(window),
+            pct
+        )
+    }
+}
+
 // ── Status bar info ────────────────────────────────────────────────────────
 
 /// Data for the status bar below the chat input.
@@ -217,9 +252,9 @@ pub struct StatusInfo {
     pub model_choices: Vec<ModelChoice>,
     /// The currently-selected picker entry (matched by `(harness, id)`).
     pub selected_model: ModelChoice,
-    /// Whether the next turn resumes the agent-side session (a continuation) or
-    /// starts fresh and re-sends the transcript as history. Drives the meta-row
-    /// resume/fresh indicator.
+    /// Whether the next turn resumes the agent-side session. Combined with
+    /// transcript emptiness via `show_resend_history_hint` for the meta-row
+    /// resend indicator.
     pub will_resume: bool,
     pub context_tokens: usize,
     /// The selected model's context window. `None` when the model reports no
@@ -1001,7 +1036,7 @@ fn truncate_chars(s: &str, max: usize) -> &str {
 
 #[allow(clippy::too_many_arguments)]
 pub fn view<'a>(
-    _session: &'a ChatSession,
+    session: &'a ChatSession,
     blocks: &'a [Block],
     editors: &'a [EditorState],
     collapse: &'a [CollapseState],
@@ -1135,8 +1170,7 @@ pub fn view<'a>(
     // extra `SPACING_SM` horizontal padding lines the meta text up with the
     // input's own text (container XS + TextEdit CONTENT_PAD = 12px).
     // Fill is measured against the *selected* model's window (`context_max`).
-    // An unknown window yields no fill — the readout drops the denominator and
-    // percentage rather than guessing against an assumed size.
+    // An unknown window yields no fill — raw token count only, no percentage.
     let ctx_pct = context_fill(status.context_tokens, status.context_max)
         .map(|fill| (fill * 100.0) as usize);
     let ctx_color = match ctx_pct {
@@ -1156,42 +1190,46 @@ pub fn view<'a>(
         );
     }
     meta_inner = meta_inner.push(Space::new().width(Length::Fill));
-    // Fresh-session indicator. Only shown when the next send will NOT resume
-    // the agent-side session — i.e. a harness switch left no session to
-    // continue, so duckboard opens a new one and re-sends the whole transcript
-    // as context. Resume is the silent default; only the notable case is
-    // called out (accent), and the label says what actually happens.
-    if !status.will_resume {
+    // Resend-history hint: only when the next send would actually re-feed the
+    // transcript (no resumable session *and* non-empty messages).
+    if show_resend_history_hint(status.will_resume, !session.messages.is_empty()) {
         meta_inner = meta_inner.push(
             text("⟳ resends full history")
                 .size(theme::font_sm())
                 .color(theme::accent()),
         );
     }
+    // Closed control shows the short display name; menu options keep
+    // harness-prefixed `label` via Display. Equality is on (harness, id).
+    let mut selected_closed = status.selected_model.clone();
+    selected_closed.label = selected_closed.closed_label.clone();
     meta_inner = meta_inner.push(
         pick_list(
             status.model_choices,
-            Some(status.selected_model),
+            Some(selected_closed),
             Msg::ModelSelected,
         )
         .text_size(theme::font_sm())
-        .padding([1.0, theme::SPACING_XS])
-        .style(theme::pick_list_style)
+        .padding([0.0, theme::SPACING_XS])
+        .style(theme::pick_list_ghost_style)
         .menu_style(theme::pick_list_menu),
     );
     let ctx_label = match status.context_max {
-        Some(max) => format!(
-            "{} / {} ({}%)",
-            format_number(status.context_tokens),
-            format_number(max),
-            ctx_pct.unwrap_or(0),
-        ),
-        // No known window → show the raw token count with no fill.
-        None => format_number(status.context_tokens),
+        // Progressive readout when the window is known and positive.
+        Some(max) if max > 0 => format_usage_readout(status.context_tokens, max),
+        // No known window → raw token count with no fill.
+        _ => format_number(status.context_tokens),
     };
     meta_inner = meta_inner.push(text(ctx_label).size(theme::font_sm()).color(ctx_color));
+    // Extra top padding separates the prompt from the meta strip so the
+    // toolbar doesn't crowd the last input line.
     let meta_row = container(meta_inner)
-        .padding([0.0, theme::SPACING_SM])
+        .padding(iced::Padding {
+            top: theme::SPACING_SM,
+            right: theme::SPACING_SM,
+            bottom: 0.0,
+            left: theme::SPACING_SM,
+        })
         .width(Length::Fill);
 
     // Queue pill — renders above the input when a message is staged while the
@@ -1707,6 +1745,88 @@ mod tests {
         let fill = context_fill(50_000, None);
         // THEN the meter shows no fill.
         assert_eq!(fill, None);
+    }
+
+    /// @spec chat/composer-footer Resend hint only when history would be resent: Hint shown when history would be resent
+    #[test]
+    fn hint_shown_when_history_would_be_resent() {
+        // GIVEN a chat with no resumable agent session AND a non-empty transcript.
+        let will_resume = false;
+        let has_messages = true;
+        // WHEN the composer footer is rendered (hint visibility is computed).
+        let show = show_resend_history_hint(will_resume, has_messages);
+        // THEN the resend-history hint is shown.
+        assert!(show);
+    }
+
+    /// @spec chat/composer-footer Resend hint only when history would be resent: Hint hidden when next send would resume
+    #[test]
+    fn hint_hidden_when_next_send_would_resume() {
+        // GIVEN a chat with a resumable agent session AND a non-empty transcript.
+        let will_resume = true;
+        let has_messages = true;
+        // WHEN the composer footer is rendered.
+        let show = show_resend_history_hint(will_resume, has_messages);
+        // THEN the resend-history hint is not shown.
+        assert!(!show);
+    }
+
+    /// @spec chat/composer-footer Resend hint only when history would be resent: Hint hidden when transcript is empty
+    #[test]
+    fn hint_hidden_when_transcript_is_empty() {
+        // GIVEN a chat with no resumable agent session AND an empty transcript.
+        let will_resume = false;
+        let has_messages = false;
+        // WHEN the composer footer is rendered.
+        let show = show_resend_history_hint(will_resume, has_messages);
+        // THEN the resend-history hint is not shown.
+        assert!(!show);
+    }
+
+    /// @spec chat/composer-footer Progressive usage readout: Cool fill shows percentage only
+    #[test]
+    fn cool_fill_shows_percentage_only() {
+        // GIVEN a known context window AND used tokens such that fill is below 75%.
+        let window = 200_000;
+        let used = 50_000; // 25%
+        // WHEN the usage readout is formatted.
+        let readout = format_usage_readout(used, window);
+        // THEN the readout shows the fill percentage AND does not include absolute used or max.
+        assert_eq!(readout, "25%");
+        assert!(!readout.contains('/'));
+        assert!(!readout.contains(','));
+    }
+
+    /// @spec chat/composer-footer Progressive usage readout: Hot fill shows used, max, and percentage
+    #[test]
+    fn hot_fill_shows_used_max_and_percentage() {
+        // GIVEN a known context window AND used tokens such that fill is at least 75%.
+        let window = 200_000;
+        let used = 150_000; // 75%
+        // WHEN the usage readout is formatted.
+        let readout = format_usage_readout(used, window);
+        // THEN the readout includes used tokens, the window max, and the fill percentage.
+        assert_eq!(readout, "150,000 / 200,000 (75%)");
+    }
+
+    /// @spec chat/composer-footer Short closed model label: Closed label is the model display name
+    #[test]
+    fn closed_label_is_the_model_display_name() {
+        // GIVEN a selectable model with a harness name and a short display name.
+        let models = vec![ModelInfo {
+            harness: "grok".to_string(),
+            id: "grok-4.5".to_string(),
+            display: "Grok 4.5".to_string(),
+            context_window: Some(500_000),
+        }];
+        // WHEN the closed model control label is built (with menu choices).
+        let choices = group_choices(models);
+        let choice = choices.first().expect("one choice");
+        // THEN the closed label is the short display name AND does not include a harness prefix.
+        assert_eq!(choice.closed_label, "Grok 4.5");
+        assert!(!choice.closed_label.contains('·'));
+        // Menu label remains harness-prefixed for grouped choices.
+        assert!(choice.label.starts_with("Grok · "));
     }
 
     #[test]

@@ -889,6 +889,33 @@ pub fn pick_list_style(_theme: &Theme, status: pick_list::Status) -> pick_list::
     }
 }
 
+/// Ghost pick-list for the chat composer meta strip: transparent when idle so
+/// it reads as text+chevron on the paper input, with a light hover/open tint
+/// and no border.
+pub fn pick_list_ghost_style(_theme: &Theme, status: pick_list::Status) -> pick_list::Style {
+    let background = match status {
+        pick_list::Status::Hovered | pick_list::Status::Opened { .. } => bg_hover(),
+        pick_list::Status::Active => Color {
+            a: 0.0,
+            ..Color::BLACK
+        },
+    };
+    pick_list::Style {
+        text_color: text_secondary(),
+        placeholder_color: text_muted(),
+        handle_color: text_muted(),
+        background: Background::Color(background),
+        border: Border {
+            color: Color {
+                a: 0.0,
+                ..Color::BLACK
+            },
+            width: 0.0,
+            radius: BORDER_RADIUS.into(),
+        },
+    }
+}
+
 /// Companion dropdown-menu style for `pick_list_style` — elevated background
 /// so the overlay separates from the surface beneath it, accent-tinted
 /// selected row matching list selection elsewhere in the app.
