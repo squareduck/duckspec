@@ -235,96 +235,462 @@ pub struct CompletionState {
     pub selected: usize,
 }
 
-// ── Build blocks from session ──────────────────────────────────────────────
+// ── Transcript segments ────────────────────────────────────────────────────
 
-/// Build blocks from a chat session for the block-aware editor.
-///
-/// ToolUse and ToolResult pairs are merged into a single ToolUse block
-/// whose label is the tool summary and whose lines are the (truncated)
-/// result output.
-pub fn build_chat_blocks(session: &ChatSession) -> Vec<Block> {
-    // Flatten all content blocks with their role, so we can look ahead.
-    let mut items: Vec<(&Role, &ContentBlock)> = Vec::new();
+/// One contiguous run of the calm transcript: user/system prose, thinking,
+/// answer, or a grouped activity of tools.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TranscriptSeg {
+    User {
+        lines: Vec<String>,
+    },
+    System {
+        lines: Vec<String>,
+    },
+    Thinking {
+        lines: Vec<String>,
+        /// True while this segment is still open in the turn (streaming and
+        /// no following Answer yet) — not merely "still receiving deltas".
+        live: bool,
+    },
+    Answer {
+        lines: Vec<String>,
+        live: bool,
+    },
+    Activity {
+        tools: Vec<ToolRow>,
+        /// True while the activity group is still open in the turn.
+        live: bool,
+    },
+}
+
+/// One tool call inside an [`TranscriptSeg::Activity`] group.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ToolRow {
+    pub id: String,
+    /// Human-readable tool summary (`format_tool_summary`), or the tool name
+    /// alone for orphan results.
+    pub summary: String,
+    /// Truncated result output; empty while still running.
+    pub output_lines: Vec<String>,
+    pub status: ToolRowStatus,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToolRowStatus {
+    Running,
+    Done,
+    /// Reserved for later error-shaped output detection.
+    #[allow(dead_code)]
+    Error,
+}
+
+/// Build calm transcript segments from committed messages and live stream
+/// buffers. Contiguous same-kind assistant content coalesces; tools pair by
+/// call id within an activity run.
+pub fn build_transcript_segments(session: &ChatSession) -> Vec<TranscriptSeg> {
+    use std::collections::HashMap;
+
+    let mut segs: Vec<TranscriptSeg> = Vec::new();
+    // Within the open Activity: row order + id → index for pairing.
+    let mut activity_index: HashMap<String, usize> = HashMap::new();
+
     for msg in &session.messages {
         for cb in &msg.content {
-            items.push((&msg.role, cb));
-        }
-    }
-
-    let mut blocks = Vec::new();
-    let mut i = 0;
-    while i < items.len() {
-        let (role, cb) = items[i];
-        match cb {
-            ContentBlock::Text(t) => {
-                let kind = match role {
-                    Role::User => BlockKind::User,
-                    Role::Assistant => BlockKind::Assistant,
-                    Role::System => BlockKind::System,
-                };
-                let role_label = match role {
-                    Role::User => "User",
-                    Role::Assistant => "Assistant",
-                    Role::System => "System",
-                };
-                let lines: Vec<String> = t.lines().map(String::from).collect();
-                blocks.push(Block {
-                    kind,
-                    label: role_label.to_string(),
-                    lines,
-                });
-            }
-            ContentBlock::ToolUse { id, name, input } => {
-                let summary = format_tool_summary(name, input);
-
-                // Look ahead for a matching ToolResult and merge.
-                let result_lines = if let Some((
-                    _,
-                    ContentBlock::ToolResult {
-                        id: rid, output, ..
-                    },
-                )) = items.get(i + 1)
-                {
-                    if rid == id {
-                        i += 1; // consume the result
-                        truncate_output(output)
+            match (msg.role, cb) {
+                (Role::User, ContentBlock::Text(t)) => {
+                    activity_index.clear();
+                    segs.push(TranscriptSeg::User {
+                        lines: text_lines(t),
+                    });
+                }
+                (Role::System, ContentBlock::Text(t)) => {
+                    activity_index.clear();
+                    segs.push(TranscriptSeg::System {
+                        lines: text_lines(t),
+                    });
+                }
+                (Role::Assistant, ContentBlock::Reasoning(t)) => {
+                    activity_index.clear();
+                    append_thinking(&mut segs, t, false);
+                }
+                (Role::Assistant, ContentBlock::Text(t)) => {
+                    activity_index.clear();
+                    append_answer(&mut segs, t, false);
+                }
+                (
+                    Role::Assistant,
+                    ContentBlock::ToolUse { id, name, input },
+                ) => {
+                    ensure_activity(&mut segs, &mut activity_index);
+                    let tools = activity_tools_mut(&mut segs);
+                    if let Some(&idx) = activity_index.get(id) {
+                        // Duplicate id: refresh summary, leave status/output.
+                        tools[idx].summary = format_tool_summary(name, input);
                     } else {
-                        Vec::new()
+                        let idx = tools.len();
+                        activity_index.insert(id.clone(), idx);
+                        tools.push(ToolRow {
+                            id: id.clone(),
+                            summary: format_tool_summary(name, input),
+                            output_lines: Vec::new(),
+                            status: ToolRowStatus::Running,
+                        });
                     }
-                } else {
-                    Vec::new()
-                };
-
-                blocks.push(Block {
-                    kind: BlockKind::ToolUse,
-                    label: summary,
-                    lines: result_lines,
-                });
-            }
-            ContentBlock::ToolResult { output, .. } => {
-                // Orphan result (no preceding ToolUse) — show standalone.
-                let lines = truncate_output(output);
-                blocks.push(Block {
-                    kind: BlockKind::ToolResult,
-                    label: "✓ done".to_string(),
-                    lines,
-                });
+                }
+                (
+                    Role::Assistant,
+                    ContentBlock::ToolResult { id, name, output },
+                ) => {
+                    ensure_activity(&mut segs, &mut activity_index);
+                    let tools = activity_tools_mut(&mut segs);
+                    if let Some(&idx) = activity_index.get(id) {
+                        tools[idx].output_lines = truncate_output(output);
+                        tools[idx].status = ToolRowStatus::Done;
+                    } else {
+                        // Orphan result: named done row from the tool name,
+                        // never a bare "✓ done" placeholder.
+                        let idx = tools.len();
+                        activity_index.insert(id.clone(), idx);
+                        tools.push(ToolRow {
+                            id: id.clone(),
+                            summary: name.clone(),
+                            output_lines: truncate_output(output),
+                            status: ToolRowStatus::Done,
+                        });
+                    }
+                }
+                // Non-text user/system content (e.g. tools) is not expected
+                // on those roles — skip rather than invent a segment.
+                (Role::User | Role::System, _) => {}
             }
         }
-        i += 1;
     }
 
-    // Streaming pending text.
-    if session.is_streaming && !session.pending_text.is_empty() {
-        let lines: Vec<String> = session.pending_text.lines().map(String::from).collect();
-        blocks.push(Block {
-            kind: BlockKind::Assistant,
-            label: "Assistant ···".to_string(),
-            lines,
+    // Live stream buffers: append to or open Thinking / Answer segments.
+    if session.is_streaming {
+        if !session.pending_reasoning.is_empty() {
+            activity_index.clear();
+            append_thinking(&mut segs, &session.pending_reasoning, true);
+        }
+        if !session.pending_text.is_empty() {
+            activity_index.clear();
+            append_answer(&mut segs, &session.pending_text, true);
+        }
+    }
+
+    // Settle tool status and turn-open live flags.
+    //
+    // `live` means "still open in the turn" — not "still receiving deltas of
+    // this kind". Committed reasoning is built with live=false above; while
+    // streaming and no following Answer, Thinking stays open so collapse
+    // policy does not snap it shut when tools start.
+    let streaming = session.is_streaming;
+    let answer_after: Vec<bool> = (0..segs.len())
+        .map(|i| {
+            segs[i + 1..]
+                .iter()
+                .any(|s| matches!(s, TranscriptSeg::Answer { .. }))
+        })
+        .collect();
+    for (i, seg) in segs.iter_mut().enumerate() {
+        match seg {
+            TranscriptSeg::Activity { tools, live } => {
+                if !streaming {
+                    for row in tools.iter_mut() {
+                        if row.status == ToolRowStatus::Running {
+                            row.status = ToolRowStatus::Done;
+                        }
+                    }
+                    *live = false;
+                } else {
+                    *live = !answer_after[i]
+                        || tools.iter().any(|t| t.status == ToolRowStatus::Running);
+                }
+            }
+            TranscriptSeg::Thinking { live, .. } => {
+                if !streaming {
+                    *live = false;
+                } else {
+                    // Open until a following Answer appears or the turn ends.
+                    *live = !answer_after[i];
+                }
+            }
+            _ => {}
+        }
+    }
+
+    segs
+}
+
+fn text_lines(t: &str) -> Vec<String> {
+    t.lines().map(String::from).collect()
+}
+
+fn append_thinking(segs: &mut Vec<TranscriptSeg>, text: &str, live: bool) {
+    let mut lines = text_lines(text);
+    if let Some(TranscriptSeg::Thinking {
+        lines: existing,
+        live: existing_live,
+    }) = segs.last_mut()
+    {
+        existing.append(&mut lines);
+        *existing_live = *existing_live || live;
+    } else {
+        segs.push(TranscriptSeg::Thinking { lines, live });
+    }
+}
+
+fn append_answer(segs: &mut Vec<TranscriptSeg>, text: &str, live: bool) {
+    let mut lines = text_lines(text);
+    if let Some(TranscriptSeg::Answer {
+        lines: existing,
+        live: existing_live,
+    }) = segs.last_mut()
+    {
+        existing.append(&mut lines);
+        *existing_live = *existing_live || live;
+    } else {
+        segs.push(TranscriptSeg::Answer { lines, live });
+    }
+}
+
+fn ensure_activity(
+    segs: &mut Vec<TranscriptSeg>,
+    activity_index: &mut std::collections::HashMap<String, usize>,
+) {
+    if !matches!(segs.last(), Some(TranscriptSeg::Activity { .. })) {
+        activity_index.clear();
+        segs.push(TranscriptSeg::Activity {
+            tools: Vec::new(),
+            live: false,
+        });
+    }
+}
+
+fn activity_tools_mut(segs: &mut [TranscriptSeg]) -> &mut Vec<ToolRow> {
+    match segs.last_mut() {
+        Some(TranscriptSeg::Activity { tools, .. }) => tools,
+        _ => unreachable!("ensure_activity must open an Activity first"),
+    }
+}
+
+// ── Collapse policy ────────────────────────────────────────────────────────
+
+/// Per-segment collapse flag plus whether the user has manually toggled it.
+/// Index-aligned with the transcript segment list.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct CollapseState {
+    pub collapsed: bool,
+    /// Once true, auto-collapse must not force this segment shut again.
+    pub user_set: bool,
+}
+
+/// First-sight default: live Thinking/Activity expanded; settled collapsed.
+/// Non-collapsible kinds (Answer, User, System) are never collapsed.
+fn first_sight_collapsed(seg: &TranscriptSeg) -> bool {
+    match seg {
+        TranscriptSeg::Thinking { live, .. } | TranscriptSeg::Activity { live, .. } => !live,
+        TranscriptSeg::User { .. }
+        | TranscriptSeg::System { .. }
+        | TranscriptSeg::Answer { .. } => false,
+    }
+}
+
+fn has_following_answer(segs: &[TranscriptSeg], idx: usize) -> bool {
+    segs[idx + 1..]
+        .iter()
+        .any(|s| matches!(s, TranscriptSeg::Answer { .. }))
+}
+
+/// Sync collapse state with the current segment list.
+///
+/// - Resizes to match `segs` (truncates if shorter; appends first-sight defaults).
+/// - Auto-collapses untoggled Thinking when a following Answer appears or the
+///   segment is no longer live (turn settled — see Thinking `live` fixup in
+///   [`build_transcript_segments`]).
+/// - Auto-collapses untoggled Activity when a following Answer appears or the
+///   turn settles (`live == false`).
+/// - Leaves `user_set` segments alone for auto-collapse.
+///
+/// Thinking `live` means open-in-turn (streaming, no following Answer), not
+/// "still receiving ReasoningDelta", so tool phases keep Thinking expanded.
+pub fn sync_collapse_states(states: &mut Vec<CollapseState>, segs: &[TranscriptSeg]) {
+    if states.len() > segs.len() {
+        states.truncate(segs.len());
+    }
+    while states.len() < segs.len() {
+        let i = states.len();
+        states.push(CollapseState {
+            collapsed: first_sight_collapsed(&segs[i]),
+            user_set: false,
         });
     }
 
-    blocks
+    for (i, seg) in segs.iter().enumerate() {
+        if states[i].user_set {
+            continue;
+        }
+        match seg {
+            TranscriptSeg::Thinking { live, .. } | TranscriptSeg::Activity { live, .. } => {
+                // Settle when Answer follows or the segment is no longer
+                // open-in-turn (`!live`). For Thinking, `live` is fixed up so
+                // committed reasoning during a tool phase stays open.
+                if has_following_answer(segs, i) || !*live {
+                    states[i].collapsed = true;
+                }
+            }
+            TranscriptSeg::User { .. }
+            | TranscriptSeg::System { .. }
+            | TranscriptSeg::Answer { .. } => {
+                states[i].collapsed = false;
+            }
+        }
+    }
+}
+
+/// User toggle: flip collapsed and mark as manually set so auto-collapse
+/// will not override this segment again.
+pub fn toggle_collapse(states: &mut [CollapseState], idx: usize) {
+    if let Some(state) = states.get_mut(idx) {
+        state.collapsed = !state.collapsed;
+        state.user_set = true;
+    }
+}
+
+// ── Segment presentation helpers ───────────────────────────────────────────
+
+/// Collapsed Thinking label: line count only (no duration).
+///
+/// Examples: `"Thinking · 1 line"`, `"Thinking · 12 lines"`.
+pub fn thinking_collapsed_label(lines: &[String]) -> String {
+    let n = lines.len();
+    if n == 1 {
+        "Thinking · 1 line".to_string()
+    } else {
+        format!("Thinking · {n} lines")
+    }
+}
+
+/// Collapsed Activity summary: tool count plus sample names from the rows.
+///
+/// Example: `"4 tools · Read, Shell, Grep"`.
+pub fn activity_collapsed_label(tools: &[ToolRow]) -> String {
+    let n = tools.len();
+    let count = if n == 1 {
+        "1 tool".to_string()
+    } else {
+        format!("{n} tools")
+    };
+    const SAMPLE: usize = 3;
+    let names: Vec<&str> = tools
+        .iter()
+        .take(SAMPLE)
+        .map(|t| tool_display_name(&t.summary))
+        .collect();
+    if names.is_empty() {
+        count
+    } else {
+        format!("{count} · {}", names.join(", "))
+    }
+}
+
+/// Humanized tool verb from a summary line (`"Read · path"` → `"Read"`).
+fn tool_display_name(summary: &str) -> &str {
+    summary.split(" · ").next().unwrap_or(summary).trim()
+}
+
+/// Quiet row for an expanded Activity group. Status + summary on the row;
+/// truncated output sits under it. Group expand only — no per-tool expand state.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ActivityRowView {
+    pub status: ToolRowStatus,
+    pub status_glyph: &'static str,
+    pub summary: String,
+    /// Truncated output lines under the row; empty while running or empty result.
+    pub output_lines: Vec<String>,
+}
+
+/// Shape expanded Activity presentation as one quiet row per tool.
+pub fn expanded_activity_rows(tools: &[ToolRow]) -> Vec<ActivityRowView> {
+    tools
+        .iter()
+        .map(|t| ActivityRowView {
+            status: t.status,
+            status_glyph: tool_status_glyph(t.status),
+            summary: t.summary.clone(),
+            output_lines: t.output_lines.clone(),
+        })
+        .collect()
+}
+
+pub fn tool_status_glyph(status: ToolRowStatus) -> &'static str {
+    match status {
+        ToolRowStatus::Running => "●",
+        ToolRowStatus::Done => "✓",
+        ToolRowStatus::Error => "✗",
+    }
+}
+
+// ── Build blocks from session ──────────────────────────────────────────────
+
+/// Map transcript segments 1:1 into editor blocks (index-aligned with
+/// [`sync_collapse_states`]).
+///
+/// Contiguous tools form one Activity block; reasoning becomes Reasoning
+/// (Thinking); orphan results are named done rows inside Activity — never a
+/// bare "✓ done" block. Call after `build_transcript_segments`.
+pub fn blocks_from_segments(segs: &[TranscriptSeg]) -> Vec<Block> {
+    segs.iter()
+        .map(|seg| match seg {
+            TranscriptSeg::User { lines } => Block {
+                kind: BlockKind::User,
+                label: "User".to_string(),
+                lines: lines.clone(),
+            },
+            TranscriptSeg::System { lines } => Block {
+                kind: BlockKind::System,
+                label: "System".to_string(),
+                lines: lines.clone(),
+            },
+            TranscriptSeg::Thinking { lines, live } => Block {
+                kind: BlockKind::Reasoning,
+                label: if *live {
+                    "Thinking ···".to_string()
+                } else {
+                    "Thinking".to_string()
+                },
+                lines: lines.clone(),
+            },
+            TranscriptSeg::Answer { lines, live } => Block {
+                kind: BlockKind::Assistant,
+                label: if *live {
+                    "Assistant ···".to_string()
+                } else {
+                    "Assistant".to_string()
+                },
+                lines: lines.clone(),
+            },
+            TranscriptSeg::Activity { tools, .. } => Block {
+                kind: BlockKind::Activity,
+                label: activity_collapsed_label(tools),
+                lines: activity_body_lines(tools),
+            },
+        })
+        .collect()
+}
+
+/// Quiet-row dump for an expanded Activity body (status + summary + indented
+/// truncated output). Group-level expand only — no per-tool expand state.
+fn activity_body_lines(tools: &[ToolRow]) -> Vec<String> {
+    let mut lines = Vec::new();
+    for row in expanded_activity_rows(tools) {
+        lines.push(format!("{} {}", row.status_glyph, row.summary));
+        for out in &row.output_lines {
+            lines.push(format!("  {out}"));
+        }
+    }
+    lines
 }
 
 /// Truncate tool output to a reasonable number of lines, filtering
@@ -408,42 +774,215 @@ fn sanitize_line(line: &str) -> String {
 }
 
 /// Produce a short human-readable summary of a tool call.
-/// E.g. `Read /src/main.rs` or `Edit /src/lib.rs`.
+///
+/// Shape: `Verb · detail` (or just `Verb`). Known Claude/Grok tools share a
+/// calm display verb; unknown names are humanized. Never dumps raw JSON.
+///
+/// Examples: `Read · agent_chat.rs`, `Shell · cargo test -p duckboard`.
 fn format_tool_summary(name: &str, input: &str) -> String {
-    // Try to extract key fields from JSON.
-    if let Ok(serde_json::Value::Object(map)) = serde_json::from_str(input) {
-        // Many tools have a file_path or path field — use that as the summary.
-        let path = map
-            .get("file_path")
-            .or_else(|| map.get("path"))
-            .and_then(|v| v.as_str());
-        if let Some(p) = path {
-            // Shorten to last 3 path components.
-            let short: String = p
-                .rsplit('/')
-                .take(3)
-                .collect::<Vec<_>>()
-                .into_iter()
-                .rev()
-                .collect::<Vec<_>>()
-                .join("/");
-            return format!("{name} {short}");
-        }
+    let verb = known_tool_verb(name)
+        .map(str::to_string)
+        .unwrap_or_else(|| humanize_tool_name(name));
+    match tool_detail(input) {
+        Some(detail) if !detail.is_empty() => format!("{verb} · {detail}"),
+        _ => verb,
+    }
+}
 
-        let pattern = map.get("pattern").and_then(|v| v.as_str());
-        if let Some(pat) = pattern {
-            let truncated = truncate_chars(pat, 40);
-            return format!("{name} \"{truncated}\"");
+/// Map known Claude / Grok tool names to a short display verb (case-insensitive).
+/// Returns `None` for unmapped names (use [`humanize_tool_name`]).
+fn known_tool_verb(name: &str) -> Option<&'static str> {
+    let key = normalize_tool_key(name);
+    match key.as_str() {
+        // Shell
+        "bash" | "shell" | "run_terminal_command" | "run_terminal" => Some("Shell"),
+        // File read
+        "read" | "read_file" => Some("Read"),
+        // File write
+        "write" | "write_file" => Some("Write"),
+        // Edit / replace
+        "edit" | "search_replace" | "multi_edit" | "str_replace" | "strreplace" => Some("Edit"),
+        // Search
+        "grep" | "rg" => Some("Grep"),
+        // Glob / list
+        "glob" => Some("Glob"),
+        "ls" | "list" | "list_dir" => Some("List"),
+        // Web
+        "web_search" | "websearch" => Some("Search"),
+        "web_fetch" | "webfetch" | "open_page" | "open_page_with_find" | "web_fetch_url" => {
+            Some("Fetch")
         }
+        // Misc agent tools
+        "todo_write" | "todowrite" => Some("Todo"),
+        "task" | "spawn_subagent" => Some("Task"),
+        "image_gen" | "image_edit" => Some("Image"),
+        _ => None,
+    }
+}
 
-        let command = map.get("command").and_then(|v| v.as_str());
-        if let Some(cmd) = command {
-            let truncated = truncate_chars(cmd, 50);
-            return format!("{name} `{truncated}`");
+/// Normalize a tool name for alias matching: `WebSearch` → `web_search`,
+/// `run-terminal-command` → `run_terminal_command`.
+fn normalize_tool_key(name: &str) -> String {
+    let mut out = String::with_capacity(name.len() + 4);
+    for (i, c) in name.trim().chars().enumerate() {
+        if c == '-' || c == ' ' {
+            if !out.ends_with('_') {
+                out.push('_');
+            }
+        } else if c.is_uppercase() {
+            if i > 0 && !out.ends_with('_') {
+                out.push('_');
+            }
+            for lower in c.to_lowercase() {
+                out.push(lower);
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    while out.contains("__") {
+        out = out.replace("__", "_");
+    }
+    out.trim_matches('_').to_string()
+}
+
+/// Humanize an unknown tool name for display: `some_obscure_tool` →
+/// `Some obscure tool`, `camelCase` → `Camel case`.
+fn humanize_tool_name(name: &str) -> String {
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        return "Tool".to_string();
+    }
+    let key = normalize_tool_key(trimmed);
+    let words: Vec<&str> = key.split('_').filter(|w| !w.is_empty()).collect();
+    if words.is_empty() {
+        return "Tool".to_string();
+    }
+    let mut parts = Vec::with_capacity(words.len());
+    for (i, w) in words.iter().enumerate() {
+        if i == 0 {
+            // Title-case the first word.
+            let mut chars = w.chars();
+            let first = chars
+                .next()
+                .map(|c| c.to_uppercase().to_string())
+                .unwrap_or_default();
+            parts.push(format!("{first}{}", chars.as_str()));
+        } else {
+            parts.push(w.to_string());
+        }
+    }
+    parts.join(" ")
+}
+
+/// Extract a single-line detail from tool input JSON for the summary row.
+/// Prefer path, command, pattern/query; never multi-line bodies or full JSON.
+fn tool_detail(input: &str) -> Option<String> {
+    let input = input.trim();
+    if input.is_empty() {
+        return None;
+    }
+    let Ok(serde_json::Value::Object(map)) = serde_json::from_str(input) else {
+        // Non-JSON input: one short line if it's already a simple string.
+        let one = input.lines().next().unwrap_or(input).trim();
+        if one.is_empty() || one.starts_with('{') {
+            return None;
+        }
+        return Some(truncate_chars(one, 50).to_string());
+    };
+
+    // Path-like fields (shorten to last components).
+    for key in [
+        "file_path",
+        "path",
+        "target_file",
+        "file",
+        "filename",
+        "target_directory",
+    ] {
+        if let Some(p) = map.get(key).and_then(|v| v.as_str()) {
+            let p = p.trim();
+            if !p.is_empty() {
+                return Some(shorten_path(p));
+            }
         }
     }
 
-    name.to_string()
+    // Shell command — first line only.
+    if let Some(cmd) = map.get("command").and_then(|v| v.as_str()) {
+        let one = cmd.lines().next().unwrap_or(cmd).trim();
+        if !one.is_empty() {
+            return Some(truncate_chars(one, 50).to_string());
+        }
+    }
+
+    // Search pattern / query — quoted.
+    for key in ["pattern", "query"] {
+        if let Some(s) = map.get(key).and_then(|v| v.as_str()) {
+            let s = s.trim();
+            if !s.is_empty() {
+                let t = truncate_chars(s, 40);
+                return Some(format!("\"{t}\""));
+            }
+        }
+    }
+
+    // URL (web fetch / open).
+    if let Some(url) = map.get("url").and_then(|v| v.as_str()) {
+        let url = url.trim();
+        if !url.is_empty() {
+            return Some(truncate_chars(url, 48).to_string());
+        }
+    }
+
+    // Fallback: first short single-line string field that isn't a bulky body.
+    const SKIP: &[&str] = &[
+        "contents",
+        "content",
+        "body",
+        "old_string",
+        "new_string",
+        "output",
+        "prompt",
+        "text",
+        "code",
+        "diff",
+    ];
+    for (key, value) in &map {
+        if SKIP.iter().any(|s| s.eq_ignore_ascii_case(key)) {
+            continue;
+        }
+        let Some(s) = value.as_str() else {
+            continue;
+        };
+        let s = s.trim();
+        if s.is_empty() || s.contains('\n') {
+            continue;
+        }
+        if s.chars().count() > 80 {
+            continue;
+        }
+        return Some(truncate_chars(s, 40).to_string());
+    }
+
+    None
+}
+
+/// Shorten a path to at most the last three components.
+fn shorten_path(p: &str) -> String {
+    let short: String = p
+        .rsplit('/')
+        .take(3)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect::<Vec<_>>()
+        .join("/");
+    if short.chars().count() > 48 {
+        truncate_chars(&short, 48).to_string()
+    } else {
+        short
+    }
 }
 
 /// Truncate a string to at most `max` characters, on char boundaries.
@@ -465,7 +1004,7 @@ pub fn view<'a>(
     _session: &'a ChatSession,
     blocks: &'a [Block],
     editors: &'a [EditorState],
-    collapsed: &'a [bool],
+    collapse: &'a [CollapseState],
     input_value: &'a EditorState,
     queue_editor: Option<&'a EditorState>,
     commands: &'a [SlashCommand],
@@ -486,7 +1025,7 @@ pub fn view<'a>(
 
     let mut block_highlights = block_highlights;
     for (i, block) in blocks.iter().enumerate() {
-        let is_collapsed = collapsed.get(i).copied().unwrap_or(false);
+        let is_collapsed = collapse.get(i).map(|s| s.collapsed).unwrap_or(false);
         let (ranges, current) = if i < block_highlights.len() {
             std::mem::take(&mut block_highlights[i])
         } else {
@@ -742,13 +1281,12 @@ pub fn view<'a>(
         .into()
 }
 
-/// Render a single chat block, Zed-style:
+/// Render a single chat block, Zed-style calm transcript:
 ///
 /// - **User**: bordered card on the "paper" surface (no label, no chevron).
-/// - **Assistant / System**: plain text flowing directly on the chat
-///   background — no header, no chevron, no card.
-/// - **Tool use / tool result**: bordered card with a chevron + label header
-///   (collapsible), visually distinct from message text.
+/// - **Answer / System**: plain text flowing on the chat background.
+/// - **Thinking**: muted collapsible header; body when expanded.
+/// - **Activity**: framed group card with quiet tool rows when expanded.
 fn view_block<'a>(
     idx: usize,
     block: &'a Block,
@@ -757,12 +1295,27 @@ fn view_block<'a>(
     hl_ranges: Vec<text_edit::HighlightRange>,
     hl_current: Option<text_edit::HighlightRange>,
 ) -> Element<'a, Msg> {
-    let is_tool = matches!(block.kind, BlockKind::ToolUse | BlockKind::ToolResult);
-    if is_tool {
-        return view_tool_block(idx, block, editor, collapsed, hl_ranges, hl_current);
+    match block.kind {
+        BlockKind::Reasoning => {
+            view_thinking_block(idx, block, editor, collapsed, hl_ranges, hl_current)
+        }
+        BlockKind::Activity | BlockKind::ToolUse | BlockKind::ToolResult => {
+            view_activity_block(idx, block, editor, collapsed, hl_ranges, hl_current)
+        }
+        BlockKind::User | BlockKind::Assistant | BlockKind::System => {
+            view_prose_block(idx, block, editor, hl_ranges, hl_current)
+        }
     }
+}
 
-    // User / Assistant / System: no header, no chevron.
+/// User / Answer / System: no header, no chevron.
+fn view_prose_block<'a>(
+    idx: usize,
+    block: &'a Block,
+    editor: Option<&'a EditorState>,
+    hl_ranges: Vec<text_edit::HighlightRange>,
+    hl_current: Option<text_edit::HighlightRange>,
+) -> Element<'a, Msg> {
     let has_content = !block.lines.is_empty();
     if !has_content {
         return Space::new().into();
@@ -793,10 +1346,74 @@ fn view_block<'a>(
     }
 }
 
-/// Tool-use / tool-result rendering: framed card with a quieter header
-/// surface and a `bg_base` body that matches the user bubble. Clicking the
-/// header toggles `collapsed`.
-fn view_tool_block<'a>(
+/// Thinking: collapsible muted header; expanded body is the thought text.
+fn view_thinking_block<'a>(
+    idx: usize,
+    block: &'a Block,
+    editor: Option<&'a EditorState>,
+    collapsed: bool,
+    hl_ranges: Vec<text_edit::HighlightRange>,
+    hl_current: Option<text_edit::HighlightRange>,
+) -> Element<'a, Msg> {
+    let has_content = !block.lines.is_empty();
+    let body_shown = has_content && !collapsed && editor.is_some();
+    let header_label = if collapsed {
+        thinking_collapsed_label(&block.lines)
+    } else {
+        block.label.clone()
+    };
+    let label_color = theme::text_muted();
+
+    let label = text(header_label)
+        .size(theme::content_size())
+        .font(theme::content_font())
+        .color(label_color);
+    let header_row = row![collapsible::chevron(!collapsed), label]
+        .spacing(theme::SPACING_XS)
+        .align_y(iced::Alignment::Center);
+    let header_content: Element<'a, Msg> = button(header_row)
+        .on_press(Msg::ToggleCollapse(idx))
+        .padding(0.0)
+        .style(|_theme, _status| iced::widget::button::Style {
+            background: None,
+            ..Default::default()
+        })
+        .into();
+
+    let header = container(header_content)
+        .padding([theme::SPACING_XS, theme::SPACING_MD])
+        .width(Length::Fill);
+
+    let mut col = column![header].width(Length::Fill);
+    if body_shown && let Some(ed) = editor {
+        let body = container(
+            text_edit::TextEdit::new(ed, move |action| Msg::ChatAction(idx, action))
+                .show_gutter(false)
+                .word_wrap(true)
+                .md_tables(true)
+                .read_only(true)
+                .fit_content(true)
+                .transparent_bg(true)
+                .highlights(hl_ranges, hl_current),
+        )
+        .padding(iced::Padding {
+            top: 0.0,
+            right: theme::SPACING_MD,
+            bottom: theme::SPACING_SM,
+            left: theme::SPACING_MD,
+        })
+        .width(Length::Fill);
+        col = col.push(body);
+    }
+
+    container(col)
+        .padding([0.0, theme::SPACING_SM])
+        .width(Length::Fill)
+        .into()
+}
+
+/// Activity group: framed card with summary header and quiet tool rows.
+fn view_activity_block<'a>(
     idx: usize,
     block: &'a Block,
     editor: Option<&'a EditorState>,
@@ -808,9 +1425,9 @@ fn view_tool_block<'a>(
     let has_content = !block.lines.is_empty();
     let body_shown = has_content && !collapsed && editor.is_some();
 
-    // Tool headers use the content (monospace) font so tool names and
-    // paths read like code, matching the highlighted result body below.
-    let header_content: Element<'a, Msg> = if has_content {
+    // Activity headers use the content (monospace) font so tool names and
+    // paths read like code, matching the quiet-row body below.
+    let header_content: Element<'a, Msg> = {
         let label = text(&block.label)
             .size(theme::content_size())
             .font(theme::content_font())
@@ -825,12 +1442,6 @@ fn view_tool_block<'a>(
                 background: None,
                 ..Default::default()
             })
-            .into()
-    } else {
-        text(&block.label)
-            .size(theme::content_size())
-            .font(theme::content_font())
-            .color(label_color)
             .into()
     };
 
@@ -865,9 +1476,6 @@ fn view_tool_block<'a>(
 
     // Outer: stack the column underneath a transparent-bg, border-only
     // overlay so the 1px frame draws on top of the header/body surfaces.
-    // (A plain outer container doesn't work here: children fill the full
-    // bounds and cover the parent's border stroke, so the frame needs to
-    // sit *above* the children in draw order.)
     let border_overlay = container(Space::new())
         .width(Length::Fill)
         .height(Length::Fill)
@@ -910,9 +1518,10 @@ fn block_header_color(kind: BlockKind) -> iced::Color {
     match kind {
         BlockKind::User => theme::accent(),
         BlockKind::Assistant => theme::text_secondary(),
-        // Tool blocks sit in a neutral palette (primary text) so tool names
-        // stay legible without competing with the accent-colored User card.
-        BlockKind::ToolUse => theme::text_primary(),
+        BlockKind::Reasoning => theme::text_muted(),
+        // Activity sits in a neutral palette so tool names stay legible
+        // without competing with the accent-colored User card.
+        BlockKind::Activity | BlockKind::ToolUse => theme::text_primary(),
         BlockKind::ToolResult => theme::text_secondary(),
         BlockKind::System => theme::text_muted(),
     }
@@ -1157,11 +1766,682 @@ mod tests {
         let long_pat = "—".repeat(60); // em-dash is 3 bytes each
         let input = format!(r#"{{"pattern":"{long_pat}"}}"#);
         let summary = format_tool_summary("Grep", &input);
-        assert!(summary.starts_with("Grep \"—"));
+        assert!(
+            summary.starts_with("Grep · \"—"),
+            "expected calm Grep label, got {summary}"
+        );
 
         let long_cmd = "é".repeat(60); // 2 bytes each
         let input = format!(r#"{{"command":"{long_cmd}"}}"#);
         let summary = format_tool_summary("Bash", &input);
-        assert!(summary.starts_with("Bash `é"));
+        assert!(
+            summary.starts_with("Shell · é"),
+            "Bash should map to Shell with command detail: {summary}"
+        );
+    }
+
+    #[test]
+    fn known_claude_and_grok_tools_share_calm_labels() {
+        // Claude-style names
+        assert_eq!(
+            format_tool_summary("Read", r#"{"path":"crates/duckboard/src/widget/agent_chat.rs"}"#),
+            "Read · src/widget/agent_chat.rs"
+        );
+        assert_eq!(
+            format_tool_summary("Bash", r#"{"command":"cargo test -p duckboard"}"#),
+            "Shell · cargo test -p duckboard"
+        );
+        assert_eq!(
+            format_tool_summary("Grep", r#"{"pattern":"format_tool_summary"}"#),
+            "Grep · \"format_tool_summary\""
+        );
+        assert_eq!(
+            format_tool_summary("Edit", r#"{"file_path":"src/state.rs","old_string":"a","new_string":"b"}"#),
+            "Edit · src/state.rs"
+        );
+
+        // Grok-style names — same verbs, same calm shape
+        assert_eq!(
+            format_tool_summary("read_file", r#"{"path":"foo.rs"}"#),
+            "Read · foo.rs"
+        );
+        assert_eq!(
+            format_tool_summary(
+                "run_terminal_command",
+                r#"{"command":"ds status"}"#
+            ),
+            "Shell · ds status"
+        );
+        assert_eq!(
+            format_tool_summary(
+                "search_replace",
+                r#"{"path":"crates/duckboard/src/main.rs","old_string":"x","new_string":"y"}"#
+            ),
+            "Edit · duckboard/src/main.rs"
+        );
+    }
+
+    #[test]
+    fn unknown_tools_look_intentional_not_raw_json() {
+        // Humanized name + one short detail; no JSON blob.
+        let summary = format_tool_summary(
+            "some_obscure_tool",
+            r#"{"target":"widget","payload":{"nested":true},"contents":"a huge body\nwith lines"}"#,
+        );
+        assert_eq!(summary, "Some obscure tool · widget");
+        assert!(!summary.contains('{'), "must not dump JSON: {summary}");
+        assert!(!summary.contains("nested"), "must not dump nested objects: {summary}");
+
+        // Empty / minimal input: name alone, still clean.
+        assert_eq!(format_tool_summary("camelCaseThing", ""), "Camel case thing");
+        assert_eq!(format_tool_summary("  ", r#"{}"#), "Tool");
+        assert_eq!(
+            format_tool_summary("run_mystery", r#"{"old_string":"a\nb","new_string":"c\nd"}"#),
+            "Run mystery"
+        );
+    }
+
+    #[test]
+    fn collapsed_activity_uses_humanized_verbs() {
+        let session = assistant_blocks(vec![
+            tool_use("1", "read_file", r#"{"path":"a.rs"}"#),
+            tool_result("1", "read_file", "ok"),
+            tool_use("2", "run_terminal_command", r#"{"command":"ls"}"#),
+            tool_result("2", "run_terminal_command", "file"),
+            tool_use("3", "grep", r#"{"pattern":"x"}"#),
+            tool_result("3", "grep", "hit"),
+        ]);
+        let segs = build_transcript_segments(&session);
+        let tools = activity_tools(&segs);
+        let label = activity_collapsed_label(tools);
+        assert!(
+            label.contains("Read") && label.contains("Shell") && label.contains("Grep"),
+            "collapsed samples should use human verbs, not harness ids: {label}"
+        );
+        assert!(
+            !label.contains("run_terminal") && !label.contains("read_file"),
+            "raw harness ids must not appear: {label}"
+        );
+    }
+
+    // ── Transcript segment builder ──────────────────────────────────────
+
+    fn assistant_blocks(blocks: Vec<ContentBlock>) -> ChatSession {
+        let mut s = ChatSession::new("test".into());
+        s.messages.push(crate::chat_store::ChatMessage {
+            role: Role::Assistant,
+            content: blocks,
+            timestamp: String::new(),
+            is_priming: false,
+        });
+        s
+    }
+
+    fn tool_use(id: &str, name: &str, input: &str) -> ContentBlock {
+        ContentBlock::ToolUse {
+            id: id.into(),
+            name: name.into(),
+            input: input.into(),
+        }
+    }
+
+    fn tool_result(id: &str, name: &str, output: &str) -> ContentBlock {
+        ContentBlock::ToolResult {
+            id: id.into(),
+            name: name.into(),
+            output: output.into(),
+        }
+    }
+
+    fn activity_tools(segs: &[TranscriptSeg]) -> &[ToolRow] {
+        segs.iter()
+            .find_map(|s| match s {
+                TranscriptSeg::Activity { tools, .. } => Some(tools.as_slice()),
+                _ => None,
+            })
+            .expect("expected an Activity segment")
+    }
+
+    /// @spec chat/transcript Segment construction: Reasoning then answer yields Thinking then Answer
+    #[test]
+    fn reasoning_then_answer_yields_thinking_then_answer() {
+        // GIVEN a session whose assistant content is a reasoning block
+        // followed by a text block.
+        let session = assistant_blocks(vec![
+            ContentBlock::Reasoning("ponder the options".into()),
+            ContentBlock::Text("here is the answer".into()),
+        ]);
+
+        // WHEN the transcript segments are built.
+        let segs = build_transcript_segments(&session);
+
+        // THEN the segments are a Thinking segment then an Answer segment
+        // AND the reasoning body is not part of the Answer segment.
+        assert_eq!(segs.len(), 2);
+        match &segs[0] {
+            TranscriptSeg::Thinking { lines, live } => {
+                assert_eq!(lines, &["ponder the options".to_string()]);
+                assert!(!*live);
+            }
+            other => panic!("expected Thinking, got {other:?}"),
+        }
+        match &segs[1] {
+            TranscriptSeg::Answer { lines, live } => {
+                assert_eq!(lines, &["here is the answer".to_string()]);
+                assert!(!*live);
+                assert!(!lines.iter().any(|l| l.contains("ponder")));
+            }
+            other => panic!("expected Answer, got {other:?}"),
+        }
+    }
+
+    /// @spec chat/transcript Segment construction: Contiguous tools yield one Activity with multiple rows
+    #[test]
+    fn contiguous_tools_yield_one_activity_with_multiple_rows() {
+        // GIVEN a session whose assistant content is several consecutive
+        // tool uses and their results.
+        let session = assistant_blocks(vec![
+            tool_use("1", "Read", r#"{"path":"a.rs"}"#),
+            tool_result("1", "Read", "fn a() {}"),
+            tool_use("2", "grep", r#"{"pattern":"foo"}"#),
+            tool_result("2", "grep", "match"),
+            tool_use("3", "shell", r#"{"command":"ls"}"#),
+            tool_result("3", "shell", "file"),
+        ]);
+
+        // WHEN the transcript segments are built.
+        let segs = build_transcript_segments(&session);
+
+        // THEN those tools form a single Activity segment AND the segment
+        // has one row per tool call.
+        assert_eq!(segs.len(), 1);
+        let tools = activity_tools(&segs);
+        assert_eq!(tools.len(), 3);
+        assert_eq!(tools[0].id, "1");
+        assert_eq!(tools[1].id, "2");
+        assert_eq!(tools[2].id, "3");
+    }
+
+    /// @spec chat/transcript Segment construction: Thought, tools, thought, answer yields four segments in order
+    #[test]
+    fn thought_tools_thought_answer_yields_four_segments() {
+        // GIVEN a session whose assistant content is reasoning, then tools,
+        // then reasoning, then text.
+        let session = assistant_blocks(vec![
+            ContentBlock::Reasoning("first thought".into()),
+            tool_use("t1", "Read", r#"{"path":"x"}"#),
+            tool_result("t1", "Read", "ok"),
+            ContentBlock::Reasoning("second thought".into()),
+            ContentBlock::Text("final answer".into()),
+        ]);
+
+        // WHEN the transcript segments are built.
+        let segs = build_transcript_segments(&session);
+
+        // THEN the segments are Thinking, Activity, Thinking, Answer in order.
+        assert_eq!(segs.len(), 4);
+        assert!(matches!(&segs[0], TranscriptSeg::Thinking { lines, .. } if lines == &["first thought".to_string()]));
+        assert!(matches!(&segs[1], TranscriptSeg::Activity { tools, .. } if tools.len() == 1));
+        assert!(matches!(&segs[2], TranscriptSeg::Thinking { lines, .. } if lines == &["second thought".to_string()]));
+        assert!(matches!(&segs[3], TranscriptSeg::Answer { lines, .. } if lines == &["final answer".to_string()]));
+    }
+
+    /// @spec chat/transcript Segment construction: Live pending reasoning appears on an open Thinking segment
+    #[test]
+    fn live_pending_reasoning_appears_on_open_thinking() {
+        // GIVEN a streaming session with non-empty pending reasoning and no
+        // committed reasoning for that run yet.
+        let mut session = ChatSession::new("test".into());
+        session.is_streaming = true;
+        session.pending_reasoning = "still thinking…".into();
+
+        // WHEN the transcript segments are built.
+        let segs = build_transcript_segments(&session);
+
+        // THEN a live Thinking segment includes that pending reasoning text.
+        assert_eq!(segs.len(), 1);
+        match &segs[0] {
+            TranscriptSeg::Thinking { lines, live } => {
+                assert!(*live);
+                assert_eq!(lines, &["still thinking…".to_string()]);
+            }
+            other => panic!("expected live Thinking, got {other:?}"),
+        }
+    }
+
+    /// @spec chat/transcript Activity pairing: Matching use and result become one done row
+    #[test]
+    fn matching_use_and_result_become_one_done_row() {
+        // GIVEN a tool use and a tool result that share the same call id.
+        let session = assistant_blocks(vec![
+            tool_use("call-1", "Read", r#"{"path":"src/main.rs"}"#),
+            tool_result("call-1", "Read", "fn main() {}"),
+        ]);
+
+        // WHEN the transcript segments are built.
+        let segs = build_transcript_segments(&session);
+
+        // THEN the Activity segment has one done row for that id AND the
+        // row carries the tool summary and the result body.
+        let tools = activity_tools(&segs);
+        assert_eq!(tools.len(), 1);
+        assert_eq!(tools[0].id, "call-1");
+        assert_eq!(tools[0].status, ToolRowStatus::Done);
+        assert!(tools[0].summary.contains("Read"));
+        assert!(tools[0].summary.contains("main.rs"));
+        assert_eq!(tools[0].output_lines, vec!["fn main() {}".to_string()]);
+    }
+
+    /// @spec chat/transcript Activity pairing: Non-adjacent use and result still pair by id
+    #[test]
+    fn non_adjacent_use_and_result_still_pair_by_id() {
+        // GIVEN two tool uses and two results ordered so each result is not
+        // immediately after its matching use, AND each result shares a call
+        // id with exactly one of the uses.
+        let session = assistant_blocks(vec![
+            tool_use("a", "Read", r#"{"path":"a.rs"}"#),
+            tool_use("b", "grep", r#"{"pattern":"x"}"#),
+            tool_result("a", "Read", "contents of a"),
+            tool_result("b", "grep", "match in b"),
+        ]);
+
+        // WHEN the transcript segments are built.
+        let segs = build_transcript_segments(&session);
+
+        // THEN each use is paired with its matching result into one done row
+        // AND no row is labeled only as a generic done placeholder.
+        let tools = activity_tools(&segs);
+        assert_eq!(tools.len(), 2);
+        let row_a = tools.iter().find(|t| t.id == "a").unwrap();
+        let row_b = tools.iter().find(|t| t.id == "b").unwrap();
+        assert_eq!(row_a.status, ToolRowStatus::Done);
+        assert_eq!(row_b.status, ToolRowStatus::Done);
+        assert_eq!(row_a.output_lines, vec!["contents of a".to_string()]);
+        assert_eq!(row_b.output_lines, vec!["match in b".to_string()]);
+        for row in tools {
+            assert_ne!(row.summary, "✓ done");
+            assert!(!row.summary.eq_ignore_ascii_case("done"));
+        }
+    }
+
+    /// @spec chat/transcript Activity pairing: Orphan result is a named done row
+    #[test]
+    fn orphan_result_is_a_named_done_row() {
+        // GIVEN a tool result with no preceding tool use for the same call id.
+        let session = assistant_blocks(vec![tool_result("orphan-1", "Read", "file body")]);
+
+        // WHEN the transcript segments are built.
+        let segs = build_transcript_segments(&session);
+
+        // THEN the Activity segment includes a done row labeled from the
+        // result's tool name AND the row is not labeled only as a generic
+        // done placeholder.
+        let tools = activity_tools(&segs);
+        assert_eq!(tools.len(), 1);
+        assert_eq!(tools[0].status, ToolRowStatus::Done);
+        assert_eq!(tools[0].summary, "Read");
+        assert_ne!(tools[0].summary, "✓ done");
+        assert_eq!(tools[0].output_lines, vec!["file body".to_string()]);
+    }
+
+    // ── Segment presentation ────────────────────────────────────────────
+
+    /// @spec chat/transcript Segment presentation: Thinking collapsed label includes line count
+    #[test]
+    fn thinking_collapsed_label_includes_line_count() {
+        // GIVEN a Thinking segment whose body has a known number of lines.
+        let lines: Vec<String> = vec![
+            "line one".into(),
+            "line two".into(),
+            "line three".into(),
+        ];
+
+        // WHEN the collapsed label for that segment is produced.
+        let label = thinking_collapsed_label(&lines);
+
+        // THEN the label includes that line count AND does not include a duration.
+        assert!(
+            label.contains('3'),
+            "label should include line count 3: {label}"
+        );
+        assert!(
+            label.contains("line"),
+            "label should mention lines: {label}"
+        );
+        let lower = label.to_ascii_lowercase();
+        for duration_token in ["ms", "sec", "min", "hour", "duration"] {
+            assert!(
+                !lower.contains(duration_token),
+                "label must not include duration ({duration_token}): {label}"
+            );
+        }
+        // "s" alone is too ambiguous (matches "lines"); require no time units.
+        assert!(!lower.contains("seconds") && !lower.contains("minutes"));
+    }
+
+    /// @spec chat/transcript Segment presentation: Activity collapsed label includes count and sample names
+    #[test]
+    fn activity_collapsed_label_includes_count_and_sample_names() {
+        // GIVEN an Activity segment with multiple completed tools.
+        let session = assistant_blocks(vec![
+            tool_use("1", "Read", r#"{"path":"a.rs"}"#),
+            tool_result("1", "Read", "ok"),
+            tool_use("2", "grep", r#"{"pattern":"foo"}"#),
+            tool_result("2", "grep", "match"),
+            tool_use("3", "shell", r#"{"command":"ls"}"#),
+            tool_result("3", "shell", "file"),
+            tool_use("4", "Write", r#"{"path":"b.rs"}"#),
+            tool_result("4", "Write", "written"),
+        ]);
+        let segs = build_transcript_segments(&session);
+        let tools = activity_tools(&segs);
+        assert_eq!(tools.len(), 4);
+
+        // WHEN the collapsed label for that segment is produced.
+        let label = activity_collapsed_label(tools);
+
+        // THEN the label includes the tool count AND sample tool names.
+        assert!(
+            label.contains('4') && label.contains("tool"),
+            "label should include tool count: {label}"
+        );
+        assert!(
+            label.contains("Read") && label.contains("Grep") && label.contains("Shell"),
+            "label should include sample humanized tool names: {label}"
+        );
+    }
+
+    /// @spec chat/transcript Segment presentation: Expanded activity exposes status, summary, and truncated output
+    #[test]
+    fn expanded_activity_exposes_status_summary_and_truncated_output() {
+        // GIVEN an expanded Activity segment with a completed tool that
+        // produced multi-line output.
+        let multi_line: String = (0..15).map(|i| format!("out line {i}\n")).collect();
+        let session = assistant_blocks(vec![
+            tool_use("1", "Read", r#"{"path":"big.txt"}"#),
+            tool_result("1", "Read", &multi_line),
+            tool_use("2", "grep", r#"{"pattern":"x"}"#),
+            tool_result("2", "grep", "hit"),
+        ]);
+        let segs = build_transcript_segments(&session);
+        let tools = activity_tools(&segs);
+
+        // WHEN the segment's rows are presented.
+        let rows = expanded_activity_rows(tools);
+
+        // THEN each tool has one row showing its status and summary
+        // AND truncated output is available under the row for that tool
+        // AND no separate per-tool expand state is required to show it.
+        assert_eq!(rows.len(), tools.len());
+        for (row, tool) in rows.iter().zip(tools.iter()) {
+            assert_eq!(row.status, tool.status);
+            assert_eq!(row.summary, tool.summary);
+            assert!(!row.status_glyph.is_empty());
+            // Output is on the row itself (no nested expand flag to consult).
+            assert_eq!(row.output_lines, tool.output_lines);
+        }
+        let first = &rows[0];
+        assert_eq!(first.status, ToolRowStatus::Done);
+        assert!(first.summary.contains("Read"));
+        assert!(
+            first.output_lines.len() > 1,
+            "multi-line result should surface truncated output under the row"
+        );
+        assert!(
+            first.output_lines.len() <= 11,
+            "output should be truncated (max 10 lines + ellipsis)"
+        );
+    }
+
+    // ── Segment → editor blocks ─────────────────────────────────────────
+
+    #[test]
+    fn blocks_from_segments_maps_calm_transcript_not_adjacency() {
+        // Reasoning + tools + orphan-style pairing + answer become
+        // Thinking / Activity / Answer — not one card per tool or "✓ done".
+        let session = assistant_blocks(vec![
+            ContentBlock::Reasoning("why".into()),
+            tool_use("1", "Read", r#"{"path":"a.rs"}"#),
+            tool_result("1", "Read", "body"),
+            tool_result("orphan", "grep", "hit"),
+            ContentBlock::Text("answer".into()),
+        ]);
+        let blocks = blocks_from_segments(&build_transcript_segments(&session));
+        assert_eq!(blocks.len(), 3);
+        assert_eq!(blocks[0].kind, BlockKind::Reasoning);
+        assert_eq!(blocks[0].lines, vec!["why".to_string()]);
+        assert_eq!(blocks[1].kind, BlockKind::Activity);
+        assert!(blocks[1].label.contains("tool"));
+        assert!(
+            blocks[1].lines.iter().any(|l| l.contains("grep")),
+            "orphan result should be a named activity row, not a bare done block: {:?}",
+            blocks[1]
+        );
+        assert!(!blocks.iter().any(|b| b.label == "✓ done"));
+        assert_eq!(blocks[2].kind, BlockKind::Assistant);
+        assert_eq!(blocks[2].lines, vec!["answer".to_string()]);
+    }
+
+    // ── Collapse defaults ───────────────────────────────────────────────
+
+    /// @spec chat/transcript Collapse defaults: Thinking collapses when answer follows
+    #[test]
+    fn thinking_collapses_when_answer_follows() {
+        // GIVEN a live Thinking segment that the user has not toggled.
+        let mut session = ChatSession::new("test".into());
+        session.is_streaming = true;
+        session.pending_reasoning = "still thinking".into();
+        let segs_live = build_transcript_segments(&session);
+        let mut states = Vec::new();
+        sync_collapse_states(&mut states, &segs_live);
+        assert_eq!(states.len(), 1);
+        assert!(
+            !states[0].collapsed,
+            "live Thinking should start expanded"
+        );
+        assert!(!states[0].user_set);
+
+        // Intermediate: reasoning committed, still streaming, NO answer yet.
+        // Collapse must not fire merely because reasoning stopped receiving
+        // deltas — only when Answer follows (or the turn settles).
+        session.pending_reasoning.clear();
+        session.messages.push(crate::chat_store::ChatMessage {
+            role: Role::Assistant,
+            content: vec![ContentBlock::Reasoning("still thinking".into())],
+            timestamp: String::new(),
+            is_priming: false,
+        });
+        let segs_committed = build_transcript_segments(&session);
+        assert_eq!(segs_committed.len(), 1);
+        assert!(
+            matches!(&segs_committed[0], TranscriptSeg::Thinking { live: true, .. }),
+            "committed Thinking mid-stream with no Answer should stay live: {segs_committed:?}"
+        );
+        sync_collapse_states(&mut states, &segs_committed);
+        assert!(
+            !states[0].collapsed,
+            "committing Reasoning alone must not auto-collapse Thinking"
+        );
+
+        // WHEN a following Answer segment appears for the same turn.
+        session.pending_text = "here is the answer".into();
+        let segs = build_transcript_segments(&session);
+        assert!(
+            matches!(&segs[0], TranscriptSeg::Thinking { live: false, .. })
+                && matches!(&segs[1], TranscriptSeg::Answer { .. }),
+            "expected settled Thinking then Answer, got {segs:?}"
+        );
+        sync_collapse_states(&mut states, &segs);
+
+        // THEN the Thinking segment is collapsed.
+        assert!(
+            states[0].collapsed,
+            "Thinking should auto-collapse when Answer follows"
+        );
+        assert!(!states[0].user_set);
+    }
+
+    /// @spec chat/transcript Collapse defaults: User-expanded Thinking is not auto-collapsed
+    #[test]
+    fn user_expanded_thinking_is_not_auto_collapsed() {
+        // GIVEN a Thinking segment the user has expanded.
+        let mut session = ChatSession::new("test".into());
+        session.is_streaming = true;
+        session.pending_reasoning = "draft thought".into();
+        let segs_live = build_transcript_segments(&session);
+        let mut states = Vec::new();
+        sync_collapse_states(&mut states, &segs_live);
+        // Simulate user expanding (or re-expanding) and locking the choice.
+        toggle_collapse(&mut states, 0);
+        // If first-sight was expanded, toggle collapses; expand again to match
+        // "user has expanded".
+        if states[0].collapsed {
+            toggle_collapse(&mut states, 0);
+        }
+        assert!(!states[0].collapsed);
+        assert!(states[0].user_set);
+
+        // WHEN a following Answer segment appears for the same turn.
+        session.pending_reasoning.clear();
+        session.messages.push(crate::chat_store::ChatMessage {
+            role: Role::Assistant,
+            content: vec![ContentBlock::Reasoning("draft thought".into())],
+            timestamp: String::new(),
+            is_priming: false,
+        });
+        session.pending_text = "answer body".into();
+        let segs = build_transcript_segments(&session);
+        sync_collapse_states(&mut states, &segs);
+
+        // THEN the Thinking segment remains expanded.
+        assert!(
+            !states[0].collapsed,
+            "user-expanded Thinking must not auto-collapse"
+        );
+        assert!(states[0].user_set);
+    }
+
+    /// @spec chat/transcript Collapse defaults: Settled Activity starts collapsed
+    #[test]
+    fn settled_activity_starts_collapsed() {
+        // GIVEN a finished turn whose transcript includes an Activity segment.
+        let session = assistant_blocks(vec![
+            tool_use("1", "Read", r#"{"path":"a.rs"}"#),
+            tool_result("1", "Read", "ok"),
+            tool_use("2", "grep", r#"{"pattern":"x"}"#),
+            tool_result("2", "grep", "hit"),
+            ContentBlock::Text("done".into()),
+        ]);
+        assert!(!session.is_streaming);
+        let segs = build_transcript_segments(&session);
+        let activity_idx = segs
+            .iter()
+            .position(|s| matches!(s, TranscriptSeg::Activity { .. }))
+            .expect("expected Activity segment");
+
+        // WHEN the transcript is presented for that settled turn.
+        let mut states = Vec::new();
+        sync_collapse_states(&mut states, &segs);
+
+        // THEN the Activity segment is collapsed.
+        assert!(
+            states[activity_idx].collapsed,
+            "settled Activity should start collapsed"
+        );
+        assert!(!states[activity_idx].user_set);
+    }
+
+    #[test]
+    fn thinking_stays_expanded_during_live_activity() {
+        // GIVEN committed Reasoning + live Activity, streaming, no Answer yet.
+        let mut session = assistant_blocks(vec![
+            ContentBlock::Reasoning("plan the approach".into()),
+            tool_use("1", "Read", r#"{"path":"a.rs"}"#),
+            tool_result("1", "Read", "ok"),
+            tool_use("2", "grep", r#"{"pattern":"x"}"#),
+        ]);
+        session.is_streaming = true;
+
+        let segs = build_transcript_segments(&session);
+        assert!(
+            matches!(&segs[0], TranscriptSeg::Thinking { live: true, .. }),
+            "Thinking should stay open-in-turn during tools: {segs:?}"
+        );
+        assert!(
+            matches!(&segs[1], TranscriptSeg::Activity { live: true, .. }),
+            "Activity should be live during tools: {segs:?}"
+        );
+
+        let mut states = Vec::new();
+        sync_collapse_states(&mut states, &segs);
+
+        // THEN Thinking stays expanded unless user-set.
+        assert!(
+            !states[0].collapsed,
+            "Thinking must stay expanded while following Activity is live"
+        );
+        assert!(!states[0].user_set);
+        assert!(
+            !states[1].collapsed,
+            "live Activity should start expanded"
+        );
+    }
+
+    #[test]
+    fn think_tools_answer_settles_thinking_collapsed() {
+        // GIVEN a think → tools stream that the user has not toggled.
+        let mut session = ChatSession::new("test".into());
+        session.is_streaming = true;
+        session.pending_reasoning = "first thought".into();
+        let mut states = Vec::new();
+        sync_collapse_states(&mut states, &build_transcript_segments(&session));
+        assert!(!states[0].collapsed);
+
+        // Tools flush reasoning; still no answer.
+        session.pending_reasoning.clear();
+        session.messages.push(crate::chat_store::ChatMessage {
+            role: Role::Assistant,
+            content: vec![
+                ContentBlock::Reasoning("first thought".into()),
+                tool_use("1", "Read", r#"{"path":"a.rs"}"#),
+                tool_result("1", "Read", "body"),
+            ],
+            timestamp: String::new(),
+            is_priming: false,
+        });
+        let segs_tools = build_transcript_segments(&session);
+        sync_collapse_states(&mut states, &segs_tools);
+        assert!(
+            !states[0].collapsed,
+            "Thinking should stay open through the tool phase"
+        );
+
+        // WHEN answer arrives (or the turn would complete after).
+        session.pending_text = "final answer".into();
+        let segs_answer = build_transcript_segments(&session);
+        assert!(
+            matches!(&segs_answer[0], TranscriptSeg::Thinking { live: false, .. })
+                && matches!(&segs_answer[1], TranscriptSeg::Activity { .. })
+                && matches!(&segs_answer[2], TranscriptSeg::Answer { .. }),
+            "expected Thinking, Activity, Answer: {segs_answer:?}"
+        );
+        sync_collapse_states(&mut states, &segs_answer);
+        assert!(
+            states[0].collapsed,
+            "Thinking should collapse when Answer follows"
+        );
+
+        // TurnComplete / settled: still collapsed, Activity settles too.
+        session.pending_text.clear();
+        session.messages[0].content.push(ContentBlock::Text("final answer".into()));
+        session.is_streaming = false;
+        let segs_settled = build_transcript_segments(&session);
+        sync_collapse_states(&mut states, &segs_settled);
+        assert!(states[0].collapsed, "settled Thinking stays collapsed");
+        assert!(
+            states[1].collapsed,
+            "settled Activity should be collapsed"
+        );
+        assert!(!states[0].user_set);
     }
 }

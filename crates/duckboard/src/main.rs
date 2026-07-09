@@ -1379,15 +1379,15 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                         ax.chat_commands = commands;
                     }
                     AgentEvent::ContentDelta { text } => {
+                        // Kind switch away from reasoning — commit thoughts first.
+                        flush_pending_reasoning(&mut ax.session);
                         ax.session.pending_text.push_str(&text);
                         ax.needs_flush = true;
                     }
                     AgentEvent::ReasoningDelta { text } => {
-                        // Only the grok harness emits reasoning. Surface it in
-                        // the streaming buffer so it's visible rather than
-                        // dropped; a dedicated reasoning-block rendering is
-                        // left as later work.
-                        ax.session.pending_text.push_str(&text);
+                        // Kind switch away from answer — commit prose first.
+                        flush_pending_text(&mut ax.session);
+                        ax.session.pending_reasoning.push_str(&text);
                         ax.needs_flush = true;
                     }
                     AgentEvent::ToolUse { id, name, input } => {
@@ -1401,7 +1401,7 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                         {
                             staged_binding = Some((slug, ax.session.scope.clone()));
                         }
-                        flush_pending_text(&mut ax.session);
+                        flush_all_pending(&mut ax.session);
                         ax.session.messages.push(chat_store::ChatMessage {
                             role: chat_store::Role::Assistant,
                             content: vec![chat_store::ContentBlock::ToolUse { id, name, input }],
@@ -1424,7 +1424,7 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                         ax.needs_flush = true;
                     }
                     AgentEvent::TurnComplete => {
-                        flush_pending_text(&mut ax.session);
+                        flush_all_pending(&mut ax.session);
                         ax.session.is_streaming = false;
                         // Detect the AGENTS.md priming turn and stage the
                         // user's actual first message for dispatch in the
@@ -3790,13 +3790,7 @@ fn build_find_snapshot(
             let roles: Vec<&'static str> = ax
                 .chat_blocks
                 .iter()
-                .map(|b| match b.kind {
-                    widget::text_edit::BlockKind::User => "User",
-                    widget::text_edit::BlockKind::Assistant => "Assistant",
-                    widget::text_edit::BlockKind::ToolUse => "Tool",
-                    widget::text_edit::BlockKind::ToolResult => "Result",
-                    widget::text_edit::BlockKind::System => "System",
-                })
+                .map(|b| chat_block_role_label(b.kind))
                 .collect();
             let searchable = chat_block_searchable(&ax.chat_blocks);
             let label = ax.session.display_name.clone();
@@ -3812,8 +3806,21 @@ fn build_find_snapshot(
     }
 }
 
-/// Predicate vector mirroring `chat_blocks`: `true` for blocks the user
-/// authored or read as conversation, `false` for tool plumbing. Local find
+/// Role label for chat find / selection context chips.
+fn chat_block_role_label(kind: widget::text_edit::BlockKind) -> &'static str {
+    match kind {
+        widget::text_edit::BlockKind::User => "User",
+        widget::text_edit::BlockKind::Assistant => "Assistant",
+        widget::text_edit::BlockKind::Reasoning => "Thinking",
+        widget::text_edit::BlockKind::Activity => "Activity",
+        widget::text_edit::BlockKind::ToolUse => "Tool",
+        widget::text_edit::BlockKind::ToolResult => "Result",
+        widget::text_edit::BlockKind::System => "System",
+    }
+}
+
+/// Predicate vector mirroring `chat_blocks`: `true` for conversation prose
+/// (user/answer/thinking/system), `false` for tool plumbing. Local find
 /// stays scoped to the conversation surface.
 fn chat_block_searchable(blocks: &[widget::text_edit::Block]) -> Vec<bool> {
     blocks
@@ -3821,7 +3828,9 @@ fn chat_block_searchable(blocks: &[widget::text_edit::Block]) -> Vec<bool> {
         .map(|b| {
             !matches!(
                 b.kind,
-                widget::text_edit::BlockKind::ToolUse | widget::text_edit::BlockKind::ToolResult
+                widget::text_edit::BlockKind::Activity
+                    | widget::text_edit::BlockKind::ToolUse
+                    | widget::text_edit::BlockKind::ToolResult
             )
         })
         .collect()
@@ -3934,13 +3943,7 @@ fn commit_find(state: &mut State) -> Task<Message> {
             let roles: Vec<&'static str> = ax
                 .chat_blocks
                 .iter()
-                .map(|b| match b.kind {
-                    widget::text_edit::BlockKind::User => "User",
-                    widget::text_edit::BlockKind::Assistant => "Assistant",
-                    widget::text_edit::BlockKind::ToolUse => "Tool",
-                    widget::text_edit::BlockKind::ToolResult => "Result",
-                    widget::text_edit::BlockKind::System => "System",
-                })
+                .map(|b| chat_block_role_label(b.kind))
                 .collect();
             let searchable = chat_block_searchable(&ax.chat_blocks);
             match widget::find::matches_for_chat(&query, &ax.chat_editors, &roles, &searchable) {
@@ -4612,6 +4615,18 @@ pub fn open_artifact_tab(
 
 // ── Agent helpers ───────────────────────────────────────────────────────────
 
+fn flush_pending_reasoning(session: &mut chat_store::ChatSession) {
+    if !session.pending_reasoning.is_empty() {
+        let text = std::mem::take(&mut session.pending_reasoning);
+        session.messages.push(chat_store::ChatMessage {
+            role: chat_store::Role::Assistant,
+            content: vec![chat_store::ContentBlock::Reasoning(text)],
+            timestamp: String::new(),
+            is_priming: false,
+        });
+    }
+}
+
 fn flush_pending_text(session: &mut chat_store::ChatSession) {
     if !session.pending_text.is_empty() {
         let text = std::mem::take(&mut session.pending_text);
@@ -4622,6 +4637,11 @@ fn flush_pending_text(session: &mut chat_store::ChatSession) {
             is_priming: false,
         });
     }
+}
+
+fn flush_all_pending(session: &mut chat_store::ChatSession) {
+    flush_pending_reasoning(session);
+    flush_pending_text(session);
 }
 
 /// Apply a title-summary result to the session identified by `key`, and —

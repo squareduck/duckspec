@@ -19,7 +19,7 @@ readable until a write completes in full.
 - **THEN** the session file on disk still parses as the previously-persisted session
 
 > test: code
-> - crates/duckboard/src/chat_store.rs:756
+> - crates/duckboard/src/chat_store.rs:763
 
 ## Requirement: Non-destructive scope migration
 
@@ -38,7 +38,7 @@ delete it.
 - **THEN** the target scope afterward holds both sessions
 
 > test: code
-> - crates/duckboard/src/chat_store.rs:788
+> - crates/duckboard/src/chat_store.rs:795
 
 ### Scenario: Same-id collision keeps the fuller session and preserves the other
 
@@ -49,7 +49,7 @@ delete it.
 - **AND** the displaced copy is preserved rather than deleted
 
 > test: code
-> - crates/duckboard/src/chat_store.rs:819
+> - crates/duckboard/src/chat_store.rs:826
 
 ## Requirement: In-flight turn durability
 
@@ -67,7 +67,7 @@ persisted during the turn, not only when the turn completes.
 - **THEN** the persisted session includes those streamed messages
 
 > test: code
-> - crates/duckboard/src/chat_store.rs:853
+> - crates/duckboard/src/chat_store.rs:860
 
 ### Scenario: Streamed messages are persisted before turn completion
 
@@ -76,4 +76,45 @@ persisted during the turn, not only when the turn completes.
 - **THEN** the persisted session includes the messages streamed so far
 
 > test: code
-> - crates/duckboard/src/chat_store.rs:904
+> - crates/duckboard/src/chat_store.rs:911
+
+### Scenario: Eager flush includes pending reasoning as Reasoning content
+
+- **GIVEN** a turn that has streamed reasoning into the pending reasoning buffer and has
+  not yet completed
+
+- **WHEN** an eager flush occurs
+
+- **THEN** the persisted session includes that reasoning as Reasoning content
+
+- **AND** that body is not stored as Text content
+
+> test: code
+> - crates/duckboard/src/chat_store.rs:1041
+
+## Requirement: Reasoning content
+
+A chat session SHALL be able to store Reasoning content blocks alongside Text and tool
+blocks. Persisting and reloading a session SHALL preserve Reasoning bodies. A session file
+that contains only legacy content kinds (no Reasoning) SHALL still load.
+
+> test: code
+
+### Scenario: Reasoning content round-trips through persist and load
+
+- **GIVEN** a session whose messages include a Reasoning content block
+- **WHEN** the session is persisted and loaded again
+- **THEN** the loaded session includes a Reasoning block with the same body
+
+> test: code
+> - crates/duckboard/src/chat_store.rs:941
+
+### Scenario: A legacy session without Reasoning still loads
+
+- **GIVEN** a session file whose messages use only Text, ToolUse, and ToolResult content
+- **WHEN** the session is loaded
+- **THEN** the load succeeds
+- **AND** the loaded messages match the file's content
+
+> test: code
+> - crates/duckboard/src/chat_store.rs:975

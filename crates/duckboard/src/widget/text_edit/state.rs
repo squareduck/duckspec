@@ -17,8 +17,15 @@ pub(crate) const CONTENT_PAD_Y: f32 = 4.0;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BlockKind {
     User,
+    /// Answer prose (primary assistant reply).
     Assistant,
+    /// Thinking body — collapsible, secondary.
+    Reasoning,
+    /// Grouped tool activity — one card for many tools.
+    Activity,
+    /// Legacy single-tool card; no longer emitted by the segment builder.
     ToolUse,
+    /// Legacy tool-result card; no longer emitted by the segment builder.
     ToolResult,
     System,
 }
@@ -45,7 +52,8 @@ pub fn block_kind_bg(kind: BlockKind) -> Color {
     match kind {
         BlockKind::User => theme::chat_bg_user(),
         BlockKind::Assistant => theme::chat_bg_assistant(),
-        BlockKind::ToolUse => theme::chat_bg_tool_use(),
+        BlockKind::Reasoning => theme::chat_bg_system(),
+        BlockKind::Activity | BlockKind::ToolUse => theme::chat_bg_tool_use(),
         BlockKind::ToolResult => theme::chat_bg_tool_result(),
         BlockKind::System => theme::chat_bg_system(),
     }
@@ -85,7 +93,8 @@ pub(crate) fn block_header_color(kind: BlockKind) -> Color {
     match kind {
         BlockKind::User => theme::accent(),
         BlockKind::Assistant => theme::text_secondary(),
-        BlockKind::ToolUse => theme::accent_dim(),
+        BlockKind::Reasoning => theme::text_muted(),
+        BlockKind::Activity | BlockKind::ToolUse => theme::accent_dim(),
         BlockKind::ToolResult => theme::success(),
         BlockKind::System => theme::text_muted(),
     }

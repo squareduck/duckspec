@@ -340,7 +340,8 @@ pub struct AgentSession {
     pub chat_completion: agent_chat::CompletionState,
     pub chat_blocks: Vec<Block>,
     pub chat_editors: Vec<EditorState>,
-    pub chat_collapsed: Vec<bool>,
+    /// Segment-index-aligned collapse state (user override + auto-collapse).
+    pub chat_collapse: Vec<agent_chat::CollapseState>,
     pub esc_count: u8,
     /// Resolved project-level default model (harness-tagged `ModelRef`) for
     /// this session's project. Transient (not persisted) — refreshed from
@@ -441,7 +442,7 @@ impl AgentSession {
             chat_completion: agent_chat::CompletionState::default(),
             chat_blocks: Vec::new(),
             chat_editors: Vec::new(),
-            chat_collapsed: Vec::new(),
+            chat_collapse: Vec::new(),
             esc_count: 0,
             project_model_default: None,
             model_dirty: false,
@@ -1094,9 +1095,7 @@ fn handle_agent_chat(
             }
         }
         agent_chat::Msg::ToggleCollapse(idx) => {
-            if let Some(collapsed) = ax.chat_collapsed.get_mut(idx) {
-                *collapsed = !*collapsed;
-            }
+            agent_chat::toggle_collapse(&mut ax.chat_collapse, idx);
         }
         agent_chat::Msg::SendPressed => {
             let typed = ax.chat_input.text().trim().to_string();
@@ -1333,6 +1332,7 @@ pub fn send_prompt_text(ax: &mut AgentSession, text: String, highlighter: &Synta
         });
         ax.session.is_streaming = true;
         ax.session.pending_text.clear();
+        ax.session.pending_reasoning.clear();
         if ax.stick_to_bottom {
             ax.pending_snap_to_bottom = true;
         }
@@ -1443,6 +1443,7 @@ pub fn send_prompt_text(ax: &mut AgentSession, text: String, highlighter: &Synta
     });
     ax.session.is_streaming = true;
     ax.session.pending_text.clear();
+    ax.session.pending_reasoning.clear();
     // Persist the transcript the moment the user turn is added, not just on
     // `TurnComplete`. Otherwise closing the app mid-turn drops the in-flight
     // message: the only prior checkpoint is the last completed turn, and on a
@@ -1530,6 +1531,13 @@ fn build_history_preamble(messages: &[crate::chat_store::ChatMessage]) -> String
                     out.push_str(t);
                     out.push_str("\n\n");
                 }
+                ContentBlock::Reasoning(t) => {
+                    // Include body: agents benefit from prior thought on
+                    // non-resume paths.
+                    out.push_str("[Assistant reasoning]\n");
+                    out.push_str(t);
+                    out.push_str("\n\n");
+                }
                 ContentBlock::ToolUse { name, .. } => {
                     out.push_str(&format!("[{who} invoked tool: {name}]\n\n"));
                 }
@@ -1547,20 +1555,10 @@ fn build_history_preamble(messages: &[crate::chat_store::ChatMessage]) -> String
 
 /// Rebuild the per-block chat editors for the given session.
 pub fn rebuild_chat_editor(ax: &mut AgentSession, highlighter: &SyntaxHighlighter) {
-    let new_blocks = agent_chat::build_chat_blocks(&ax.session);
-
-    let old_len = ax.chat_collapsed.len();
-    ax.chat_collapsed.resize(new_blocks.len(), false);
-    for (i, block) in new_blocks.iter().enumerate().skip(old_len) {
-        // Collapse tool blocks on first appearance regardless of current
-        // content — during streaming they show up empty and get filled in
-        // later, and we don't want them flashing expanded then snapping shut.
-        ax.chat_collapsed[i] = matches!(
-            block.kind,
-            crate::widget::text_edit::BlockKind::ToolUse
-                | crate::widget::text_edit::BlockKind::ToolResult
-        );
-    }
+    // Segment model → collapse policy → editor blocks (index-aligned).
+    let segs = agent_chat::build_transcript_segments(&ax.session);
+    agent_chat::sync_collapse_states(&mut ax.chat_collapse, &segs);
+    let new_blocks = agent_chat::blocks_from_segments(&segs);
 
     let mut new_editors = Vec::with_capacity(new_blocks.len());
     for (i, block) in new_blocks.iter().enumerate() {
@@ -1860,12 +1858,23 @@ pub fn ensure_sessions_with_label(
     state.active_session = 0;
 }
 
-/// Persist a single session, folding any in-flight `pending_text` into a
-/// trailing assistant message so streamed prose survives a crash even though
-/// it hasn't been committed to `messages` yet. The in-memory session is left
-/// untouched — a clone is persisted. Returns whether the write succeeded.
+/// Persist a single session, folding any in-flight `pending_text` /
+/// `pending_reasoning` into trailing assistant messages so streamed content
+/// survives a crash even though it hasn't been committed to `messages` yet.
+/// Reasoning is folded first (as `ContentBlock::Reasoning`), then answer text
+/// (as `ContentBlock::Text`). The in-memory session is left untouched — a
+/// clone is persisted. Returns whether the write succeeded.
 pub fn persist_session_snapshot(session: &ChatSession, project_root: Option<&Path>) -> bool {
     let mut snapshot = session.clone();
+    if !snapshot.pending_reasoning.is_empty() {
+        let text = std::mem::take(&mut snapshot.pending_reasoning);
+        snapshot.messages.push(ChatMessage {
+            role: Role::Assistant,
+            content: vec![ContentBlock::Reasoning(text)],
+            timestamp: String::new(),
+            is_priming: false,
+        });
+    }
     if !snapshot.pending_text.is_empty() {
         let text = std::mem::take(&mut snapshot.pending_text);
         snapshot.messages.push(ChatMessage {
@@ -2035,7 +2044,7 @@ pub fn view_column<'a, M: 'a + Clone>(
                     &ax.session,
                     &ax.chat_blocks,
                     &ax.chat_editors,
-                    &ax.chat_collapsed,
+                    &ax.chat_collapse,
                     &ax.chat_input,
                     ax.queue_editor.as_ref(),
                     &ax.chat_commands,

@@ -36,6 +36,8 @@ pub enum Role {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ContentBlock {
     Text(String),
+    /// Assistant thinking, distinct from answer prose.
+    Reasoning(String),
     ToolUse {
         id: String,
         name: String,
@@ -58,6 +60,9 @@ pub struct ChatSession {
     pub messages: Vec<ChatMessage>,
     pub is_streaming: bool,
     pub pending_text: String,
+    /// Streaming reasoning, distinct from answer prose. Not persisted as a
+    /// field — folded into `ContentBlock::Reasoning` on flush / snapshot.
+    pub pending_reasoning: String,
     /// Agent CLI session id, used to resume the same agent-side conversation
     /// across turns. Set after the first successful turn; persisted so
     /// conversations can be resumed across app restarts.
@@ -103,6 +108,7 @@ impl ChatSession {
             messages: Vec::new(),
             is_streaming: false,
             pending_text: String::new(),
+            pending_reasoning: String::new(),
             agent_session_id: None,
             session_harness: None,
             title: None,
@@ -316,6 +322,7 @@ pub fn load_sessions_for(scope: &str, project_root: Option<&Path>) -> Vec<ChatSe
             messages: persisted.messages,
             is_streaming: false,
             pending_text: String::new(),
+            pending_reasoning: String::new(),
             agent_session_id: persisted.agent_session_id,
             session_harness: persisted.session_harness,
             title: persisted.title,
@@ -928,6 +935,149 @@ mod tests {
             let persisted = load_sessions_for("eager-scope", Some(&root));
             let sess = persisted.iter().find(|s| s.id == "sess-eager").unwrap();
             assert_eq!(sess.messages.len(), 1);
+        });
+    }
+
+    /// @spec chat/persistence Reasoning content: Reasoning content round-trips through persist and load
+    #[test]
+    fn reasoning_content_round_trips_through_persist_and_load() {
+        let tmp = FsTmp::new();
+        with_home(tmp.path(), || {
+            let root = tmp.path().join("project-reasoning-rt");
+            std::fs::create_dir_all(&root).unwrap();
+
+            // GIVEN a session whose messages include a Reasoning content block.
+            let mut session = ChatSession::new("reasoning-scope".into());
+            session.id = "sess-reasoning".into();
+            session.messages = vec![ChatMessage {
+                role: Role::Assistant,
+                content: vec![ContentBlock::Reasoning("consider the edge cases".into())],
+                timestamp: String::new(),
+                is_priming: false,
+            }];
+
+            // WHEN the session is persisted and loaded again.
+            save_session(&session, Some(&root)).unwrap();
+            let loaded = load_sessions_for("reasoning-scope", Some(&root));
+
+            // THEN the loaded session includes a Reasoning block with the same body.
+            let sess = loaded.iter().find(|s| s.id == "sess-reasoning").unwrap();
+            assert_eq!(sess.messages.len(), 1);
+            match &sess.messages[0].content[..] {
+                [ContentBlock::Reasoning(body)] => {
+                    assert_eq!(body, "consider the edge cases");
+                }
+                other => panic!("expected single Reasoning block, got {other:?}"),
+            }
+        });
+    }
+
+    /// @spec chat/persistence Reasoning content: A legacy session without Reasoning still loads
+    #[test]
+    fn legacy_session_without_reasoning_still_loads() {
+        let tmp = FsTmp::new();
+        with_home(tmp.path(), || {
+            let root = tmp.path().join("project-legacy");
+            std::fs::create_dir_all(&root).unwrap();
+
+            // GIVEN a session file whose messages use only Text, ToolUse, and
+            // ToolResult content (no Reasoning variant).
+            let mut session = ChatSession::new("legacy-scope".into());
+            session.id = "sess-legacy".into();
+            session.messages = vec![
+                user_msg("hello"),
+                ChatMessage {
+                    role: Role::Assistant,
+                    content: vec![
+                        ContentBlock::Text("hi".into()),
+                        ContentBlock::ToolUse {
+                            id: "t1".into(),
+                            name: "Read".into(),
+                            input: "{\"path\":\"a\"}".into(),
+                        },
+                        ContentBlock::ToolResult {
+                            id: "t1".into(),
+                            name: "Read".into(),
+                            output: "file contents".into(),
+                        },
+                    ],
+                    timestamp: String::new(),
+                    is_priming: false,
+                },
+            ];
+            save_session(&session, Some(&root)).unwrap();
+
+            // Confirm the on-disk JSON has no Reasoning variant.
+            let path = scope_dir("legacy-scope", Some(&root)).join("sess-legacy.json");
+            let raw = std::fs::read_to_string(&path).unwrap();
+            assert!(!raw.contains("Reasoning"), "fixture must not contain Reasoning");
+
+            // WHEN the session is loaded.
+            let loaded = load_sessions_for("legacy-scope", Some(&root));
+
+            // THEN the load succeeds AND the loaded messages match the file's content.
+            let sess = loaded.iter().find(|s| s.id == "sess-legacy").unwrap();
+            assert_eq!(sess.messages.len(), 2);
+            assert!(matches!(
+                &sess.messages[0].content[..],
+                [ContentBlock::Text(t)] if t == "hello"
+            ));
+            assert_eq!(sess.messages[1].content.len(), 3);
+            assert!(matches!(
+                &sess.messages[1].content[0],
+                ContentBlock::Text(t) if t == "hi"
+            ));
+            assert!(matches!(
+                &sess.messages[1].content[1],
+                ContentBlock::ToolUse { id, name, .. } if id == "t1" && name == "Read"
+            ));
+            assert!(matches!(
+                &sess.messages[1].content[2],
+                ContentBlock::ToolResult { id, name, .. } if id == "t1" && name == "Read"
+            ));
+        });
+    }
+
+    /// @spec chat/persistence In-flight turn durability: Eager flush includes pending reasoning as Reasoning content
+    #[test]
+    fn eager_flush_includes_pending_reasoning_as_reasoning_content() {
+        use crate::area::interaction::{AgentSession, InteractionState, flush_dirty_sessions};
+        use crate::scope::ScopeKind;
+
+        let tmp = FsTmp::new();
+        with_home(tmp.path(), || {
+            let root = tmp.path().join("project-eager-reasoning");
+            std::fs::create_dir_all(&root).unwrap();
+
+            // GIVEN a turn that has streamed reasoning into the pending
+            // reasoning buffer and has not yet completed.
+            let mut ax = AgentSession::new("eager-reasoning-scope".into(), ScopeKind::Change);
+            ax.session.id = "sess-eager-r".into();
+            ax.session.pending_reasoning = "thinking out loud".into();
+            ax.session.is_streaming = true;
+            ax.needs_flush = true;
+            let mut ix = InteractionState::default();
+            ix.sessions.push(ax);
+
+            // WHEN an eager flush occurs.
+            flush_dirty_sessions(&mut ix, Some(&root));
+
+            // THEN the persisted session includes that reasoning as Reasoning
+            // content AND that body is not stored as Text content.
+            let persisted = load_sessions_for("eager-reasoning-scope", Some(&root));
+            let sess = persisted.iter().find(|s| s.id == "sess-eager-r").unwrap();
+            assert_eq!(sess.messages.len(), 1);
+            match &sess.messages[0].content[..] {
+                [ContentBlock::Reasoning(body)] => {
+                    assert_eq!(body, "thinking out loud");
+                }
+                other => panic!("expected Reasoning content, got {other:?}"),
+            }
+            // In-memory session is left untouched (snapshot only).
+            assert_eq!(
+                ix.sessions[0].session.pending_reasoning,
+                "thinking out loud"
+            );
         });
     }
 
