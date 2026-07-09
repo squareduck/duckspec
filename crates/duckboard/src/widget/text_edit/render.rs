@@ -668,14 +668,6 @@ impl<'a, M> TextEdit<'a, M> {
         self
     }
 
-    /// Extend the drag-selection to the (viewport-clamped) pointer line and,
-    /// when the pointer sits past a vertical edge with room to move, emit a
-    /// scroll and re-request a redraw so the loop keeps running with the mouse
-    /// held still. The edge is measured against the *visible* rectangle —
-    /// `bounds ∩ viewport` — so it works both for a self-scrolling file editor
-    /// (viewport ≈ the window) and a chat message clipped by an outer
-    /// scrollable (viewport = the on-screen slice). Returns whether it
-    /// scrolled.
     /// Vertical scroll offset to render and hit-test at — the single source of
     /// truth so the painted frame and the click math never disagree. It is the
     /// user/keyboard-driven `scroll_y` clamped to range. The caret is kept in
@@ -750,16 +742,18 @@ impl<'a, M> TextEdit<'a, M> {
                 + CONTENT_PAD_Y * 2.0
         };
 
-        // Edge against the actually-visible span (layout bounds ∩ clip viewport).
-        let top = bounds.y.max(viewport.y);
-        let bottom = (bounds.y + bounds.height).min(viewport.y + viewport.height);
-        let velocity = autoscroll::edge_velocity(pos.y, top, bottom);
+        // Hit-test Y + autoscroll velocity against bounds ∩ viewport. When the
+        // intersection is empty (chat block just past the outer fold while a
+        // drag is still live), the helper pins to the nearest bounds edge and
+        // still drives scroll toward bringing the block back on screen — never
+        // `f32::clamp` with min > max.
+        let (drag_y, velocity) = drag_pointer_y_and_velocity(pos.y, bounds, viewport);
         let scroll_y = self.resolved_scroll_y(bounds.height, content_height);
 
-        // Selection always tracks the edge line: clamp the drag target into the
-        // visible span so a big overshoot doesn't snap selection to the doc end.
+        // Selection tracks the (possibly edge-pinned) drag line so a big
+        // overshoot doesn't snap selection to the doc end.
         let drag_pos = pixel_to_pos_wrapped(
-            Point::new(pos.x, pos.y.clamp(top, bottom)),
+            Point::new(pos.x, drag_y),
             bounds,
             internal,
             self.state,
@@ -803,6 +797,51 @@ impl<'a, M> TextEdit<'a, M> {
         }
         shell.request_redraw();
         true
+    }
+}
+
+/// Resolve drag hit-test Y and signed auto-scroll velocity for one drag frame.
+///
+/// When `bounds ∩ viewport` is non-empty, the pointer is clamped into that
+/// visible span (so overshoot selects the edge line, not the document end) and
+/// velocity is measured against the same span.
+///
+/// When the intersection is empty — a nested chat message whose layout rect
+/// has scrolled just past the outer fold while the drag is still live — a
+/// naive `pointer.clamp(top, bottom)` panics (`min > max`). Instead:
+/// - pin hit-test Y to the bounds edge nearest the viewport
+/// - sample velocity against the *viewport* using a Y forced past that edge
+///   by the off-screen block, so a still pointer still drives outer scroll
+///   toward bringing the block back on screen
+fn drag_pointer_y_and_velocity(
+    pointer_y: f32,
+    bounds: Rectangle,
+    viewport: Rectangle,
+) -> (f32, f32) {
+    let bounds_bottom = bounds.y + bounds.height;
+    let viewport_bottom = viewport.y + viewport.height;
+    let top = bounds.y.max(viewport.y);
+    let bottom = bounds_bottom.min(viewport_bottom);
+
+    if top <= bottom {
+        let drag_y = pointer_y.clamp(top, bottom);
+        let velocity = autoscroll::edge_velocity(pointer_y, top, bottom);
+        return (drag_y, velocity);
+    }
+
+    // Empty intersection: block fully above or below the clip rect.
+    if bounds.y >= viewport_bottom {
+        // Entirely below the viewport — pin to block top, scroll down.
+        let drag_y = bounds.y;
+        let sample_y = pointer_y.max(bounds.y);
+        let velocity = autoscroll::edge_velocity(sample_y, viewport.y, viewport_bottom);
+        (drag_y, velocity)
+    } else {
+        // Entirely above the viewport — pin to block bottom, scroll up.
+        let drag_y = bounds_bottom;
+        let sample_y = pointer_y.min(bounds_bottom);
+        let velocity = autoscroll::edge_velocity(sample_y, viewport.y, viewport_bottom);
+        (drag_y, velocity)
     }
 }
 
@@ -2777,6 +2816,65 @@ fn read_paste_action() -> Option<EditorAction> {
         media_type: "image/png".to_string(),
         bytes,
     })
+}
+
+#[cfg(test)]
+mod drag_edge_tests {
+    use super::*;
+
+    fn rect(y: f32, height: f32) -> Rectangle {
+        Rectangle {
+            x: 0.0,
+            y,
+            width: 100.0,
+            height,
+        }
+    }
+
+    #[test]
+    fn intersecting_clamps_into_visible_span() {
+        // Viewport [0, 100], bounds [20, 120] → visible [20, 100].
+        let bounds = rect(20.0, 100.0);
+        let viewport = rect(0.0, 100.0);
+        let (y, v) = drag_pointer_y_and_velocity(150.0, bounds, viewport);
+        assert_eq!(y, 100.0);
+        assert!(v > 0.0, "past bottom of visible span → scroll down");
+        let (y2, v2) = drag_pointer_y_and_velocity(50.0, bounds, viewport);
+        assert_eq!(y2, 50.0);
+        assert_eq!(v2, 0.0);
+    }
+
+    #[test]
+    fn empty_intersection_below_viewport_does_not_panic() {
+        // Regression: chat block just past the outer fold while drag is live.
+        // Crash was `f32::clamp` with min=6709.3, max=6705.2.
+        let viewport = rect(0.0, 6705.2);
+        let bounds = rect(6709.3, 200.0);
+        let pointer_inside = 6700.0;
+        let (y, v) = drag_pointer_y_and_velocity(pointer_inside, bounds, viewport);
+        assert_eq!(y, 6709.3, "pin to top of off-screen block");
+        assert!(v > 0.0, "still pointer must drive scroll toward the block");
+    }
+
+    #[test]
+    fn empty_intersection_above_viewport_scrolls_up() {
+        let viewport = rect(500.0, 200.0); // [500, 700]
+        let bounds = rect(100.0, 50.0); // [100, 150] fully above
+        let (y, v) = drag_pointer_y_and_velocity(600.0, bounds, viewport);
+        assert_eq!(y, 150.0, "pin to bottom of block above the fold");
+        assert!(v < 0.0, "scroll up to reveal the block");
+    }
+
+    #[test]
+    fn zero_height_touching_edge_is_safe() {
+        // top == bottom is a valid clamp range (not min > max).
+        let viewport = rect(0.0, 100.0);
+        let bounds = rect(100.0, 50.0); // touches viewport bottom at y=100
+        // Intersection is a point at y=100 when bounds.y == viewport_bottom.
+        // bounds.y.max(viewport.y) = 100, bounds_bottom.min(viewport_bottom) = 100.
+        let (y, _v) = drag_pointer_y_and_velocity(80.0, bounds, viewport);
+        assert_eq!(y, 100.0);
+    }
 }
 
 #[cfg(test)]
