@@ -1394,8 +1394,10 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                         // Attribute a change folder to this session at the
                         // causal moment: an exploration whose agent runs
                         // `ds create change` owns the folder it creates.
+                        // Match on the command string, not the tool name —
+                        // Claude uses "Bash", grok uses "run_terminal_command".
                         if ax.scope_kind == scope::ScopeKind::Exploration
-                            && let Some(slug) = parse_create_change(&name, &input)
+                            && let Some(slug) = parse_create_change(&input)
                         {
                             staged_binding = Some((slug, ax.session.scope.clone()));
                         }
@@ -2917,15 +2919,16 @@ fn rehighlight_all(state: &mut State) -> Task<Message> {
 }
 
 /// Parse a `ToolUse` event into the change-folder slug it will create, or
-/// `None` when the call is not a `ds create change` Bash command. The tool
-/// input is JSON; for Bash that is `{"command": "…"}`. The extracted argument
-/// is slugified with the shared rule so the result equals the directory the
-/// CLI creates. Anything unrecognized yields `None`, which declines to bind
+/// `None` when the call is not a shell command running `ds create change`.
+///
+/// Attribution is content-first: any tool whose JSON input carries a
+/// `command` string is eligible — Claude's `"Bash"` and grok's
+/// `"run_terminal_command"` share that shape. The tool name is ignored so a
+/// new harness does not silently drop bindings. The extracted argument is
+/// slugified with the shared rule so the result equals the directory the CLI
+/// creates. Anything unrecognized yields `None`, which declines to bind
 /// rather than risk mis-attributing.
-fn parse_create_change(name: &str, input: &str) -> Option<String> {
-    if name != "Bash" {
-        return None;
-    }
+fn parse_create_change(input: &str) -> Option<String> {
     let command = serde_json::from_str::<serde_json::Value>(input)
         .ok()?
         .get("command")?
@@ -5433,7 +5436,7 @@ mod tests {
     #[test]
     fn parses_plain_create_change() {
         assert_eq!(
-            parse_create_change("Bash", &bash("ds create change my-thing")),
+            parse_create_change(&bash("ds create change my-thing")),
             Some("my-thing".to_string())
         );
     }
@@ -5441,7 +5444,7 @@ mod tests {
     #[test]
     fn parses_quoted_multiword_title() {
         assert_eq!(
-            parse_create_change("Bash", &bash("ds create change \"My Thing\"")),
+            parse_create_change(&bash("ds create change \"My Thing\"")),
             Some("my-thing".to_string())
         );
     }
@@ -5449,24 +5452,34 @@ mod tests {
     #[test]
     fn parses_cd_prefixed_and_compound_command() {
         assert_eq!(
-            parse_create_change(
-                "Bash",
-                &bash("cd /repo && ds create change my-thing && ds status")
-            ),
+            parse_create_change(&bash(
+                "cd /repo && ds create change my-thing && ds status"
+            )),
             Some("my-thing".to_string())
         );
     }
 
+    /// Grok's shell tool is `run_terminal_command`, not Claude's `Bash` —
+    /// attribution keys off the `command` field, not the tool name.
     #[test]
-    fn ignores_non_bash_tool() {
+    fn parses_grok_run_terminal_command() {
         assert_eq!(
-            parse_create_change("Write", &bash("ds create change my-thing")),
-            None
+            parse_create_change(&bash(
+                "ds create change md-table-render && ds status"
+            )),
+            Some("md-table-render".to_string())
         );
     }
 
     #[test]
+    fn ignores_input_without_command_field() {
+        // A non-shell tool (Write, read_file, …) has no `command` key.
+        let write = r#"{"file_path":"foo.rs","content":"ds create change my-thing"}"#;
+        assert_eq!(parse_create_change(write), None);
+    }
+
+    #[test]
     fn ignores_command_without_create_change() {
-        assert_eq!(parse_create_change("Bash", &bash("ds status")), None);
+        assert_eq!(parse_create_change(&bash("ds status")), None);
     }
 }
