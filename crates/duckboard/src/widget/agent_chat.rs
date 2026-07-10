@@ -3,6 +3,7 @@
 use iced::widget::{
     Space, button, column, container, pick_list, row, rule, scrollable, stack, text,
 };
+use iced::widget::text::Wrapping;
 
 pub const CHAT_SCROLLABLE_ID: &str = "agent-chat-scroll";
 pub const CHAT_INPUT_ID: &str = "agent-chat-input";
@@ -1751,6 +1752,8 @@ fn view_default_prompts_loading<'a>() -> Element<'a, Msg> {
 
 /// Default-prompt list in source order with `↳` on the active row. Active uses
 /// normal muted text; other rows are fainter so the current default stays clear.
+/// Long prompts soft-wrap; row height follows content so rows never paint
+/// through each other.
 fn view_default_prompt_list<'a>(prompts: &[String], active_idx: usize) -> Element<'a, Msg> {
     const CONTENT_PAD: f32 = 8.0;
     const MARKER_W: f32 = 16.0;
@@ -1761,7 +1764,7 @@ fn view_default_prompt_list<'a>(prompts: &[String], active_idx: usize) -> Elemen
         active_idx % prompts.len()
     };
 
-    let mut col = column![].spacing(0.0);
+    let mut col = column![].spacing(theme::SPACING_XS);
     for (i, prompt) in prompts.iter().enumerate() {
         let is_active = i == active;
         let color = if is_active {
@@ -1780,17 +1783,17 @@ fn view_default_prompt_list<'a>(prompts: &[String], active_idx: usize) -> Elemen
                     .color(color)
                     .font(theme::content_font()),
             )
-            .width(Length::Fixed(MARKER_W))
-            .height(Length::Fixed(text_edit::LINE_HEIGHT))
-            .align_y(iced::Alignment::Center),
+            .width(Length::Fixed(MARKER_W)),
             text(prompt.clone())
                 .size(theme::content_size())
                 .color(color)
-                .font(theme::content_font()),
+                .font(theme::content_font())
+                .width(Length::Fill)
+                .wrapping(Wrapping::Word),
         ]
         .spacing(0.0)
-        .align_y(iced::Alignment::Center)
-        .height(Length::Fixed(text_edit::LINE_HEIGHT));
+        .align_y(iced::Alignment::Start)
+        .width(Length::Fill);
         col = col.push(line);
     }
 

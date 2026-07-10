@@ -5,6 +5,10 @@ use crate::request::ReplySuggestionRequest;
 /// Hard cap on suggestions returned from a single oneshot.
 pub const MAX_REPLIES: usize = 3;
 
+/// Soft per-suggestion character budget asked of the oneshot model.
+/// Not enforced at parse or display — layout must still soft-wrap.
+pub const REPLY_SUGGEST_MAX_CHARS: usize = 100;
+
 /// Max lines of the last assistant turn embedded in the oneshot prompt (tail).
 pub const ASSISTANT_PROMPT_MAX_LINES: usize = 40;
 
@@ -26,9 +30,10 @@ fn is_side_diagnostic_command(text: &str) -> bool {
 
 /// Lines starting with `REPLY:` (case-sensitive prefix), trimmed after the
 /// colon. Empty lines after trim are dropped; hard cap [`MAX_REPLIES`]; order
-/// preserved. Unknown slash forms are kept as written. Side diagnostics such
-/// as `/ds-verify` are dropped so inventing them cannot arm the defaults
-/// chrome.
+/// preserved. Unknown slash forms are kept as written. Soft
+/// [`REPLY_SUGGEST_MAX_CHARS`] is not applied — over-budget text is kept full.
+/// Side diagnostics such as `/ds-verify` are dropped so inventing them cannot
+/// arm the defaults chrome.
 pub fn parse_replies(raw: &str) -> Vec<String> {
     let mut out = Vec::new();
     for line in raw.lines() {
@@ -85,7 +90,8 @@ Prefer main-flow duckspec stage slash commands when the assistant is steering wo
 (e.g. /ds-explore, /ds-propose, /ds-design, /ds-spec, /ds-step, /ds-apply, /ds-review, \
 /ds-archive, /ds-codex). Do not suggest /ds-verify — it is a side diagnostic, not part of \
 the usual lifecycle. Prefer short user-voice replies when the assistant asks for confirmation \
-or a natural choice. When you emit multiple REPLY lines, order them as: first line = the most \
+or a natural choice. Keep each REPLY text at most 100 characters. When you emit multiple \
+REPLY lines, order them as: first line = the most \
 obvious continuation of the flow; any middle lines = alternatives; last line = a negative or \
 declining option when a negative option is appropriate. A lifecycle_heuristic in the input is \
 a soft hint only — you may omit it, place it in any position, or invent different replies. \
@@ -208,6 +214,31 @@ REPLY: fourth
             inst.contains("main-flow"),
             "instruction should prefer main-flow stages: {inst}"
         );
+    }
+
+    // @spec chat/default-prompts Oneshot request framing: Length guidance is present in the instruction
+    #[test]
+    fn length_guidance_is_present_in_the_instruction() {
+        let inst = REPLY_SUGGEST_INSTRUCTION;
+        let n = REPLY_SUGGEST_MAX_CHARS.to_string();
+        assert!(
+            inst.contains(&n),
+            "instruction must soft-ask ≤{n} chars: {inst}"
+        );
+        assert!(
+            inst.contains("characters") || inst.contains("character"),
+            "instruction should state a character budget: {inst}"
+        );
+    }
+
+    // @spec chat/default-prompts Parsed suggestion list: Reply longer than 100 characters is preserved in full
+    #[test]
+    fn reply_longer_than_100_characters_is_preserved_in_full() {
+        let long = "x".repeat(REPLY_SUGGEST_MAX_CHARS + 20);
+        assert!(long.chars().count() > REPLY_SUGGEST_MAX_CHARS);
+        let raw = format!("REPLY: {long}\n");
+        let got = parse_replies(&raw);
+        assert_eq!(got, vec![long], "parser must not hard-truncate soft budget");
     }
 
     #[test]
