@@ -23,7 +23,7 @@ committed user messages in the session.
 - **THEN** it does not contain a user message whose sole purpose is the chrome chip
 
 > test: code
-> - crates/duckboard/src/obvious_bubble.rs:511
+> - crates/duckboard/src/obvious_bubble.rs:490
 
 ## Requirement: Lifecycle option formatting
 
@@ -41,7 +41,7 @@ Empty or blank skill names SHALL not produce a lifecycle send string.
 - **THEN** the send text is that name with a single leading `/`
 
 > test: code
-> - crates/duckboard/src/obvious_bubble.rs:224
+> - crates/duckboard/src/obvious_bubble.rs:214
 
 ### Scenario: Already-slashed command is preserved
 
@@ -50,7 +50,7 @@ Empty or blank skill names SHALL not produce a lifecycle send string.
 - **THEN** the send text equals the stored name
 
 > test: code
-> - crates/duckboard/src/obvious_bubble.rs:240
+> - crates/duckboard/src/obvious_bubble.rs:230
 
 ## Requirement: Chrome composition
 
@@ -287,7 +287,7 @@ chrome SHALL NOT be shown when any gate fails.
 - **THEN** the chrome is shown
 
 > test: code
-> - crates/duckboard/src/obvious_bubble.rs:252
+> - crates/duckboard/src/obvious_bubble.rs:242
 
 ### Scenario: Streaming hides chrome
 
@@ -299,7 +299,7 @@ chrome SHALL NOT be shown when any gate fails.
 - **THEN** the chrome is not shown
 
 > test: code
-> - crates/duckboard/src/obvious_bubble.rs:260
+> - crates/duckboard/src/obvious_bubble.rs:250
 
 ### Scenario: Non-empty composer hides chrome
 
@@ -311,7 +311,7 @@ chrome SHALL NOT be shown when any gate fails.
 - **THEN** the chrome is not shown
 
 > test: code
-> - crates/duckboard/src/obvious_bubble.rs:267
+> - crates/duckboard/src/obvious_bubble.rs:257
 
 ### Scenario: Empty chrome is hidden
 
@@ -323,7 +323,7 @@ chrome SHALL NOT be shown when any gate fails.
 - **THEN** the chrome is not shown
 
 > test: code
-> - crates/duckboard/src/obvious_bubble.rs:274
+> - crates/duckboard/src/obvious_bubble.rs:264
 
 ### Scenario: Oneshot pending does not hide chrome when otherwise visible
 
@@ -336,7 +336,7 @@ chrome SHALL NOT be shown when any gate fails.
 - **THEN** the chrome is shown
 
 > test: code
-> - crates/duckboard/src/obvious_bubble.rs:282
+> - crates/duckboard/src/obvious_bubble.rs:272
 
 ### Scenario: Auto messages disabled hides chrome
 
@@ -348,7 +348,7 @@ chrome SHALL NOT be shown when any gate fails.
 - **THEN** the chrome is not shown
 
 > test: code
-> - crates/duckboard/src/obvious_bubble.rs:290
+> - crates/duckboard/src/obvious_bubble.rs:280
 
 ### Scenario: Default auto messages setting is enabled
 
@@ -383,7 +383,7 @@ default-prompt list, even when that list is non-empty and differs.
 - **AND** the send text is not a lifecycle option
 
 > test: code
-> - crates/duckboard/src/obvious_bubble.rs:302
+> - crates/duckboard/src/obvious_bubble.rs:292
 
 ### Scenario: Cmd-Enter sends first lifecycle when affirm absent
 
@@ -393,7 +393,7 @@ default-prompt list, even when that list is non-empty and differs.
 - **THEN** the send text equals the first lifecycle option
 
 > test: code
-> - crates/duckboard/src/obvious_bubble.rs:312
+> - crates/duckboard/src/obvious_bubble.rs:302
 
 ### Scenario: Cmd-Backspace sends Reject when decline set
 
@@ -402,7 +402,7 @@ default-prompt list, even when that list is non-empty and differs.
 - **THEN** the send text is `Reject`
 
 > test: code
-> - crates/duckboard/src/obvious_bubble.rs:320
+> - crates/duckboard/src/obvious_bubble.rs:310
 
 ### Scenario: Cmd-digit sends matching lifecycle option
 
@@ -411,7 +411,7 @@ default-prompt list, even when that list is non-empty and differs.
 - **THEN** the send text equals the second lifecycle option
 
 > test: code
-> - crates/duckboard/src/obvious_bubble.rs:329
+> - crates/duckboard/src/obvious_bubble.rs:319
 
 ### Scenario: Resolution is a no-op when chrome not visible
 
@@ -420,7 +420,7 @@ default-prompt list, even when that list is non-empty and differs.
 - **THEN** there is no send text
 
 > test: code
-> - crates/duckboard/src/obvious_bubble.rs:338
+> - crates/duckboard/src/obvious_bubble.rs:328
 
 ### Scenario: Resolved text ignores oneshot list when both differ
 
@@ -432,14 +432,15 @@ default-prompt list, even when that list is non-empty and differs.
 - **AND** the send text is not B
 
 > test: code
-> - crates/duckboard/src/obvious_bubble.rs:365
+> - crates/duckboard/src/obvious_bubble.rs:355
 
 ## Requirement: Chip display
 
 Each visible chrome action SHALL present a chip label that places the hotkey glyph and
-binding before the action text (lifecycle: `⌘` plus 1-based index; affirm: `⌘↩`; decline:
-`⌘⌫`), then the action string. The text sent on activation SHALL be the action string only
-— not the hotkey prefix.
+binding before the action text. Multi-option lifecycle chips use `⌘` plus 1-based index
+then the empty-send `/ds-…` string. Affirm uses `⌘↩` then Confirm, Commit, or Create
+change. Decline uses `⌘⌫` then Reject. The text sent on activation SHALL be the action
+string only — not the hotkey prefix.
 
 When the chrome has more than one lifecycle option and no affirm, the first lifecycle
 option SHALL be dual-presented: once as its numbered lifecycle chip (hotkey plus
@@ -450,8 +451,11 @@ lifecycle option string, not the friendly name. Friendly names SHALL strip a lea
 `/ds-` or `ds-` prefix when present and title-case the remainder (e.g. `/ds-apply` yields
 `Apply`).
 
-When the chrome has exactly one lifecycle option and no affirm, or when affirm is present,
-the first lifecycle option SHALL NOT be dual-presented as a separate enter chip.
+When the chrome has exactly one lifecycle option and no affirm, that option SHALL be
+presented as a single enter-tone chip whose label uses the `⌘↩` hotkey followed by the
+same friendly-name derivation (e.g. `/ds-explore` → `⌘↩  Explore`); it SHALL NOT use a
+numbered lifecycle label and SHALL NOT be dual-presented. When affirm is present, the
+first lifecycle option SHALL NOT be dual-presented as a separate enter chip.
 
 > test: code
 
@@ -464,7 +468,7 @@ the first lifecycle option SHALL NOT be dual-presented as a separate enter chip.
 - **AND** the send text is exactly `/ds-step`
 
 > test: code
-> - crates/duckboard/src/obvious_bubble.rs:380
+> - crates/duckboard/src/obvious_bubble.rs:370
 
 ### Scenario: Affirm chip label is hotkey then Confirm, Commit, or Create change
 
@@ -475,7 +479,7 @@ the first lifecycle option SHALL NOT be dual-presented as a separate enter chip.
 - **AND** the send text is exactly `Create change`
 
 > test: code
-> - crates/duckboard/src/obvious_bubble.rs:392
+> - crates/duckboard/src/obvious_bubble.rs:382
 
 ### Scenario: Multi lifecycle without affirm dual-presents first option
 
@@ -486,7 +490,7 @@ the first lifecycle option SHALL NOT be dual-presented as a separate enter chip.
 - **AND** that option retains its numbered lifecycle chip label
 
 > test: code
-> - crates/duckboard/src/obvious_bubble.rs:422
+> - crates/duckboard/src/obvious_bubble.rs:412
 
 ### Scenario: Single lifecycle does not dual-present
 
@@ -494,9 +498,12 @@ the first lifecycle option SHALL NOT be dual-presented as a separate enter chip.
 - **AND** no affirm
 - **WHEN** dual-enter presentation is derived
 - **THEN** dual-enter is not active
+- **AND** the single enter chip label starts with the ⌘↩ hotkey
+- **AND** the label includes the friendly name (e.g. `Explore` for `/ds-explore`)
+- **AND** the send text is the original lifecycle option string
 
 > test: code
-> - crates/duckboard/src/obvious_bubble.rs:439
+> - crates/duckboard/src/obvious_bubble.rs:429
 
 ### Scenario: Affirm present does not dual-present lifecycle
 
@@ -506,7 +513,7 @@ the first lifecycle option SHALL NOT be dual-presented as a separate enter chip.
 - **THEN** dual-enter is not active
 
 > test: code
-> - crates/duckboard/src/obvious_bubble.rs:453
+> - crates/duckboard/src/obvious_bubble.rs:450
 
 ### Scenario: Enter dual label is hotkey then friendly name with original send text
 
@@ -519,18 +526,21 @@ the first lifecycle option SHALL NOT be dual-presented as a separate enter chip.
 - **AND** the send text is exactly `/ds-apply`
 
 > test: code
-> - crates/duckboard/src/obvious_bubble.rs:465
+> - crates/duckboard/src/obvious_bubble.rs:462
 
 ## Requirement: Chrome bottom pad
 
-When obvious chrome is visible in the chat scroll column, a top pad above the chrome SHALL
-be derived so chips sit at the bottom of the chat viewport when natural content is shorter
-than the viewport. Given viewport height `viewport_h`, laid-out scroll content height
-including any previous pad `content_h`, and the previous pad height `prev_pad`, the pad
-height SHALL be `max(0, viewport_h - (content_h - prev_pad))`. When natural content height
-(content without the previous pad) is greater than or equal to the viewport height, the
-pad SHALL be zero. The pad is view layout only and SHALL NOT be stored in the session
-transcript.
+When obvious chrome is visible, chips SHALL render inside the chat scroll column after
+transcript content (not between the scroll viewport and the composer). A top pad above the
+chrome SHALL be derived so chips sit at the bottom of the chat viewport when natural
+content is shorter than the viewport. Given viewport height `viewport_h`, laid-out scroll
+content height including any previous pad `content_h`, and the previous pad height
+`prev_pad`, the pad height SHALL be `max(0, viewport_h - (content_h - prev_pad))`. When
+natural content height (content without the previous pad) is greater than or equal to the
+viewport height, the pad SHALL be zero and chips follow the last message in document
+order. The pad is view layout only and SHALL NOT be stored in the session transcript. Pad
+measurement SHALL work even when content fits the viewport (scroll notifications alone are
+not sufficient).
 
 > test: code
 
@@ -542,7 +552,7 @@ transcript.
 - **THEN** the pad height is 300
 
 > test: code
-> - crates/duckboard/src/obvious_bubble.rs:493
+> - crates/duckboard/src/obvious_bubble.rs:502
 
 ### Scenario: Content at or above viewport yields zero pad
 
@@ -552,4 +562,5 @@ transcript.
 - **THEN** the pad height is 0
 
 > test: code
-> - crates/duckboard/src/obvious_bubble.rs:502
+> - crates/duckboard/src/obvious_bubble.rs:511
+

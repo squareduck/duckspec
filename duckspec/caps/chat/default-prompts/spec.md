@@ -4,10 +4,12 @@ Conversation-local empty-input defaults from a cheap-model oneshot: parse ordere
 suggestions (heuristic passed only as a soft hint), show and arm them only after the
 oneshot settles, and drive empty Enter plus Tab cycling from that list alone.
 
-Under-input input hints for the empty composer: an empty session seeds a single entry from
-the first lifecycle option when one exists; a non-empty session uses settled agent oneshot
-`REPLY:` suggestions only when the global agent input hints setting is enabled (default
-off). Empty Enter and Tab cycle drive that effective list alone.
+Under-input input hints for the empty composer: when the global auto messages setting is
+enabled, the effective list is always empty (obvious chrome owns lifecycle assistance).
+When auto messages is disabled, an empty session seeds a single entry from the first
+lifecycle option when one exists; a non-empty session uses settled agent oneshot `REPLY:`
+suggestions only when the global agent input hints setting is enabled (default off). Empty
+Enter and Tab cycle drive that effective list alone.
 
 ## Requirement: Parsed suggestion list
 
@@ -139,21 +141,25 @@ the model.
 
 ## Requirement: Effective default-prompt list
 
-The effective default-prompt list is built as follows. When the session transcript is
+The effective default-prompt list is built as follows. When auto messages is enabled, the
+effective list SHALL be empty regardless of session emptiness, lifecycle options, agent
+input hints, or oneshot storage — under-input hints are fully suppressed so obvious chrome
+owns lifecycle assistance. When auto messages is disabled and the session transcript is
 empty and a first lifecycle option is present, the effective list SHALL be exactly that
 option in empty-send form (a single entry); the list SHALL NOT wait on a oneshot and SHALL
-NOT include oneshot parse results. When the session transcript is empty and no first
-lifecycle option is present, the effective list SHALL be empty. When the session
-transcript is non-empty and agent input hints are enabled, and a reply-suggestion oneshot
-has settled for the current generation with one or more parsed reply strings, the
-effective list SHALL be exactly those strings (order preserved, already capped); the first
-lifecycle option SHALL NOT be appended or merged into that list. When the session
-transcript is non-empty and agent input hints are enabled, and no such non-empty oneshot
-result is armed — including a settled oneshot that failed or produced no suggestions — the
-effective list SHALL be empty, whether or not a first lifecycle option is present. When
-the session transcript is non-empty and agent input hints are disabled, the effective list
-SHALL be empty regardless of oneshot storage or lifecycle options. The first lifecycle
-option SHALL NOT appear as an effective-list entry for a non-empty session.
+NOT include oneshot parse results. When auto messages is disabled and the session
+transcript is empty and no first lifecycle option is present, the effective list SHALL be
+empty. When auto messages is disabled and the session transcript is non-empty and agent
+input hints are enabled, and a reply-suggestion oneshot has settled for the current
+generation with one or more parsed reply strings, the effective list SHALL be exactly those
+strings (order preserved, already capped); the first lifecycle option SHALL NOT be appended
+or merged into that list. When auto messages is disabled and the session transcript is
+non-empty and agent input hints are enabled, and no such non-empty oneshot result is armed
+— including a settled oneshot that failed or produced no suggestions — the effective list
+SHALL be empty, whether or not a first lifecycle option is present. When auto messages is
+disabled and the session transcript is non-empty and agent input hints are disabled, the
+effective list SHALL be empty regardless of oneshot storage or lifecycle options. The first
+lifecycle option SHALL NOT appear as an effective-list entry for a non-empty session.
 
 > test: code
 
@@ -161,77 +167,95 @@ option SHALL NOT appear as an effective-list entry for a non-empty session.
 
 - **GIVEN** a non-empty session transcript
 - **AND** agent input hints enabled
+- **AND** auto messages disabled
 - **AND** a settled oneshot whose parse produced three distinct reply strings
 - **WHEN** the effective default-prompt list is built
 - **THEN** the list is exactly those three strings in parse order
 
 > test: code
-> - crates/duckboard/src/default_prompts.rs:204
+> - crates/duckboard/src/default_prompts.rs:214
 
 ### Scenario: No non-empty oneshot result yields an empty list
 
 - **GIVEN** a non-empty session transcript
 - **AND** agent input hints enabled
+- **AND** auto messages disabled
 - **AND** no settled non-empty oneshot result
 - **WHEN** the effective default-prompt list is built
 - **THEN** the list is empty
 
 > test: code
-> - crates/duckboard/src/default_prompts.rs:220
+> - crates/duckboard/src/default_prompts.rs:230
 
 ### Scenario: Failed or empty oneshot yields an empty list even with a heuristic
 
 - **GIVEN** a non-empty session transcript
 - **AND** agent input hints enabled
+- **AND** auto messages disabled
 - **AND** a settled oneshot that failed or produced no suggestions
 - **AND** a present first lifecycle option
 - **WHEN** the effective default-prompt list is built
 - **THEN** the list is empty
 
 > test: code
-> - crates/duckboard/src/default_prompts.rs:228
+> - crates/duckboard/src/default_prompts.rs:238
 
 ### Scenario: Empty session seeds first lifecycle
 
 - **GIVEN** an empty session transcript
 - **AND** a first lifecycle option in empty-send form
+- **AND** auto messages disabled
 - **WHEN** the effective default-prompt list is built
 - **THEN** the list is exactly that single lifecycle option
 
 > test: code
-> - crates/duckboard/src/default_prompts.rs:244
+> - crates/duckboard/src/default_prompts.rs:254
 
 ### Scenario: Empty session without lifecycle yields empty
 
 - **GIVEN** an empty session transcript
 - **AND** no first lifecycle option
+- **AND** auto messages disabled
 - **WHEN** the effective default-prompt list is built
 - **THEN** the list is empty
 
 > test: code
-> - crates/duckboard/src/default_prompts.rs:255
+> - crates/duckboard/src/default_prompts.rs:268
 
 ### Scenario: Non-empty session with agent hints disabled yields empty despite oneshot
 
 - **GIVEN** a non-empty session transcript
 - **AND** agent input hints disabled
+- **AND** auto messages disabled
 - **AND** a settled oneshot whose parse produced one or more reply strings
 - **WHEN** the effective default-prompt list is built
 - **THEN** the list is empty
 
 > test: code
-> - crates/duckboard/src/default_prompts.rs:264
+> - crates/duckboard/src/default_prompts.rs:277
 
 ### Scenario: Empty session ignores oneshot results
 
 - **GIVEN** an empty session transcript
 - **AND** a first lifecycle option in empty-send form
+- **AND** auto messages disabled
 - **AND** stored oneshot reply strings that differ from that option
 - **WHEN** the effective default-prompt list is built
 - **THEN** the list is exactly that single lifecycle option
 
 > test: code
-> - crates/duckboard/src/default_prompts.rs:272
+> - crates/duckboard/src/default_prompts.rs:285
+
+### Scenario: Auto messages on yields empty even for empty session seed
+
+- **GIVEN** an empty session transcript
+- **AND** a first lifecycle option in empty-send form
+- **AND** auto messages enabled
+- **WHEN** the effective default-prompt list is built
+- **THEN** the list is empty
+
+> test: code
+> - crates/duckboard/src/default_prompts.rs:293
 
 ## Requirement: Suggestion readiness
 
@@ -260,7 +284,7 @@ list would otherwise be available.
 - **AND** a loading indicator is shown
 
 > test: code
-> - crates/duckboard/src/default_prompts.rs:355
+> - crates/duckboard/src/default_prompts.rs:380
 
 ### Scenario: Empty submit is a no-op while pending
 
@@ -270,7 +294,7 @@ list would otherwise be available.
 - **THEN** no message is sent
 
 > test: code
-> - crates/duckboard/src/default_prompts.rs:322
+> - crates/duckboard/src/default_prompts.rs:347
 
 ### Scenario: Ready after settle arms the effective list
 
@@ -282,7 +306,7 @@ list would otherwise be available.
 - **AND** empty submit sends the active entry
 
 > test: code
-> - crates/duckboard/src/default_prompts.rs:330
+> - crates/duckboard/src/default_prompts.rs:355
 
 ### Scenario: Superseded generation does not arm the list
 
@@ -291,7 +315,7 @@ list would otherwise be available.
 - **THEN** the session's ready default-prompt list is unchanged
 
 > test: code
-> - crates/duckboard/src/default_prompts.rs:348
+> - crates/duckboard/src/default_prompts.rs:373
 
 ### Scenario: Main turn in progress hides default prompts
 
@@ -303,7 +327,7 @@ list would otherwise be available.
 - **AND** a defaults loading indicator is not shown
 
 > test: code
-> - crates/duckboard/src/default_prompts.rs:384
+> - crates/duckboard/src/default_prompts.rs:409
 
 ### Scenario: Timed-out or failed oneshot settles to ready
 
@@ -316,7 +340,7 @@ list would otherwise be available.
 - **AND** the effective list is empty when the failure produced no parse
 
 > test: code
-> - crates/duckboard/src/default_prompts.rs:403
+> - crates/duckboard/src/default_prompts.rs:428
 
 ### Scenario: Agent handle ends while suggestions pending
 
@@ -328,7 +352,7 @@ list would otherwise be available.
 - **AND** suggestions are ready
 
 > test: code
-> - crates/duckboard/src/default_prompts.rs:430
+> - crates/duckboard/src/default_prompts.rs:455
 
 ## Requirement: Empty-input send and cycle
 
@@ -351,7 +375,7 @@ entry SHALL NOT insert text into the composer input.
 - **THEN** the sent text is the entry at the active index
 
 > test: code
-> - crates/duckboard/src/default_prompts.rs:292
+> - crates/duckboard/src/default_prompts.rs:317
 
 ### Scenario: Empty submit is a no-op when the list is empty
 
@@ -362,7 +386,7 @@ entry SHALL NOT insert text into the composer input.
 - **THEN** no message is sent
 
 > test: code
-> - crates/duckboard/src/default_prompts.rs:303
+> - crates/duckboard/src/default_prompts.rs:328
 
 ### Scenario: Tab cycles active index with wrap
 
@@ -375,7 +399,7 @@ entry SHALL NOT insert text into the composer input.
 - **AND** the composer input remains empty
 
 > test: code
-> - crates/duckboard/src/default_prompts.rs:310
+> - crates/duckboard/src/default_prompts.rs:335
 
 ## Requirement: Defaults list presentation
 
@@ -409,10 +433,13 @@ length.
 ## Requirement: Agent input hints gate
 
 A global agent input hints setting SHALL control whether reply-suggestion oneshots run
-after turns. The setting SHALL default to disabled. When the setting is disabled, a
-reply-suggestion oneshot SHALL NOT be started after a non-priming turn completes. When the
-setting is enabled, oneshot launch follows the existing non-priming turn rules (assistant
-text present, and other launch conditions in this capability).
+after turns, and a global auto messages setting SHALL suppress oneshots entirely when
+enabled (chrome owns assistance). The agent input hints setting SHALL default to disabled;
+auto messages SHALL default to enabled. When agent input hints is disabled, or when auto
+messages is enabled, a reply-suggestion oneshot SHALL NOT be started after a non-priming
+turn completes. When agent input hints is enabled and auto messages is disabled, oneshot
+launch follows the existing non-priming turn rules (assistant text present, and other
+launch conditions in this capability).
 
 > test: code
 
@@ -428,9 +455,10 @@ text present, and other launch conditions in this capability).
 ### Scenario: Oneshot launch requires agent input hints enabled
 
 - **GIVEN** agent input hints disabled
+- **AND** auto messages disabled
 - **AND** a non-priming turn that would otherwise qualify for reply suggestions
 - **WHEN** oneshot launch is decided
 - **THEN** a reply-suggestion oneshot is not started
 
 > test: code
-> - crates/duckboard/src/default_prompts.rs:280
+> - crates/duckboard/src/default_prompts.rs:305

@@ -16,16 +16,18 @@ disk phase + session empty? + VCS dirty
         │
         ├── auto messages ON
         │     obvious chrome chips + keys / click  ──▶ send action text
+        │     under-input input hints: always empty
         │
-        └── first lifecycle (empty session)
+        └── auto messages OFF
+              first lifecycle (empty session)
               or agent oneshot (non-empty, agent hints ON)
                     ──▶ under-input input hints (empty Enter / Tab)
 ```
 
-Chrome never shows oneshot `REPLY:` lines. Under-input input hints on an empty session may
-show the first lifecycle option so empty Enter works without chips; that list is owned by
-the input-hints path, not by auto messages. When auto messages is off, chips and chrome
-hotkeys are fully dark; empty-session under-input seed is unaffected.
+Chrome never shows oneshot `REPLY:` lines. When auto messages is on, under-input input
+hints are fully suppressed so chips alone provide lifecycle assistance. When auto messages
+is off, chips and chrome hotkeys are dark; an empty session may still seed the under-input
+list from the first lifecycle option so empty Enter works without chips.
 
 Chips are action affordances (hotkey then action), not faux user messages.
 
@@ -108,7 +110,7 @@ through the same path as typing that text and submitting.
 |------------------------------|-------------------------|-------------------------|------------------------|
 | Numbered lifecycle (multi)   | light blue              | `⌘n  /ds-…`             | that `/ds-…`           |
 | Enter dual (multi, no affirm)| green                   | `⌘↩  Apply` (friendly)  | first lifecycle `/ds-…`|
-| Single lifecycle only        | green                   | `⌘1  /ds-…`             | that `/ds-…`           |
+| Single lifecycle only        | green                   | `⌘↩  Explore` (friendly)| that `/ds-…`           |
 | Affirm                       | green                   | `⌘↩  Confirm` (etc.)    | Confirm / Commit / …   |
 | Decline                      | red                     | `⌘⌫  Reject`            | Reject                 |
 ```
@@ -117,15 +119,15 @@ When there are two or more lifecycle options and no affirm, the first lifecycle 
 dual-presented: a blue numbered chip in order, plus a green enter chip at the bottom of
 the chrome with a friendly name (strip `/ds-` / `ds-`, title-case — e.g. `/ds-apply` →
 `Apply`). Both send the original `/ds-…` string. A single lifecycle option (e.g.
-`/ds-explore`) or affirm-only chrome (Commit, Create change) stays one green chip — no
-dual row. When affirm is present, lifecycle chips are numbered only; green is the affirm
-chip.
+`/ds-explore`) is one green chip labeled `⌘↩  Explore` (friendly name, not numbered) — no
+dual row. Affirm-only chrome (Commit, Create change) stays one green chip. When affirm is
+present, lifecycle chips are numbered only; green is the affirm chip.
 
-Chips sit in the chat scroll column after transcript content (not an overlay). When the
-natural height of messages plus chrome is shorter than the chat viewport, a top pad above
-the chrome pins the chips to the bottom of the history pane above the composer. When
-content already fills or exceeds the viewport, the pad is zero and chips follow the last
-message in document order.
+Chips sit inside the chat scroll column after transcript content (not an overlay, not
+between the scroll viewport and the composer — so the input widget tree stays stable when
+chrome shows or hides). When messages plus chrome are shorter than the chat viewport, a
+top pad above the chrome pins chips to the bottom of the history pane; when content
+already fills or exceeds the viewport, the pad is zero and chips follow the last message.
 
 Before activation, chips are view chrome only — not part of the persisted transcript.
 After send, the message is a normal user bubble in history.
@@ -133,6 +135,7 @@ After send, the message is a normal user bubble in history.
 ## Soft hint
 
 The first lifecycle option (when any) remains a soft hint on the reply-suggestion oneshot
-request when agent input hints run. Orientation's single suggested next stage matches that
-same first lifecycle option. On an empty session, that option may also seed the
-under-input input-hints list (separate surface from chips).
+request when agent input hints run and auto messages is off. Orientation's single suggested
+next stage matches that same first lifecycle option. When auto messages is off and the
+session is empty, that option may also seed the under-input input-hints list (separate
+surface from chips).

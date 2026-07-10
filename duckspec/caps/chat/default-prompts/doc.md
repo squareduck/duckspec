@@ -5,45 +5,55 @@ suggestions (lifecycle heuristic passed only as a soft request hint), show and a
 only after a non-empty parse settles, and drive empty Enter plus Tab cycling from that
 list alone. The effective list is never seeded or filled from the lifecycle heuristic.
 
-Under-input **input hints** for the empty composer: an empty session seeds a single entry
-from the first lifecycle option when one exists; a non-empty session uses settled agent
-oneshot `REPLY:` suggestions only when the global agent input hints setting is enabled
-(default off). Empty Enter and Tab cycle that effective list alone.
+Under-input **input hints** for the empty composer: when auto messages is on, the list is
+always empty (obvious chrome owns lifecycle assistance). When auto messages is off, an
+empty session seeds a single entry from the first lifecycle option when one exists; a
+non-empty session uses settled agent oneshot `REPLY:` suggestions only when the global
+agent input hints setting is enabled (default off). Empty Enter and Tab cycle that
+effective list alone.
 
 ## Pipeline
 
-Input hints under the empty composer come from one of two sources — never both at once.
+Input hints under the empty composer are fully off when auto messages is on. Otherwise
+they come from one of two sources — never both at once.
 
-**Empty session** (`messages` empty): the effective list is the first lifecycle option in
-empty-send form when the session has one (for example `/ds-explore` or `/ds-propose`).
-That seed is ready immediately — no model call. If there is no first lifecycle option
-(caps, codex, and similar), the list is empty.
+**Auto messages on:** effective list empty; no oneshot is started.
 
-**Non-empty session with agent input hints enabled:** after a non-priming agent turn
-completes, the session harness runs a short oneshot on its cheapest available model. The
-request carries the last assistant message, the preceding user message when present,
-discovered slash command names, and the lifecycle heuristic when the session has one — all
-as priming context. Message bodies are capped for speed: the assistant tail is at most 40
-lines and the user tail at most 12 lines (with a marker when truncated). The model returns
-0–3 `REPLY:` lines. The effective list is only that non-empty parse. Fail, timeout, or
-empty parse leaves the list empty; the lifecycle heuristic is request context only and
-never fills the list.
+**Auto messages off + empty session** (`messages` empty): the effective list is the first
+lifecycle option in empty-send form when the session has one (for example `/ds-explore` or
+`/ds-propose`). That seed is ready immediately — no model call. If there is no first
+lifecycle option (caps, codex, and similar), the list is empty.
 
-**Non-empty session with agent input hints disabled:** no oneshot is started; the
-effective list stays empty.
+**Auto messages off + non-empty session with agent input hints enabled:** after a
+non-priming agent turn completes, the session harness runs a short oneshot on its cheapest
+available model. The request carries the last assistant message, the preceding user
+message when present, discovered slash command names, and the lifecycle heuristic when the
+session has one — all as priming context. Message bodies are capped for speed: the
+assistant tail is at most 40 lines and the user tail at most 12 lines (with a marker when
+truncated). The model returns 0–3 `REPLY:` lines. The effective list is only that non-empty
+parse. Fail, timeout, or empty parse leaves the list empty; the lifecycle heuristic is
+request context only and never fills the list.
+
+**Auto messages off + non-empty session with agent input hints disabled:** no oneshot is
+started; the effective list stays empty.
 
 ```
-empty session + lifecycle[0]
+auto messages ON
+    │
+    ▼
+effective list empty  (chrome owns assistance)
+
+auto messages OFF + empty session + lifecycle[0]
     │
     ▼
 effective list = [lifecycle[0]]  ──▶  ready (no pending)
 
-non-empty + agent hints OFF
+auto messages OFF + non-empty + agent hints OFF
     │
     ▼
 no oneshot  ──▶  effective list empty
 
-non-empty + agent hints ON
+auto messages OFF + non-empty + agent hints ON
     │
     ▼
 TurnComplete ──▶ cheap-model oneshot

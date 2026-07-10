@@ -1408,6 +1408,7 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
             let mut recover_lost_session = false;
             // Copy before mutably borrowing the session (config lives on `state`).
             let agent_input_hints = state.config.chat.agent_input_hints;
+            let auto_messages = state.config.chat.auto_messages;
             // Structural / kind-switch events force an immediate chat UI
             // materialize; pure content deltas only set `chat_ui_dirty` and
             // wait for StreamTick (see chat/stream-ui).
@@ -1552,6 +1553,7 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                             let has_assistant = !assistant.trim().is_empty();
                             if default_prompts::should_begin_reply_oneshot(
                                 agent_input_hints,
+                                auto_messages,
                                 was_priming,
                                 has_assistant,
                             ) && let Some(handle) = ax.agent_handle.clone()
@@ -2691,7 +2693,10 @@ fn message_opens_content(message: &Message) -> bool {
 }
 
 fn update_with_scroll_preservation(state: &mut State, message: Message) -> Task<Message> {
-    let snapshot = if is_chat_scroll_message(&message) {
+    // Chrome pad measure messages must not snapshot/replay scroll — they only
+    // adjust an in-scroll spacer.
+    let is_chrome_layout = is_chrome_layout_message(&message);
+    let snapshot = if is_chat_scroll_message(&message) || is_chrome_layout {
         None
     } else {
         capture_chat_scroll_snapshot(state)
@@ -2727,18 +2732,88 @@ fn update_with_scroll_preservation(state: &mut State, message: Message) -> Task<
     // scroll-to-match.
     if state.chat_scroll_overridden {
         state.chat_scroll_overridden = false;
-        return task;
+        return Task::batch([task, maybe_measure_chrome_pad(state)]);
     }
     // A chat-fold drag accumulated a deliberate scroll this tick. Issue it and
     // skip the snapshot replay — replaying the pre-update offset would undo the
     // scroll every frame the drag holds past the edge.
     if has_pending_chat_autoscroll(state) {
-        return Task::batch([task, take_pending_chat_autoscroll(state)]);
+        return Task::batch([
+            task,
+            take_pending_chat_autoscroll(state),
+            maybe_measure_chrome_pad(state),
+        ]);
     }
-    match snapshot {
+    let task = match snapshot {
         Some(snap) => Task::batch([task, replay_chat_scroll(snap)]),
         None => task,
+    };
+    // After layout-affecting updates, measure scroll bounds so the bottom-pin
+    // pad works when content still fits the viewport (no on_scroll from iced).
+    // Skip re-measure on ChromeLayout itself to avoid a tight loop; one more
+    // measure is scheduled only when pad actually changes (handled there).
+    if is_chrome_layout {
+        task
+    } else {
+        Task::batch([task, maybe_measure_chrome_pad(state)])
     }
+}
+
+fn is_chrome_layout_message(msg: &Message) -> bool {
+    fn is_layout(im: &interaction::Msg) -> bool {
+        matches!(
+            im,
+            interaction::Msg::AgentChat(widget::agent_chat::Msg::ChromeLayout { .. })
+        )
+    }
+    match msg {
+        Message::Interaction(im) => is_layout(im),
+        Message::Change(area::change::Message::Interaction(im)) => is_layout(im),
+        Message::Caps(area::caps::Message::Interaction(im)) => is_layout(im),
+        Message::Codex(area::codex::Message::Interaction(im)) => is_layout(im),
+        Message::Ideas(area::ideas::Message::Interaction(im)) => is_layout(im),
+        _ => false,
+    }
+}
+
+/// When obvious chrome is visible on the active chat, schedule a bounds
+/// measure so the in-scroll bottom-pin pad can update. No-op otherwise.
+fn maybe_measure_chrome_pad(state: &State) -> Task<Message> {
+    if !state.config.chat.auto_messages {
+        return Task::none();
+    }
+    let Some(scope) = state.active_scope() else {
+        return Task::none();
+    };
+    let Some(ix) = state.interactions.get(&scope) else {
+        return Task::none();
+    };
+    let Some(ax) = ix.active() else {
+        return Task::none();
+    };
+    let input_empty = ax.chat_input.text().trim().is_empty();
+    if !crate::obvious_bubble::chrome_visible(
+        ax.session.is_streaming,
+        input_empty,
+        &ax.obvious_chrome,
+        true,
+    ) {
+        return Task::none();
+    }
+    let area = state.active_area;
+    widget::agent_chat::measure_scroll_bounds().map(move |(viewport_h, content_h)| {
+        let im = interaction::Msg::AgentChat(widget::agent_chat::Msg::ChromeLayout {
+            viewport_h,
+            content_h,
+        });
+        match area {
+            Area::Change => Message::Change(area::change::Message::Interaction(im)),
+            Area::Caps => Message::Caps(area::caps::Message::Interaction(im)),
+            Area::Codex => Message::Codex(area::codex::Message::Interaction(im)),
+            Area::Ideas => Message::Ideas(area::ideas::Message::Interaction(im)),
+            Area::Dashboard | Area::Settings => Message::Interaction(im),
+        }
+    })
 }
 
 /// Resolve a composite routing key `<instance_id>/<session_id>` to its

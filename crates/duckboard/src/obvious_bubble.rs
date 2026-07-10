@@ -448,6 +448,13 @@ mod tests {
         // WHEN dual-enter presentation is derived
         // THEN dual-enter is not active
         assert!(!dual_enter_lifecycle(&chrome));
+        // AND the single enter chip uses ⌘↩ + friendly name (not ⌘1)
+        let action = chrome.lifecycle.first().expect("first");
+        let label = lifecycle_enter_chip_label(action);
+        assert!(label.starts_with("⌘↩"), "label={label}");
+        assert!(label.contains("Explore"), "label={label}");
+        assert!(!label.contains(action), "friendly label must not embed slash form: {label}");
+        assert_eq!(action, "/ds-explore");
     }
 
     // @spec chat/obvious-bubble Chip display: Affirm present does not dual-present lifecycle

@@ -58,6 +58,10 @@ pub enum Msg {
     ModelSelected(ModelChoice),
     /// Cycle empty-input default prompts (`+1` Tab, `-1` Shift-Tab).
     CycleDefaultPrompt(i8),
+    /// Layout measure of the chat scrollable (viewport + content heights).
+    /// Used to recompute the bottom-pin pad even when content fits the
+    /// viewport and iced suppresses `on_scroll` notifications.
+    ChromeLayout { viewport_h: f32, content_h: f32 },
 }
 
 // ── Model picker ─────────────────────────────────────────────────────────────
@@ -1105,10 +1109,12 @@ pub fn view<'a>(
         );
     }
 
-    // Obvious chrome — key-first action chips after real transcript content,
-    // above the composer. Not stored messages; activation sends via
-    // `Msg::SendObviousAction`. Optional top pad pins chips to the bottom of
-    // the viewport when history is short (still inside the scroll column).
+    // Obvious chrome after transcript content, inside the scroll column.
+    // Optional top pad pins chips to the bottom of the viewport when history
+    // is short; when history already fills the viewport, pad is 0 and chips
+    // sit naturally after the last message. Keeping chrome inside the scroll
+    // (not between scroll and composer) preserves a stable outer widget tree
+    // so the input keeps focus when chrome shows/hides.
     let input_empty = input_value.text().trim().is_empty();
     if crate::obvious_bubble::chrome_visible(
         status.is_streaming,
@@ -1373,9 +1379,58 @@ pub fn view<'a>(
         .width(Length::Fill)
         .style(theme::chat_input);
 
+    // Stable outer column (scroll → completion → divider → input) so showing
+    // or hiding in-scroll chrome never remounts the input and steals focus.
     column![chat_area, completion_el, input_divider, input_row]
         .height(Length::Fill)
         .into()
+}
+
+/// Measure the chat scrollable's viewport and content heights via a widget
+/// operation. Unlike `on_scroll`, this runs even when content fits the
+/// viewport (iced suppresses scroll notifications in that case).
+pub fn measure_scroll_bounds() -> iced::Task<(f32, f32)> {
+    use iced::Rectangle;
+    use iced::Vector;
+    use iced::advanced::widget::Id;
+    use iced::advanced::widget::operation::{self, Operation, Outcome};
+
+    struct Measure {
+        viewport_h: Option<f32>,
+        content_h: Option<f32>,
+    }
+
+    impl Operation<(f32, f32)> for Measure {
+        fn traverse(&mut self, operate: &mut dyn FnMut(&mut dyn Operation<(f32, f32)>)) {
+            operate(self);
+        }
+
+        fn scrollable(
+            &mut self,
+            id: Option<&Id>,
+            bounds: Rectangle,
+            content_bounds: Rectangle,
+            _translation: Vector,
+            _state: &mut dyn operation::Scrollable,
+        ) {
+            if id == Some(&Id::new(CHAT_SCROLLABLE_ID)) {
+                self.viewport_h = Some(bounds.height);
+                self.content_h = Some(content_bounds.height);
+            }
+        }
+
+        fn finish(&self) -> Outcome<(f32, f32)> {
+            match (self.viewport_h, self.content_h) {
+                (Some(v), Some(c)) if v > 0.0 => Outcome::Some((v, c)),
+                _ => Outcome::None,
+            }
+        }
+    }
+
+    iced::advanced::widget::operate(Measure {
+        viewport_h: None,
+        content_h: None,
+    })
 }
 
 /// Render a single chat block, Zed-style calm transcript:
@@ -1659,16 +1714,21 @@ fn view_obvious_chrome<'a>(
 
     let mut col = column![].spacing(theme::SPACING_XS);
     let dual = dual_enter_lifecycle(chrome);
-    // Single lifecycle, no affirm → green enter chip (not dual, not blue).
+    // Single lifecycle, no affirm → green ⌘↩ + friendly name (not dual, not blue).
     let single_lifecycle_enter = chrome.affirm.is_none() && chrome.lifecycle.len() == 1;
 
     for (i, action) in chrome.lifecycle.iter().enumerate() {
-        let label = lifecycle_chip_label(i + 1, action);
-        let tone = if single_lifecycle_enter && i == 0 {
-            ObviousChipTone::Enter
+        let (label, tone) = if single_lifecycle_enter && i == 0 {
+            (
+                lifecycle_enter_chip_label(action),
+                ObviousChipTone::Enter,
+            )
         } else {
             // Multi-option list (with or without affirm) uses numbered blue.
-            ObviousChipTone::Numbered
+            (
+                lifecycle_chip_label(i + 1, action),
+                ObviousChipTone::Numbered,
+            )
         };
         col = col.push(view_obvious_chip(label, action.clone(), tone));
     }

@@ -393,16 +393,9 @@ pub struct AgentSession {
     /// (offset unchanged but content bounds grew). Without this distinction
     /// the latter would race the auto-snap task and unstick us.
     pub last_chat_offset_y: Option<f32>,
-    /// Last chat scrollable viewport height (logical px) from `ChatScrolled`.
-    /// Ephemeral — not persisted.
-    pub chat_viewport_height: Option<f32>,
-    /// Last scroll content height including chrome pad (logical px).
-    /// Ephemeral — not persisted.
-    pub chat_content_height: Option<f32>,
     /// Spacer above obvious chrome so short history pins chips above the
-    /// composer. Recomputed on scroll notifications via
-    /// [`crate::obvious_bubble::chrome_bottom_pad`]. Ephemeral — not
-    /// persisted.
+    /// composer inside the scroll column. Recomputed from scroll/measure
+    /// bounds via [`crate::obvious_bubble::chrome_bottom_pad`]. Ephemeral.
     pub chrome_top_pad: f32,
     /// Set by `send_prompt_text` when the user submits while sticking to the
     /// bottom: the user's message lands in the transcript immediately but the
@@ -485,8 +478,6 @@ impl AgentSession {
             idea_description: None,
             stick_to_bottom: true,
             last_chat_offset_y: None,
-            chat_viewport_height: None,
-            chat_content_height: None,
             chrome_top_pad: 0.0,
             pending_snap_to_bottom: false,
             pending_chat_autoscroll: None,
@@ -520,12 +511,18 @@ impl AgentSession {
     }
 
     /// Under-input input hints for the empty composer (disk seed or agent list).
-    pub fn session_input_hints(&self, agent_input_hints: bool) -> Vec<String> {
+    /// Empty when auto messages are on (chrome owns lifecycle assistance).
+    pub fn session_input_hints(
+        &self,
+        agent_input_hints: bool,
+        auto_messages: bool,
+    ) -> Vec<String> {
         crate::default_prompts::effective_prompts(
             self.session.messages.is_empty(),
             self.obvious_chrome.lifecycle.first().map(String::as_str),
             &self.agent_default_prompts,
             agent_input_hints,
+            auto_messages,
         )
     }
 
@@ -1668,7 +1665,7 @@ fn handle_agent_chat(
                 // Streaming + empty input + no queue → no-op.
             } else {
                 let typed_opt = if typed.is_empty() {
-                    let prompts = ax.session_input_hints(agent_input_hints);
+                    let prompts = ax.session_input_hints(agent_input_hints, auto_messages);
                     crate::default_prompts::empty_submit_text(
                         ax.default_prompts_pending,
                         ax.session.is_streaming,
@@ -1694,7 +1691,7 @@ fn handle_agent_chat(
             if !ax.chat_input.text().trim().is_empty() {
                 return;
             }
-            let prompts = ax.session_input_hints(agent_input_hints);
+            let prompts = ax.session_input_hints(agent_input_hints, auto_messages);
             if !crate::default_prompts::can_cycle_defaults(
                 ax.default_prompts_pending,
                 ax.session.is_streaming,
@@ -1772,26 +1769,14 @@ fn handle_agent_chat(
                 ax.stick_to_bottom = false;
             }
 
-            // Bottom-pin pad for obvious chrome: recompute whenever the
-            // scrollable reports viewport/content bounds. When chrome is
-            // hidden, force pad to 0 so the next show starts clean.
-            ax.chat_viewport_height = Some(bounds.height);
-            ax.chat_content_height = Some(content.height);
-            let input_empty = ax.chat_input.text().trim().is_empty();
-            if crate::obvious_bubble::chrome_visible(
-                ax.session.is_streaming,
-                input_empty,
-                &ax.obvious_chrome,
+            // Bottom-pin pad for obvious chrome (when content > viewport so
+            // on_scroll fires). Short content is measured via ChromeLayout.
+            recompute_chrome_top_pad(
+                ax,
+                bounds.height,
+                content.height,
                 auto_messages,
-            ) {
-                ax.chrome_top_pad = crate::obvious_bubble::chrome_bottom_pad(
-                    bounds.height,
-                    content.height,
-                    ax.chrome_top_pad,
-                );
-            } else {
-                ax.chrome_top_pad = 0.0;
-            }
+            );
 
             // Re-engaging stick while pure-content dirtiness was deferred
             // (user was reading history): paint the live answer now.
@@ -1803,6 +1788,51 @@ fn handle_agent_chat(
                 materialize_chat_ui(ax, highlighter);
             }
         }
+        agent_chat::Msg::ChromeLayout {
+            viewport_h,
+            content_h,
+        } => {
+            // Operation-based measure — works even when content fits the
+            // viewport and iced suppresses on_scroll.
+            recompute_chrome_top_pad(ax, viewport_h, content_h, auto_messages);
+        }
+    }
+
+    // When chrome is hidden (typing, streaming, empty chrome), drop the pad
+    // so the next show measures from a clean baseline.
+    let input_empty = ax.chat_input.text().trim().is_empty();
+    if !crate::obvious_bubble::chrome_visible(
+        ax.session.is_streaming,
+        input_empty,
+        &ax.obvious_chrome,
+        auto_messages,
+    ) {
+        ax.chrome_top_pad = 0.0;
+    }
+}
+
+/// Recompute `chrome_top_pad` from scroll/measure bounds. Zero when chrome
+/// is not visible so the next show starts clean.
+fn recompute_chrome_top_pad(
+    ax: &mut AgentSession,
+    viewport_h: f32,
+    content_h: f32,
+    auto_messages: bool,
+) {
+    let input_empty = ax.chat_input.text().trim().is_empty();
+    if crate::obvious_bubble::chrome_visible(
+        ax.session.is_streaming,
+        input_empty,
+        &ax.obvious_chrome,
+        auto_messages,
+    ) {
+        ax.chrome_top_pad = crate::obvious_bubble::chrome_bottom_pad(
+            viewport_h,
+            content_h,
+            ax.chrome_top_pad,
+        );
+    } else {
+        ax.chrome_top_pad = 0.0;
     }
 }
 
@@ -2564,7 +2594,7 @@ pub fn handle_agent_chat_key(
 
     // Empty-input default-prompt cycle (only when completion is not consuming Tab).
     if *key == keyboard::Key::Named(Named::Tab) && ax.chat_input.text().trim().is_empty() {
-        let prompts = ax.session_input_hints(agent_input_hints);
+        let prompts = ax.session_input_hints(agent_input_hints, auto_messages);
         if crate::default_prompts::can_cycle_defaults(
             ax.default_prompts_pending,
             ax.session.is_streaming,
@@ -3036,7 +3066,7 @@ pub fn view_column<'a, M: 'a + Clone>(
                     context_max: agent_chat::model_context_window(&effective_model),
                 };
                 let w = wrap.clone();
-                let default_prompts = ax.session_input_hints(agent_input_hints);
+                let default_prompts = ax.session_input_hints(agent_input_hints, auto_messages);
                 let default_prompt_idx = crate::default_prompts::clamp_active_index(
                     default_prompts.len(),
                     ax.default_prompt_idx,

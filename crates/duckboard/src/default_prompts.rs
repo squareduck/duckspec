@@ -31,15 +31,21 @@ pub fn oneshot_replies_trimmed(oneshot_replies: &[String]) -> Vec<String> {
 
 /// Build the under-input list for the empty composer.
 ///
-/// - Empty session: single entry from first lifecycle (empty-send form), or empty.
-/// - Non-empty + agent hints on: settled oneshot parse only (no disk merge).
-/// - Non-empty + agent hints off: empty.
+/// - Auto messages on: always empty (chrome owns lifecycle assistance).
+/// - Auto messages off + empty session: first lifecycle (empty-send form), or empty.
+/// - Auto messages off + non-empty + agent hints on: settled oneshot only.
+/// - Auto messages off + non-empty + agent hints off: empty.
 pub fn effective_prompts(
     session_empty: bool,
     first_lifecycle: Option<&str>,
     oneshot_replies: &[String],
     agent_input_hints: bool,
+    auto_messages: bool,
 ) -> Vec<String> {
+    // Auto-message chips own lifecycle assistance — no under-input hints.
+    if auto_messages {
+        return Vec::new();
+    }
     if session_empty {
         return crate::obvious_bubble::bubble_send_text(first_lifecycle)
             .into_iter()
@@ -53,14 +59,16 @@ pub fn effective_prompts(
 
 /// Whether a reply-suggestion oneshot may start after a turn.
 ///
-/// Requires agent input hints enabled, a non-priming turn, and a non-empty
-/// last assistant message (caller has already resolved assistant text).
+/// Requires agent input hints enabled, auto messages off (chrome otherwise owns
+/// assistance), a non-priming turn, and a non-empty last assistant message
+/// (caller has already resolved assistant text).
 pub fn should_begin_reply_oneshot(
     agent_input_hints: bool,
+    auto_messages: bool,
     was_priming: bool,
     has_assistant_text: bool,
 ) -> bool {
-    agent_input_hints && !was_priming && has_assistant_text
+    agent_input_hints && !auto_messages && !was_priming && has_assistant_text
 }
 
 /// Text to send on empty-composer submit when suggestions are ready, or
@@ -204,13 +212,13 @@ mod tests {
     // @spec chat/default-prompts Effective default-prompt list: Parsed replies are the effective list in order
     #[test]
     fn parsed_replies_are_the_effective_list_in_order() {
-        // GIVEN a non-empty session transcript + agent input hints enabled
+        // GIVEN a non-empty session transcript + agent input hints enabled + auto messages off
         let agent = vec![
             "/ds-spec".into(),
             "yes, continue".into(),
             "no, skip".into(),
         ];
-        let got = effective_prompts(false, Some("ds-propose"), &agent, true);
+        let got = effective_prompts(false, Some("ds-propose"), &agent, true, false);
         assert_eq!(
             got,
             vec!["/ds-spec", "yes, continue", "no, skip"]
@@ -220,44 +228,47 @@ mod tests {
     // @spec chat/default-prompts Effective default-prompt list: No non-empty oneshot result yields an empty list
     #[test]
     fn no_non_empty_oneshot_result_yields_an_empty_list() {
-        // GIVEN a non-empty session, agent hints on, no settled non-empty oneshot
-        let got = effective_prompts(false, Some("ds-propose"), &[], true);
+        // GIVEN a non-empty session, agent hints on, auto off, no settled non-empty oneshot
+        let got = effective_prompts(false, Some("ds-propose"), &[], true, false);
         assert!(got.is_empty());
     }
 
     // @spec chat/default-prompts Effective default-prompt list: Failed or empty oneshot yields an empty list even with a heuristic
     #[test]
     fn failed_or_empty_oneshot_yields_an_empty_list_even_with_a_heuristic() {
-        // GIVEN non-empty session, agent on, settled empty/fail, first lifecycle present
+        // GIVEN non-empty session, agent on, auto off, settled empty/fail, first lifecycle present
         let got = apply_oneshot_if_current(1, 1, Ok(vec![])).expect("matching gen applies");
         assert!(got.is_empty());
-        let effective = effective_prompts(false, Some("ds-propose"), &got, true);
+        let effective = effective_prompts(false, Some("ds-propose"), &got, true, false);
         assert!(effective.is_empty());
 
         let got =
             apply_oneshot_if_current(1, 1, Err("boom".into())).expect("matching gen applies");
         assert!(got.is_empty());
-        let effective = effective_prompts(false, Some("/ds-explore"), &got, true);
+        let effective = effective_prompts(false, Some("/ds-explore"), &got, true, false);
         assert!(effective.is_empty());
     }
 
     // @spec chat/default-prompts Effective default-prompt list: Empty session seeds first lifecycle
     #[test]
     fn empty_session_seeds_first_lifecycle() {
-        // GIVEN empty transcript + first lifecycle in empty-send form
-        let got = effective_prompts(true, Some("/ds-explore"), &[], false);
+        // GIVEN empty transcript + first lifecycle + auto messages off
+        // (when auto is on, chrome owns assistance — see auto_messages_suppresses_all_hints)
+        let got = effective_prompts(true, Some("/ds-explore"), &[], false, false);
         assert_eq!(got, vec!["/ds-explore"]);
-        // Bare name also formats.
-        let got = effective_prompts(true, Some("ds-propose"), &[], true);
+        // Bare name also formats. Agent hints on/off does not gate empty seed.
+        let got = effective_prompts(true, Some("ds-propose"), &[], true, false);
+        assert_eq!(got, vec!["/ds-propose"]);
+        let got = effective_prompts(true, Some("ds-propose"), &[], false, false);
         assert_eq!(got, vec!["/ds-propose"]);
     }
 
     // @spec chat/default-prompts Effective default-prompt list: Empty session without lifecycle yields empty
     #[test]
     fn empty_session_without_lifecycle_yields_empty() {
-        let got = effective_prompts(true, None, &[], false);
+        let got = effective_prompts(true, None, &[], false, false);
         assert!(got.is_empty());
-        let got = effective_prompts(true, Some("  "), &[], true);
+        let got = effective_prompts(true, Some("  "), &[], true, false);
         assert!(got.is_empty());
     }
 
@@ -265,7 +276,7 @@ mod tests {
     #[test]
     fn non_empty_session_with_agent_hints_disabled_yields_empty_despite_oneshot() {
         let oneshot = vec!["/ds-spec".into(), "yes".into()];
-        let got = effective_prompts(false, Some("ds-propose"), &oneshot, false);
+        let got = effective_prompts(false, Some("ds-propose"), &oneshot, false, false);
         assert!(got.is_empty());
     }
 
@@ -273,20 +284,34 @@ mod tests {
     #[test]
     fn empty_session_ignores_oneshot_results() {
         let oneshot = vec!["something else".into(), "and another".into()];
-        let got = effective_prompts(true, Some("/ds-explore"), &oneshot, true);
+        let got = effective_prompts(true, Some("/ds-explore"), &oneshot, true, false);
         assert_eq!(got, vec!["/ds-explore"]);
+    }
+
+    // @spec chat/default-prompts Effective default-prompt list: Auto messages on yields empty even for empty session seed
+    #[test]
+    fn auto_messages_on_yields_empty_even_for_empty_session_seed() {
+        // GIVEN empty session + first lifecycle + auto messages on
+        let got = effective_prompts(true, Some("/ds-explore"), &[], false, true);
+        assert!(got.is_empty());
+        // Non-empty + agent hints + oneshot also suppressed when auto on.
+        let oneshot = vec!["/ds-spec".into()];
+        let got = effective_prompts(false, Some("ds-propose"), &oneshot, true, true);
+        assert!(got.is_empty());
     }
 
     // @spec chat/default-prompts Agent input hints gate: Oneshot launch requires agent input hints enabled
     #[test]
     fn oneshot_launch_requires_agent_input_hints_enabled() {
-        // GIVEN agent input hints disabled + non-priming turn that would qualify
-        assert!(!should_begin_reply_oneshot(false, false, true));
-        // Enabled + non-priming + assistant → may start
-        assert!(should_begin_reply_oneshot(true, false, true));
+        // GIVEN agent input hints disabled + auto off + non-priming turn that would qualify
+        assert!(!should_begin_reply_oneshot(false, false, false, true));
+        // Enabled + auto off + non-priming + assistant → may start
+        assert!(should_begin_reply_oneshot(true, false, false, true));
+        // Auto messages on blocks oneshot even when agent hints on
+        assert!(!should_begin_reply_oneshot(true, true, false, true));
         // Priming or missing assistant still blocks
-        assert!(!should_begin_reply_oneshot(true, true, true));
-        assert!(!should_begin_reply_oneshot(true, false, false));
+        assert!(!should_begin_reply_oneshot(true, false, true, true));
+        assert!(!should_begin_reply_oneshot(true, false, false, false));
     }
 
     // @spec chat/default-prompts Empty-input send and cycle: Empty submit sends the active prompt
