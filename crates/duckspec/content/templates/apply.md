@@ -109,8 +109,8 @@ problem.
 
 Suggested next actions:
 
-- `/ds-review`
 - `/ds-archive`
+- `/ds-review`
 
 Review before archive is the intended path.
 

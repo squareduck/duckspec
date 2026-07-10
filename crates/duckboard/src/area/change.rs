@@ -953,15 +953,17 @@ pub fn build_obvious_chrome(
                 .filter_map(|c| format_lifecycle_command(c))
                 .collect();
 
-            // Confirm+Reject when nonempty and either a review is on file
-            // (write-approval during rework /ds-step|/ds-spec) or the change
-            // is still pre-step (no steps on disk). Open steps without a
-            // review stay lifecycle-only.
+            // Confirm+Reject when nonempty and any of: a review is on file
+            // (write-approval during rework /ds-step|/ds-spec), the change is
+            // still pre-step (no steps on disk), or lifecycle includes
+            // /ds-archive (archive dry-run write approval without chat parse).
+            // Open steps without a review and without archive stay lifecycle-only.
             let has_steps = facts.step_count > 0;
             let has_review = facts.current_review.is_some();
+            let archive_in_lifecycle = lifecycle.iter().any(|c| c == "/ds-archive");
             let (affirm, decline) = if session_empty {
                 (None, false)
-            } else if has_review || !has_steps {
+            } else if has_review || !has_steps || archive_in_lifecycle {
                 (Some(Affirm::Confirm), true)
             } else {
                 (None, false)
@@ -2236,6 +2238,26 @@ mod breadcrumb_tests {
         });
         let chrome = build_obvious_chrome(&Scope::Change("foo".into()), &project, true, false);
         assert_eq!(chrome.lifecycle, vec!["/ds-archive", "/ds-review"]);
+    }
+
+    // @spec chat/obvious-bubble Chrome composition: All steps complete nonempty session includes Confirm and Reject
+    #[test]
+    fn chrome_all_steps_complete_nonempty_session_includes_confirm_and_reject() {
+        // GIVEN all steps complete, no reviews, nonempty session
+        let mut project = make_project(&["foo"], &[]);
+        set_change(&mut project, "foo", |c| {
+            c.has_proposal = true;
+            c.has_design = true;
+            c.cap_tree = vec![tree_node("caps/auth")];
+            c.steps = vec![step(true), step(true)];
+        });
+        let chrome = build_obvious_chrome(&Scope::Change("foo".into()), &project, false, false);
+        assert_eq!(chrome.lifecycle, vec!["/ds-archive", "/ds-review"]);
+        assert_eq!(
+            chrome.affirm,
+            Some(crate::obvious_bubble::Affirm::Confirm)
+        );
+        assert!(chrome.decline);
     }
 
     // @spec chat/obvious-bubble Chrome composition: Nonempty change session includes Confirm and Reject

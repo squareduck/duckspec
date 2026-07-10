@@ -73,11 +73,12 @@ Lifecycle options SHALL be ordered empty-send `/ds-*` strings by the first match
 - empty change (no proposal), no reviews: `/ds-propose` only
 
 When the scope is an active change and the session is non-empty, the chrome SHALL include
-affirm `Confirm` and decline `Reject` when either the change has at least one review, or
-the change has no steps on disk — except on the Commit-only path below. When the session
-is empty, the gate row SHALL be omitted. When the session is non-empty, the change has
-steps on disk, and the change has no reviews, the gate row SHALL be omitted (lifecycle
-chips only).
+affirm `Confirm` and decline `Reject` when any of the following hold: the change has at
+least one review; the change has no steps on disk; or the composed lifecycle options
+include `/ds-archive` — except on the Commit-only path below. When the session is empty,
+the gate row SHALL be omitted. When the session is non-empty, the change has steps on
+disk, the change has no reviews, and the lifecycle options do not include `/ds-archive`,
+the gate row SHALL be omitted (lifecycle chips only).
 
 When the scope is an exploration and the session is non-empty, the chrome SHALL be affirm
 `Create change` only — no lifecycle options and no `Reject`. The affirm send text SHALL be
@@ -98,7 +99,7 @@ Caps and codex scopes SHALL yield empty chrome.
 - **THEN** the lifecycle options are `/ds-archive` and `/ds-review` in that order
 
 > test: code
-> - crates/duckboard/src/area/change.rs:2227
+> - crates/duckboard/src/area/change.rs:2229
 
 ### Scenario: Nonempty change session includes Confirm and Reject
 
@@ -111,7 +112,7 @@ Caps and codex scopes SHALL yield empty chrome.
 - **AND** decline is present
 
 > test: code
-> - crates/duckboard/src/area/change.rs:2241
+> - crates/duckboard/src/area/change.rs:2263
 
 ### Scenario: Empty change session omits gate row
 
@@ -121,7 +122,7 @@ Caps and codex scopes SHALL yield empty chrome.
 - **AND** decline is absent
 
 > test: code
-> - crates/duckboard/src/area/change.rs:2315
+> - crates/duckboard/src/area/change.rs:2337
 
 ### Scenario: Archived dirty nonempty session yields Commit only
 
@@ -134,7 +135,7 @@ Caps and codex scopes SHALL yield empty chrome.
 - **AND** decline is absent
 
 > test: code
-> - crates/duckboard/src/area/change.rs:2325
+> - crates/duckboard/src/area/change.rs:2347
 
 ### Scenario: Empty exploration yields explore only
 
@@ -145,7 +146,7 @@ Caps and codex scopes SHALL yield empty chrome.
 - **AND** decline is absent
 
 > test: code
-> - crates/duckboard/src/area/change.rs:2340
+> - crates/duckboard/src/area/change.rs:2362
 
 ### Scenario: Nonempty exploration yields Create change only
 
@@ -156,7 +157,7 @@ Caps and codex scopes SHALL yield empty chrome.
 - **AND** decline is absent
 
 > test: code
-> - crates/duckboard/src/area/change.rs:2209
+> - crates/duckboard/src/area/change.rs:2211
 
 ### Scenario: Design without caps yields spec then step
 
@@ -165,7 +166,7 @@ Caps and codex scopes SHALL yield empty chrome.
 - **THEN** the lifecycle options are `/ds-spec` and `/ds-step` in that order
 
 > test: code
-> - crates/duckboard/src/area/change.rs:2197
+> - crates/duckboard/src/area/change.rs:2199
 
 ### Scenario: Caps without steps yield step then archive
 
@@ -174,7 +175,7 @@ Caps and codex scopes SHALL yield empty chrome.
 - **THEN** the lifecycle options are `/ds-step` and `/ds-archive` in that order
 
 > test: code
-> - crates/duckboard/src/area/change.rs:2185
+> - crates/duckboard/src/area/change.rs:2187
 
 ### Scenario: Open steps yield apply then review without gate
 
@@ -186,7 +187,7 @@ Caps and codex scopes SHALL yield empty chrome.
 - **AND** decline is absent
 
 > test: code
-> - crates/duckboard/src/area/change.rs:2255
+> - crates/duckboard/src/area/change.rs:2277
 
 ### Scenario: Open steps with review yield apply only with gate
 
@@ -198,7 +199,7 @@ Caps and codex scopes SHALL yield empty chrome.
 - **AND** decline is present
 
 > test: code
-> - crates/duckboard/src/area/change.rs:2271
+> - crates/duckboard/src/area/change.rs:2293
 
 ### Scenario: No open steps with review yield step then spec then archive with gate
 
@@ -216,7 +217,20 @@ Caps and codex scopes SHALL yield empty chrome.
 - **AND** decline is present
 
 > test: code
-> - crates/duckboard/src/area/change.rs:2292
+> - crates/duckboard/src/area/change.rs:2314
+
+### Scenario: All steps complete nonempty session includes Confirm and Reject
+
+- **GIVEN** an active change whose steps are all complete
+- **AND** the change has no reviews
+- **AND** a non-empty session transcript
+- **WHEN** obvious chrome is composed
+- **THEN** the lifecycle options are `/ds-archive` and `/ds-review` in that order
+- **AND** affirm is Confirm
+- **AND** decline is present
+
+> test: code
+> - crates/duckboard/src/area/change.rs:2243
 
 ## Requirement: Chrome visibility
 
