@@ -1579,6 +1579,9 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                         // confuse the next reconnect.
                         ax.priming_in_flight = false;
                         ax.pending_followup_prompt = None;
+                        // Belt: do not leave reply-suggestion chrome on loading
+                        // when the worker is gone with no DefaultPromptsReady.
+                        ax.clear_agent_default_prompts();
                     }
                 }
             }
@@ -1747,6 +1750,7 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                 return Task::none();
             };
             // Map Err to a string so the pure helper can settle either arm.
+            // Ok or Err (including oneshot timeout) both settle when gen matches.
             let result = result.map_err(|e| {
                 tracing::warn!(key, "reply suggestions failed: {e}");
                 e

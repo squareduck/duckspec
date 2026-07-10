@@ -21,6 +21,10 @@ pub enum Error {
     #[error("cancelled")]
     Cancelled,
 
+    /// Oneshot work exceeded the per-call wall-clock budget.
+    #[error("oneshot timed out: {0}")]
+    Timeout(String),
+
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
 

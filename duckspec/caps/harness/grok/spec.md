@@ -47,7 +47,7 @@ supplied, resume that id.
   session id
 
 > test: code
-> - crates/duckchat/src/grok/runtime.rs:532
+> - crates/duckchat/src/grok/runtime.rs:536
 
 ### Scenario: After cancel, the next turn can spawn and resume
 
@@ -58,7 +58,7 @@ supplied, resume that id.
 - **AND** it opens the session by resuming that id
 
 > test: code
-> - crates/duckchat/src/grok/runtime.rs:567
+> - crates/duckchat/src/grok/runtime.rs:571
 
 ## Requirement: Event translation
 
@@ -224,7 +224,7 @@ session (N=1) and SHALL NOT resume a prior oneshot conversation session.
 - **AND** it does not resume the prior oneshot session id
 
 > test: code
-> - crates/duckchat/src/grok/runtime.rs:628
+> - crates/duckchat/src/grok/runtime.rs:632
 
 ### Scenario: An oneshot call on a hot path reuses the process
 
@@ -233,4 +233,4 @@ session (N=1) and SHALL NOT resume a prior oneshot conversation session.
 - **THEN** the harness does not spawn a new `grok agent stdio` process for that call
 
 > test: code
-> - crates/duckchat/src/grok/runtime.rs:660
+> - crates/duckchat/src/grok/runtime.rs:664

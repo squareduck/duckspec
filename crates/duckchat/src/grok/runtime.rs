@@ -280,6 +280,10 @@ impl OneshotRuntime for GrokOneshotRuntime {
             .ok_or_else(|| Error::Other("grok advertised no models for oneshot".into()))?;
         let content = text_prompt_content(&text);
 
+        // Cancel token is cooperative while prompt is polling; if the future is
+        // abandoned (worker oneshot budget), the worker calls `shutdown` →
+        // `drop_child` which kills ACP heat so the next `ensure_hot` can proceed.
+        let cancel = CancelToken::new();
         let mut raw = String::new();
         let result = {
             let turn = self
@@ -296,7 +300,7 @@ impl OneshotRuntime for GrokOneshotRuntime {
                         raw.push_str(&text);
                     }
                 },
-                &CancelToken::new(),
+                &cancel,
             )
             .await
         };
@@ -681,6 +685,54 @@ mod tests {
             spawns.load(Ordering::SeqCst),
             1,
             "oneshot calls on a hot path must not spawn a new process"
+        );
+        rt.shutdown().await;
+    }
+
+    /// Abandoned/hung oneshot + `shutdown` cold-resets heat so a later oneshot works.
+    #[tokio::test]
+    async fn abandoned_oneshot_shutdown_allows_later_oneshot() {
+        let spawns = Arc::new(AtomicUsize::new(0));
+        let hang_then_ok: OpenChild = {
+            let spawns = spawns.clone();
+            let first = Arc::new(std::sync::atomic::AtomicBool::new(true));
+            Arc::new(move || {
+                spawns.fetch_add(1, Ordering::SeqCst);
+                let is_first = first.swap(false, Ordering::SeqCst);
+                Box::pin(async move {
+                    if is_first {
+                        Ok(fake_acp_peer_hang_on_prompt().await)
+                    } else {
+                        Ok(fake_acp_peer().await)
+                    }
+                })
+            })
+        };
+        let mut rt = GrokOneshotRuntime::with_open(hang_then_ok, std::env::temp_dir());
+
+        rt.ensure_hot().await.unwrap();
+        // Hang on session/prompt until the budget aborts this future (worker does
+        // the same with `timeout` then `shutdown`).
+        let hung = tokio::time::timeout(
+            Duration::from_millis(80),
+            rt.prompt(OneshotKind::Title, "will hang".into()),
+        )
+        .await;
+        assert!(hung.is_err(), "first oneshot should not finish within budget");
+
+        // Worker cold-reset path after Timeout.
+        rt.shutdown().await;
+
+        // Later oneshot on the same runtime can complete (re-hot).
+        rt.ensure_hot().await.unwrap();
+        let text = rt
+            .prompt(OneshotKind::Title, "after recover".into())
+            .await
+            .expect("oneshot after hang+shutdown");
+        assert!(!text.is_empty());
+        assert!(
+            spawns.load(Ordering::SeqCst) >= 2,
+            "shutdown drops heat; next ensure_hot may spawn again"
         );
         rt.shutdown().await;
     }

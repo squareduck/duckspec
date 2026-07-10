@@ -22,7 +22,7 @@ handles SHALL NOT share oneshot work with each other.
 - **AND** the result is a plain-text title string
 
 > test: code
-> - crates/duckchat/src/worker.rs:567
+> - crates/duckchat/src/worker.rs:630
 
 ### Scenario: Reply suggestions are requested through the chat handle
 
@@ -32,7 +32,7 @@ handles SHALL NOT share oneshot work with each other.
 - **AND** the result is a list of reply strings
 
 > test: code
-> - crates/duckchat/src/worker.rs:588
+> - crates/duckchat/src/worker.rs:651
 
 ## Requirement: Lazy activation
 
@@ -50,7 +50,7 @@ step.
 - **THEN** the turn completes without requiring a separate pre-warm call
 
 > test: code
-> - crates/duckchat/src/worker.rs:609
+> - crates/duckchat/src/worker.rs:672
 
 ### Scenario: Oneshot after first send needs no separate pre-warm API
 
@@ -59,7 +59,7 @@ step.
 - **THEN** the request completes without a separate pre-warm call from the caller
 
 > test: code
-> - crates/duckchat/src/worker.rs:631
+> - crates/duckchat/src/worker.rs:694
 
 ## Requirement: Oneshot serialization and isolation
 
@@ -80,7 +80,7 @@ history.
 - **AND** the oneshot path did not run the two prompts concurrently
 
 > test: code
-> - crates/duckchat/src/worker.rs:650
+> - crates/duckchat/src/worker.rs:713
 
 ### Scenario: A second oneshot call does not resume the prior oneshot session
 
@@ -89,7 +89,7 @@ history.
 - **THEN** the second call does not resume the prior oneshot conversation
 
 > test: code
-> - crates/duckchat/src/worker.rs:682
+> - crates/duckchat/src/worker.rs:745
 
 ## Requirement: Cancel and re-warm
 
@@ -106,7 +106,7 @@ SHALL NOT be required to tear down the oneshot path.
 - **THEN** the later turn can complete
 
 > test: code
-> - crates/duckchat/src/worker.rs:714
+> - crates/duckchat/src/worker.rs:777
 
 ## Requirement: Cold-capable harnesses
 
@@ -124,4 +124,39 @@ process.
 - **THEN** the request completes with a plain-text title string
 
 > test: code
-> - crates/duckchat/src/worker.rs:755
+> - crates/duckchat/src/worker.rs:818
+
+## Requirement: Oneshot call budget and recovery
+
+Each oneshot work item on a handle — the ensure-hot plus prompt work for one title-summary
+or reply-suggestion call — SHALL complete within ten seconds of wall-clock time or SHALL
+fail with an error returned to the caller. An oneshot call SHALL NOT remain in flight
+indefinitely past that budget. After any oneshot failure, including a timeout that exceeds
+the budget, the oneshot path for that handle SHALL cold-reset process heat before serving
+further oneshot work. A later oneshot request on the same handle after a failed or
+timed-out oneshot SHALL still be able to complete, subject to its own budget. Title
+summary and reply suggestion each receive a full ten-second budget per call; they still
+run one at a time on the shared oneshot path.
+
+> test: code
+
+### Scenario: Over-budget oneshot returns an error
+
+- **GIVEN** a chat agent handle
+- **AND** oneshot work that does not finish within ten seconds
+- **WHEN** that oneshot call is awaited
+- **THEN** the caller receives an error
+- **AND** the call does not remain in flight indefinitely past the budget
+
+> test: code
+> - crates/duckchat/src/worker.rs:841
+
+### Scenario: Later oneshot succeeds after prior oneshot failure
+
+- **GIVEN** a chat agent handle
+- **AND** an oneshot call that failed or timed out
+- **WHEN** a subsequent oneshot is requested on the same handle
+- **THEN** that subsequent call can complete with a result
+
+> test: code
+> - crates/duckchat/src/worker.rs:874

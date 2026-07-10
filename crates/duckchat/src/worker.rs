@@ -5,8 +5,10 @@
 //! affects the main path; shutdown tears down both runtimes.
 
 use std::path::PathBuf;
+use std::time::Duration;
 
 use tokio::sync::{mpsc, oneshot};
+use tokio::time::timeout;
 
 use crate::cancel::CancelToken;
 use crate::error::Error;
@@ -18,6 +20,9 @@ use crate::reply_suggest::{
 use crate::request::{ReplySuggestionRequest, TitleRequest, TurnRequest};
 use crate::runtime::OneshotKind;
 use crate::title::{build_title_prompt, clean_title};
+
+/// Wall-clock budget for one oneshot Work item (`ensure_hot` + `prompt`).
+pub const ONESHOT_CALL_BUDGET: Duration = Duration::from_secs(10);
 
 /// Commands the caller can queue on the main worker loop.
 #[derive(Debug)]
@@ -146,11 +151,23 @@ impl std::fmt::Debug for AgentHandle {
 ///
 /// On the first `RunTurn`, the worker `ensure_hot`s main and kicks a
 /// best-effort oneshot warm-up. Title/reply requests serialize on the oneshot
-/// path and rotate after each successful prompt (N=1).
+/// path and rotate after each successful prompt (N=1). Each oneshot Work item
+/// is bounded by [`ONESHOT_CALL_BUDGET`].
 pub fn spawn_worker<P: Provider + 'static>(
     provider: P,
     working_dir: PathBuf,
     events: mpsc::Sender<AgentEvent>,
+) -> AgentHandle {
+    spawn_worker_with_oneshot_budget(provider, working_dir, events, ONESHOT_CALL_BUDGET)
+}
+
+/// Like [`spawn_worker`], but with an explicit oneshot Work budget (tests inject
+/// a short budget so hang recovery does not wait the full production 10s).
+fn spawn_worker_with_oneshot_budget<P: Provider + 'static>(
+    provider: P,
+    working_dir: PathBuf,
+    events: mpsc::Sender<AgentEvent>,
+    oneshot_budget: Duration,
 ) -> AgentHandle {
     let (cmd_tx, mut cmd_rx) = mpsc::unbounded_channel::<AgentCommand>();
     let (oneshot_tx, mut oneshot_rx) = mpsc::unbounded_channel::<OneshotCommand>();
@@ -173,18 +190,26 @@ pub fn spawn_worker<P: Provider + 'static>(
                     let _ = oneshot.ensure_hot().await;
                 }
                 OneshotCommand::Work(req) => {
-                    let result = async {
+                    let result = match timeout(oneshot_budget, async {
                         oneshot.ensure_hot().await?;
                         oneshot.prompt(req.kind, req.prompt).await
-                    }
-                    .await;
+                    })
+                    .await
+                    {
+                        Ok(inner) => inner,
+                        Err(_elapsed) => Err(Error::Timeout(
+                            "oneshot call exceeded budget".into(),
+                        )),
+                    };
                     let ok = result.is_ok();
                     let _ = req.reply.send(result);
                     // N=1: rotate after a successful prompt before the next work item.
-                    // Failure must not block the already-returned result; next call
-                    // will ensure_hot again if needed.
+                    // Any Err (including timeout) cold-resets oneshot heat so the
+                    // serial queue cannot stay wedged behind a dead child.
                     if ok {
                         let _ = oneshot.rotate().await;
+                    } else {
+                        oneshot.shutdown().await;
                     }
                 }
                 OneshotCommand::Shutdown => {
@@ -352,6 +377,8 @@ mod tests {
         /// When set, the first main turn blocks until cancel or this notify.
         hang_first_turn: Option<Arc<Notify>>,
         hang_released: Arc<AtomicBool>,
+        /// When true, the first oneshot `prompt` hangs until dropped (budget timeout).
+        hang_first_oneshot: bool,
     }
 
     impl FakeProvider {
@@ -360,6 +387,7 @@ mod tests {
                 log,
                 hang_first_turn: None,
                 hang_released: Arc::new(AtomicBool::new(false)),
+                hang_first_oneshot: false,
             }
         }
 
@@ -368,6 +396,16 @@ mod tests {
                 log,
                 hang_first_turn: Some(hang),
                 hang_released: Arc::new(AtomicBool::new(false)),
+                hang_first_oneshot: false,
+            }
+        }
+
+        fn with_hang_first_oneshot(log: Arc<FakeLog>) -> Self {
+            Self {
+                log,
+                hang_first_turn: None,
+                hang_released: Arc::new(AtomicBool::new(false)),
+                hang_first_oneshot: true,
             }
         }
     }
@@ -386,6 +424,20 @@ mod tests {
         /// Logical oneshot session id; rotate advances it.
         session_id: u64,
         next_session: u64,
+        hang_first_oneshot: bool,
+        hung_once: bool,
+    }
+
+    /// Restores concurrent bookkeeping if `prompt` is cancelled mid-flight (timeout).
+    struct OneshotInFlightGuard<'a> {
+        log: &'a FakeLog,
+    }
+
+    impl Drop for OneshotInFlightGuard<'_> {
+        fn drop(&mut self) {
+            self.log.oneshot_concurrent.fetch_sub(1, Ordering::SeqCst);
+            self.log.oneshot_in_flight.store(false, Ordering::SeqCst);
+        }
     }
 
     #[async_trait]
@@ -452,12 +504,22 @@ mod tests {
         async fn prompt(&mut self, model_hint: OneshotKind, text: String) -> Result<String, Error> {
             let concurrent = self.log.oneshot_concurrent.fetch_add(1, Ordering::SeqCst) + 1;
             self.log.oneshot_in_flight.store(true, Ordering::SeqCst);
+            let _guard = OneshotInFlightGuard { log: &self.log };
             let max = self.log.oneshot_max_concurrent.load(Ordering::SeqCst);
             if concurrent > max {
                 self.log
                     .oneshot_max_concurrent
                     .store(concurrent, Ordering::SeqCst);
             }
+
+            if self.hang_first_oneshot && !self.hung_once {
+                self.hung_once = true;
+                // Hang until the worker's oneshot budget cancels this future.
+                loop {
+                    tokio::time::sleep(Duration::from_secs(60)).await;
+                }
+            }
+
             // Small delay so concurrent callers would overlap if not serialized.
             tokio::time::sleep(Duration::from_millis(30)).await;
 
@@ -472,9 +534,6 @@ mod tests {
                 .lock()
                 .unwrap()
                 .push(sid);
-
-            self.log.oneshot_concurrent.fetch_sub(1, Ordering::SeqCst);
-            self.log.oneshot_in_flight.store(false, Ordering::SeqCst);
 
             match model_hint {
                 OneshotKind::Title => Ok(format!("\"Title for session {sid}.\"")),
@@ -492,6 +551,8 @@ mod tests {
 
         async fn shutdown(&mut self) {
             self.hot = false;
+            // Cold-reset clears logical session so the next ensure_hot opens fresh.
+            self.session_id = 0;
             self.log.oneshot_shutdown.fetch_add(1, Ordering::SeqCst);
         }
     }
@@ -532,6 +593,8 @@ mod tests {
                 hot: false,
                 session_id: 0,
                 next_session: 0,
+                hang_first_oneshot: self.hang_first_oneshot,
+                hung_once: false,
             })
         }
 
@@ -768,6 +831,79 @@ mod tests {
         assert!(
             !title.contains('.') && !title.contains('"'),
             "plain-text title: {title}"
+        );
+        handle.shutdown();
+    }
+
+    /// Short budget for hang-recovery tests (production is 10s).
+    const TEST_ONESHOT_BUDGET: Duration = Duration::from_millis(80);
+
+    // @spec harness/warm-runtime Oneshot call budget and recovery: Over-budget oneshot returns an error
+    #[tokio::test]
+    async fn over_budget_oneshot_returns_an_error() {
+        let log = Arc::new(FakeLog::default());
+        let (tx, _rx) = mpsc::channel(16);
+        let handle = spawn_worker_with_oneshot_budget(
+            FakeProvider::with_hang_first_oneshot(log.clone()),
+            std::env::temp_dir(),
+            tx,
+            TEST_ONESHOT_BUDGET,
+        );
+
+        let started = std::time::Instant::now();
+        let err = handle
+            .title_summary(TitleRequest::new("will hang past budget"))
+            .await
+            .expect_err("over-budget oneshot must error");
+        assert!(
+            matches!(err, Error::Timeout(_)),
+            "expected Timeout, got {err:?}"
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "must not remain in flight for the full production budget"
+        );
+        // Cold-reset after timeout.
+        assert!(
+            log.oneshot_shutdown.load(Ordering::SeqCst) >= 1,
+            "timeout path cold-resets oneshot heat"
+        );
+        handle.shutdown();
+    }
+
+    // @spec harness/warm-runtime Oneshot call budget and recovery: Later oneshot succeeds after prior oneshot failure
+    #[tokio::test]
+    async fn later_oneshot_succeeds_after_prior_oneshot_failure() {
+        let log = Arc::new(FakeLog::default());
+        let (tx, _rx) = mpsc::channel(16);
+        let handle = spawn_worker_with_oneshot_budget(
+            FakeProvider::with_hang_first_oneshot(log.clone()),
+            std::env::temp_dir(),
+            tx,
+            TEST_ONESHOT_BUDGET,
+        );
+
+        let first = handle
+            .title_summary(TitleRequest::new("first hangs"))
+            .await;
+        assert!(
+            matches!(first, Err(Error::Timeout(_))),
+            "first oneshot should time out: {first:?}"
+        );
+
+        // Same handle: subsequent oneshot must complete after cold-reset.
+        let title = handle
+            .title_summary(TitleRequest::new("second succeeds"))
+            .await
+            .expect("later oneshot after prior failure");
+        assert!(!title.is_empty());
+        assert!(
+            log.oneshot_shutdown.load(Ordering::SeqCst) >= 1,
+            "failure path cold-resets before next work"
+        );
+        assert!(
+            log.prompt_kinds().contains(&OneshotKind::Title),
+            "successful second call should have recorded a prompt"
         );
         handle.shutdown();
     }

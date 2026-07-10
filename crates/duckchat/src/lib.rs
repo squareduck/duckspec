@@ -35,4 +35,4 @@ pub use request::{
 };
 pub use runtime::{MainRuntime, OneshotKind, OneshotRuntime};
 pub use title::{build_title_prompt, clean_title};
-pub use worker::{AgentCommand, AgentHandle, spawn_worker};
+pub use worker::{AgentCommand, AgentHandle, ONESHOT_CALL_BUDGET, spawn_worker};

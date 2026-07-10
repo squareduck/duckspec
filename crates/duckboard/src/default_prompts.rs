@@ -335,6 +335,57 @@ mod tests {
         assert!(!can_cycle_defaults(false, true, prompts.len()));
     }
 
+    // @spec chat/default-prompts Suggestion readiness: Timed-out or failed oneshot settles to ready
+    #[test]
+    fn timed_out_or_failed_oneshot_settles_to_ready() {
+        // GIVEN pending oneshot that settles as failure (timeout-shaped Err) for
+        // the current generation + heuristic + empty composer.
+        let list = apply_oneshot_if_current(
+            1,
+            1,
+            Err("oneshot timed out: oneshot call exceeded budget".into()),
+            Some("ds-design"),
+        )
+        .expect("matching gen applies");
+        let pending = false; // settled → ready
+        assert_eq!(list, vec!["/ds-design"]);
+        assert_eq!(
+            defaults_chrome(true, pending, false, list.len()),
+            DefaultsChrome::List
+        );
+        // Plain failure settles the same way (no loading).
+        let list2 = apply_oneshot_if_current(2, 2, Err("boom".into()), Some("ds-spec"))
+            .expect("matching gen applies");
+        assert_eq!(list2, vec!["/ds-spec"]);
+        assert_eq!(
+            defaults_chrome(true, false, false, list2.len()),
+            DefaultsChrome::List
+        );
+    }
+
+    // @spec chat/default-prompts Suggestion readiness: Agent handle ends while suggestions pending
+    #[test]
+    fn agent_handle_ends_while_suggestions_pending() {
+        // GIVEN pending oneshot + empty composer → loading.
+        assert_eq!(
+            defaults_chrome(true, true, false, 0),
+            DefaultsChrome::Loading
+        );
+        // WHEN the chat agent handle ends without a settle (ProcessExited clears
+        // pending; effective list is the heuristic at view time).
+        let pending = false;
+        let prompts = heuristic_as_prompts(Some("ds-explore"));
+        // THEN loading is not shown; suggestions are ready.
+        assert_eq!(
+            defaults_chrome(true, pending, false, prompts.len()),
+            DefaultsChrome::List
+        );
+        assert_eq!(
+            empty_submit_text(pending, false, &prompts, 0).as_deref(),
+            Some("/ds-explore")
+        );
+    }
+
     #[test]
     fn heuristic_as_prompts_adds_leading_slash() {
         assert_eq!(
