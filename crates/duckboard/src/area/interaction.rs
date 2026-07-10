@@ -499,6 +499,16 @@ impl AgentSession {
         self.default_prompts_pending = true;
     }
 
+    /// Under-input input hints for the empty composer (disk seed or agent list).
+    pub fn session_input_hints(&self, agent_input_hints: bool) -> Vec<String> {
+        crate::default_prompts::effective_prompts(
+            self.session.messages.is_empty(),
+            self.obvious_chrome.lifecycle.first().map(String::as_str),
+            &self.agent_default_prompts,
+            agent_input_hints,
+        )
+    }
+
     /// The harness this session's next turn dispatches to, resolved through the
     /// model cascade (per-chat pin → project default → built-in default).
     pub(crate) fn effective_harness(&self) -> String {
@@ -973,7 +983,15 @@ pub enum Msg {
 
 /// Handle an interaction message. Returns `true` if the panel was just toggled open.
 /// NewSession / SelectSession / ClearSession are ignored here — areas handle them.
-pub fn update(state: &mut InteractionState, msg: Msg, highlighter: &SyntaxHighlighter) -> bool {
+///
+/// `agent_input_hints` / `auto_messages` come from global chat config.
+pub fn update(
+    state: &mut InteractionState,
+    msg: Msg,
+    highlighter: &SyntaxHighlighter,
+    agent_input_hints: bool,
+    auto_messages: bool,
+) -> bool {
     let mut just_opened = false;
     match msg {
         Msg::Handle(hmsg) => match hmsg {
@@ -1019,7 +1037,13 @@ pub fn update(state: &mut InteractionState, msg: Msg, highlighter: &SyntaxHighli
             }
         }
         Msg::AgentChat(chat_msg) => {
-            handle_agent_chat(state, chat_msg, highlighter);
+            handle_agent_chat(
+                state,
+                chat_msg,
+                highlighter,
+                agent_input_hints,
+                auto_messages,
+            );
         }
         Msg::TerminalScroll => {
             if let Some(tt) = state.active_terminal_mut() {
@@ -1048,6 +1072,8 @@ fn handle_agent_chat(
     state: &mut InteractionState,
     msg: agent_chat::Msg,
     highlighter: &SyntaxHighlighter,
+    agent_input_hints: bool,
+    auto_messages: bool,
 ) {
     let Some(ax) = state.active_mut() else { return };
     match msg {
@@ -1169,6 +1195,7 @@ fn handle_agent_chat(
                 ax.session.is_streaming,
                 input_empty,
                 &ax.obvious_chrome,
+                auto_messages,
             ) {
                 send_prompt_text(ax, text, highlighter);
             }
@@ -1198,8 +1225,7 @@ fn handle_agent_chat(
                 // Streaming + empty input + no queue → no-op.
             } else {
                 let typed_opt = if typed.is_empty() {
-                    let prompts =
-                        crate::default_prompts::effective_prompts(&ax.agent_default_prompts);
+                    let prompts = ax.session_input_hints(agent_input_hints);
                     crate::default_prompts::empty_submit_text(
                         ax.default_prompts_pending,
                         ax.session.is_streaming,
@@ -1225,8 +1251,7 @@ fn handle_agent_chat(
             if !ax.chat_input.text().trim().is_empty() {
                 return;
             }
-            let prompts =
-                crate::default_prompts::effective_prompts(&ax.agent_default_prompts);
+            let prompts = ax.session_input_hints(agent_input_hints);
             if !crate::default_prompts::can_cycle_defaults(
                 ax.default_prompts_pending,
                 ax.session.is_streaming,
@@ -1825,6 +1850,8 @@ pub fn handle_agent_chat_key(
     ix: &mut InteractionState,
     key: &iced::keyboard::Key,
     mods: iced::keyboard::Modifiers,
+    agent_input_hints: bool,
+    auto_messages: bool,
 ) -> AgentChatKeyResult {
     use iced::keyboard;
     use iced::keyboard::key::Named;
@@ -1853,8 +1880,7 @@ pub fn handle_agent_chat_key(
 
     // Empty-input default-prompt cycle (only when completion is not consuming Tab).
     if *key == keyboard::Key::Named(Named::Tab) && ax.chat_input.text().trim().is_empty() {
-        let prompts =
-            crate::default_prompts::effective_prompts(&ax.agent_default_prompts);
+        let prompts = ax.session_input_hints(agent_input_hints);
         if crate::default_prompts::can_cycle_defaults(
             ax.default_prompts_pending,
             ax.session.is_streaming,
@@ -1873,6 +1899,7 @@ pub fn handle_agent_chat_key(
             ax.session.is_streaming,
             input_empty,
             &ax.obvious_chrome,
+            auto_messages,
         );
         if chrome_vis && mods.command() && !mods.shift() && !mods.alt() {
             // ⌘↩ → affirm or lifecycle[0]
@@ -1994,8 +2021,16 @@ pub fn update_with_side_effects(
     scope_kind: ScopeKind,
     project_root: Option<&std::path::Path>,
     highlighter: &SyntaxHighlighter,
+    agent_input_hints: bool,
+    auto_messages: bool,
 ) {
-    update(state, msg, highlighter);
+    update(
+        state,
+        msg,
+        highlighter,
+        agent_input_hints,
+        auto_messages,
+    );
 
     // Persist a just-changed per-chat model selection. Done here (not in
     // `handle_agent_chat`) because this is the layer that has `project_root`.
@@ -2268,6 +2303,8 @@ pub fn view_column<'a, M: 'a + Clone>(
         Option<crate::widget::text_edit::HighlightRange>,
     )>,
     find_toolbar: Option<Element<'a, M>>,
+    agent_input_hints: bool,
+    auto_messages: bool,
 ) -> Element<'a, M> {
     use iced::widget::column;
 
@@ -2315,8 +2352,7 @@ pub fn view_column<'a, M: 'a + Clone>(
                     context_max: agent_chat::model_context_window(&effective_model),
                 };
                 let w = wrap.clone();
-                let default_prompts =
-                    crate::default_prompts::effective_prompts(&ax.agent_default_prompts);
+                let default_prompts = ax.session_input_hints(agent_input_hints);
                 let default_prompt_idx = crate::default_prompts::clamp_active_index(
                     default_prompts.len(),
                     ax.default_prompt_idx,
@@ -2335,6 +2371,7 @@ pub fn view_column<'a, M: 'a + Clone>(
                     default_prompt_idx,
                     ax.default_prompts_pending,
                     &ax.obvious_chrome,
+                    auto_messages,
                     &ax.selection_pinned,
                     ax.selection_tentative.as_ref(),
                     block_highlights,

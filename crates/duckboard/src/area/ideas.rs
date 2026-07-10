@@ -189,6 +189,8 @@ pub fn update(
     message: Message,
     project: &ProjectData,
     highlighter: &SyntaxHighlighter,
+    agent_input_hints: bool,
+    auto_messages: bool,
 ) {
     match message {
         Message::AddIdea => {
@@ -278,7 +280,16 @@ pub fn update(
             }
         }
         Message::Interaction(msg) => {
-            handle_interaction(state, tabs, interactions, msg, project, highlighter);
+            handle_interaction(
+                state,
+                tabs,
+                interactions,
+                msg,
+                project,
+                highlighter,
+                agent_input_hints,
+                auto_messages,
+            );
         }
         Message::ScrollList(offset) => {
             state.list_scroll = offset;
@@ -425,6 +436,8 @@ fn handle_interaction(
     msg: interaction::Msg,
     project: &ProjectData,
     highlighter: &SyntaxHighlighter,
+    agent_input_hints: bool,
+    auto_messages: bool,
 ) {
     let Some(path) = state.selected.clone() else {
         return;
@@ -491,6 +504,8 @@ fn handle_interaction(
                 scope_kind,
                 project.project_root.as_deref(),
                 highlighter,
+                agent_input_hints,
+                auto_messages,
             );
         }
     }

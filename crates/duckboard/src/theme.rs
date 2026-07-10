@@ -421,7 +421,8 @@ pub const SPACING_XL: f32 = 24.0;
 
 pub const SIDEBAR_WIDTH: f32 = 48.0;
 pub const LIST_COLUMN_WIDTH: f32 = 260.0;
-pub const INTERACTION_COLUMN_WIDTH: f32 = 360.0;
+/// Default chat/terminal column width on a fresh interaction panel.
+pub const INTERACTION_COLUMN_WIDTH: f32 = 480.0;
 pub const BORDER_RADIUS: f32 = 4.0;
 
 // ── Custom theme ───────────────────────────────────────────────────────────

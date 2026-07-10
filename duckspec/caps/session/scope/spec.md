@@ -44,7 +44,7 @@ step is complete it SHALL report completion.
 - **AND** it suggests the apply stage as the next step
 
 > test: code
-> - crates/duckboard/src/area/change.rs:2347
+> - crates/duckboard/src/area/change.rs:2351
 
 ### Scenario: A change with only a proposal reports the design next-stage
 
@@ -53,7 +53,7 @@ step is complete it SHALL report completion.
 - **THEN** it suggests the design stage as the next step
 
 > test: code
-> - crates/duckboard/src/area/change.rs:2397
+> - crates/duckboard/src/area/change.rs:2401
 
 ### Scenario: A change with all steps complete reports completion and the archive next-stage
 
@@ -64,7 +64,7 @@ step is complete it SHALL report completion.
 - **AND** it suggests the archive stage as the next step
 
 > test: code
-> - crates/duckboard/src/area/change.rs:2365
+> - crates/duckboard/src/area/change.rs:2369
 
 ### Scenario: All steps complete with a review suggests the step next-stage
 
@@ -74,7 +74,7 @@ step is complete it SHALL report completion.
 - **THEN** it suggests the step stage as the next step
 
 > test: code
-> - crates/duckboard/src/area/change.rs:2382
+> - crates/duckboard/src/area/change.rs:2386
 
 ## Requirement: Non-change scope orientation
 
@@ -130,7 +130,7 @@ the same session.
 - **THEN** the orientation is part of the message body sent on that turn
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:661
+> - crates/duckboard/src/area/interaction.rs:671
 
 ### Scenario: Orientation is present when the project has no AGENTS.md
 
@@ -139,7 +139,7 @@ the same session.
 - **THEN** the orientation is part of the message body sent on that turn
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:678
+> - crates/duckboard/src/area/interaction.rs:688
 
 ### Scenario: A resumed session does not repeat the orientation
 
@@ -148,7 +148,7 @@ the same session.
 - **THEN** the orientation is not included again
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:698
+> - crates/duckboard/src/area/interaction.rs:708
 
 ## Requirement: Current review in orientation
 
@@ -173,7 +173,7 @@ reviews.
   `duckspec/changes/{name}/reviews/{filename}`
 
 > test: code
-> - crates/duckboard/src/area/change.rs:2421
+> - crates/duckboard/src/area/change.rs:2425
 
 ### Scenario: A change with no reviews reports no current review
 
@@ -182,7 +182,7 @@ reviews.
 - **THEN** it does not report a current review
 
 > test: code
-> - crates/duckboard/src/area/change.rs:2443
+> - crates/duckboard/src/area/change.rs:2447
 
 ### Scenario: Adding a review does not change reported step progress
 
@@ -192,4 +192,4 @@ reviews.
 - **THEN** both report the same step progress (done and total)
 
 > test: code
-> - crates/duckboard/src/area/change.rs:2458
+> - crates/duckboard/src/area/change.rs:2462

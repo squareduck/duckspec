@@ -3,8 +3,9 @@
 Lifecycle next-command as a greyed faux user bubble and ⌘↩ send path — independent of
 oneshot composer suggestions.
 
-Ranked lifecycle `/ds-*` action chips plus optional affirm and decline, with key-first
-labels and dual-purpose ⌘↩ — independent of oneshot composer suggestions.
+Auto messages: ranked lifecycle `/ds-*` action chips plus optional affirm and decline,
+with key-first labels and dual-purpose ⌘↩ — independent of under-input input hints, and
+shown only when the global auto messages setting is enabled (default on).
 
 ## Requirement: Ephemeral chrome
 
@@ -22,7 +23,7 @@ committed user messages in the session.
 - **THEN** it does not contain a user message whose sole purpose is the chrome chip
 
 > test: code
-> - crates/duckboard/src/obvious_bubble.rs:355
+> - crates/duckboard/src/obvious_bubble.rs:372
 
 ## Requirement: Lifecycle option formatting
 
@@ -40,7 +41,7 @@ Empty or blank skill names SHALL not produce a lifecycle send string.
 - **THEN** the send text is that name with a single leading `/`
 
 > test: code
-> - crates/duckboard/src/obvious_bubble.rs:169
+> - crates/duckboard/src/obvious_bubble.rs:174
 
 ### Scenario: Already-slashed command is preserved
 
@@ -49,7 +50,7 @@ Empty or blank skill names SHALL not produce a lifecycle send string.
 - **THEN** the send text equals the stored name
 
 > test: code
-> - crates/duckboard/src/obvious_bubble.rs:185
+> - crates/duckboard/src/obvious_bubble.rs:190
 
 ## Requirement: Chrome composition
 
@@ -97,7 +98,7 @@ Caps and codex scopes SHALL yield empty chrome.
 - **THEN** the lifecycle options are `/ds-archive` and `/ds-review` in that order
 
 > test: code
-> - crates/duckboard/src/area/change.rs:2223
+> - crates/duckboard/src/area/change.rs:2227
 
 ### Scenario: Nonempty change session includes Confirm and Reject
 
@@ -110,7 +111,7 @@ Caps and codex scopes SHALL yield empty chrome.
 - **AND** decline is present
 
 > test: code
-> - crates/duckboard/src/area/change.rs:2237
+> - crates/duckboard/src/area/change.rs:2241
 
 ### Scenario: Empty change session omits gate row
 
@@ -120,7 +121,7 @@ Caps and codex scopes SHALL yield empty chrome.
 - **AND** decline is absent
 
 > test: code
-> - crates/duckboard/src/area/change.rs:2311
+> - crates/duckboard/src/area/change.rs:2315
 
 ### Scenario: Archived dirty nonempty session yields Commit only
 
@@ -133,7 +134,7 @@ Caps and codex scopes SHALL yield empty chrome.
 - **AND** decline is absent
 
 > test: code
-> - crates/duckboard/src/area/change.rs:2321
+> - crates/duckboard/src/area/change.rs:2325
 
 ### Scenario: Empty exploration yields explore only
 
@@ -144,7 +145,7 @@ Caps and codex scopes SHALL yield empty chrome.
 - **AND** decline is absent
 
 > test: code
-> - crates/duckboard/src/area/change.rs:2336
+> - crates/duckboard/src/area/change.rs:2340
 
 ### Scenario: Nonempty exploration yields Create change only
 
@@ -155,7 +156,7 @@ Caps and codex scopes SHALL yield empty chrome.
 - **AND** decline is absent
 
 > test: code
-> - crates/duckboard/src/area/change.rs:2205
+> - crates/duckboard/src/area/change.rs:2209
 
 ### Scenario: Design without caps yields spec then step
 
@@ -164,7 +165,7 @@ Caps and codex scopes SHALL yield empty chrome.
 - **THEN** the lifecycle options are `/ds-spec` and `/ds-step` in that order
 
 > test: code
-> - crates/duckboard/src/area/change.rs:2193
+> - crates/duckboard/src/area/change.rs:2197
 
 ### Scenario: Caps without steps yield step then archive
 
@@ -173,7 +174,7 @@ Caps and codex scopes SHALL yield empty chrome.
 - **THEN** the lifecycle options are `/ds-step` and `/ds-archive` in that order
 
 > test: code
-> - crates/duckboard/src/area/change.rs:2181
+> - crates/duckboard/src/area/change.rs:2185
 
 ### Scenario: Open steps yield apply then review without gate
 
@@ -185,7 +186,7 @@ Caps and codex scopes SHALL yield empty chrome.
 - **AND** decline is absent
 
 > test: code
-> - crates/duckboard/src/area/change.rs:2251
+> - crates/duckboard/src/area/change.rs:2255
 
 ### Scenario: Open steps with review yield apply only with gate
 
@@ -197,7 +198,7 @@ Caps and codex scopes SHALL yield empty chrome.
 - **AND** decline is present
 
 > test: code
-> - crates/duckboard/src/area/change.rs:2267
+> - crates/duckboard/src/area/change.rs:2271
 
 ### Scenario: No open steps with review yield step then spec then archive with gate
 
@@ -215,65 +216,72 @@ Caps and codex scopes SHALL yield empty chrome.
 - **AND** decline is present
 
 > test: code
-> - crates/duckboard/src/area/change.rs:2288
+> - crates/duckboard/src/area/change.rs:2292
 
 ## Requirement: Chrome visibility
 
-Obvious chrome SHALL be shown only when all of the following hold: the main agent turn is
-not in progress, the composer input is empty, and the chrome is non-empty (at least one
-lifecycle option, affirm, or decline). A pending or settled oneshot for composer default
-prompts SHALL NOT hide the chrome when those gates hold. The chrome SHALL NOT be shown
-when any gate fails.
+Obvious chrome SHALL be shown only when all of the following hold: the global auto
+messages setting is enabled, the main agent turn is not in progress, the composer input is
+empty, and the chrome is non-empty (at least one lifecycle option, affirm, or decline).
+The auto messages setting SHALL default to enabled. When auto messages is disabled, the
+chrome SHALL NOT be shown even if the other gates would allow it. A pending or settled
+oneshot for under-input input hints SHALL NOT hide the chrome when those gates hold. The
+chrome SHALL NOT be shown when any gate fails.
 
 > test: code
 
 ### Scenario: Idle empty composer with chrome shows chrome
 
-- **GIVEN** non-empty obvious chrome for the session
+- **GIVEN** auto messages enabled
+- **AND** non-empty obvious chrome for the session
 - **AND** an empty composer input
 - **AND** no main agent turn in progress
 - **WHEN** chrome visibility is evaluated
 - **THEN** the chrome is shown
 
 > test: code
-> - crates/duckboard/src/obvious_bubble.rs:197
+> - crates/duckboard/src/obvious_bubble.rs:202
 
 ### Scenario: Streaming hides chrome
 
-- **GIVEN** non-empty obvious chrome for the session
+- **GIVEN** auto messages enabled
+- **AND** non-empty obvious chrome for the session
 - **AND** an empty composer input
 - **AND** a main agent turn in progress
 - **WHEN** chrome visibility is evaluated
 - **THEN** the chrome is not shown
 
 > test: code
-> - crates/duckboard/src/obvious_bubble.rs:207
+> - crates/duckboard/src/obvious_bubble.rs:210
 
 ### Scenario: Non-empty composer hides chrome
 
-- **GIVEN** non-empty obvious chrome for the session
+- **GIVEN** auto messages enabled
+- **AND** non-empty obvious chrome for the session
 - **AND** a non-empty composer input
 - **AND** no main agent turn in progress
 - **WHEN** chrome visibility is evaluated
 - **THEN** the chrome is not shown
 
 > test: code
-> - crates/duckboard/src/obvious_bubble.rs:214
+> - crates/duckboard/src/obvious_bubble.rs:217
 
 ### Scenario: Empty chrome is hidden
 
-- **GIVEN** empty obvious chrome for the session
+- **GIVEN** auto messages enabled
+- **AND** empty obvious chrome for the session
 - **AND** an empty composer input
 - **AND** no main agent turn in progress
 - **WHEN** chrome visibility is evaluated
 - **THEN** the chrome is not shown
 
 > test: code
-> - crates/duckboard/src/obvious_bubble.rs:221
+> - crates/duckboard/src/obvious_bubble.rs:224
 
 ### Scenario: Oneshot pending does not hide chrome when otherwise visible
 
-- **GIVEN** non-empty obvious chrome for the session
+- **GIVEN** auto messages enabled
+- **AND** non-empty obvious chrome for the session
 - **AND** an empty composer input
 - **AND** no main agent turn in progress
 - **AND** a pending reply-suggestion oneshot
@@ -281,7 +289,28 @@ when any gate fails.
 - **THEN** the chrome is shown
 
 > test: code
-> - crates/duckboard/src/obvious_bubble.rs:229
+> - crates/duckboard/src/obvious_bubble.rs:232
+
+### Scenario: Auto messages disabled hides chrome
+
+- **GIVEN** auto messages disabled
+- **AND** non-empty obvious chrome for the session
+- **AND** an empty composer input
+- **AND** no main agent turn in progress
+- **WHEN** chrome visibility is evaluated
+- **THEN** the chrome is not shown
+
+> test: code
+> - crates/duckboard/src/obvious_bubble.rs:240
+
+### Scenario: Default auto messages setting is enabled
+
+- **GIVEN** application config defaults
+- **WHEN** the auto messages setting is read
+- **THEN** it is enabled
+
+> test: code
+> - crates/duckboard/src/config.rs:256
 
 ## Requirement: Key resolution
 
@@ -307,7 +336,7 @@ default-prompt list, even when that list is non-empty and differs.
 - **AND** the send text is not a lifecycle option
 
 > test: code
-> - crates/duckboard/src/obvious_bubble.rs:237
+> - crates/duckboard/src/obvious_bubble.rs:252
 
 ### Scenario: Cmd-Enter sends first lifecycle when affirm absent
 
@@ -317,7 +346,7 @@ default-prompt list, even when that list is non-empty and differs.
 - **THEN** the send text equals the first lifecycle option
 
 > test: code
-> - crates/duckboard/src/obvious_bubble.rs:247
+> - crates/duckboard/src/obvious_bubble.rs:262
 
 ### Scenario: Cmd-Backspace sends Reject when decline set
 
@@ -326,7 +355,7 @@ default-prompt list, even when that list is non-empty and differs.
 - **THEN** the send text is `Reject`
 
 > test: code
-> - crates/duckboard/src/obvious_bubble.rs:255
+> - crates/duckboard/src/obvious_bubble.rs:270
 
 ### Scenario: Cmd-digit sends matching lifecycle option
 
@@ -335,7 +364,7 @@ default-prompt list, even when that list is non-empty and differs.
 - **THEN** the send text equals the second lifecycle option
 
 > test: code
-> - crates/duckboard/src/obvious_bubble.rs:263
+> - crates/duckboard/src/obvious_bubble.rs:279
 
 ### Scenario: Resolution is a no-op when chrome not visible
 
@@ -344,7 +373,7 @@ default-prompt list, even when that list is non-empty and differs.
 - **THEN** there is no send text
 
 > test: code
-> - crates/duckboard/src/obvious_bubble.rs:271
+> - crates/duckboard/src/obvious_bubble.rs:288
 
 ### Scenario: Resolved text ignores oneshot list when both differ
 
@@ -356,7 +385,7 @@ default-prompt list, even when that list is non-empty and differs.
 - **AND** the send text is not B
 
 > test: code
-> - crates/duckboard/src/obvious_bubble.rs:298
+> - crates/duckboard/src/obvious_bubble.rs:315
 
 ## Requirement: Chip display
 
@@ -376,7 +405,7 @@ binding before the action text (lifecycle: `⌘` plus 1-based index; affirm: `�
 - **AND** the send text is exactly `/ds-step`
 
 > test: code
-> - crates/duckboard/src/obvious_bubble.rs:313
+> - crates/duckboard/src/obvious_bubble.rs:330
 
 ### Scenario: Affirm chip label is hotkey then Confirm, Commit, or Create change
 
@@ -387,4 +416,4 @@ binding before the action text (lifecycle: `⌘` plus 1-based index; affirm: `�
 - **AND** the send text is exactly `Create change`
 
 > test: code
-> - crates/duckboard/src/obvious_bubble.rs:325
+> - crates/duckboard/src/obvious_bubble.rs:342

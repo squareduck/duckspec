@@ -60,13 +60,15 @@ pub fn chrome_is_empty(chrome: &ObviousChrome) -> bool {
     chrome.lifecycle.is_empty() && chrome.affirm.is_none() && !chrome.decline
 }
 
-/// Idle + empty composer + non-empty chrome. Oneshot pending is not a gate.
+/// Idle + empty composer + non-empty chrome + auto messages on.
+/// Oneshot pending is not a gate.
 pub fn chrome_visible(
     is_streaming: bool,
     input_empty: bool,
     chrome: &ObviousChrome,
+    auto_messages: bool,
 ) -> bool {
-    !is_streaming && input_empty && !chrome_is_empty(chrome)
+    auto_messages && !is_streaming && input_empty && !chrome_is_empty(chrome)
 }
 
 /// ⌘↩ target (ignores visibility): affirm if present, else lifecycle[0].
@@ -99,8 +101,9 @@ pub fn resolve_cmd_enter_when_visible(
     is_streaming: bool,
     input_empty: bool,
     chrome: &ObviousChrome,
+    auto_messages: bool,
 ) -> Option<String> {
-    if !chrome_visible(is_streaming, input_empty, chrome) {
+    if !chrome_visible(is_streaming, input_empty, chrome, auto_messages) {
         return None;
     }
     resolve_cmd_enter(chrome)
@@ -111,8 +114,9 @@ pub fn resolve_cmd_backspace_when_visible(
     is_streaming: bool,
     input_empty: bool,
     chrome: &ObviousChrome,
+    auto_messages: bool,
 ) -> Option<String> {
-    if !chrome_visible(is_streaming, input_empty, chrome) {
+    if !chrome_visible(is_streaming, input_empty, chrome, auto_messages) {
         return None;
     }
     resolve_cmd_backspace(chrome)
@@ -123,9 +127,10 @@ pub fn resolve_cmd_digit_when_visible(
     is_streaming: bool,
     input_empty: bool,
     chrome: &ObviousChrome,
+    auto_messages: bool,
     digit: u8,
 ) -> Option<String> {
-    if !chrome_visible(is_streaming, input_empty, chrome) {
+    if !chrome_visible(is_streaming, input_empty, chrome, auto_messages) {
         return None;
     }
     resolve_cmd_digit(chrome, digit)
@@ -197,25 +202,23 @@ mod tests {
     // @spec chat/obvious-bubble Chrome visibility: Idle empty composer with chrome shows chrome
     #[test]
     fn idle_empty_composer_with_chrome_shows_chrome() {
-        // GIVEN non-empty obvious chrome, empty composer, no main turn
-        // WHEN chrome visibility is evaluated
-        // THEN the chrome is shown
+        // GIVEN auto messages enabled + non-empty chrome, empty composer, no main turn
         let chrome = sample_lifecycle_chrome();
-        assert!(chrome_visible(false, true, &chrome));
+        assert!(chrome_visible(false, true, &chrome, true));
     }
 
     // @spec chat/obvious-bubble Chrome visibility: Streaming hides chrome
     #[test]
     fn streaming_hides_chrome() {
         let chrome = sample_lifecycle_chrome();
-        assert!(!chrome_visible(true, true, &chrome));
+        assert!(!chrome_visible(true, true, &chrome, true));
     }
 
     // @spec chat/obvious-bubble Chrome visibility: Non-empty composer hides chrome
     #[test]
     fn non_empty_composer_hides_chrome() {
         let chrome = sample_lifecycle_chrome();
-        assert!(!chrome_visible(false, false, &chrome));
+        assert!(!chrome_visible(false, false, &chrome, true));
     }
 
     // @spec chat/obvious-bubble Chrome visibility: Empty chrome is hidden
@@ -223,23 +226,35 @@ mod tests {
     fn empty_chrome_is_hidden() {
         let chrome = ObviousChrome::default();
         assert!(chrome_is_empty(&chrome));
-        assert!(!chrome_visible(false, true, &chrome));
+        assert!(!chrome_visible(false, true, &chrome, true));
     }
 
     // @spec chat/obvious-bubble Chrome visibility: Oneshot pending does not hide chrome when otherwise visible
     #[test]
     fn oneshot_pending_does_not_hide_chrome_when_otherwise_visible() {
-        // Oneshot state is not a visibility parameter — idle/empty/chrome gates only.
+        // Oneshot state is not a visibility parameter — auto/idle/empty/chrome only.
         let chrome = sample_lifecycle_chrome();
-        assert!(chrome_visible(false, true, &chrome));
+        assert!(chrome_visible(false, true, &chrome, true));
+    }
+
+    // @spec chat/obvious-bubble Chrome visibility: Auto messages disabled hides chrome
+    #[test]
+    fn auto_messages_disabled_hides_chrome() {
+        // GIVEN auto messages disabled + otherwise visible conditions
+        let chrome = sample_lifecycle_chrome();
+        assert!(!chrome_visible(false, true, &chrome, false));
+        assert_eq!(
+            resolve_cmd_enter_when_visible(false, true, &chrome, false),
+            None
+        );
     }
 
     // @spec chat/obvious-bubble Key resolution: Cmd-Enter sends affirm when present
     #[test]
     fn cmd_enter_sends_affirm_when_present() {
         let chrome = sample_gate_chrome();
-        assert!(chrome_visible(false, true, &chrome));
-        let sent = resolve_cmd_enter_when_visible(false, true, &chrome).expect("visible");
+        assert!(chrome_visible(false, true, &chrome, true));
+        let sent = resolve_cmd_enter_when_visible(false, true, &chrome, true).expect("visible");
         assert_eq!(sent, "Confirm");
         assert!(!chrome.lifecycle.contains(&sent));
     }
@@ -248,7 +263,7 @@ mod tests {
     #[test]
     fn cmd_enter_sends_first_lifecycle_when_affirm_absent() {
         let chrome = sample_lifecycle_chrome();
-        let sent = resolve_cmd_enter_when_visible(false, true, &chrome).expect("visible");
+        let sent = resolve_cmd_enter_when_visible(false, true, &chrome, true).expect("visible");
         assert_eq!(sent, "/ds-step");
     }
 
@@ -256,7 +271,8 @@ mod tests {
     #[test]
     fn cmd_backspace_sends_reject_when_decline_set() {
         let chrome = sample_gate_chrome();
-        let sent = resolve_cmd_backspace_when_visible(false, true, &chrome).expect("visible");
+        let sent =
+            resolve_cmd_backspace_when_visible(false, true, &chrome, true).expect("visible");
         assert_eq!(sent, "Reject");
     }
 
@@ -264,7 +280,8 @@ mod tests {
     #[test]
     fn cmd_digit_sends_matching_lifecycle_option() {
         let chrome = sample_lifecycle_chrome();
-        let sent = resolve_cmd_digit_when_visible(false, true, &chrome, 2).expect("visible");
+        let sent =
+            resolve_cmd_digit_when_visible(false, true, &chrome, true, 2).expect("visible");
         assert_eq!(sent, "/ds-spec");
     }
 
@@ -273,24 +290,24 @@ mod tests {
     fn resolution_is_a_no_op_when_chrome_not_visible() {
         let chrome = sample_gate_chrome();
         assert_eq!(
-            resolve_cmd_enter_when_visible(true, true, &chrome),
+            resolve_cmd_enter_when_visible(true, true, &chrome, true),
             None
         );
         assert_eq!(
-            resolve_cmd_backspace_when_visible(true, true, &chrome),
+            resolve_cmd_backspace_when_visible(true, true, &chrome, true),
             None
         );
         assert_eq!(
-            resolve_cmd_digit_when_visible(true, true, &chrome, 1),
+            resolve_cmd_digit_when_visible(true, true, &chrome, true, 1),
             None
         );
         assert_eq!(
-            resolve_cmd_enter_when_visible(false, false, &chrome),
+            resolve_cmd_enter_when_visible(false, false, &chrome, true),
             None
         );
         let empty = ObviousChrome::default();
         assert_eq!(
-            resolve_cmd_enter_when_visible(false, true, &empty),
+            resolve_cmd_enter_when_visible(false, true, &empty, true),
             None
         );
     }
@@ -305,7 +322,7 @@ mod tests {
             decline: false,
         };
         let oneshot_active = "/ds-review";
-        let sent = resolve_cmd_enter_when_visible(false, true, &chrome).expect("visible");
+        let sent = resolve_cmd_enter_when_visible(false, true, &chrome, true).expect("visible");
         assert_eq!(sent, "/ds-archive");
         assert_ne!(sent, oneshot_active);
     }
@@ -360,7 +377,7 @@ mod tests {
         use crate::chat_store::{ChatSession, ContentBlock, Role};
 
         let chrome = sample_lifecycle_chrome();
-        assert!(chrome_visible(false, true, &chrome));
+        assert!(chrome_visible(false, true, &chrome, true));
         let action = resolve_cmd_enter(&chrome).expect("lifecycle");
 
         let session = ChatSession::new("change".into());

@@ -18,6 +18,18 @@ pub struct Config {
     /// the built-in default. Legacy bare-string values load as the
     /// `claude-code` harness via `ModelRef`'s deserialize shim.
     pub model_defaults: HashMap<String, ModelRef>,
+    /// Chat affordances: under-input agent hints and auto-message chips.
+    pub chat: ChatConfig,
+}
+
+/// Global chat UI flags (all projects / instances).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ChatConfig {
+    /// Under-input agent (oneshot) suggestions after a turn. Default off.
+    pub agent_input_hints: bool,
+    /// Obvious lifecycle / affirm / decline chip chrome + ⌘ bindings. Default on.
+    pub auto_messages: bool,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -50,6 +62,16 @@ impl Default for Config {
             },
             projects: ProjectsConfig::default(),
             model_defaults: HashMap::new(),
+            chat: ChatConfig::default(),
+        }
+    }
+}
+
+impl Default for ChatConfig {
+    fn default() -> Self {
+        Self {
+            agent_input_hints: false,
+            auto_messages: true,
         }
     }
 }
@@ -215,4 +237,36 @@ pub fn list_system_fonts() -> Vec<String> {
     families.sort_unstable();
     families.dedup();
     families
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // @spec chat/default-prompts Agent input hints gate: Default agent input hints setting is disabled
+    #[test]
+    fn default_agent_input_hints_setting_is_disabled() {
+        // GIVEN application config defaults
+        // WHEN the agent input hints setting is read
+        // THEN it is disabled
+        assert!(!Config::default().chat.agent_input_hints);
+        assert!(!ChatConfig::default().agent_input_hints);
+    }
+
+    // @spec chat/obvious-bubble Chrome visibility: Default auto messages setting is enabled
+    #[test]
+    fn default_auto_messages_setting_is_enabled() {
+        // GIVEN application config defaults
+        // WHEN the auto messages setting is read
+        // THEN it is enabled
+        assert!(Config::default().chat.auto_messages);
+        assert!(ChatConfig::default().auto_messages);
+    }
+
+    #[test]
+    fn missing_chat_table_deserializes_to_defaults() {
+        let cfg: Config = toml::from_str("").expect("empty toml");
+        assert!(!cfg.chat.agent_input_hints);
+        assert!(cfg.chat.auto_messages);
+    }
 }

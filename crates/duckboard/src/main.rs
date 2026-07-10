@@ -923,7 +923,9 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                         area::change::Message::SelectChange(name.clone()),
                         &state.project,
                         &state.highlighter,
-                    );
+                        state.config.chat.agent_input_hints,
+                        state.config.chat.auto_messages,
+                        );
                     return restore_chat_scroll(state);
                 }
                 area::dashboard::Message::AddExploration => {
@@ -935,7 +937,9 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                         area::change::Message::AddExploration,
                         &state.project,
                         &state.highlighter,
-                    );
+                        state.config.chat.agent_input_hints,
+                        state.config.chat.auto_messages,
+                        );
                     return Task::batch([restore_chat_scroll(state), focus_chat_input()]);
                 }
                 area::dashboard::Message::SelectAuditError {
@@ -953,7 +957,9 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                         },
                         &state.project,
                         &state.highlighter,
-                    );
+                        state.config.chat.agent_input_hints,
+                        state.config.chat.auto_messages,
+                        );
                     return restore_chat_scroll(state);
                 }
                 area::dashboard::Message::HoverRecent(path) => {
@@ -1003,7 +1009,9 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                             area::ideas::Message::SelectIdea(idea_path),
                             &state.project,
                             &state.highlighter,
-                        );
+                            state.config.chat.agent_input_hints,
+                            state.config.chat.auto_messages,
+                            );
                         return restore_chat_scroll(state);
                     }
                 }
@@ -1032,7 +1040,9 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                         msg,
                         &state.project,
                         &state.highlighter,
-                    );
+                        state.config.chat.agent_input_hints,
+                        state.config.chat.auto_messages,
+                        );
                     if needs_focus {
                         return focus_chat_input();
                     }
@@ -1060,7 +1070,9 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                 msg,
                 &state.project,
                 &state.highlighter,
-            );
+                state.config.chat.agent_input_hints,
+                state.config.chat.auto_messages,
+                );
             if needs_focus {
                 return focus_chat_input();
             }
@@ -1075,7 +1087,9 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                 msg,
                 &state.project,
                 &state.highlighter,
-            );
+                state.config.chat.agent_input_hints,
+                state.config.chat.auto_messages,
+                );
             if needs_focus {
                 return focus_chat_input();
             }
@@ -1143,7 +1157,9 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                     area::ideas::Message::SelectIdea(new_path),
                     &state.project,
                     &state.highlighter,
-                );
+                    state.config.chat.agent_input_hints,
+                    state.config.chat.auto_messages,
+                    );
                 // SelectIdea spawns the exploration session with
                 // empty chrome; refresh so the chat input renders lifecycle
                 // chrome (mirrors ideas.rs).
@@ -1187,7 +1203,9 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                     area::change::Message::SelectChange(canonical),
                     &state.project,
                     &state.highlighter,
-                );
+                    state.config.chat.agent_input_hints,
+                    state.config.chat.auto_messages,
+                    );
                 return restore_chat_scroll(state);
             }
             // Chip click: shift held → promote to primary; otherwise open
@@ -1214,7 +1232,9 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                 msg,
                 &state.project,
                 &state.highlighter,
-            );
+                state.config.chat.agent_input_hints,
+                state.config.chat.auto_messages,
+                );
             if focus_tag_input {
                 return iced::widget::operation::focus(area::ideas::TAG_INPUT_ID);
             }
@@ -1386,6 +1406,8 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
             // SessionNotFound (or stringified equivalent): clear the dead id and
             // re-dispatch after this block so we can borrow `highlighter`.
             let mut recover_lost_session = false;
+            // Copy before mutably borrowing the session (config lives on `state`).
+            let agent_input_hints = state.config.chat.agent_input_hints;
             {
                 let Some(ax) = state.agent_session_mut(&key) else {
                     return Task::none();
@@ -1498,37 +1520,43 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                                 ax.idea_description.clone(),
                             ));
                         }
-                        // Reply-suggestion oneshot: every non-priming turn.
-                        if !was_priming
-                            && let Some(handle) = ax.agent_handle.clone()
-                            && let Some((assistant, user)) =
-                                default_prompts::last_assistant_and_user(&ax.session)
+                        // Reply-suggestion oneshot: gated by agent input hints.
+                        if let Some((assistant, user)) =
+                            default_prompts::last_assistant_and_user(&ax.session)
                         {
-                            ax.begin_default_prompts_oneshot();
-                            let prompts_gen = ax.default_prompts_gen;
-                            let cmds: Vec<String> =
-                                ax.chat_commands.iter().map(|c| c.name.clone()).collect();
-                            // Soft hint: first lifecycle option (bare name),
-                            // matching orientation next_command — never the
-                            // oneshot composer list seed.
-                            let heuristic = ax
-                                .obvious_chrome
-                                .lifecycle
-                                .first()
-                                .map(|s| s.trim_start_matches('/').to_string())
-                                .or_else(|| {
-                                    ax.scope_facts
-                                        .as_ref()
-                                        .and_then(|f| f.next_command.clone())
-                                });
-                            reply_task_input = Some((
-                                handle,
-                                assistant,
-                                user,
-                                cmds,
-                                heuristic,
-                                prompts_gen,
-                            ));
+                            let has_assistant = !assistant.trim().is_empty();
+                            if default_prompts::should_begin_reply_oneshot(
+                                agent_input_hints,
+                                was_priming,
+                                has_assistant,
+                            ) && let Some(handle) = ax.agent_handle.clone()
+                            {
+                                ax.begin_default_prompts_oneshot();
+                                let prompts_gen = ax.default_prompts_gen;
+                                let cmds: Vec<String> =
+                                    ax.chat_commands.iter().map(|c| c.name.clone()).collect();
+                                // Soft hint: first lifecycle option (bare name),
+                                // matching orientation next_command — never the
+                                // oneshot composer list seed.
+                                let heuristic = ax
+                                    .obvious_chrome
+                                    .lifecycle
+                                    .first()
+                                    .map(|s| s.trim_start_matches('/').to_string())
+                                    .or_else(|| {
+                                        ax.scope_facts
+                                            .as_ref()
+                                            .and_then(|f| f.next_command.clone())
+                                    });
+                                reply_task_input = Some((
+                                    handle,
+                                    assistant,
+                                    user,
+                                    cmds,
+                                    heuristic,
+                                    prompts_gen,
+                                ));
+                            }
                         }
                     }
                     AgentEvent::Error(msg) => {
@@ -2301,8 +2329,16 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                 (active_info, &active_key)
             {
                 // Agent chat keyboard shortcuts (completion, esc-cancel, enter-send).
+                let agent_input_hints = state.config.chat.agent_input_hints;
+                let auto_messages = state.config.chat.auto_messages;
                 if agent_chat_active && let Some(ix) = state.interaction_mut(routing_key) {
-                    match interaction::handle_agent_chat_key(ix, &key, mods) {
+                    match interaction::handle_agent_chat_key(
+                        ix,
+                        &key,
+                        mods,
+                        agent_input_hints,
+                        auto_messages,
+                    ) {
                         interaction::AgentChatKeyResult::Handled => return Task::none(),
                         interaction::AgentChatKeyResult::Dispatch(msg) => {
                             // Tab-cycling defaults should leave the caret in the
@@ -4349,7 +4385,9 @@ fn route_interaction(state: &mut State, msg: interaction::Msg) -> Task<Message> 
                 area::change::Message::Interaction(msg),
                 &state.project,
                 &state.highlighter,
-            );
+                state.config.chat.agent_input_hints,
+                state.config.chat.auto_messages,
+                );
         }
         Area::Caps => {
             let ix = state.interactions.entry(scope::Scope::Caps).or_default();
@@ -4360,7 +4398,9 @@ fn route_interaction(state: &mut State, msg: interaction::Msg) -> Task<Message> 
                 area::caps::Message::Interaction(msg),
                 &state.project,
                 &state.highlighter,
-            );
+                state.config.chat.agent_input_hints,
+                state.config.chat.auto_messages,
+                );
         }
         Area::Codex => {
             let ix = state.interactions.entry(scope::Scope::Codex).or_default();
@@ -4371,7 +4411,9 @@ fn route_interaction(state: &mut State, msg: interaction::Msg) -> Task<Message> 
                 area::codex::Message::Interaction(msg),
                 &state.project,
                 &state.highlighter,
-            );
+                state.config.chat.agent_input_hints,
+                state.config.chat.auto_messages,
+                );
         }
         Area::Ideas => {
             area::ideas::update(
@@ -4381,7 +4423,9 @@ fn route_interaction(state: &mut State, msg: interaction::Msg) -> Task<Message> 
                 area::ideas::Message::Interaction(msg),
                 &state.project,
                 &state.highlighter,
-            );
+                state.config.chat.agent_input_hints,
+                state.config.chat.auto_messages,
+                );
         }
         Area::Dashboard | Area::Settings => {}
     }
@@ -4934,7 +4978,15 @@ fn view_area_three_column(state: &State) -> Element<'_, Message> {
                 .map(|fs| widget::find::view_toolbar(target.clone(), fs).map(Message::Find))
         });
         let interaction_col =
-            interaction::view_column(ix, Message::Interaction, controls, block_hl, find_toolbar);
+            interaction::view_column(
+            ix,
+            Message::Interaction,
+            controls,
+            block_hl,
+            find_toolbar,
+            state.config.chat.agent_input_hints,
+            state.config.chat.auto_messages,
+        );
         let col = container(interaction_col)
             .height(Length::Fill)
             .style(theme::surface);

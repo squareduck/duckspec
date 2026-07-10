@@ -1,10 +1,8 @@
-//! Pure helpers for conversation-local empty-input default prompts.
+//! Pure helpers for conversation-local empty-input default prompts (input hints).
 //!
-//! The effective list is only a settled non-empty oneshot parse. The lifecycle
-//! heuristic is not a list entry (it remains a soft oneshot request hint and
-//! empty-send formatting helper for the obvious bubble). Helpers drive empty-
-//! submit / Tab-cycle selection without touching the composer buffer, gated on
-//! oneshot readiness.
+//! Empty session: single entry from first lifecycle option when present.
+//! Non-empty session: settled oneshot parse only when agent input hints are on.
+//! Helpers drive empty-submit / Tab-cycle without touching the composer buffer.
 
 use crate::chat_store::{ChatMessage, ChatSession, ContentBlock, Role};
 
@@ -12,7 +10,7 @@ use crate::chat_store::{ChatMessage, ChatSession, ContentBlock, Role};
 ///
 /// Shares empty-send formatting with [`crate::obvious_bubble::bubble_send_text`].
 /// Used for oneshot soft-hint display and any remaining send-form callers — **not**
-/// for the composer default-prompt list.
+/// for the composer default-prompt list on non-empty sessions.
 pub fn heuristic_as_prompts(obvious_command: Option<&str>) -> Vec<String> {
     match crate::obvious_bubble::bubble_send_text(obvious_command) {
         Some(text) => vec![text],
@@ -20,14 +18,49 @@ pub fn heuristic_as_prompts(obvious_command: Option<&str>) -> Vec<String> {
     }
 }
 
-/// Effective empty-composer defaults: non-empty oneshot parse only (order
-/// preserved). Empty when no non-empty parse is armed.
-pub fn effective_prompts(oneshot_replies: &[String]) -> Vec<String> {
+/// Trim and drop empties from a oneshot parse (order preserved). Used when
+/// storing settled oneshot results; list *selection* goes through
+/// [`effective_prompts`].
+pub fn oneshot_replies_trimmed(oneshot_replies: &[String]) -> Vec<String> {
     oneshot_replies
         .iter()
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
         .collect()
+}
+
+/// Build the under-input list for the empty composer.
+///
+/// - Empty session: single entry from first lifecycle (empty-send form), or empty.
+/// - Non-empty + agent hints on: settled oneshot parse only (no disk merge).
+/// - Non-empty + agent hints off: empty.
+pub fn effective_prompts(
+    session_empty: bool,
+    first_lifecycle: Option<&str>,
+    oneshot_replies: &[String],
+    agent_input_hints: bool,
+) -> Vec<String> {
+    if session_empty {
+        return crate::obvious_bubble::bubble_send_text(first_lifecycle)
+            .into_iter()
+            .collect();
+    }
+    if !agent_input_hints {
+        return Vec::new();
+    }
+    oneshot_replies_trimmed(oneshot_replies)
+}
+
+/// Whether a reply-suggestion oneshot may start after a turn.
+///
+/// Requires agent input hints enabled, a non-priming turn, and a non-empty
+/// last assistant message (caller has already resolved assistant text).
+pub fn should_begin_reply_oneshot(
+    agent_input_hints: bool,
+    was_priming: bool,
+    has_assistant_text: bool,
+) -> bool {
+    agent_input_hints && !was_priming && has_assistant_text
 }
 
 /// Text to send on empty-composer submit when suggestions are ready, or
@@ -62,7 +95,7 @@ pub fn apply_oneshot_if_current(
         return None;
     }
     Some(match result {
-        Ok(list) => effective_prompts(&list),
+        Ok(list) => oneshot_replies_trimmed(&list),
         Err(_) => Vec::new(),
     })
 }
@@ -171,12 +204,13 @@ mod tests {
     // @spec chat/default-prompts Effective default-prompt list: Parsed replies are the effective list in order
     #[test]
     fn parsed_replies_are_the_effective_list_in_order() {
+        // GIVEN a non-empty session transcript + agent input hints enabled
         let agent = vec![
             "/ds-spec".into(),
             "yes, continue".into(),
             "no, skip".into(),
         ];
-        let got = effective_prompts(&agent);
+        let got = effective_prompts(false, Some("ds-propose"), &agent, true);
         assert_eq!(
             got,
             vec!["/ds-spec", "yes, continue", "no, skip"]
@@ -186,22 +220,73 @@ mod tests {
     // @spec chat/default-prompts Effective default-prompt list: No non-empty oneshot result yields an empty list
     #[test]
     fn no_non_empty_oneshot_result_yields_an_empty_list() {
-        // GIVEN a session with no settled non-empty oneshot result
-        let got = effective_prompts(&[]);
+        // GIVEN a non-empty session, agent hints on, no settled non-empty oneshot
+        let got = effective_prompts(false, Some("ds-propose"), &[], true);
         assert!(got.is_empty());
     }
 
     // @spec chat/default-prompts Effective default-prompt list: Failed or empty oneshot yields an empty list even with a heuristic
     #[test]
     fn failed_or_empty_oneshot_yields_an_empty_list_even_with_a_heuristic() {
-        // Settled empty parse — list empty (heuristic is not a list entry).
+        // GIVEN non-empty session, agent on, settled empty/fail, first lifecycle present
         let got = apply_oneshot_if_current(1, 1, Ok(vec![])).expect("matching gen applies");
         assert!(got.is_empty());
+        let effective = effective_prompts(false, Some("ds-propose"), &got, true);
+        assert!(effective.is_empty());
 
-        // Settled error — same empty list.
         let got =
             apply_oneshot_if_current(1, 1, Err("boom".into())).expect("matching gen applies");
         assert!(got.is_empty());
+        let effective = effective_prompts(false, Some("/ds-explore"), &got, true);
+        assert!(effective.is_empty());
+    }
+
+    // @spec chat/default-prompts Effective default-prompt list: Empty session seeds first lifecycle
+    #[test]
+    fn empty_session_seeds_first_lifecycle() {
+        // GIVEN empty transcript + first lifecycle in empty-send form
+        let got = effective_prompts(true, Some("/ds-explore"), &[], false);
+        assert_eq!(got, vec!["/ds-explore"]);
+        // Bare name also formats.
+        let got = effective_prompts(true, Some("ds-propose"), &[], true);
+        assert_eq!(got, vec!["/ds-propose"]);
+    }
+
+    // @spec chat/default-prompts Effective default-prompt list: Empty session without lifecycle yields empty
+    #[test]
+    fn empty_session_without_lifecycle_yields_empty() {
+        let got = effective_prompts(true, None, &[], false);
+        assert!(got.is_empty());
+        let got = effective_prompts(true, Some("  "), &[], true);
+        assert!(got.is_empty());
+    }
+
+    // @spec chat/default-prompts Effective default-prompt list: Non-empty session with agent hints disabled yields empty despite oneshot
+    #[test]
+    fn non_empty_session_with_agent_hints_disabled_yields_empty_despite_oneshot() {
+        let oneshot = vec!["/ds-spec".into(), "yes".into()];
+        let got = effective_prompts(false, Some("ds-propose"), &oneshot, false);
+        assert!(got.is_empty());
+    }
+
+    // @spec chat/default-prompts Effective default-prompt list: Empty session ignores oneshot results
+    #[test]
+    fn empty_session_ignores_oneshot_results() {
+        let oneshot = vec!["something else".into(), "and another".into()];
+        let got = effective_prompts(true, Some("/ds-explore"), &oneshot, true);
+        assert_eq!(got, vec!["/ds-explore"]);
+    }
+
+    // @spec chat/default-prompts Agent input hints gate: Oneshot launch requires agent input hints enabled
+    #[test]
+    fn oneshot_launch_requires_agent_input_hints_enabled() {
+        // GIVEN agent input hints disabled + non-priming turn that would qualify
+        assert!(!should_begin_reply_oneshot(false, false, true));
+        // Enabled + non-priming + assistant → may start
+        assert!(should_begin_reply_oneshot(true, false, true));
+        // Priming or missing assistant still blocks
+        assert!(!should_begin_reply_oneshot(true, true, true));
+        assert!(!should_begin_reply_oneshot(true, false, false));
     }
 
     // @spec chat/default-prompts Empty-input send and cycle: Empty submit sends the active prompt

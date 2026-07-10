@@ -3,8 +3,9 @@
 Lifecycle next-command as a greyed faux user bubble and ⌘↩ send path — independent of
 oneshot composer suggestions.
 
-Ranked lifecycle `/ds-*` action chips plus optional affirm and decline, with key-first
-labels and dual-purpose ⌘↩ — independent of oneshot composer suggestions.
+**Auto messages:** ranked lifecycle `/ds-*` action chips plus optional affirm and decline,
+with key-first labels and dual-purpose ⌘↩ — independent of under-input input hints, and
+shown only when the global auto messages setting is enabled (default on).
 
 ## Surfaces
 
@@ -13,31 +14,36 @@ Two empty-composer affordances stay separate:
 ```
 disk phase + session empty? + VCS dirty
         │
-        ├── obvious chrome chips + keys / click  ──▶ send action text
+        ├── auto messages ON
+        │     obvious chrome chips + keys / click  ──▶ send action text
         │
-        └── soft hint (first lifecycle only) ──▶ oneshot ──▶ composer list
-                                                      (empty Enter / Tab)
+        └── first lifecycle (empty session)
+              or agent oneshot (non-empty, agent hints ON)
+                    ──▶ under-input input hints (empty Enter / Tab)
 ```
 
-Chrome never shows oneshot `REPLY:` lines. The composer list never shows lifecycle options
-unless the oneshot happens to emit the same text.
+Chrome never shows oneshot `REPLY:` lines. Under-input input hints on an empty session may
+show the first lifecycle option so empty Enter works without chips; that list is owned by
+the input-hints path, not by auto messages. When auto messages is off, chips and chrome
+hotkeys are fully dark; empty-session under-input seed is unaffected.
 
 Chips are action affordances (hotkey then action), not faux user messages.
 
 ## Visibility
 
 ```
-| Condition                              | Chrome   |
-|----------------------------------------|----------|
-| Main turn streaming                    | Hidden   |
-| Composer non-empty                     | Hidden   |
-| Empty chrome                           | Hidden   |
-| Idle, empty composer, non-empty chrome | Shown    |
-| Oneshot pending (idle + chrome)        | Shown    |
+| Condition                                       | Chrome   |
+|-------------------------------------------------|----------|
+| Auto messages disabled                          | Hidden   |
+| Main turn streaming                             | Hidden   |
+| Composer non-empty                              | Hidden   |
+| Empty chrome                                    | Hidden   |
+| Auto messages on, idle, empty composer, chrome  | Shown    |
+| Oneshot pending (idle + chrome + auto on)       | Shown    |
 ```
 
-While the oneshot is still in flight, chrome remains available so the lifecycle path does
-not wait on the model.
+While a reply-suggestion oneshot is still in flight, chrome remains available when auto
+messages is on so the lifecycle path does not wait on the model.
 
 ## Categories and keys
 
@@ -90,5 +96,6 @@ After send, the message is a normal user bubble in history.
 ## Soft hint
 
 The first lifecycle option (when any) remains a soft hint on the reply-suggestion oneshot
-request. Orientation's single suggested next stage matches that same first lifecycle
-option. The oneshot composer list is otherwise independent.
+request when agent input hints run. Orientation's single suggested next stage matches that
+same first lifecycle option. On an empty session, that option may also seed the
+under-input input-hints list (separate surface from chips).

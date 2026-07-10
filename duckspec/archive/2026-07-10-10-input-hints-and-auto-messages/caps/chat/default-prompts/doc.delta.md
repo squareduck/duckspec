@@ -1,16 +1,11 @@
-# Chat default prompts
-
-Conversation-local empty-input defaults from a cheap-model oneshot: parse ordered `REPLY:`
-suggestions (lifecycle heuristic passed only as a soft request hint), show and arm them
-only after a non-empty parse settles, and drive empty Enter plus Tab cycling from that
-list alone. The effective list is never seeded or filled from the lifecycle heuristic.
+# @ Chat default prompts
 
 Under-input **input hints** for the empty composer: an empty session seeds a single entry
 from the first lifecycle option when one exists; a non-empty session uses settled agent
 oneshot `REPLY:` suggestions only when the global agent input hints setting is enabled
 (default off). Empty Enter and Tab cycle that effective list alone.
 
-## Pipeline
+## ~ Pipeline
 
 Input hints under the empty composer come from one of two sources — never both at once.
 
@@ -61,7 +56,7 @@ stale defaults. If the chat agent ends while a oneshot is still outstanding, sug
 become ready (not left pending on the loading indicator). Empty-session disk seed never
 uses the loading indicator.
 
-## Reply format and order
+## ~ Reply format and order
 
 The oneshot must answer only with lines of the form `REPLY: <text>`. Parsing keeps those
 lines in order, trims the text, drops empties, and hard-caps at three. Other lines are
@@ -84,7 +79,7 @@ it, place it in any slot, or invent different replies. For non-empty sessions th
 heuristic never populates the effective list. For empty sessions the first lifecycle
 option is the list itself (not a soft hint to a model).
 
-## Readiness
+## ~ Readiness
 
 ```
 | State                              | Empty-input chrome     | Empty Enter              |
@@ -106,11 +101,3 @@ option is the list itself (not a soft hint to a model).
 Superseded oneshot results (generation mismatch) are ignored and do not change the ready
 list. While a main turn is streaming, defaults chrome stays hidden even if a settled list
 would otherwise be ready.
-
-## Defaults list presentation
-
-When the ready effective list is shown under an empty composer, each suggestion soft-wraps
-within the composer width and its row grows with the wrapped lines so the next suggestion
-starts below the previous block without overlap. Full suggestion text stays visible (no
-ellipsis or hard clip of the displayed value). Empty Enter still sends the full active
-string.

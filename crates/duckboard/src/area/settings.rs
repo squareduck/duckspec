@@ -1,8 +1,10 @@
-//! Settings area — font + per-project model configuration UI.
+//! Settings area — font, chat affordances, and per-project model configuration UI.
 
 use std::path::Path;
 
-use iced::widget::{Space, button, column, container, pick_list, row, scrollable, slider, text};
+use iced::widget::{
+    Space, button, column, container, pick_list, row, scrollable, slider, text, toggler,
+};
 use iced::{Center, Element, Length};
 
 use crate::config::{self, Config};
@@ -27,6 +29,8 @@ pub enum Message {
     ContentFontSizeChanged(f32),
     /// Project-level default model picked (`id == None` → no default).
     ModelDefaultSelected(ModelChoice),
+    AgentInputHintsToggled(bool),
+    AutoMessagesToggled(bool),
     ResetDefaults,
 }
 
@@ -68,6 +72,14 @@ pub fn update(
                 config.set_project_model_default(root, model);
                 let _ = config::save(config);
             }
+        }
+        Message::AgentInputHintsToggled(on) => {
+            config.chat.agent_input_hints = on;
+            let _ = config::save(config);
+        }
+        Message::AutoMessagesToggled(on) => {
+            config.chat.auto_messages = on;
+            let _ = config::save(config);
         }
         Message::ResetDefaults => {
             *config = Config::default();
@@ -113,12 +125,16 @@ pub fn view<'a>(
     .on_press(Message::ResetDefaults)
     .style(theme::dashboard_action);
 
+    let chat_section = chat_section(config);
+
     let mut body = column![
         heading,
         Space::new().height(theme::SPACING_XL),
         ui_section,
         Space::new().height(theme::SPACING_XL),
         content_section,
+        Space::new().height(theme::SPACING_XL),
+        chat_section,
     ];
     // Per-project model default — only meaningful with a project open.
     if let Some(root) = project_root {
@@ -140,6 +156,45 @@ pub fn view<'a>(
     .width(Length::Fill)
     .height(Length::Fill)
     .style(theme::surface)
+    .into()
+}
+
+fn chat_section<'a>(config: &Config) -> Element<'a, Message> {
+    let label = text("Chat")
+        .size(theme::font_md())
+        .color(theme::text_primary());
+    let desc = text(
+        "Input hints under the empty composer and auto-message action chips. \
+         Applies to all projects.",
+    )
+    .size(theme::font_sm())
+    .color(theme::text_muted());
+
+    let agent_row = toggler(config.chat.agent_input_hints)
+        .label("Agent input hints")
+        .on_toggle(Message::AgentInputHintsToggled);
+    let agent_help = text("Suggest replies under the empty composer after a turn.")
+        .size(theme::font_sm())
+        .color(theme::text_muted());
+
+    let auto_row = toggler(config.chat.auto_messages)
+        .label("Auto messages")
+        .on_toggle(Message::AutoMessagesToggled);
+    let auto_help = text("Show lifecycle action chips when the composer is empty.")
+        .size(theme::font_sm())
+        .color(theme::text_muted());
+
+    column![
+        label,
+        desc,
+        Space::new().height(theme::SPACING_SM),
+        agent_row,
+        agent_help,
+        Space::new().height(theme::SPACING_SM),
+        auto_row,
+        auto_help,
+    ]
+    .spacing(theme::SPACING_XS)
     .into()
 }
 

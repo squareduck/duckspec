@@ -1055,8 +1055,10 @@ pub fn view<'a>(
     default_prompt_idx: usize,
     // True while the reply-suggestion oneshot is outstanding.
     default_prompts_pending: bool,
-    // Multi-option obvious chrome (send form derived in view; multi-chip in step 04).
+    // Multi-option obvious chrome (send form derived in view).
     obvious_chrome: &'a crate::obvious_bubble::ObviousChrome,
+    // Global auto messages setting — when false, chips are not shown.
+    auto_messages: bool,
     pinned_selections: &'a [SelectionContext],
     tentative_selection: Option<&'a SelectionContext>,
     block_highlights: Vec<(
@@ -1105,7 +1107,12 @@ pub fn view<'a>(
     // above the composer. Not stored messages; activation sends via
     // `Msg::SendObviousAction`.
     let input_empty = input_value.text().trim().is_empty();
-    if crate::obvious_bubble::chrome_visible(status.is_streaming, input_empty, obvious_chrome) {
+    if crate::obvious_bubble::chrome_visible(
+        status.is_streaming,
+        input_empty,
+        obvious_chrome,
+        auto_messages,
+    ) {
         chat_col = chat_col.push(view_obvious_chrome(obvious_chrome));
     }
 
