@@ -257,6 +257,31 @@ mod tests {
         );
     }
 
+    #[test]
+    fn all_steps_complete_orientation_includes_archive_next_stage() {
+        let scope = SessionScope {
+            kind: ScopeKind::Change,
+            scope_key: "foo".into(),
+            change_facts: Some(ChangeScopeFacts {
+                phase: "all steps complete",
+                steps_done: 2,
+                step_count: 2,
+                active_step_tasks: None,
+                next_command: Some("ds-archive".into()),
+                current_review: None,
+            }),
+        };
+        let text = orientation(&scope);
+        assert!(
+            text.contains("all steps complete") || text.contains("all 2 steps complete"),
+            "orientation should report steps complete: {text}"
+        );
+        assert!(
+            text.contains("Suggested next stage: /ds-archive"),
+            "orientation must suggest archive when all steps are done: {text}"
+        );
+    }
+
     /// @spec session/scope Non-change scope orientation: An exploration scope signals early-stage work with no change artifacts
     #[test]
     fn exploration_orientation_is_early_stage_with_no_change_facts() {

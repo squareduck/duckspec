@@ -103,11 +103,12 @@ After writing, run `ds check` on the proposal to validate it.
 ## Handoff
 
 When the proposal is written and validated, offer at most two ranked next
-actions (offer once; drop if declined):
+actions (list order = rank; offer once; drop if declined):
 
-- **Primary** — `/ds-design` (default after a proposal).
-- **Secondary** — `/ds-spec` (when the user may want to skip design for a
-  clear-cut change).
+Suggested next actions:
+
+- `/ds-design` — default after a proposal
+- `/ds-spec` — when the user may want to skip design for a clear-cut change
 
 Do not offer archive or other stages here. The user may refine the proposal
 further before moving on.

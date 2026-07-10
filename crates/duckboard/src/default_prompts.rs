@@ -1,37 +1,33 @@
 //! Pure helpers for conversation-local empty-input default prompts.
 //!
-//! The effective list is non-empty oneshot parse when available; otherwise the
-//! lifecycle heuristic in empty-send form (leading `/`). Helpers drive empty-
+//! The effective list is only a settled non-empty oneshot parse. The lifecycle
+//! heuristic is not a list entry (it remains a soft oneshot request hint and
+//! empty-send formatting helper for the obvious bubble). Helpers drive empty-
 //! submit / Tab-cycle selection without touching the composer buffer, gated on
 //! oneshot readiness.
 
 use crate::chat_store::{ChatMessage, ChatSession, ContentBlock, Role};
 
 /// Build the send-form heuristic entry (leading `/`), or empty if none.
+///
+/// Shares empty-send formatting with [`crate::obvious_bubble::bubble_send_text`].
+/// Used for oneshot soft-hint display and any remaining send-form callers — **not**
+/// for the composer default-prompt list.
 pub fn heuristic_as_prompts(obvious_command: Option<&str>) -> Vec<String> {
-    match obvious_command.map(str::trim).filter(|s| !s.is_empty()) {
-        Some(cmd) if cmd.starts_with('/') => vec![cmd.to_string()],
-        Some(cmd) => vec![format!("/{cmd}")],
+    match crate::obvious_bubble::bubble_send_text(obvious_command) {
+        Some(text) => vec![text],
         None => Vec::new(),
     }
 }
 
-/// Effective empty-composer defaults: non-empty oneshot parse wins (order
-/// preserved); otherwise the lifecycle heuristic as a single-entry list.
-pub fn effective_prompts(
-    oneshot_replies: &[String],
-    obvious_command: Option<&str>,
-) -> Vec<String> {
-    let parsed: Vec<String> = oneshot_replies
+/// Effective empty-composer defaults: non-empty oneshot parse only (order
+/// preserved). Empty when no non-empty parse is armed.
+pub fn effective_prompts(oneshot_replies: &[String]) -> Vec<String> {
+    oneshot_replies
         .iter()
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
-        .collect();
-    if !parsed.is_empty() {
-        parsed
-    } else {
-        heuristic_as_prompts(obvious_command)
-    }
+        .collect()
 }
 
 /// Text to send on empty-composer submit when suggestions are ready, or
@@ -56,20 +52,18 @@ pub fn can_cycle_defaults(pending: bool, is_streaming: bool, prompts_len: usize)
 
 /// Apply a oneshot result only when its generation still matches the session.
 /// Returns `None` when superseded (caller leaves list and readiness unchanged).
-/// On match: non-empty parse wins; empty parse or error falls back to the
-/// lifecycle heuristic (empty-send form).
+/// On match: non-empty parse wins; empty parse or error yields an empty list.
 pub fn apply_oneshot_if_current(
     session_gen: u64,
     result_gen: u64,
     result: Result<Vec<String>, String>,
-    obvious_command: Option<&str>,
 ) -> Option<Vec<String>> {
     if result_gen != session_gen {
         return None;
     }
     Some(match result {
-        Ok(list) => effective_prompts(&list, obvious_command),
-        Err(_) => heuristic_as_prompts(obvious_command),
+        Ok(list) => effective_prompts(&list),
+        Err(_) => Vec::new(),
     })
 }
 
@@ -182,39 +176,31 @@ mod tests {
             "yes, continue".into(),
             "no, skip".into(),
         ];
-        let got = effective_prompts(&agent, Some("ds-design"));
+        let got = effective_prompts(&agent);
         assert_eq!(
             got,
             vec!["/ds-spec", "yes, continue", "no, skip"]
         );
     }
 
-    // @spec chat/default-prompts Effective default-prompt list: Pre-oneshot list is the lifecycle heuristic when present
+    // @spec chat/default-prompts Effective default-prompt list: No non-empty oneshot result yields an empty list
     #[test]
-    fn pre_oneshot_list_is_the_lifecycle_heuristic_when_present() {
-        // GIVEN no settled non-empty oneshot result AND a present lifecycle heuristic
-        let got = effective_prompts(&[], Some("ds-explore"));
-        assert_eq!(got, vec!["/ds-explore"]);
+    fn no_non_empty_oneshot_result_yields_an_empty_list() {
+        // GIVEN a session with no settled non-empty oneshot result
+        let got = effective_prompts(&[]);
+        assert!(got.is_empty());
     }
 
-    // @spec chat/default-prompts Effective default-prompt list: Failed or empty oneshot falls back to the heuristic
+    // @spec chat/default-prompts Effective default-prompt list: Failed or empty oneshot yields an empty list even with a heuristic
     #[test]
-    fn failed_or_empty_oneshot_falls_back_to_the_heuristic() {
-        // Settled empty parse with heuristic present → single heuristic entry.
-        let got = apply_oneshot_if_current(1, 1, Ok(vec![]), Some("ds-design"))
-            .expect("matching gen applies");
-        assert_eq!(got, vec!["/ds-design"]);
+    fn failed_or_empty_oneshot_yields_an_empty_list_even_with_a_heuristic() {
+        // Settled empty parse — list empty (heuristic is not a list entry).
+        let got = apply_oneshot_if_current(1, 1, Ok(vec![])).expect("matching gen applies");
+        assert!(got.is_empty());
 
-        // Settled error with heuristic present → same fallback.
-        let got = apply_oneshot_if_current(1, 1, Err("boom".into()), Some("ds-design"))
-            .expect("matching gen applies");
-        assert_eq!(got, vec!["/ds-design"]);
-    }
-
-    // @spec chat/default-prompts Effective default-prompt list: No oneshot and no heuristic yields an empty list
-    #[test]
-    fn no_oneshot_and_no_heuristic_yields_an_empty_list() {
-        let got = effective_prompts(&[], None);
+        // Settled error — same empty list.
+        let got =
+            apply_oneshot_if_current(1, 1, Err("boom".into())).expect("matching gen applies");
         assert!(got.is_empty());
     }
 
@@ -263,7 +249,6 @@ mod tests {
             3,
             3,
             Ok(vec!["/ds-spec".into(), "no thanks".into()]),
-            Some("ds-design"),
         )
         .expect("matching gen applies");
         let pending = false; // settled → ready
@@ -278,12 +263,7 @@ mod tests {
     // @spec chat/default-prompts Suggestion readiness: Superseded generation does not arm the list
     #[test]
     fn superseded_generation_does_not_arm_the_list() {
-        let applied = apply_oneshot_if_current(
-            5,
-            4,
-            Ok(vec!["stale".into()]),
-            Some("ds-explore"),
-        );
+        let applied = apply_oneshot_if_current(5, 4, Ok(vec!["stale".into()]));
         assert!(applied.is_none(), "superseded gen must not replace the list");
     }
 
@@ -339,27 +319,26 @@ mod tests {
     #[test]
     fn timed_out_or_failed_oneshot_settles_to_ready() {
         // GIVEN pending oneshot that settles as failure (timeout-shaped Err) for
-        // the current generation + heuristic + empty composer.
+        // the current generation + empty composer.
         let list = apply_oneshot_if_current(
             1,
             1,
             Err("oneshot timed out: oneshot call exceeded budget".into()),
-            Some("ds-design"),
         )
         .expect("matching gen applies");
         let pending = false; // settled → ready
-        assert_eq!(list, vec!["/ds-design"]);
+        assert!(list.is_empty(), "failure with no parse yields empty list");
         assert_eq!(
             defaults_chrome(true, pending, false, list.len()),
-            DefaultsChrome::List
+            DefaultsChrome::Hidden
         );
-        // Plain failure settles the same way (no loading).
-        let list2 = apply_oneshot_if_current(2, 2, Err("boom".into()), Some("ds-spec"))
-            .expect("matching gen applies");
-        assert_eq!(list2, vec!["/ds-spec"]);
+        // Plain failure settles the same way (no loading; empty list).
+        let list2 =
+            apply_oneshot_if_current(2, 2, Err("boom".into())).expect("matching gen applies");
+        assert!(list2.is_empty());
         assert_eq!(
             defaults_chrome(true, false, false, list2.len()),
-            DefaultsChrome::List
+            DefaultsChrome::Hidden
         );
     }
 
@@ -372,18 +351,15 @@ mod tests {
             DefaultsChrome::Loading
         );
         // WHEN the chat agent handle ends without a settle (ProcessExited clears
-        // pending; effective list is the heuristic at view time).
+        // pending; effective list stays empty without a parse).
         let pending = false;
-        let prompts = heuristic_as_prompts(Some("ds-explore"));
-        // THEN loading is not shown; suggestions are ready.
+        let prompts: Vec<String> = Vec::new();
+        // THEN loading is not shown; suggestions are ready (list may be empty).
         assert_eq!(
             defaults_chrome(true, pending, false, prompts.len()),
-            DefaultsChrome::List
+            DefaultsChrome::Hidden
         );
-        assert_eq!(
-            empty_submit_text(pending, false, &prompts, 0).as_deref(),
-            Some("/ds-explore")
-        );
+        assert_eq!(empty_submit_text(pending, false, &prompts, 0), None);
     }
 
     #[test]

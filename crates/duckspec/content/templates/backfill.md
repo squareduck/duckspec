@@ -142,7 +142,12 @@ Depth 2 or 3 → same plus `/ds-step` → `/ds-apply` for the tests (and
 
 ## Handoff
 
-**Primary** — `/ds-propose` only, with a clean summary (no secondary):
+Offer at most one ranked next action (list order = rank; offer once; drop if
+declined), with a clean summary:
+
+Suggested next actions:
+
+- `/ds-propose`
 
 > Ready to draft the proposal. Suggested slice:
 >
@@ -156,7 +161,7 @@ Depth 2 or 3 → same plus `/ds-step` → `/ds-apply` for the tests (and
 >
 > Run `/ds-propose` to draft the proposal.
 
-Offer once. If the user wants to keep refining the slice or the test plan
-first, drop the suggestion and stay in the conversation.
+If the user wants to keep refining the slice or the test plan first, drop the
+suggestion and stay in the conversation.
 
 ## After write

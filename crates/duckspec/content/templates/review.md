@@ -151,14 +151,24 @@ once the user decides which findings to act on.
 
 - Lead with the triage you presented — the verdict and the findings table,
   naming the review file.
-- At most one ranked next action (offer once; drop if declined):
-  - **Findings need work:** **Primary** — `/ds-spec` when any finding calls for
-    new or changed behavior (cap change first); otherwise **Primary** —
-    `/ds-step`. Both read the latest review and cite it as they turn findings
-    into work. No secondary.
-  - **Ready to finish** (no open findings, or verdict accepts the change as
-    done / archive-ready — typically all steps complete and audit clean):
-    **Primary** — `/ds-archive`. No secondary.
+- At most one ranked next action (list order = rank; offer once; drop if
+  declined):
+
+**Findings need work:**
+
+Suggested next actions:
+
+- `/ds-spec` when any finding calls for new or changed behavior (cap change
+  first); otherwise `/ds-step`. Both read the latest review and cite it as they
+  turn findings into work.
+
+**Ready to finish** (no open findings, or verdict accepts the change as done /
+archive-ready — typically all steps complete and audit clean):
+
+Suggested next actions:
+
+- `/ds-archive`
+
 - A review never changes the orientation's suggested next stage on its own.
 
 ## After write

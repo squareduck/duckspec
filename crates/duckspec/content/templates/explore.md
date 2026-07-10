@@ -117,24 +117,27 @@ suggest `/ds-codex` instead.
 
 **Do not push.** Exploration has no required ending — clarity alone is a fine
 outcome. When the conversation *does* identify concrete work, offer at most two
-ranked next actions (**Primary**, then **Secondary** if any). Offer once; if
-the user declines, drop it.
+ranked next actions as a flat "Suggested next actions:" list (list order =
+rank). Offer once; if the user declines, drop it.
 
 **When a change for this work does not exist yet:**
 
-- **Primary** — create the change (`ds create change <name>`) — empty folder
-  only; no artifacts yet.
-- **Secondary** — `/ds-propose` — after the change exists, or if the user wants
-  to name and propose in one motion.
+Suggested next actions:
+
+- create the change (`ds create change <name>`) — empty folder only; no
+  artifacts yet
+- `/ds-propose` — after the change exists, or if the user wants to name and
+  propose in one motion
 
 **When a change for this work already exists:**
 
-- **Primary** — `/ds-propose` (or the stage the change is actually ready for,
-  if later than propose — but still one primary only).
-- No secondary unless the user asks for options.
+Suggested next actions:
 
-Codex-worthy knowledge only (no change): suggest `/ds-codex` as the single
-next action — that is a side path, not a second rank next to create/propose.
+- `/ds-propose` (or the stage the change is actually ready for, if later than
+  propose — still only one action unless the user asks for options)
+
+Codex-worthy knowledge only (no change): suggest `/ds-codex` as the single next
+action — that is a side path, not a second rank next to create/propose.
 
 **Sometimes the thinking IS the value.**
 

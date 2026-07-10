@@ -68,9 +68,11 @@ After archiving:
   backlinks synced, full audit clean." If this was a proposal-only or doc-only
   archive, `ds sync` is a no-op and a full `ds audit` is still worth running:
   "Archived. No code changes involved."
-- **Primary** — commit: propose a commit message using the project's
-  conventions (read `AGENTS.md` or equivalent when present for VCS and message
-  form) and **wait for explicit confirmation**. Never auto-commit.
-- No secondary next action.
+
+Suggested next actions:
+
+- commit: propose a commit message using the project's conventions (read
+  `AGENTS.md` or equivalent when present for VCS and message form) and **wait
+  for explicit confirmation**. Never auto-commit.
 
 ## After write

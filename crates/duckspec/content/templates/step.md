@@ -92,17 +92,20 @@ After writing all steps, run `ds check` on the steps directory.
 
 ## Handoff
 
-When all steps are written and validated:
+When all steps are written and validated, offer at most two ranked next actions
+(list order = rank; offer once; drop if declined):
 
-- **Primary** — `/ds-apply` (only ranked next action). Steps just written still
-  have open work; do not offer archive.
-- If coverage is incomplete or ordering is unclear, fix that *before* the
-  handoff suggestion (work rules, not a second next-stage rank).
-- Don't run `ds audit <change>` now. The change-scoped audit is a progress
-  check for `/ds-apply` — before any step is implemented it only reports every
-  `test: code` scenario as pending, which is the expected pre-implementation
-  state, not a finding to act on.
+Suggested next actions:
 
-Offer the apply handoff once; drop if declined.
+- `/ds-apply` — only ranked next action; steps just written still have open
+  work, so do not offer archive
+
+If coverage is incomplete or ordering is unclear, fix that *before* the handoff
+suggestion (work rules, not a second next-stage rank).
+
+Don't run `ds audit <change>` now. The change-scoped audit is a progress check
+for `/ds-apply` — before any step is implemented it only reports every
+`test: code` scenario as pending, which is the expected pre-implementation
+state, not a finding to act on.
 
 ## After write

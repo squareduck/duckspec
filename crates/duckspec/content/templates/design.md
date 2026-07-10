@@ -89,16 +89,20 @@ After writing, run `ds check` on the design to validate it.
 ## Handoff
 
 When the design is written and validated, offer at most two ranked next actions
-(offer once; drop if declined):
+(list order = rank; offer once; drop if declined):
 
-- **If open questions remain:**
-  - **Primary** — resolve those open questions (stay in design / edit the
-    design).
-  - **Secondary** — `/ds-spec` only if the user insists on moving on with
-    questions still open.
-- **If no open questions:**
-  - **Primary** — `/ds-spec`.
-  - **Secondary** — `/ds-step` (when skipping straight to planning is
-    plausible).
+**If open questions remain:**
+
+Suggested next actions:
+
+- resolve those open questions (stay in design / edit the design)
+- `/ds-spec` — only if the user insists on moving on with questions still open
+
+**If no open questions:**
+
+Suggested next actions:
+
+- `/ds-spec`
+- `/ds-step` — when skipping straight to planning is plausible
 
 ## After write

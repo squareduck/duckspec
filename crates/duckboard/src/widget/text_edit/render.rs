@@ -1242,7 +1242,12 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for TextEdit<'a, M> {
                         shell.publish((self.on_action)(EditorAction::Delete));
                     }
                     keyboard::Key::Named(Named::Enter) if !self.read_only => {
-                        if !shift && let Some(msg) = self.on_submit.as_ref() {
+                        // Plain Enter → on_submit (or newline). ⌘/Ctrl+Enter is
+                        // left uncaptured so app-level handlers can activate the
+                        // obvious bubble without also firing empty-submit.
+                        if cmd {
+                            handled = false;
+                        } else if !shift && let Some(msg) = self.on_submit.as_ref() {
                             shell.publish(msg.clone());
                         } else {
                             shell.publish((self.on_action)(EditorAction::Enter));

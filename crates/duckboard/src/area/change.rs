@@ -768,7 +768,7 @@ pub fn change_scope_facts(name: &str, project: &ProjectData) -> Option<ChangeSco
     // review under a proposal-only change. It never gates phase/next_command.
     let current_review = change.reviews.last().cloned();
 
-    // Steps exist → either apply (unfinished) or review (all done).
+    // Steps exist → either apply (unfinished) or archive (all done).
     if !change.steps.is_empty() {
         let steps_done = change
             .steps
@@ -789,7 +789,7 @@ pub fn change_scope_facts(name: &str, project: &ProjectData) -> Option<ChangeSco
             steps_done,
             step_count: change.steps.len(),
             active_step_tasks,
-            next_command: Some(if all_done { "ds-review" } else { "ds-apply" }.into()),
+            next_command: Some(if all_done { "ds-archive" } else { "ds-apply" }.into()),
             current_review,
         });
     }
@@ -846,9 +846,9 @@ fn obvious_command_from_artifacts(name: &str, project: &ProjectData) -> Option<S
 /// right placeholder even when the user is in another area at the time
 /// of promotion.
 ///
-/// When no oneshot is pending and no non-empty oneshot-only list is armed,
-/// also seeds `agent_default_prompts` from the heuristic so empty Enter is
-/// ready without a model call.
+/// Does not seed `agent_default_prompts` — the composer list is oneshot-parse
+/// only. The lifecycle command remains for orientation soft-hint and the
+/// obvious bubble.
 pub fn refresh_obvious_command(
     interactions: &mut HashMap<Scope, InteractionState>,
     project: &ProjectData,
@@ -867,20 +867,8 @@ pub fn refresh_obvious_command(
             Scope::Caps | Scope::Codex => continue,
         };
         for ax in ix.sessions.iter_mut() {
-            let prev_heuristic =
-                crate::default_prompts::heuristic_as_prompts(ax.obvious_command.as_deref());
-            // Reseed when ready and either empty or still holding only the
-            // previous heuristic (oneshot parse not armed).
-            let should_seed = !ax.default_prompts_pending
-                && (ax.agent_default_prompts.is_empty()
-                    || ax.agent_default_prompts == prev_heuristic);
             ax.obvious_command = cmd.clone();
             ax.scope_facts = facts.clone();
-            if should_seed {
-                ax.agent_default_prompts =
-                    crate::default_prompts::heuristic_as_prompts(cmd.as_deref());
-                ax.default_prompt_idx = 0;
-            }
         }
     }
 }
@@ -2035,7 +2023,7 @@ mod breadcrumb_tests {
     }
 
     #[test]
-    fn obvious_all_steps_done_suggests_review() {
+    fn obvious_all_steps_done_suggests_archive() {
         let state = make_state("foo", &[]);
         let mut project = make_project(&["foo"], &[]);
         set_change(&mut project, "foo", |c| {
@@ -2046,7 +2034,7 @@ mod breadcrumb_tests {
         });
         assert_eq!(
             compute_obvious_command(&state, &project).as_deref(),
-            Some("ds-review")
+            Some("ds-archive")
         );
     }
 
@@ -2068,9 +2056,9 @@ mod breadcrumb_tests {
         assert_eq!(facts.next_command.as_deref(), Some("ds-apply"));
     }
 
-    /// @spec session/scope Lifecycle reflection: A change with all steps complete reports completion and the review next-stage
+    /// @spec session/scope Lifecycle reflection: A change with all steps complete reports completion and the archive next-stage
     #[test]
-    fn facts_all_steps_complete_report_completion_and_review() {
+    fn facts_all_steps_complete_report_completion_and_archive() {
         let mut project = make_project(&["foo"], &[]);
         set_change(&mut project, "foo", |c| {
             c.has_proposal = true;
@@ -2081,7 +2069,7 @@ mod breadcrumb_tests {
         let facts = change_scope_facts("foo", &project).expect("active change has facts");
         assert_eq!(facts.steps_done, facts.step_count);
         assert!(facts.step_count > 0, "completion is over real steps");
-        assert_eq!(facts.next_command.as_deref(), Some("ds-review"));
+        assert_eq!(facts.next_command.as_deref(), Some("ds-archive"));
     }
 
     /// @spec session/scope Lifecycle reflection: A change with only a proposal reports the design next-stage

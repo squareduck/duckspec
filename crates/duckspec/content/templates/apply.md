@@ -93,19 +93,26 @@ batch checkboxes.
 ## Handoff
 
 When all tasks in the current step are checked, offer at most two ranked next
-actions (offer once; drop if declined). Operational notes below are work rules,
-not extra ranks.
+actions as a flat list (list order = rank; offer once; drop if declined).
+Operational notes below are work rules, not extra ranks.
 
-**Ranked next actions:**
+**Unfinished steps remain:**
 
-- **Unfinished steps remain:**
-  - **Primary** — `/ds-apply` for the next step (name it). No secondary.
-  - Remaining scoped-audit pending scenarios for later steps are expected, not
-    a problem.
-- **All steps complete and scoped audit is clean** (no errors, no pending):
-  - **Primary** — `/ds-review`.
-  - **Secondary** — `/ds-archive`.
-  - Review before archive is the intended path.
+Suggested next actions:
+
+- `/ds-apply` for the next step (name it)
+
+Remaining scoped-audit pending scenarios for later steps are expected, not a
+problem.
+
+**All steps complete and scoped audit is clean** (no errors, no pending):
+
+Suggested next actions:
+
+- `/ds-review`
+- `/ds-archive`
+
+Review before archive is the intended path.
 
 **Work rules (not next-stage ranks):**
 

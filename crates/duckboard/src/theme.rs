@@ -616,6 +616,24 @@ pub fn chat_user_card(_theme: &Theme) -> container::Style {
     }
 }
 
+/// Ghost lifecycle bubble — same shape as a user card, muted so it reads as
+/// chrome rather than a committed transcript message.
+pub fn chat_obvious_bubble(_theme: &Theme) -> container::Style {
+    let mut border = border_color();
+    border.a *= 0.55;
+    let mut bg = bg_base();
+    bg.a *= 0.55;
+    container::Style {
+        background: Some(bg.into()),
+        border: Border {
+            color: border,
+            width: 1.0,
+            radius: BORDER_RADIUS.into(),
+        },
+        ..Default::default()
+    }
+}
+
 pub fn chat_queued_card(_theme: &Theme) -> container::Style {
     container::Style {
         background: Some(bg_surface().into()),

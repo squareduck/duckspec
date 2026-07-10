@@ -43,17 +43,7 @@ report completion.
 - **AND** it suggests the apply stage as the next step
 
 > test: code
-> - crates/duckboard/src/area/change.rs:2053
-
-### Scenario: A change with all steps complete reports completion and the review next-stage
-
-- **GIVEN** a change scope whose steps are all complete
-- **WHEN** the orientation is produced
-- **THEN** it reports the steps as complete
-- **AND** it suggests the review stage as the next step
-
-> test: code
-> - crates/duckboard/src/area/change.rs:2071
+> - crates/duckboard/src/area/change.rs:2041
 
 ### Scenario: A change with only a proposal reports the design next-stage
 
@@ -62,7 +52,17 @@ report completion.
 - **THEN** it suggests the design stage as the next step
 
 > test: code
-> - crates/duckboard/src/area/change.rs:2087
+> - crates/duckboard/src/area/change.rs:2075
+
+### Scenario: A change with all steps complete reports completion and the archive next-stage
+
+- **GIVEN** a change scope whose steps are all complete
+- **WHEN** the orientation is produced
+- **THEN** it reports the steps as complete
+- **AND** it suggests the archive stage as the next step
+
+> test: code
+> - crates/duckboard/src/area/change.rs:2059
 
 ## Requirement: Non-change scope orientation
 
@@ -79,7 +79,7 @@ scope and SHALL NOT report change progress or a change next-stage.
 - **AND** it does not report change progress or a change next-stage
 
 > test: code
-> - crates/duckboard/src/scope.rs:260
+> - crates/duckboard/src/scope.rs:285
 
 ### Scenario: A capability-tree scope carries no change facts
 
@@ -90,7 +90,7 @@ scope and SHALL NOT report change progress or a change next-stage.
 - **AND** it does not report change progress or a change next-stage
 
 > test: code
-> - crates/duckboard/src/scope.rs:283
+> - crates/duckboard/src/scope.rs:308
 
 ### Scenario: A codex scope points at the codex tree
 
@@ -101,7 +101,7 @@ scope and SHALL NOT report change progress or a change next-stage.
 - **AND** it does not report change progress or a change next-stage
 
 > test: code
-> - crates/duckboard/src/scope.rs:310
+> - crates/duckboard/src/scope.rs:335
 
 ## Requirement: Reliable first-turn delivery
 
@@ -158,7 +158,7 @@ reviews SHALL NOT affect the change's reported progress or its suggested next st
   `duckspec/changes/{name}/reviews/{filename}`
 
 > test: code
-> - crates/duckboard/src/area/change.rs:2111
+> - crates/duckboard/src/area/change.rs:2099
 
 ### Scenario: A change with no reviews reports no current review
 
@@ -167,7 +167,7 @@ reviews SHALL NOT affect the change's reported progress or its suggested next st
 - **THEN** it does not report a current review
 
 > test: code
-> - crates/duckboard/src/area/change.rs:2133
+> - crates/duckboard/src/area/change.rs:2121
 
 ### Scenario: Adding a review does not change the suggested next stage
 
@@ -177,4 +177,4 @@ reviews SHALL NOT affect the change's reported progress or its suggested next st
 - **THEN** both report the same suggested next stage
 
 > test: code
-> - crates/duckboard/src/area/change.rs:2148
+> - crates/duckboard/src/area/change.rs:2136

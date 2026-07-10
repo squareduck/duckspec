@@ -4,10 +4,10 @@ Conversation-local empty-input defaults from a cheap-model oneshot: parse ordere
 suggestions (heuristic passed only as a soft hint), show and arm them only after the
 oneshot settles, and drive empty Enter plus Tab cycling from that list alone.
 
-Conversation-local empty-input defaults: the lifecycle heuristic arms the list before any
-oneshot and after a failed or empty oneshot; a settled oneshot with parsed replies
-replaces the list. Show and arm after readiness rules; drive empty Enter plus Tab cycling
-from the effective list.
+Conversation-local empty-input defaults from a cheap-model oneshot: parse ordered `REPLY:`
+suggestions (lifecycle heuristic passed only as a soft request hint), show and arm them
+only after a non-empty parse settles, and drive empty Enter plus Tab cycling from that
+list alone. The effective list is never seeded or filled from the lifecycle heuristic.
 
 ## Requirement: Parsed suggestion list
 
@@ -120,12 +120,9 @@ settled for the current generation with one or more parsed reply strings, the ef
 list SHALL be exactly those strings (order preserved, already capped); the lifecycle
 heuristic SHALL NOT be appended or merged into that list. When no such non-empty oneshot
 result is armed — including a brand-new session that has never run a oneshot, and a
-settled oneshot that failed or produced no suggestions — and a lifecycle heuristic is
-present, the effective list SHALL be a single entry: that heuristic in empty-send form
-(leading `/` when the heuristic is a skill name such as `ds-explore`). When neither a
-non-empty oneshot result nor a heuristic is available, the effective list SHALL be empty.
-Pre-oneshot heuristic defaults SHALL be ready without a model call (no pending oneshot
-required).
+settled oneshot that failed or produced no suggestions — the effective list SHALL be
+empty, whether or not a lifecycle heuristic is present. The lifecycle heuristic SHALL NOT
+appear as an effective-list entry.
 
 > test: code
 
@@ -136,39 +133,26 @@ required).
 - **THEN** the list is exactly those three strings in parse order
 
 > test: code
-> - crates/duckboard/src/default_prompts.rs:177
+> - crates/duckboard/src/default_prompts.rs:171
 
-### Scenario: Pre-oneshot list is the lifecycle heuristic when present
-
-- **GIVEN** a session with no settled non-empty oneshot result
-- **AND** a present lifecycle heuristic
-- **WHEN** the effective default-prompt list is built
-- **THEN** the list has exactly one entry
-- **AND** that entry is the heuristic in empty-send form
-
-> test: code
-> - crates/duckboard/src/default_prompts.rs:192
-
-### Scenario: Failed or empty oneshot falls back to the heuristic
-
-- **GIVEN** a settled oneshot that failed or produced no suggestions
-- **AND** a present lifecycle heuristic
-- **WHEN** the effective default-prompt list is built
-- **THEN** the list has exactly one entry
-- **AND** that entry is the heuristic in empty-send form
-
-> test: code
-> - crates/duckboard/src/default_prompts.rs:200
-
-### Scenario: No oneshot and no heuristic yields an empty list
+### Scenario: No non-empty oneshot result yields an empty list
 
 - **GIVEN** a session with no settled non-empty oneshot result
-- **AND** no lifecycle heuristic
 - **WHEN** the effective default-prompt list is built
 - **THEN** the list is empty
 
 > test: code
-> - crates/duckboard/src/default_prompts.rs:214
+> - crates/duckboard/src/default_prompts.rs:186
+
+### Scenario: Failed or empty oneshot yields an empty list even with a heuristic
+
+- **GIVEN** a settled oneshot that failed or produced no suggestions
+- **AND** a present lifecycle heuristic
+- **WHEN** the effective default-prompt list is built
+- **THEN** the list is empty
+
+> test: code
+> - crates/duckboard/src/default_prompts.rs:194
 
 ## Requirement: Suggestion readiness
 
@@ -197,7 +181,7 @@ list would otherwise be available.
 - **AND** a loading indicator is shown
 
 > test: code
-> - crates/duckboard/src/default_prompts.rs:290
+> - crates/duckboard/src/default_prompts.rs:270
 
 ### Scenario: Empty submit is a no-op while pending
 
@@ -207,7 +191,7 @@ list would otherwise be available.
 - **THEN** no message is sent
 
 > test: code
-> - crates/duckboard/src/default_prompts.rs:251
+> - crates/duckboard/src/default_prompts.rs:237
 
 ### Scenario: Ready after settle arms the effective list
 
@@ -219,7 +203,7 @@ list would otherwise be available.
 - **AND** empty submit sends the active entry
 
 > test: code
-> - crates/duckboard/src/default_prompts.rs:259
+> - crates/duckboard/src/default_prompts.rs:245
 
 ### Scenario: Superseded generation does not arm the list
 
@@ -228,7 +212,7 @@ list would otherwise be available.
 - **THEN** the session's ready default-prompt list is unchanged
 
 > test: code
-> - crates/duckboard/src/default_prompts.rs:278
+> - crates/duckboard/src/default_prompts.rs:263
 
 ### Scenario: Main turn in progress hides default prompts
 
@@ -240,20 +224,20 @@ list would otherwise be available.
 - **AND** a defaults loading indicator is not shown
 
 > test: code
-> - crates/duckboard/src/default_prompts.rs:319
+> - crates/duckboard/src/default_prompts.rs:299
 
 ### Scenario: Timed-out or failed oneshot settles to ready
 
 - **GIVEN** a pending reply-suggestion oneshot
 - **AND** that oneshot settles as a failure for the current generation
-- **AND** a present lifecycle heuristic
 - **AND** an empty composer input
 - **WHEN** the empty-input defaults chrome is rendered
 - **THEN** a loading indicator is not shown
-- **AND** the effective list is the heuristic in empty-send form
+- **AND** suggestions are ready
+- **AND** the effective list is empty when the failure produced no parse
 
 > test: code
-> - crates/duckboard/src/default_prompts.rs:338
+> - crates/duckboard/src/default_prompts.rs:318
 
 ### Scenario: Agent handle ends while suggestions pending
 
@@ -265,7 +249,7 @@ list would otherwise be available.
 - **AND** suggestions are ready
 
 > test: code
-> - crates/duckboard/src/default_prompts.rs:366
+> - crates/duckboard/src/default_prompts.rs:345
 
 ## Requirement: Empty-input send and cycle
 
@@ -288,7 +272,7 @@ entry SHALL NOT insert text into the composer input.
 - **THEN** the sent text is the entry at the active index
 
 > test: code
-> - crates/duckboard/src/default_prompts.rs:221
+> - crates/duckboard/src/default_prompts.rs:207
 
 ### Scenario: Empty submit is a no-op when the list is empty
 
@@ -299,7 +283,7 @@ entry SHALL NOT insert text into the composer input.
 - **THEN** no message is sent
 
 > test: code
-> - crates/duckboard/src/default_prompts.rs:232
+> - crates/duckboard/src/default_prompts.rs:218
 
 ### Scenario: Tab cycles active index with wrap
 
@@ -312,4 +296,4 @@ entry SHALL NOT insert text into the composer input.
 - **AND** the composer input remains empty
 
 > test: code
-> - crates/duckboard/src/default_prompts.rs:239
+> - crates/duckboard/src/default_prompts.rs:225

@@ -1,13 +1,11 @@
-# Chat default prompts
-
-
+# ~ Chat default prompts
 
 Conversation-local empty-input defaults from a cheap-model oneshot: parse ordered `REPLY:`
 suggestions (lifecycle heuristic passed only as a soft request hint), show and arm them
 only after a non-empty parse settles, and drive empty Enter plus Tab cycling from that
 list alone. The effective list is never seeded or filled from the lifecycle heuristic.
 
-## Pipeline
+## ~ Pipeline
 
 After a non-priming agent turn completes, the session harness runs a short oneshot on its
 cheapest available model. The request carries the last assistant message, the preceding
@@ -44,7 +42,7 @@ list. Starting a new turn invalidates any in-flight oneshot so a late result can
 stale defaults. If the chat agent ends while a oneshot is still outstanding, suggestions
 become ready (not left pending on the loading indicator).
 
-## Reply format and order
+## ~ Reply format and order
 
 The oneshot must answer only with lines of the form `REPLY: <text>`. Parsing keeps those
 lines in order, trims the text, drops empties, and hard-caps at three. Other lines are
@@ -64,7 +62,7 @@ On the oneshot request, the lifecycle heuristic is a soft hint only — the mode
 it, place it in any slot, or invent different replies. The heuristic never populates the
 effective list.
 
-## Readiness
+## ~ Readiness
 
 ```
 | State                         | Empty-input chrome     | Empty Enter              |

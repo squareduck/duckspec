@@ -152,10 +152,13 @@ Present capabilities **one at a time**. Don't batch all specs into a single gate
 ## Handoff
 
 When all capabilities from the proposal's scope are specced and validated,
-offer at most two ranked next actions (offer once; drop if declined):
+offer at most two ranked next actions (list order = rank; offer once; drop if
+declined):
 
-- **Primary** — `/ds-step` (default after specs).
-- **Secondary** — `/ds-archive` (for no-code / refinement-only changes that
-  need no implementation steps).
+Suggested next actions:
+
+- `/ds-step` — default after specs
+- `/ds-archive` — for no-code / refinement-only changes that need no
+  implementation steps
 
 ## After write

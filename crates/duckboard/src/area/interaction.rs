@@ -355,11 +355,11 @@ pub struct AgentSession {
     pub agent_input_tokens: usize,
     pub agent_output_tokens: usize,
     /// Suggested /ds-* command for the current stage (without the leading slash).
-    /// Soft hint on the reply-suggestion oneshot request, and the pre-oneshot /
-    /// failed-oneshot fallback for the empty-input default list (send form adds `/`).
+    /// Soft hint on the reply-suggestion oneshot request and empty-send form for
+    /// the obvious bubble (composer list does not use this).
     pub obvious_command: Option<String>,
-    /// Armed empty-input default prompts: non-empty oneshot parse when available,
-    /// otherwise the lifecycle heuristic seed/fallback. Ephemeral — not persisted.
+    /// Armed empty-input default prompts: settled non-empty oneshot parse only.
+    /// Ephemeral — not persisted. Never seeded from the lifecycle heuristic.
     pub agent_default_prompts: Vec<String>,
     /// Monotonic generation; oneshot results apply only when gen matches.
     pub default_prompts_gen: u64,
@@ -1160,6 +1160,17 @@ fn handle_agent_chat(
         agent_chat::Msg::ToggleCollapse(idx) => {
             agent_chat::toggle_collapse(&mut ax.chat_collapse, idx);
         }
+        agent_chat::Msg::SendObvious => {
+            // Lifecycle bubble only — never the oneshot default-prompt list.
+            let input_empty = ax.chat_input.text().trim().is_empty();
+            if let Some(text) = crate::obvious_bubble::activation_send_text(
+                ax.session.is_streaming,
+                input_empty,
+                ax.obvious_command.as_deref(),
+            ) {
+                send_prompt_text(ax, text, highlighter);
+            }
+        }
         agent_chat::Msg::SendPressed => {
             let typed = ax.chat_input.text().trim().to_string();
 
@@ -1185,10 +1196,8 @@ fn handle_agent_chat(
                 // Streaming + empty input + no queue → no-op.
             } else {
                 let typed_opt = if typed.is_empty() {
-                    let prompts = crate::default_prompts::effective_prompts(
-                        &ax.agent_default_prompts,
-                        ax.obvious_command.as_deref(),
-                    );
+                    let prompts =
+                        crate::default_prompts::effective_prompts(&ax.agent_default_prompts);
                     crate::default_prompts::empty_submit_text(
                         ax.default_prompts_pending,
                         ax.session.is_streaming,
@@ -1214,10 +1223,8 @@ fn handle_agent_chat(
             if !ax.chat_input.text().trim().is_empty() {
                 return;
             }
-            let prompts = crate::default_prompts::effective_prompts(
-                &ax.agent_default_prompts,
-                ax.obvious_command.as_deref(),
-            );
+            let prompts =
+                crate::default_prompts::effective_prompts(&ax.agent_default_prompts);
             if !crate::default_prompts::can_cycle_defaults(
                 ax.default_prompts_pending,
                 ax.session.is_streaming,
@@ -1844,10 +1851,8 @@ pub fn handle_agent_chat_key(
 
     // Empty-input default-prompt cycle (only when completion is not consuming Tab).
     if *key == keyboard::Key::Named(Named::Tab) && ax.chat_input.text().trim().is_empty() {
-        let prompts = crate::default_prompts::effective_prompts(
-            &ax.agent_default_prompts,
-            ax.obvious_command.as_deref(),
-        );
+        let prompts =
+            crate::default_prompts::effective_prompts(&ax.agent_default_prompts);
         if crate::default_prompts::can_cycle_defaults(
             ax.default_prompts_pending,
             ax.session.is_streaming,
@@ -1855,6 +1860,23 @@ pub fn handle_agent_chat_key(
         ) {
             let delta: i8 = if mods.shift() { -1 } else { 1 };
             return AgentChatKeyResult::Dispatch(agent_chat::Msg::CycleDefaultPrompt(delta));
+        }
+    }
+
+    // ⌘↩ / Ctrl+Enter — activate the lifecycle obvious bubble when visible.
+    // Plain Enter stays on empty-submit (list only) via TextEdit `on_submit`.
+    if *key == keyboard::Key::Named(Named::Enter)
+        && mods.command()
+        && !mods.shift()
+        && !mods.alt()
+    {
+        let input_empty = ax.chat_input.text().trim().is_empty();
+        if crate::obvious_bubble::bubble_visible(
+            ax.session.is_streaming,
+            input_empty,
+            ax.obvious_command.as_deref(),
+        ) {
+            return AgentChatKeyResult::Dispatch(agent_chat::Msg::SendObvious);
         }
     }
 
@@ -2259,10 +2281,8 @@ pub fn view_column<'a, M: 'a + Clone>(
                     context_max: agent_chat::model_context_window(&effective_model),
                 };
                 let w = wrap.clone();
-                let default_prompts = crate::default_prompts::effective_prompts(
-                    &ax.agent_default_prompts,
-                    ax.obvious_command.as_deref(),
-                );
+                let default_prompts =
+                    crate::default_prompts::effective_prompts(&ax.agent_default_prompts);
                 let default_prompt_idx = crate::default_prompts::clamp_active_index(
                     default_prompts.len(),
                     ax.default_prompt_idx,
@@ -2280,6 +2300,7 @@ pub fn view_column<'a, M: 'a + Clone>(
                     default_prompts,
                     default_prompt_idx,
                     ax.default_prompts_pending,
+                    ax.obvious_command.as_deref(),
                     &ax.selection_pinned,
                     ax.selection_tentative.as_ref(),
                     block_highlights,

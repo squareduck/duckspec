@@ -53,7 +53,7 @@ proposal only                                  design
 design, no specs                               spec
 specs, no steps                                step
 steps with at least one incomplete             apply
-all steps complete                             review
+all steps complete                             archive
 ```
 
 ## Step progress

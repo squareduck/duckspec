@@ -15,6 +15,7 @@ mod chat_store;
 pub mod config;
 mod data;
 mod default_prompts;
+mod obvious_bubble;
 pub mod highlight;
 mod idea_format;
 mod idea_store;
@@ -1759,12 +1760,11 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                 ax.default_prompts_gen,
                 prompts_gen,
                 result,
-                ax.obvious_command.as_deref(),
             ) else {
                 // Superseded generation — leave list and readiness unchanged.
                 return Task::none();
             };
-            // Effective list (oneshot parse or heuristic fallback) is ready.
+            // Effective list (oneshot parse only; empty on fail) is ready.
             ax.agent_default_prompts = list;
             ax.default_prompts_pending = false;
             ax.default_prompt_idx = default_prompts::clamp_active_index(
@@ -3852,6 +3852,7 @@ fn update_focused_column(state: &mut State, message: &Message) {
                     | ChatMsg::ChatAction(_, _)
                     | ChatMsg::QueueAction(_)
                     | ChatMsg::SendPressed
+                    | ChatMsg::SendObvious
                     | ChatMsg::ChatScrolled(_)
                     | ChatMsg::CycleDefaultPrompt(_)
             );

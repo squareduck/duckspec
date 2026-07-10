@@ -33,6 +33,8 @@ pub enum Msg {
     /// Action from the chat input editor.
     InputAction(text_edit::EditorAction),
     SendPressed,
+    /// Activate the lifecycle obvious bubble (⌘↩ / click) when visible.
+    SendObvious,
     CancelPressed,
     CompletionAccept,
     CompletionNext,
@@ -1051,6 +1053,8 @@ pub fn view<'a>(
     default_prompt_idx: usize,
     // True while the reply-suggestion oneshot is outstanding.
     default_prompts_pending: bool,
+    // Lifecycle next command for the obvious bubble (send form derived in view).
+    obvious_command: Option<&'a str>,
     pinned_selections: &'a [SelectionContext],
     tentative_selection: Option<&'a SelectionContext>,
     block_highlights: Vec<(
@@ -1093,6 +1097,20 @@ pub fn view<'a>(
                 .padding([theme::SPACING_SM, theme::SPACING_MD + theme::SPACING_SM])
                 .width(Length::Fill),
         );
+    }
+
+    // Lifecycle obvious bubble — greyed faux user chrome after real transcript
+    // content, above the composer. Not a stored message; activation sends via
+    // `Msg::SendObvious`.
+    let input_empty = input_value.text().trim().is_empty();
+    if crate::obvious_bubble::bubble_visible(
+        status.is_streaming,
+        input_empty,
+        obvious_command,
+    ) {
+        if let Some(send_text) = crate::obvious_bubble::bubble_send_text(obvious_command) {
+            chat_col = chat_col.push(view_obvious_bubble(send_text));
+        }
     }
 
     let chat_scroll = scrollable(chat_col)
@@ -1152,7 +1170,6 @@ pub fn view<'a>(
     // word-nav, selection). Plain Enter sends via `on_submit`; Shift+Enter
     // falls through to the default newline action. Grows via `fit_content`
     // (sibling column layout — never stacked under the defaults list).
-    let input_empty = input_value.text().trim().is_empty();
     let input = text_edit::TextEdit::new(input_value, Msg::InputAction)
         .id(CHAT_INPUT_ID)
         .show_gutter(false)
@@ -1604,6 +1621,51 @@ fn format_number(n: usize) -> String {
         result.push(ch);
     }
     result
+}
+
+/// Greyed faux user bubble for the lifecycle next command + ⌘↩ hint.
+/// View chrome only — not part of the transcript until activation sends.
+fn view_obvious_bubble<'a>(send_text: String) -> Element<'a, Msg> {
+    let mut hint_color = theme::text_muted();
+    hint_color.a *= 0.75;
+    let body = row![
+        text(send_text)
+            .size(theme::content_size())
+            .color(theme::text_muted())
+            .font(theme::content_font()),
+        Space::new().width(Length::Fill),
+        text("⌘↩")
+            .size(theme::font_sm())
+            .color(hint_color),
+    ]
+    .spacing(theme::SPACING_SM)
+    .align_y(iced::Alignment::Center);
+
+    let card = container(body)
+        .padding([theme::SPACING_SM, theme::SPACING_MD])
+        .width(Length::Fill)
+        .style(theme::chat_obvious_bubble);
+
+    let clickable = button(card)
+        .on_press(Msg::SendObvious)
+        .padding(0.0)
+        .width(Length::Fill)
+        .style(|_theme, status| {
+            let base = iced::widget::button::Style {
+                background: None,
+                ..Default::default()
+            };
+            match status {
+                iced::widget::button::Status::Hovered
+                | iced::widget::button::Status::Pressed => base,
+                _ => base,
+            }
+        });
+
+    container(clickable)
+        .padding([0.0, theme::SPACING_SM])
+        .width(Length::Fill)
+        .into()
 }
 
 /// Quiet loading strip while the reply-suggestion oneshot is pending.

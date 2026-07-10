@@ -69,12 +69,15 @@ don't go through the change workflow.
 
 ## Handoff
 
-Codex is a side operation. After writing entries, at most one next action:
+Codex is a side operation. After writing entries, at most one next action
+(list order = rank; offer once; never stack a second rank):
 
-- Mid-change: **Primary** — resume the change with `/ds-<stage>` (name the
-  stage).
-- Standalone harvest: no next action — "Entry saved."
+**Mid-change:**
 
-Offer once if suggesting a resume; never stack a second rank.
+Suggested next actions:
+
+- resume the change with `/ds-<stage>` (name the stage)
+
+**Standalone harvest:** no next action — "Entry saved."
 
 ## After write
