@@ -633,7 +633,8 @@ pub fn chat_obvious_chip_neutral(_theme: &Theme) -> container::Style {
     }
 }
 
-/// Very subtle green chip — Confirm / Commit, or the ⌘↩ lifecycle target when no affirm.
+/// Very subtle green chip — Confirm / Commit / Create change, or the ⌘↩ lifecycle
+/// target when no affirm.
 /// Starts from the neutral chrome chip and tints only slightly so it stays quiet.
 pub fn chat_obvious_chip_enter(_theme: &Theme) -> container::Style {
     let mut style = chat_obvious_chip_neutral(_theme);

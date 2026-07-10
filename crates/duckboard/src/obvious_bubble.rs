@@ -9,17 +9,20 @@
 pub struct ObviousChrome {
     /// Ordered lifecycle actions in empty-send form (`/ds-step`, …).
     pub lifecycle: Vec<String>,
-    /// Affirm row: Confirm (gate) or Commit (post-archive dirty).
+    /// Affirm row: Confirm (pre-step gate), Commit (post-archive dirty), or
+    /// Create change (nonempty exploration).
     pub affirm: Option<Affirm>,
     /// When true, show Reject and bind ⌘⌫.
     pub decline: bool,
 }
 
-/// Affirm action shown on ⌘↩ when the gate or Commit path is active.
+/// Affirm action shown on ⌘↩ when Confirm, Commit, or Create change is active.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Affirm {
     Confirm,
     Commit,
+    /// Nonempty exploration handoff — send text is literal `Create change`.
+    CreateChange,
 }
 
 impl Affirm {
@@ -27,6 +30,7 @@ impl Affirm {
         match self {
             Affirm::Confirm => "Confirm",
             Affirm::Commit => "Commit",
+            Affirm::CreateChange => "Create change",
         }
     }
 }
@@ -132,7 +136,7 @@ pub fn lifecycle_chip_label(index_1based: usize, action: &str) -> String {
     format!("⌘{index_1based}  {action}")
 }
 
-/// Chip label for affirm: `⌘↩  Confirm` or `⌘↩  Commit`.
+/// Chip label for affirm: `⌘↩  Confirm`, `⌘↩  Commit`, or `⌘↩  Create change`.
 pub fn affirm_chip_label(affirm: Affirm) -> String {
     format!("⌘↩  {}", affirm.send_text())
 }
@@ -318,14 +322,25 @@ mod tests {
         assert_ne!(label, action);
     }
 
-    // @spec chat/obvious-bubble Chip display: Affirm chip label is hotkey then Confirm or Commit
+    // @spec chat/obvious-bubble Chip display: Affirm chip label is hotkey then Confirm, Commit, or Create change
     #[test]
-    fn affirm_chip_label_is_hotkey_then_confirm_or_commit() {
-        let label = affirm_chip_label(Affirm::Confirm);
+    fn affirm_chip_label_is_hotkey_then_confirm_commit_or_create_change() {
+        // GIVEN affirm Create change
+        // WHEN the chip label is derived
+        // THEN the label starts with the ⌘↩ hotkey
+        // AND the label includes `Create change`
+        // AND the send text is exactly `Create change`
+        let label = affirm_chip_label(Affirm::CreateChange);
         assert!(label.starts_with("⌘↩"), "label={label}");
-        assert!(label.contains("Confirm"), "label={label}");
+        assert!(label.contains("Create change"), "label={label}");
+        assert_eq!(Affirm::CreateChange.send_text(), "Create change");
+        assert_ne!(label, "Create change");
+
+        // Confirm and Commit keep the same hotkey-then-action shape.
+        let confirm = affirm_chip_label(Affirm::Confirm);
+        assert!(confirm.starts_with("⌘↩"), "label={confirm}");
+        assert!(confirm.contains("Confirm"), "label={confirm}");
         assert_eq!(Affirm::Confirm.send_text(), "Confirm");
-        assert_ne!(label, "Confirm");
 
         let commit = affirm_chip_label(Affirm::Commit);
         assert!(commit.starts_with("⌘↩"), "label={commit}");

@@ -29,9 +29,10 @@ project state never makes the agent ask which change to act on.
 ## Requirement: Lifecycle reflection
 
 For a change scope, the orientation SHALL report the change's step progress and a
-suggested next stage that matches the change's artifact and step state. When steps remain
-unfinished it SHALL report the incomplete progress; when every step is complete it SHALL
-report completion.
+suggested next stage that matches the change's artifact state, step completion, and
+whether the change has any reviews — the same first lifecycle option used for obvious
+chrome. When steps remain unfinished it SHALL report the incomplete progress; when every
+step is complete it SHALL report completion.
 
 > test: code
 
@@ -43,7 +44,7 @@ report completion.
 - **AND** it suggests the apply stage as the next step
 
 > test: code
-> - crates/duckboard/src/area/change.rs:2219
+> - crates/duckboard/src/area/change.rs:2347
 
 ### Scenario: A change with only a proposal reports the design next-stage
 
@@ -52,17 +53,28 @@ report completion.
 - **THEN** it suggests the design stage as the next step
 
 > test: code
-> - crates/duckboard/src/area/change.rs:2253
+> - crates/duckboard/src/area/change.rs:2397
 
 ### Scenario: A change with all steps complete reports completion and the archive next-stage
 
 - **GIVEN** a change scope whose steps are all complete
+- **AND** the change has no reviews
 - **WHEN** the orientation is produced
 - **THEN** it reports the steps as complete
 - **AND** it suggests the archive stage as the next step
 
 > test: code
-> - crates/duckboard/src/area/change.rs:2237
+> - crates/duckboard/src/area/change.rs:2365
+
+### Scenario: All steps complete with a review suggests the step next-stage
+
+- **GIVEN** a change scope whose steps are all complete
+- **AND** the change has at least one review
+- **WHEN** the orientation is produced
+- **THEN** it suggests the step stage as the next step
+
+> test: code
+> - crates/duckboard/src/area/change.rs:2382
 
 ## Requirement: Non-change scope orientation
 
@@ -143,8 +155,11 @@ the same session.
 For a change scope, the orientation SHALL report the change's current review — the
 highest-numbered review in the change — as the project-root path
 `duckspec/changes/{name}/reviews/{filename}` when the change has at least one review, and
-SHALL omit any current-review report when the change has none. The presence or absence of
-reviews SHALL NOT affect the change's reported progress or its suggested next stage.
+SHALL omit any current-review report when the change has none. The presence of reviews
+SHALL NOT change reported step progress (done and total counts). The suggested next stage
+SHALL follow the review-aware lifecycle (same first option as obvious chrome), so a review
+may change the suggested next stage relative to an otherwise identical change without
+reviews.
 
 > test: code
 
@@ -158,7 +173,7 @@ reviews SHALL NOT affect the change's reported progress or its suggested next st
   `duckspec/changes/{name}/reviews/{filename}`
 
 > test: code
-> - crates/duckboard/src/area/change.rs:2277
+> - crates/duckboard/src/area/change.rs:2421
 
 ### Scenario: A change with no reviews reports no current review
 
@@ -167,14 +182,14 @@ reviews SHALL NOT affect the change's reported progress or its suggested next st
 - **THEN** it does not report a current review
 
 > test: code
-> - crates/duckboard/src/area/change.rs:2299
+> - crates/duckboard/src/area/change.rs:2443
 
-### Scenario: Adding a review does not change the suggested next stage
+### Scenario: Adding a review does not change reported step progress
 
-- **GIVEN** two change scopes with identical artifact and step state
+- **GIVEN** two change scopes with identical step completion state
 - **AND** one of them additionally has reviews
 - **WHEN** the orientation is produced for each
-- **THEN** both report the same suggested next stage
+- **THEN** both report the same step progress (done and total)
 
 > test: code
-> - crates/duckboard/src/area/change.rs:2314
+> - crates/duckboard/src/area/change.rs:2458

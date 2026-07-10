@@ -1624,14 +1624,14 @@ fn format_number(n: usize) -> String {
 enum ObviousChipTone {
     /// Default muted chrome.
     Neutral,
-    /// Confirm / Commit, or the lifecycle option bound to ⌘↩ when no affirm.
+    /// Confirm / Commit / Create change, or the lifecycle option bound to ⌘↩ when no affirm.
     Enter,
     /// Reject.
     Reject,
 }
 
 /// Multi-option obvious chrome: lifecycle chips (⌘1…) then optional gate row
-/// (Confirm/Reject or Commit). View chrome only until activation sends.
+/// (Confirm/Reject, Commit, or Create change). View chrome only until activation sends.
 fn view_obvious_chrome<'a>(
     chrome: &'a crate::obvious_bubble::ObviousChrome,
 ) -> Element<'a, Msg> {

@@ -169,6 +169,9 @@ Suggested next actions:
 
 - `/ds-archive`
 
-- A review never changes the orientation's suggested next stage on its own.
+- Creating a review file may change the change's chrome and orientation next
+  stage (review-aware ladder: rework via `/ds-step` / `/ds-spec`, with
+  `/ds-archive` still available when there are no open steps). Confirm/Reject
+  remains available on nonempty sessions while a review is on file.
 
 ## After write

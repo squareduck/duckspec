@@ -747,8 +747,8 @@ pub struct ChangeScopeFacts {
     /// Full ordered bare skill names for multi-option chrome (no leading `/`).
     pub lifecycle_commands: Vec<String>,
     /// The change's current review — the highest-numbered review filename
-    /// (`NN-<slug>.md`), or `None` when the change has no reviews. Advisory:
-    /// surfaced in the orientation but never affects `phase`/`next_command`.
+    /// (`NN-<slug>.md`), or `None` when the change has no reviews. Surfaced in
+    /// orientation; when present, also steers the review-aware lifecycle arms.
     pub current_review: Option<String>,
 }
 
@@ -789,50 +789,78 @@ pub fn change_scope_facts(name: &str, project: &ProjectData) -> Option<ChangeSco
     // The current review is the highest-numbered review (reviews are sorted
     // ascending). Computed before the phase branches and set in every arm so
     // it surfaces at any lifecycle stage — including a pre-implementation
-    // review under a proposal-only change. It never gates phase/next_command.
+    // review under a proposal-only change. When present, review-aware arms
+    // below take priority over the plain ladder.
     let current_review = change.reviews.last().cloned();
+    let has_review = current_review.is_some();
 
-    // Steps exist → apply (unfinished) or archive+review (all done).
-    if !change.steps.is_empty() {
-        let steps_done = change
-            .steps
-            .iter()
-            .filter(|s| matches!(s.completion, StepCompletion::Done))
-            .count();
-        let all_done = steps_done == change.steps.len();
-        let active_step_tasks = change.steps.iter().find_map(|s| match s.completion {
-            StepCompletion::Partial(done, total) => Some((done, total)),
-            _ => None,
-        });
-        return Some(if all_done {
-            scope_facts(
-                "all steps complete",
-                steps_done,
-                change.steps.len(),
-                active_step_tasks,
-                &["ds-archive", "ds-review"],
-                current_review,
-            )
+    let steps_done = change
+        .steps
+        .iter()
+        .filter(|s| matches!(s.completion, StepCompletion::Done))
+        .count();
+    let step_count = change.steps.len();
+    let has_steps = step_count > 0;
+    let all_done = has_steps && steps_done == step_count;
+    let open = has_steps && !all_done;
+    let active_step_tasks = change.steps.iter().find_map(|s| match s.completion {
+        StepCompletion::Partial(done, total) => Some((done, total)),
+        _ => None,
+    });
+
+    // Open steps: apply only when a review is on file; else apply + review.
+    if open {
+        let life: &[&str] = if has_review {
+            &["ds-apply"]
         } else {
-            scope_facts(
-                "implementing steps",
-                steps_done,
-                change.steps.len(),
-                active_step_tasks,
-                &["ds-apply", "ds-review"],
-                current_review,
-            )
-        });
+            &["ds-apply", "ds-review"]
+        };
+        return Some(scope_facts(
+            "implementing steps",
+            steps_done,
+            step_count,
+            active_step_tasks,
+            life,
+            current_review,
+        ));
     }
 
-    // Caps on disk, no steps — multi-option: step / more-spec / no-code archive.
+    // No open steps + review: rework path (step / spec / archive).
+    if has_review {
+        return Some(scope_facts(
+            if all_done {
+                "all steps complete, review on file"
+            } else {
+                "review on file, no open steps"
+            },
+            steps_done,
+            step_count,
+            active_step_tasks,
+            &["ds-step", "ds-spec", "ds-archive"],
+            current_review,
+        ));
+    }
+
+    // All steps complete, no review → archive + review.
+    if all_done {
+        return Some(scope_facts(
+            "all steps complete",
+            steps_done,
+            step_count,
+            active_step_tasks,
+            &["ds-archive", "ds-review"],
+            current_review,
+        ));
+    }
+
+    // Caps on disk, no steps — step or no-code archive (no re-entry to ds-spec).
     if !change.cap_tree.is_empty() {
         return Some(scope_facts(
             "specs drafted, steps not yet written",
             0,
             0,
             None,
-            &["ds-step", "ds-spec", "ds-archive"],
+            &["ds-step", "ds-archive"],
             current_review,
         ));
     }
@@ -844,7 +872,7 @@ pub fn change_scope_facts(name: &str, project: &ProjectData) -> Option<ChangeSco
             0,
             0,
             None,
-            &["ds-spec"],
+            &["ds-spec", "ds-step"],
             current_review,
         ));
     }
@@ -890,7 +918,12 @@ pub fn build_obvious_chrome(
                     decline: false,
                 }
             } else {
-                ObviousChrome::default()
+                // Nonempty exploration: Commit-style Create change affirm only.
+                ObviousChrome {
+                    lifecycle: Vec::new(),
+                    affirm: Some(Affirm::CreateChange),
+                    decline: false,
+                }
             }
         }
         Scope::Change(name) => {
@@ -916,11 +949,18 @@ pub fn build_obvious_chrome(
                 .filter_map(|c| format_lifecycle_command(c))
                 .collect();
 
-            // Gate row only on nonempty active-change sessions (not Commit path).
+            // Confirm+Reject when nonempty and either a review is on file
+            // (write-approval during rework /ds-step|/ds-spec) or the change
+            // is still pre-step (no steps on disk). Open steps without a
+            // review stay lifecycle-only.
+            let has_steps = facts.step_count > 0;
+            let has_review = facts.current_review.is_some();
             let (affirm, decline) = if session_empty {
                 (None, false)
-            } else {
+            } else if has_review || !has_steps {
                 (Some(Affirm::Confirm), true)
+            } else {
+                (None, false)
             };
 
             ObviousChrome {
@@ -2138,19 +2178,46 @@ mod breadcrumb_tests {
         );
     }
 
-    // @spec chat/obvious-bubble Chrome composition: Caps without steps yield step then spec then archive
+    // @spec chat/obvious-bubble Chrome composition: Caps without steps yield step then archive
     #[test]
-    fn chrome_caps_without_steps_yield_step_then_spec_then_archive() {
+    fn chrome_caps_without_steps_yield_step_then_archive() {
         let mut project = make_project(&["foo"], &[]);
         set_change(&mut project, "foo", |c| {
             c.has_proposal = true;
             c.cap_tree = vec![tree_node("caps/auth")];
         });
         let chrome = build_obvious_chrome(&Scope::Change("foo".into()), &project, true, false);
-        assert_eq!(
-            chrome.lifecycle,
-            vec!["/ds-step", "/ds-spec", "/ds-archive"]
+        assert_eq!(chrome.lifecycle, vec!["/ds-step", "/ds-archive"]);
+    }
+
+    // @spec chat/obvious-bubble Chrome composition: Design without caps yields spec then step
+    #[test]
+    fn chrome_design_without_caps_yields_spec_then_step() {
+        let mut project = make_project(&["foo"], &[]);
+        set_change(&mut project, "foo", |c| {
+            c.has_proposal = true;
+            c.has_design = true;
+        });
+        let chrome = build_obvious_chrome(&Scope::Change("foo".into()), &project, true, false);
+        assert_eq!(chrome.lifecycle, vec!["/ds-spec", "/ds-step"]);
+    }
+
+    // @spec chat/obvious-bubble Chrome composition: Nonempty exploration yields Create change only
+    #[test]
+    fn chrome_nonempty_exploration_yields_create_change_only() {
+        let project = make_project(&[], &[]);
+        let chrome = build_obvious_chrome(
+            &Scope::Exploration("exploration-1".into()),
+            &project,
+            false,
+            false,
         );
+        assert_eq!(
+            chrome.affirm,
+            Some(crate::obvious_bubble::Affirm::CreateChange)
+        );
+        assert!(chrome.lifecycle.is_empty());
+        assert!(!chrome.decline);
     }
 
     // @spec chat/obvious-bubble Chrome composition: All steps complete yield archive then review
@@ -2170,9 +2237,70 @@ mod breadcrumb_tests {
     // @spec chat/obvious-bubble Chrome composition: Nonempty change session includes Confirm and Reject
     #[test]
     fn chrome_nonempty_change_session_includes_confirm_and_reject() {
+        // GIVEN pre-step, no reviews, nonempty session
         let mut project = make_project(&["foo"], &[]);
         set_change(&mut project, "foo", |c| c.has_proposal = true);
         let chrome = build_obvious_chrome(&Scope::Change("foo".into()), &project, false, false);
+        assert_eq!(
+            chrome.affirm,
+            Some(crate::obvious_bubble::Affirm::Confirm)
+        );
+        assert!(chrome.decline);
+    }
+
+    // @spec chat/obvious-bubble Chrome composition: Open steps yield apply then review without gate
+    #[test]
+    fn chrome_open_steps_yield_apply_then_review_without_gate() {
+        let mut project = make_project(&["foo"], &[]);
+        set_change(&mut project, "foo", |c| {
+            c.has_proposal = true;
+            c.has_design = true;
+            c.cap_tree = vec![tree_node("caps/auth")];
+            c.steps = vec![step(false), step(true)];
+        });
+        let chrome = build_obvious_chrome(&Scope::Change("foo".into()), &project, false, false);
+        assert_eq!(chrome.lifecycle, vec!["/ds-apply", "/ds-review"]);
+        assert!(chrome.affirm.is_none());
+        assert!(!chrome.decline);
+    }
+
+    // @spec chat/obvious-bubble Chrome composition: Open steps with review yield apply only with gate
+    #[test]
+    fn chrome_open_steps_with_review_yield_apply_only_with_gate() {
+        // GIVEN open steps + review + nonempty session → apply only + Confirm/Reject
+        let mut project = make_project(&["foo"], &[]);
+        set_change(&mut project, "foo", |c| {
+            c.has_proposal = true;
+            c.has_design = true;
+            c.cap_tree = vec![tree_node("caps/auth")];
+            c.steps = vec![step(false), step(true)];
+            c.reviews = vec!["01-look.md".into()];
+        });
+        let chrome = build_obvious_chrome(&Scope::Change("foo".into()), &project, false, false);
+        assert_eq!(chrome.lifecycle, vec!["/ds-apply"]);
+        assert_eq!(
+            chrome.affirm,
+            Some(crate::obvious_bubble::Affirm::Confirm)
+        );
+        assert!(chrome.decline);
+    }
+
+    // @spec chat/obvious-bubble Chrome composition: No open steps with review yield step then spec then archive with gate
+    #[test]
+    fn chrome_no_open_steps_with_review_yield_step_spec_archive_with_gate() {
+        let mut project = make_project(&["foo"], &[]);
+        set_change(&mut project, "foo", |c| {
+            c.has_proposal = true;
+            c.has_design = true;
+            c.cap_tree = vec![tree_node("caps/auth")];
+            c.steps = vec![step(true), step(true)];
+            c.reviews = vec!["01-look.md".into()];
+        });
+        let chrome = build_obvious_chrome(&Scope::Change("foo".into()), &project, false, false);
+        assert_eq!(
+            chrome.lifecycle,
+            vec!["/ds-step", "/ds-spec", "/ds-archive"]
+        );
         assert_eq!(
             chrome.affirm,
             Some(crate::obvious_bubble::Affirm::Confirm)
@@ -2234,9 +2362,10 @@ mod breadcrumb_tests {
         assert_eq!(facts.next_command.as_deref(), Some("ds-apply"));
     }
 
-    /// @spec session/scope Lifecycle reflection: A change with all steps complete reports completion and the archive next-stage
+    // @spec session/scope Lifecycle reflection: A change with all steps complete reports completion and the archive next-stage
     #[test]
     fn facts_all_steps_complete_report_completion_and_archive() {
+        // GIVEN all steps complete AND no reviews
         let mut project = make_project(&["foo"], &[]);
         set_change(&mut project, "foo", |c| {
             c.has_proposal = true;
@@ -2248,6 +2377,21 @@ mod breadcrumb_tests {
         assert_eq!(facts.steps_done, facts.step_count);
         assert!(facts.step_count > 0, "completion is over real steps");
         assert_eq!(facts.next_command.as_deref(), Some("ds-archive"));
+    }
+
+    // @spec session/scope Lifecycle reflection: All steps complete with a review suggests the step next-stage
+    #[test]
+    fn facts_all_steps_complete_with_review_suggests_step() {
+        let mut project = make_project(&["foo"], &[]);
+        set_change(&mut project, "foo", |c| {
+            c.has_proposal = true;
+            c.has_design = true;
+            c.cap_tree = vec![tree_node("caps/auth")];
+            c.steps = vec![step(true), step(true)];
+            c.reviews = vec!["01-look.md".into()];
+        });
+        let facts = change_scope_facts("foo", &project).expect("active change has facts");
+        assert_eq!(facts.next_command.as_deref(), Some("ds-step"));
     }
 
     /// @spec session/scope Lifecycle reflection: A change with only a proposal reports the design next-stage
@@ -2311,29 +2455,29 @@ mod breadcrumb_tests {
         );
     }
 
-    // @spec session/scope Current review in orientation: Adding a review does not change the suggested next stage
+    // @spec session/scope Current review in orientation: Adding a review does not change reported step progress
     #[test]
-    fn adding_a_review_does_not_change_next_stage() {
-        // Two changes with identical artifact/step state; only `bar` has reviews.
+    fn adding_a_review_does_not_change_reported_step_progress() {
+        // Two changes with identical step completion; only `bar` has reviews.
         let mut project = make_project(&["foo", "bar"], &[]);
-        set_change(&mut project, "foo", |c| c.has_proposal = true);
+        for name in ["foo", "bar"] {
+            set_change(&mut project, name, |c| {
+                c.has_proposal = true;
+                c.has_design = true;
+                c.cap_tree = vec![tree_node("caps/auth")];
+                c.steps = vec![step(true), step(false)];
+            });
+        }
         set_change(&mut project, "bar", |c| {
-            c.has_proposal = true;
             c.reviews = vec!["01-a-look.md".into()];
         });
 
         let foo = change_scope_facts("foo", &project).expect("facts");
         let bar = change_scope_facts("bar", &project).expect("facts");
-        assert_eq!(
-            foo.next_command, bar.next_command,
-            "reviews must not affect the suggested next stage"
-        );
-
-        // The orientations agree on the suggested next stage even though only
-        // one carries a current-review report.
-        let next = " Suggested next stage: /ds-design.";
-        assert!(orientation_for("foo", &project).contains(next));
-        assert!(orientation_for("bar", &project).contains(next));
+        assert_eq!(foo.steps_done, bar.steps_done);
+        assert_eq!(foo.step_count, bar.step_count);
+        assert_eq!(foo.steps_done, 1);
+        assert_eq!(foo.step_count, 2);
     }
 }
 

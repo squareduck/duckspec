@@ -22,7 +22,7 @@ committed user messages in the session.
 - **THEN** it does not contain a user message whose sole purpose is the chrome chip
 
 > test: code
-> - crates/duckboard/src/obvious_bubble.rs:340
+> - crates/duckboard/src/obvious_bubble.rs:355
 
 ## Requirement: Lifecycle option formatting
 
@@ -40,7 +40,7 @@ Empty or blank skill names SHALL not produce a lifecycle send string.
 - **THEN** the send text is that name with a single leading `/`
 
 > test: code
-> - crates/duckboard/src/obvious_bubble.rs:165
+> - crates/duckboard/src/obvious_bubble.rs:169
 
 ### Scenario: Already-slashed command is preserved
 
@@ -49,28 +49,38 @@ Empty or blank skill names SHALL not produce a lifecycle send string.
 - **THEN** the send text equals the stored name
 
 > test: code
-> - crates/duckboard/src/obvious_bubble.rs:181
+> - crates/duckboard/src/obvious_bubble.rs:185
 
 ## Requirement: Chrome composition
 
-Obvious chrome SHALL be composed only from disk lifecycle phase, whether the session
-transcript is empty, whether the change is archived, and whether the repository working
-tree is dirty — never from oneshot default-prompt text.
+Obvious chrome SHALL be composed only from disk lifecycle phase (including whether any
+steps exist and whether any are incomplete), whether the change has at least one review,
+whether the session transcript is empty, whether the change is archived, and whether the
+repository working tree is dirty — never from oneshot default-prompt text.
 
-Lifecycle options SHALL be ordered empty-send `/ds-*` strings by phase:
+Lifecycle options SHALL be ordered empty-send `/ds-*` strings by the first matching arm:
 
 - empty exploration session: `/ds-explore` only
 - nonempty exploration session: no lifecycle options
-- empty change (no proposal): `/ds-propose` only
-- proposal present, no design, no caps: `/ds-design`, then `/ds-spec`
-- design present, no caps: `/ds-spec` only
-- caps present, no steps: `/ds-step`, then `/ds-spec`, then `/ds-archive`
-- steps present and not all complete: `/ds-apply`, then `/ds-review`
-- all steps complete: `/ds-archive`, then `/ds-review`
+- open steps and at least one review: `/ds-apply` only
+- open steps and no reviews: `/ds-apply`, then `/ds-review`
+- no open steps and at least one review: `/ds-step`, then `/ds-spec`, then `/ds-archive`
+- all steps complete and no reviews: `/ds-archive`, then `/ds-review`
+- caps present, no steps, no reviews: `/ds-step`, then `/ds-archive`
+- design present, no caps, no reviews: `/ds-spec`, then `/ds-step`
+- proposal present, no design, no caps, no reviews: `/ds-design`, then `/ds-spec`
+- empty change (no proposal), no reviews: `/ds-propose` only
 
 When the scope is an active change and the session is non-empty, the chrome SHALL include
-affirm `Confirm` and decline `Reject`, except on the Commit-only path below. When the
-session is empty, the gate row SHALL be omitted.
+affirm `Confirm` and decline `Reject` when either the change has at least one review, or
+the change has no steps on disk — except on the Commit-only path below. When the session
+is empty, the gate row SHALL be omitted. When the session is non-empty, the change has
+steps on disk, and the change has no reviews, the gate row SHALL be omitted (lifecycle
+chips only).
+
+When the scope is an exploration and the session is non-empty, the chrome SHALL be affirm
+`Create change` only — no lifecycle options and no `Reject`. The affirm send text SHALL be
+the literal string `Create change`.
 
 When the scope is an archived change, the session is non-empty, and the repository is
 dirty, the chrome SHALL be affirm `Commit` only — no lifecycle options and no `Reject`.
@@ -80,18 +90,6 @@ Caps and codex scopes SHALL yield empty chrome.
 
 > test: code
 
-### Scenario: Caps without steps yield step then spec then archive
-
-- **GIVEN** an active change with at least one capability and no steps
-
-- **WHEN** obvious chrome is composed
-
-- **THEN** the lifecycle options are `/ds-step`, `/ds-spec`, and `/ds-archive` in that
-  order
-
-> test: code
-> - crates/duckboard/src/area/change.rs:2141
-
 ### Scenario: All steps complete yield archive then review
 
 - **GIVEN** an active change whose steps are all complete
@@ -99,18 +97,20 @@ Caps and codex scopes SHALL yield empty chrome.
 - **THEN** the lifecycle options are `/ds-archive` and `/ds-review` in that order
 
 > test: code
-> - crates/duckboard/src/area/change.rs:2156
+> - crates/duckboard/src/area/change.rs:2223
 
 ### Scenario: Nonempty change session includes Confirm and Reject
 
 - **GIVEN** an active change with a non-empty session transcript
+- **AND** the change has no steps on disk
+- **AND** the change has no reviews
 - **AND** the change is not on the archived Commit-only path
 - **WHEN** obvious chrome is composed
 - **THEN** affirm is Confirm
 - **AND** decline is present
 
 > test: code
-> - crates/duckboard/src/area/change.rs:2170
+> - crates/duckboard/src/area/change.rs:2237
 
 ### Scenario: Empty change session omits gate row
 
@@ -120,7 +120,7 @@ Caps and codex scopes SHALL yield empty chrome.
 - **AND** decline is absent
 
 > test: code
-> - crates/duckboard/src/area/change.rs:2183
+> - crates/duckboard/src/area/change.rs:2311
 
 ### Scenario: Archived dirty nonempty session yields Commit only
 
@@ -133,7 +133,7 @@ Caps and codex scopes SHALL yield empty chrome.
 - **AND** decline is absent
 
 > test: code
-> - crates/duckboard/src/area/change.rs:2193
+> - crates/duckboard/src/area/change.rs:2321
 
 ### Scenario: Empty exploration yields explore only
 
@@ -144,7 +144,78 @@ Caps and codex scopes SHALL yield empty chrome.
 - **AND** decline is absent
 
 > test: code
-> - crates/duckboard/src/area/change.rs:2208
+> - crates/duckboard/src/area/change.rs:2336
+
+### Scenario: Nonempty exploration yields Create change only
+
+- **GIVEN** an exploration scope with a non-empty session transcript
+- **WHEN** obvious chrome is composed
+- **THEN** affirm is Create change
+- **AND** there are no lifecycle options
+- **AND** decline is absent
+
+> test: code
+> - crates/duckboard/src/area/change.rs:2205
+
+### Scenario: Design without caps yields spec then step
+
+- **GIVEN** an active change with a design, no capabilities, and no reviews
+- **WHEN** obvious chrome is composed
+- **THEN** the lifecycle options are `/ds-spec` and `/ds-step` in that order
+
+> test: code
+> - crates/duckboard/src/area/change.rs:2193
+
+### Scenario: Caps without steps yield step then archive
+
+- **GIVEN** an active change with at least one capability, no steps, and no reviews
+- **WHEN** obvious chrome is composed
+- **THEN** the lifecycle options are `/ds-step` and `/ds-archive` in that order
+
+> test: code
+> - crates/duckboard/src/area/change.rs:2181
+
+### Scenario: Open steps yield apply then review without gate
+
+- **GIVEN** an active change with at least one incomplete step and no reviews
+- **AND** a non-empty session transcript
+- **WHEN** obvious chrome is composed
+- **THEN** the lifecycle options are `/ds-apply` and `/ds-review` in that order
+- **AND** affirm is absent
+- **AND** decline is absent
+
+> test: code
+> - crates/duckboard/src/area/change.rs:2251
+
+### Scenario: Open steps with review yield apply only with gate
+
+- **GIVEN** an active change with at least one incomplete step and at least one review
+- **AND** a non-empty session transcript
+- **WHEN** obvious chrome is composed
+- **THEN** the only lifecycle option is `/ds-apply`
+- **AND** affirm is Confirm
+- **AND** decline is present
+
+> test: code
+> - crates/duckboard/src/area/change.rs:2267
+
+### Scenario: No open steps with review yield step then spec then archive with gate
+
+- **GIVEN** an active change with no incomplete steps and at least one review
+
+- **AND** a non-empty session transcript
+
+- **WHEN** obvious chrome is composed
+
+- **THEN** the lifecycle options are `/ds-step`, `/ds-spec`, and `/ds-archive` in that
+  order
+
+- **AND** affirm is Confirm
+
+- **AND** decline is present
+
+> test: code
+> - crates/duckboard/src/area/change.rs:2288
 
 ## Requirement: Chrome visibility
 
@@ -165,7 +236,7 @@ when any gate fails.
 - **THEN** the chrome is shown
 
 > test: code
-> - crates/duckboard/src/obvious_bubble.rs:193
+> - crates/duckboard/src/obvious_bubble.rs:197
 
 ### Scenario: Streaming hides chrome
 
@@ -176,7 +247,7 @@ when any gate fails.
 - **THEN** the chrome is not shown
 
 > test: code
-> - crates/duckboard/src/obvious_bubble.rs:203
+> - crates/duckboard/src/obvious_bubble.rs:207
 
 ### Scenario: Non-empty composer hides chrome
 
@@ -187,7 +258,7 @@ when any gate fails.
 - **THEN** the chrome is not shown
 
 > test: code
-> - crates/duckboard/src/obvious_bubble.rs:210
+> - crates/duckboard/src/obvious_bubble.rs:214
 
 ### Scenario: Empty chrome is hidden
 
@@ -198,7 +269,7 @@ when any gate fails.
 - **THEN** the chrome is not shown
 
 > test: code
-> - crates/duckboard/src/obvious_bubble.rs:217
+> - crates/duckboard/src/obvious_bubble.rs:221
 
 ### Scenario: Oneshot pending does not hide chrome when otherwise visible
 
@@ -210,7 +281,7 @@ when any gate fails.
 - **THEN** the chrome is shown
 
 > test: code
-> - crates/duckboard/src/obvious_bubble.rs:225
+> - crates/duckboard/src/obvious_bubble.rs:229
 
 ## Requirement: Key resolution
 
@@ -222,21 +293,21 @@ index exists, otherwise no send. When the chrome is not visible, every such acti
 SHALL be a no-op (no send).
 
 The resolved send text SHALL be the action string only (lifecycle empty-send form,
-`Confirm`, `Commit`, or `Reject`). It SHALL NOT be taken from the oneshot default-prompt
-list, even when that list is non-empty and differs.
+`Confirm`, `Commit`, `Create change`, or `Reject`). It SHALL NOT be taken from the oneshot
+default-prompt list, even when that list is non-empty and differs.
 
 > test: code
 
 ### Scenario: Cmd-Enter sends affirm when present
 
-- **GIVEN** visible chrome with affirm Confirm or Commit
+- **GIVEN** visible chrome with affirm Confirm, Commit, or Create change
 - **AND** one or more lifecycle options
 - **WHEN** ⌘↩ activation is resolved
 - **THEN** the send text is the affirm action string
 - **AND** the send text is not a lifecycle option
 
 > test: code
-> - crates/duckboard/src/obvious_bubble.rs:233
+> - crates/duckboard/src/obvious_bubble.rs:237
 
 ### Scenario: Cmd-Enter sends first lifecycle when affirm absent
 
@@ -246,7 +317,7 @@ list, even when that list is non-empty and differs.
 - **THEN** the send text equals the first lifecycle option
 
 > test: code
-> - crates/duckboard/src/obvious_bubble.rs:243
+> - crates/duckboard/src/obvious_bubble.rs:247
 
 ### Scenario: Cmd-Backspace sends Reject when decline set
 
@@ -255,7 +326,7 @@ list, even when that list is non-empty and differs.
 - **THEN** the send text is `Reject`
 
 > test: code
-> - crates/duckboard/src/obvious_bubble.rs:251
+> - crates/duckboard/src/obvious_bubble.rs:255
 
 ### Scenario: Cmd-digit sends matching lifecycle option
 
@@ -264,7 +335,7 @@ list, even when that list is non-empty and differs.
 - **THEN** the send text equals the second lifecycle option
 
 > test: code
-> - crates/duckboard/src/obvious_bubble.rs:259
+> - crates/duckboard/src/obvious_bubble.rs:263
 
 ### Scenario: Resolution is a no-op when chrome not visible
 
@@ -273,7 +344,7 @@ list, even when that list is non-empty and differs.
 - **THEN** there is no send text
 
 > test: code
-> - crates/duckboard/src/obvious_bubble.rs:267
+> - crates/duckboard/src/obvious_bubble.rs:271
 
 ### Scenario: Resolved text ignores oneshot list when both differ
 
@@ -285,7 +356,7 @@ list, even when that list is non-empty and differs.
 - **AND** the send text is not B
 
 > test: code
-> - crates/duckboard/src/obvious_bubble.rs:294
+> - crates/duckboard/src/obvious_bubble.rs:298
 
 ## Requirement: Chip display
 
@@ -305,15 +376,15 @@ binding before the action text (lifecycle: `⌘` plus 1-based index; affirm: `�
 - **AND** the send text is exactly `/ds-step`
 
 > test: code
-> - crates/duckboard/src/obvious_bubble.rs:309
+> - crates/duckboard/src/obvious_bubble.rs:313
 
-### Scenario: Affirm chip label is hotkey then Confirm or Commit
+### Scenario: Affirm chip label is hotkey then Confirm, Commit, or Create change
 
-- **GIVEN** affirm Confirm
+- **GIVEN** affirm Create change
 - **WHEN** the chip label is derived
 - **THEN** the label starts with the ⌘↩ hotkey
-- **AND** the label includes `Confirm`
-- **AND** the send text is exactly `Confirm`
+- **AND** the label includes `Create change`
+- **AND** the send text is exactly `Create change`
 
 > test: code
-> - crates/duckboard/src/obvious_bubble.rs:321
+> - crates/duckboard/src/obvious_bubble.rs:325
