@@ -1,11 +1,18 @@
 # Review schema
 
 A review is a **judgment** on a change — the read that static verification can't
-do. `ds audit` and `ds check` already prove a change is well-*formed*: schemas
-valid, scenarios covered, backlinks resolved. A review asks the harder question:
+do. `ds audit <change>` and `ds check` already prove a change is well-*formed*:
+schemas valid, scenarios covered, backlinks resolved. (Bare `ds audit` is
+whole-project health, not change progress.) A review asks the harder question:
 is the change well-*conceived* and well-*made*? It records that judgment as a
 document a reader or agent can act on. Reviews live under
-`changes/<name>/reviews/NN-<slug>.md` and form an append-only, chronological log.
+`changes/<name>/reviews/NN-review-<slug>.md` and form an append-only,
+chronological log shared with followups.
+
+**Producing this document is the whole job of `/ds-review`.** Applying fixes
+(plan, code, or templates) is a later choice by the user — `/ds-spec`,
+`/ds-step`, ignore, or an explicit in-place request — not part of writing the
+review.
 
 ## What a review examines
 
@@ -35,6 +42,9 @@ It judges along three **lenses**:
 
 ## Structure
 
+Write for two read modes: a **Summary** table for triage, then structured detail
+under **Findings**. Chat presentation should match the Summary table.
+
 ```markdown
 # <Review Title>
 
@@ -46,12 +56,23 @@ It judges along three **lenses**:
 change is at (proposal-only, mid-implementation, post-implementation). Name the
 deepest layer reached down the chain.>
 
+## Summary
+
+| # | sev | lens | title | → next |
+|---|-----|------|-------|--------|
+| 1 | critical | soundness | State comparison inverted on callback | /ds-spec |
+| 2 | major | quality | Token exchange reimplements retry helper | /ds-step |
+
 ## Findings
 
-### <Finding title> — <lens>/<severity>
+### 1. <Finding title> — <lens>/<severity>
 
-<what the issue is, where it lives (`path:line` for code, the artifact + section
-for an upstream layer), why it matters long-term, and the recommended action>
+**Where:** <`path:line` for code, or artifact + section for an upstream layer>
+
+**Why:** <why it matters long-term if frozen as-is>
+
+**Action:** <concrete recommended action or next stage — not work already performed
+in this session>
 
 ## Open questions
 
@@ -64,6 +85,11 @@ decision only the human can make. Omit this section if there are none.>
 the thinking sound, and is the realization (as far as it exists) faithful and
 well-made? Say plainly what should improve before this is accepted as done.>
 ```
+
+Number findings in the Summary table and use the same numbers in Findings headings
+so the two surfaces stay aligned. The `→ next` column recommends the stage that
+would own the work (`/ds-spec` for new or changed behavior, `/ds-step` for
+restructure, `/ds-archive` when ready, or `ignore`).
 
 ## Severity
 
@@ -98,12 +124,21 @@ same.
 - A summary paragraph directly follows the H1.
 - The body is freeform markdown — the sections above are recommended, not enforced
   by `ds check`. A review validates against the document schema only.
+- New creates use a `review-` slug prefix (`NN-review-<slug>.md`); legacy files
+  without a kind prefix remain valid.
 
 ## Quality
 
-- **Judge, don't re-verify.** Don't spend findings on what `ds audit`/`ds check`
-  already prove (unresolved backlinks, uncovered scenarios, invalid schemas).
-  Spend them on soundness, fidelity, and craft — the things only judgment catches.
+- **Document first.** The review file is the deliverable; applying fixes is out of
+  band until the user chooses a next step.
+- **Scannable first.** A reader should triage from Summary without reading every
+  finding body. Keep titles short; put depth under **Where** / **Why** / **Action**.
+- **Recommend, don't apply.** Action describes what should happen next; it does not
+  narrate edits performed during `/ds-review`.
+- **Judge, don't re-verify.** Don't spend findings on what
+  `ds audit <change>` / `ds check` already prove (unresolved backlinks,
+  uncovered scenarios, invalid schemas). Spend them on soundness, fidelity, and
+  craft — the things only judgment catches.
 - **The verdict is an aggregate, not a maximum.** Form a holistic read. Five minor
   quality findings in a small, load-bearing component is a *different* signal than
   one stray nit — the verdict must reflect the gestalt, not just the worst single
@@ -151,27 +186,42 @@ that I wouldn't freeze it as-is.
 The `caps/auth/google` spec and design, the change's steps, and the code under
 `src/auth/google/`. Post-implementation: the full chain down to code.
 
+## Summary
+
+| # | sev | lens | title | → next |
+|---|-----|------|-------|--------|
+| 1 | critical | soundness | State comparison inverted on callback | /ds-spec |
+| 2 | major | quality | Token exchange reimplements retry helper | /ds-step |
+| 3 | minor | fidelity | Callback splits auth logic across modules | /ds-step |
+
 ## Findings
 
-### State comparison is inverted on the callback — soundness/critical
+### 1. State comparison inverted on callback — soundness/critical
 
-`src/auth/google/callback.rs:42` compares the returned `state` to a freshly
-generated value, not the one stashed at authorize time, so every callback
-passes the check. This contradicts the "Callback rejects a forged state"
-scenario, whose test only asserts the param is present. Compare against the
-stored value and tighten the test to assert a mismatch is rejected.
+**Where:** `src/auth/google/callback.rs:42`
 
-### Token exchange reimplements the shared retry helper — quality/major
+**Why:** Every callback passes the forged-state check; contradicts the "Callback
+rejects a forged state" scenario, whose test only asserts the param is present.
 
-`callback.rs:70-110` hand-rolls a retry-with-backoff loop that duplicates
-`http::retry`. It's longer, drops the jitter the shared helper applies, and is a
-second place to fix bugs. Call `http::retry` instead.
+**Action:** Compare against the stored authorize-time value; tighten the test to
+assert a mismatch is rejected.
 
-### Callback splits auth logic across two modules — fidelity/minor
+### 2. Token exchange reimplements retry helper — quality/major
 
-The design puts all of the exchange in `callback`, but error mapping leaked into
-`mod.rs`. Minor, but it erodes the single-module boundary the design chose. Fold
-it back.
+**Where:** `callback.rs:70-110`
+
+**Why:** Hand-rolled retry-with-backoff duplicates `http::retry`, drops jitter,
+and is a second place to fix bugs.
+
+**Action:** Call `http::retry` instead.
+
+### 3. Callback splits auth logic across modules — fidelity/minor
+
+**Where:** error mapping in `mod.rs` vs design boundary on `callback`
+
+**Why:** Erodes the single-module boundary the design chose.
+
+**Action:** Fold error mapping back into `callback`.
 
 ## Verdict
 

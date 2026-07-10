@@ -812,24 +812,20 @@ pub fn change_scope_facts(name: &str, project: &ProjectData) -> Option<ChangeSco
         _ => None,
     });
 
-    // Open steps: apply only when a review is on file; else apply + review.
+    // Open steps: apply first; review and followup stay available (including
+    // when a critique file already exists — re-critique mid-impl).
     if open {
-        let life: &[&str] = if has_review {
-            &["ds-apply"]
-        } else {
-            &["ds-apply", "ds-review"]
-        };
         return Some(scope_facts(
             "implementing steps",
             steps_done,
             step_count,
             active_step_tasks,
-            life,
+            &["ds-apply", "ds-review", "ds-followup"],
             current_review,
         ));
     }
 
-    // No open steps + review: rework path (step / spec / archive).
+    // No open steps + review: rework + re-critique + archive.
     if has_review {
         return Some(scope_facts(
             if all_done {
@@ -840,19 +836,25 @@ pub fn change_scope_facts(name: &str, project: &ProjectData) -> Option<ChangeSco
             steps_done,
             step_count,
             active_step_tasks,
-            &["ds-step", "ds-spec", "ds-archive"],
+            &[
+                "ds-step",
+                "ds-spec",
+                "ds-review",
+                "ds-followup",
+                "ds-archive",
+            ],
             current_review,
         ));
     }
 
-    // All steps complete, no review → archive + review.
+    // All steps complete, no review → archive + both critique modes.
     if all_done {
         return Some(scope_facts(
             "all steps complete",
             steps_done,
             step_count,
             active_step_tasks,
-            &["ds-archive", "ds-review"],
+            &["ds-archive", "ds-review", "ds-followup"],
             current_review,
         ));
     }
@@ -2237,7 +2239,10 @@ mod breadcrumb_tests {
             c.steps = vec![step(true), step(true)];
         });
         let chrome = build_obvious_chrome(&Scope::Change("foo".into()), &project, true, false);
-        assert_eq!(chrome.lifecycle, vec!["/ds-archive", "/ds-review"]);
+        assert_eq!(
+            chrome.lifecycle,
+            vec!["/ds-archive", "/ds-review", "/ds-followup"]
+        );
     }
 
     // @spec chat/obvious-bubble Chrome composition: All steps complete nonempty session includes Confirm and Reject
@@ -2252,7 +2257,10 @@ mod breadcrumb_tests {
             c.steps = vec![step(true), step(true)];
         });
         let chrome = build_obvious_chrome(&Scope::Change("foo".into()), &project, false, false);
-        assert_eq!(chrome.lifecycle, vec!["/ds-archive", "/ds-review"]);
+        assert_eq!(
+            chrome.lifecycle,
+            vec!["/ds-archive", "/ds-review", "/ds-followup"]
+        );
         assert_eq!(
             chrome.affirm,
             Some(crate::obvious_bubble::Affirm::Confirm)
@@ -2285,7 +2293,10 @@ mod breadcrumb_tests {
             c.steps = vec![step(false), step(true)];
         });
         let chrome = build_obvious_chrome(&Scope::Change("foo".into()), &project, false, false);
-        assert_eq!(chrome.lifecycle, vec!["/ds-apply", "/ds-review"]);
+        assert_eq!(
+            chrome.lifecycle,
+            vec!["/ds-apply", "/ds-review", "/ds-followup"]
+        );
         assert!(chrome.affirm.is_none());
         assert!(!chrome.decline);
     }
@@ -2293,7 +2304,7 @@ mod breadcrumb_tests {
     // @spec chat/obvious-bubble Chrome composition: Open steps with review yield apply only with gate
     #[test]
     fn chrome_open_steps_with_review_yield_apply_only_with_gate() {
-        // GIVEN open steps + review + nonempty session → apply only + Confirm/Reject
+        // GIVEN open steps + review + nonempty session → critique peers + Confirm/Reject
         let mut project = make_project(&["foo"], &[]);
         set_change(&mut project, "foo", |c| {
             c.has_proposal = true;
@@ -2303,7 +2314,10 @@ mod breadcrumb_tests {
             c.reviews = vec!["01-look.md".into()];
         });
         let chrome = build_obvious_chrome(&Scope::Change("foo".into()), &project, false, false);
-        assert_eq!(chrome.lifecycle, vec!["/ds-apply"]);
+        assert_eq!(
+            chrome.lifecycle,
+            vec!["/ds-apply", "/ds-review", "/ds-followup"]
+        );
         assert_eq!(
             chrome.affirm,
             Some(crate::obvious_bubble::Affirm::Confirm)
@@ -2313,7 +2327,7 @@ mod breadcrumb_tests {
 
     // @spec chat/obvious-bubble Chrome composition: No open steps with review yield step then spec then archive with gate
     #[test]
-    fn chrome_no_open_steps_with_review_yield_step_spec_archive_with_gate() {
+    fn chrome_no_open_steps_with_review_yield_step_then_spec_then_archive_with_gate() {
         let mut project = make_project(&["foo"], &[]);
         set_change(&mut project, "foo", |c| {
             c.has_proposal = true;
@@ -2325,7 +2339,13 @@ mod breadcrumb_tests {
         let chrome = build_obvious_chrome(&Scope::Change("foo".into()), &project, false, false);
         assert_eq!(
             chrome.lifecycle,
-            vec!["/ds-step", "/ds-spec", "/ds-archive"]
+            vec![
+                "/ds-step",
+                "/ds-spec",
+                "/ds-review",
+                "/ds-followup",
+                "/ds-archive"
+            ]
         );
         assert_eq!(
             chrome.affirm,

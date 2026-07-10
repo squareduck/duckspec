@@ -60,9 +60,17 @@ pub enum CreateCommand {
         #[arg(long = "in")]
         change: String,
     },
+    /// Create a followup critique file in a change.
+    Followup {
+        /// Name for the followup (will be slugified).
+        name: String,
+        /// Change to create the followup in.
+        #[arg(long = "in")]
+        change: String,
+    },
     /// Create a hook file for a stage.
     Hook {
-        /// Stage name (explore, propose, design, spec, step, apply, archive, verify, codex).
+        /// Stage name (explore, propose, design, spec, step, apply, archive, verify, review, followup, codex).
         stage: String,
         /// Create a pre-stage hook.
         #[arg(long, group = "position")]
@@ -78,8 +86,8 @@ pub fn run(cmd: CreateCommand) -> anyhow::Result<()> {
 
     // Capture the seed content for files whose placeholder can't be inferred
     // from the filename, before `cmd` is consumed. Hooks carry a stage/position
-    // skeleton; reviews share the `NN-<slug>.md` shape with steps, so their
-    // `# Review` title must be threaded from the command rather than sniffed.
+    // skeleton; reviews/followups share the `NN-<slug>.md` shape with steps, so
+    // their H1 title must be threaded from the command rather than sniffed.
     let forced_content = match &cmd {
         CreateCommand::Hook { stage, pre, .. } => {
             let pos = if *pre { "Pre" } else { "Post" };
@@ -87,6 +95,7 @@ pub fn run(cmd: CreateCommand) -> anyhow::Result<()> {
             Some(format!("# {title} - {pos}\n"))
         }
         CreateCommand::Review { .. } => Some("# Review\n".to_string()),
+        CreateCommand::Followup { .. } => Some("# Followup\n".to_string()),
         _ => None,
     };
 
@@ -154,7 +163,25 @@ pub fn run(cmd: CreateCommand) -> anyhow::Result<()> {
             let active = list_subdirs(&duckspec_root.join("changes"))?;
             let reviews_dir = duckspec_root.join("changes").join(&change).join("reviews");
             let existing_reviews = list_files(&reviews_dir)?;
-            duckpond::plan::create_review(&name, &change, &active, &existing_reviews)?
+            duckpond::plan::create_critique(
+                &name,
+                duckpond::plan::CritiqueKind::Review,
+                &change,
+                &active,
+                &existing_reviews,
+            )?
+        }
+        CreateCommand::Followup { name, change } => {
+            let active = list_subdirs(&duckspec_root.join("changes"))?;
+            let reviews_dir = duckspec_root.join("changes").join(&change).join("reviews");
+            let existing_reviews = list_files(&reviews_dir)?;
+            duckpond::plan::create_critique(
+                &name,
+                duckpond::plan::CritiqueKind::Followup,
+                &change,
+                &active,
+                &existing_reviews,
+            )?
         }
         CreateCommand::Hook { stage, pre, post } => {
             let position = if pre {

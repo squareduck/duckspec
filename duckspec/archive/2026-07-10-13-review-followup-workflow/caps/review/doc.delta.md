@@ -1,14 +1,11 @@
-# Change review record
-
-A review is an advisory critique of a change, captured as a document and kept as a
-permanent part of that change's record.
+# @ Change review record
 
 A critique record is an advisory document kept as a permanent part of a change's history.
 Two create kinds share one append-only `reviews/` log: **review** (agent-led judgment) and
 **followup** (user-led course correction). Both are recognized as review artifacts and
 validated as documents.
 
-## What a review is
+## ~ What a review is
 
 A critique record is a document-schema artifact — the same shape as a proposal or a
 design: an H1 title, a summary, and a body. Its content is the judgment that static
@@ -33,7 +30,7 @@ Critique records are advisory. They record judgment a reader or agent can act on
 decide nothing on their own — nothing in the system blocks or gates on a review file's
 presence beyond lifecycle chrome that *offers* rework and further critique.
 
-## Where reviews live
+## ~ Where reviews live
 
 Each change owns a `reviews/` directory. Critique files sit directly inside it, named
 `NN-<slug>.md`, where `NN` is a two-digit sequence number and `<slug>` is a kebab-case
@@ -62,7 +59,7 @@ Recognition is by location only — any markdown file directly under a change's 
 directory is a review artifact and is validated as a document. Legacy files without a kind
 prefix remain recognized; new creates always write a kind-prefixed slug.
 
-## Numbering and order
+## ~ Numbering and order
 
 Review and followup creates share one append-only sequence. Creating either assigns the
 next number — one greater than the highest critique file already present — so the
@@ -73,7 +70,7 @@ change cannot share the same full slug (kind prefix included), so `review-post-i
 `followup-post-impl` may both exist. The result is a stable, ordered history: a file's
 number never changes once assigned.
 
-## Lifecycle and archival
+## ~ Lifecycle and archival
 
 Critique records are written at any point in a change's life — a design critique before
 implementation, a mid-flight followup that records course correction, a

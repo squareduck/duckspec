@@ -31,8 +31,9 @@ project state never makes the agent ask which change to act on.
 For a change scope, the orientation SHALL report the change's step progress and a
 suggested next stage that matches the change's artifact state, step completion, and
 whether the change has any reviews — the same first lifecycle option used for obvious
-chrome. When steps remain unfinished it SHALL report the incomplete progress; when every
-step is complete it SHALL report completion.
+chrome (including arms that also list `/ds-review` and `/ds-followup`). When steps remain
+unfinished it SHALL report the incomplete progress; when every step is complete it SHALL
+report completion.
 
 > test: code
 
@@ -44,7 +45,7 @@ step is complete it SHALL report completion.
 - **AND** it suggests the apply stage as the next step
 
 > test: code
-> - crates/duckboard/src/area/change.rs:2373
+> - crates/duckboard/src/area/change.rs:2393
 
 ### Scenario: A change with only a proposal reports the design next-stage
 
@@ -53,7 +54,7 @@ step is complete it SHALL report completion.
 - **THEN** it suggests the design stage as the next step
 
 > test: code
-> - crates/duckboard/src/area/change.rs:2423
+> - crates/duckboard/src/area/change.rs:2443
 
 ### Scenario: A change with all steps complete reports completion and the archive next-stage
 
@@ -64,7 +65,7 @@ step is complete it SHALL report completion.
 - **AND** it suggests the archive stage as the next step
 
 > test: code
-> - crates/duckboard/src/area/change.rs:2391
+> - crates/duckboard/src/area/change.rs:2411
 
 ### Scenario: All steps complete with a review suggests the step next-stage
 
@@ -74,7 +75,7 @@ step is complete it SHALL report completion.
 - **THEN** it suggests the step stage as the next step
 
 > test: code
-> - crates/duckboard/src/area/change.rs:2408
+> - crates/duckboard/src/area/change.rs:2428
 
 ## Requirement: Non-change scope orientation
 
@@ -153,7 +154,8 @@ the same session.
 ## Requirement: Current review in orientation
 
 For a change scope, the orientation SHALL report the change's current review — the
-highest-numbered review in the change — as the project-root path
+highest-numbered file under the change's `reviews/` directory (whether kind-prefixed as
+review or followup, or a legacy unprefixed name) — as the project-root path
 `duckspec/changes/{name}/reviews/{filename}` when the change has at least one review, and
 SHALL omit any current-review report when the change has none. The presence of reviews
 SHALL NOT change reported step progress (done and total counts). The suggested next stage
@@ -173,7 +175,7 @@ reviews.
   `duckspec/changes/{name}/reviews/{filename}`
 
 > test: code
-> - crates/duckboard/src/area/change.rs:2447
+> - crates/duckboard/src/area/change.rs:2467
 
 ### Scenario: A change with no reviews reports no current review
 
@@ -182,7 +184,7 @@ reviews.
 - **THEN** it does not report a current review
 
 > test: code
-> - crates/duckboard/src/area/change.rs:2469
+> - crates/duckboard/src/area/change.rs:2489
 
 ### Scenario: Adding a review does not change reported step progress
 
@@ -192,4 +194,4 @@ reviews.
 - **THEN** both report the same step progress (done and total)
 
 > test: code
-> - crates/duckboard/src/area/change.rs:2484
+> - crates/duckboard/src/area/change.rs:2504

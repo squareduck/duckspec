@@ -88,7 +88,7 @@ pub const REPLY_SUGGEST_INSTRUCTION: &str = "You are a reply-suggestion tool. Yo
 to read the conversation snippet and output 1–3 short user replies the human might send next. \
 Prefer main-flow duckspec stage slash commands when the assistant is steering workflow \
 (e.g. /ds-explore, /ds-propose, /ds-design, /ds-spec, /ds-step, /ds-apply, /ds-review, \
-/ds-archive, /ds-codex). Do not suggest /ds-verify — it is a side diagnostic, not part of \
+/ds-followup, /ds-archive, /ds-codex). Do not suggest /ds-verify — it is a side diagnostic, not part of \
 the usual lifecycle. Prefer short user-voice replies when the assistant asks for confirmation \
 or a natural choice. Keep each REPLY text at most 100 characters. When you emit multiple \
 REPLY lines, order them as: first line = the most \

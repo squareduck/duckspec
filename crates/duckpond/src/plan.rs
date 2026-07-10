@@ -53,8 +53,25 @@ pub enum PlanError {
 /// Known stage names for hooks.
 pub const STAGES: &[&str] = &[
     "explore", "backfill", "propose", "design", "spec", "step", "apply", "archive", "verify",
-    "review", "codex",
+    "review", "followup", "codex",
 ];
+
+/// Create kind for a critique file under `reviews/` — agent-led review or
+/// user-led followup. Encoded once as a filename slug prefix at create time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CritiqueKind {
+    Review,
+    Followup,
+}
+
+impl CritiqueKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            CritiqueKind::Review => "review",
+            CritiqueKind::Followup => "followup",
+        }
+    }
+}
 
 /// Position of a hook relative to the stage.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -291,33 +308,38 @@ pub fn create_step(
     Ok(Plan { creates, renames })
 }
 
-/// Plan the creation of a review file in a change.
+/// Plan the creation of a critique file (review or followup) in a change.
 ///
-/// Reviews are an append-only chronological log: the new review is numbered one
-/// above the highest existing review, existing reviews are never renamed, and
-/// there is no `--after` insertion (unlike steps).
+/// Critique files share one append-only chronological log under `reviews/`: the
+/// new file is numbered one above the highest existing entry, existing files
+/// are never renamed, and there is no `--after` insertion (unlike steps). The
+/// filename slug is `{kind}-{title-slug}` where `kind` is `review` or
+/// `followup` and the title portion comes from the canonical slug rule.
 ///
 /// `active_changes` — names of directories under `changes/`.
 /// `existing_reviews` — filenames in `changes/<change>/reviews/`, each
 ///   following the `NN-<slug>.md` pattern.
-/// `name` — human name for the review (will be slugified).
-pub fn create_review(
+/// `name` — human title (slugified); the kind prefix is applied here, not by
+///   embedding the kind word in the title.
+pub fn create_critique(
     name: &str,
+    kind: CritiqueKind,
     change: &str,
     active_changes: &[String],
     existing_reviews: &[String],
 ) -> Result<Plan, PlanError> {
     check_change_exists(change, active_changes)?;
 
-    let slug = crate::slug::slugify(name);
-    if slug.is_empty() {
+    let title_slug = crate::slug::slugify(name);
+    if title_slug.is_empty() {
         return Err(PlanError::EmptySlug {
             title: name.to_string(),
         });
     }
+    let slug = format!("{}-{title_slug}", kind.as_str());
     let parsed = parse_nn_slug(existing_reviews);
 
-    // Check slug uniqueness.
+    // Check full-slug uniqueness (kind prefix included).
     if parsed.iter().any(|r| r.slug == slug) {
         return Err(PlanError::ReviewSlugExists { slug });
     }
@@ -329,6 +351,24 @@ pub fn create_review(
         creates: vec![review_path(change, next_nn, &slug)],
         renames: vec![],
     })
+}
+
+/// Plan the creation of a review-kind critique file in a change.
+///
+/// Thin wrapper over [`create_critique`] with [`CritiqueKind::Review`].
+pub fn create_review(
+    name: &str,
+    change: &str,
+    active_changes: &[String],
+    existing_reviews: &[String],
+) -> Result<Plan, PlanError> {
+    create_critique(
+        name,
+        CritiqueKind::Review,
+        change,
+        active_changes,
+        existing_reviews,
+    )
 }
 
 /// Plan the creation of a hook file.
@@ -684,7 +724,7 @@ mod tests {
         assert!(matches!(err, PlanError::AfterStepNotFound { .. }));
     }
 
-    // -- create_review --------------------------------------------------------
+    // -- create_critique / create_review --------------------------------------
 
     // @spec review Sequential numbering: The first review in a change is numbered 01
     #[test]
@@ -693,7 +733,7 @@ mod tests {
         assert_eq!(
             plan.creates,
             vec![PathBuf::from(
-                "changes/add-oauth/reviews/01-post-implementation.md"
+                "changes/add-oauth/reviews/01-review-post-implementation.md"
             )]
         );
         assert!(plan.renames.is_empty());
@@ -706,12 +746,17 @@ mod tests {
             "third pass",
             "add-oauth",
             &[s("add-oauth")],
-            &ss(&["01-initial.md", "02-mid-implementation.md"]),
+            &ss(&[
+                "01-review-initial.md",
+                "02-review-mid-implementation.md",
+            ]),
         )
         .unwrap();
         assert_eq!(
             plan.creates,
-            vec![PathBuf::from("changes/add-oauth/reviews/03-third-pass.md")]
+            vec![PathBuf::from(
+                "changes/add-oauth/reviews/03-review-third-pass.md"
+            )]
         );
         // Existing reviews are left unchanged — no renames.
         assert!(plan.renames.is_empty());
@@ -724,10 +769,68 @@ mod tests {
             "initial",
             "add-oauth",
             &[s("add-oauth")],
-            &ss(&["01-initial.md"]),
+            &ss(&["01-review-initial.md"]),
         )
         .unwrap_err();
         assert!(matches!(err, PlanError::ReviewSlugExists { .. }));
+    }
+
+    // @spec review Sequential numbering: A followup continues the shared sequence after a review
+    #[test]
+    fn followup_continues_shared_sequence_after_review() {
+        let plan = create_critique(
+            "collapse amend",
+            CritiqueKind::Followup,
+            "add-oauth",
+            &[s("add-oauth")],
+            &ss(&["01-review-post-implementation.md"]),
+        )
+        .unwrap();
+        assert_eq!(
+            plan.creates,
+            vec![PathBuf::from(
+                "changes/add-oauth/reviews/02-followup-collapse-amend.md"
+            )]
+        );
+        assert!(plan.renames.is_empty());
+    }
+
+    // @spec review Sequential numbering: Review and followup with the same title portion both create
+    #[test]
+    fn review_and_followup_same_title_portion_both_create() {
+        let plan = create_critique(
+            "post-impl",
+            CritiqueKind::Followup,
+            "add-oauth",
+            &[s("add-oauth")],
+            &ss(&["01-review-post-impl.md"]),
+        )
+        .unwrap();
+        assert_eq!(
+            plan.creates,
+            vec![PathBuf::from(
+                "changes/add-oauth/reviews/02-followup-post-impl.md"
+            )]
+        );
+    }
+
+    // @spec review Filename slug: A followup create prefixes the slug with followup-
+    #[test]
+    fn followup_create_prefixes_slug_with_followup() {
+        let plan = create_critique(
+            "collapse policy",
+            CritiqueKind::Followup,
+            "add-oauth",
+            &[s("add-oauth")],
+            &[],
+        )
+        .unwrap();
+        assert_eq!(
+            plan.creates,
+            vec![PathBuf::from(
+                "changes/add-oauth/reviews/01-followup-collapse-policy.md"
+            )]
+        );
     }
 
     // -- strip_archive_prefix -------------------------------------------------
@@ -804,7 +907,7 @@ mod tests {
         assert_eq!(
             plan.creates,
             vec![PathBuf::from(
-                "changes/add-oauth/reviews/01-post-impl-soundness-fidelity.md"
+                "changes/add-oauth/reviews/01-review-post-impl-soundness-fidelity.md"
             )]
         );
     }

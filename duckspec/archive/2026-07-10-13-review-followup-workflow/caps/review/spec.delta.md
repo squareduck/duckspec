@@ -1,53 +1,11 @@
-# Change review record
-
-A review is an advisory, document-schema artifact stored as a sequentially numbered file
-in a change's `reviews/` directory — recognized and validated as a document, and appended
-with the next number on creation.
+# @ Change review record
 
 A review is an advisory, document-schema artifact stored as a sequentially numbered file
 in a change's `reviews/` directory — recognized and validated as a document, and appended
 with the next number on creation. Creation is kind-aware: a review or followup shares the
 same log, and the kind is encoded in the filename slug prefix.
 
-## Requirement: Review recognition and validation
-
-A markdown file under a change's `reviews/` directory SHALL be recognized as a review
-artifact and validated against the document schema. Recognition SHALL hold for reviews in
-both active and archived changes.
-
-> test: code
-
-### Scenario: A well-formed review validates
-
-- **GIVEN** a review file under a change's `reviews/` directory with an H1 title and a
-  summary
-
-- **WHEN** the file is validated
-
-- **THEN** validation succeeds
-
-> test: code
-> - crates/duckpond/tests/review.rs:11
-
-### Scenario: A review missing its H1 title is reported as a document error
-
-- **GIVEN** a review file under a change's `reviews/` directory with no H1 title
-- **WHEN** the file is validated
-- **THEN** validation fails with a document-schema error
-
-> test: code
-> - crates/duckpond/tests/review.rs:27
-
-### Scenario: A review in an archived change is still recognized
-
-- **GIVEN** a review file under an archived change's `reviews/` directory
-- **WHEN** the file is classified
-- **THEN** it is recognized as a review artifact
-
-> test: code
-> - crates/duckpond/tests/review.rs:43
-
-## Requirement: Sequential numbering
+## ~ Requirement: Sequential numbering
 
 Creating a review or a followup SHALL place it in the change's `reviews/` directory with a
 two-digit number one greater than the highest existing critique file in that directory,
@@ -65,7 +23,6 @@ change.
 - **AND** its slug begins with `review-`
 
 > test: code
-> - crates/duckpond/src/plan.rs:729
 
 ### Scenario: A new review is numbered above the highest existing review
 
@@ -76,7 +33,6 @@ change.
 - **AND** its slug begins with `review-`
 
 > test: code
-> - crates/duckpond/src/plan.rs:742
 
 ### Scenario: A review whose slug already exists is rejected
 
@@ -85,7 +41,6 @@ change.
 - **THEN** creation is rejected
 
 > test: code
-> - crates/duckpond/src/plan.rs:765
 
 ### Scenario: A followup continues the shared sequence after a review
 
@@ -96,7 +51,6 @@ change.
 - **AND** the existing review is left unchanged
 
 > test: code
-> - crates/duckpond/src/plan.rs:778
 
 ### Scenario: Review and followup with the same title portion both create
 
@@ -110,9 +64,8 @@ change.
 - **AND** the new file's full slug is `followup-post-impl`
 
 > test: code
-> - crates/duckpond/src/plan.rs:798
 
-## Requirement: Filename slug
+## ~ Requirement: Filename slug
 
 Creating a review or followup SHALL derive a title slug from the human title by the
 canonical slug rule, then form the filename slug by prefixing that title slug once with
@@ -131,7 +84,6 @@ empty title slug.
 - **THEN** the new review file's slug is `review-post-impl-soundness-fidelity`
 
 > test: code
-> - crates/duckpond/src/plan.rs:897
 
 ### Scenario: A title with no alphanumeric characters is rejected
 
@@ -141,7 +93,6 @@ empty title slug.
 - **AND** no review file is written
 
 > test: code
-> - crates/duckpond/src/plan.rs:915
 
 ### Scenario: A followup create prefixes the slug with followup-
 
@@ -150,4 +101,3 @@ empty title slug.
 - **THEN** the new file's slug is `followup-collapse-policy`
 
 > test: code
-> - crates/duckpond/src/plan.rs:817

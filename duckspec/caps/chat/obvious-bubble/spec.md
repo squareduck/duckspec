@@ -62,14 +62,23 @@ repository working tree is dirty — never from oneshot default-prompt text.
 Lifecycle options SHALL be ordered empty-send `/ds-*` strings by the first matching arm:
 
 - empty exploration session: `/ds-explore` only
+
 - nonempty exploration session: no lifecycle options
-- open steps and at least one review: `/ds-apply` only
-- open steps and no reviews: `/ds-apply`, then `/ds-review`
-- no open steps and at least one review: `/ds-step`, then `/ds-spec`, then `/ds-archive`
-- all steps complete and no reviews: `/ds-archive`, then `/ds-review`
+
+- open steps (with or without reviews): `/ds-apply`, then `/ds-review`, then
+  `/ds-followup`
+
+- no open steps and at least one review: `/ds-step`, then `/ds-spec`, then `/ds-review`,
+  then `/ds-followup`, then `/ds-archive`
+
+- all steps complete and no reviews: `/ds-archive`, then `/ds-review`, then `/ds-followup`
+
 - caps present, no steps, no reviews: `/ds-step`, then `/ds-archive`
+
 - design present, no caps, no reviews: `/ds-spec`, then `/ds-step`
+
 - proposal present, no design, no caps, no reviews: `/ds-design`, then `/ds-spec`
+
 - empty change (no proposal), no reviews: `/ds-propose` only
 
 When the scope is an active change and the session is non-empty, the chrome SHALL include
@@ -95,11 +104,16 @@ Caps and codex scopes SHALL yield empty chrome.
 ### Scenario: All steps complete yield archive then review
 
 - **GIVEN** an active change whose steps are all complete
+
+- **AND** the change has no reviews
+
 - **WHEN** obvious chrome is composed
-- **THEN** the lifecycle options are `/ds-archive` and `/ds-review` in that order
+
+- **THEN** the lifecycle options are `/ds-archive`, `/ds-review`, and `/ds-followup` in
+  that order
 
 > test: code
-> - crates/duckboard/src/area/change.rs:2229
+> - crates/duckboard/src/area/change.rs:2231
 
 ### Scenario: Nonempty change session includes Confirm and Reject
 
@@ -112,7 +126,7 @@ Caps and codex scopes SHALL yield empty chrome.
 - **AND** decline is present
 
 > test: code
-> - crates/duckboard/src/area/change.rs:2263
+> - crates/duckboard/src/area/change.rs:2271
 
 ### Scenario: Empty change session omits gate row
 
@@ -122,7 +136,7 @@ Caps and codex scopes SHALL yield empty chrome.
 - **AND** decline is absent
 
 > test: code
-> - crates/duckboard/src/area/change.rs:2337
+> - crates/duckboard/src/area/change.rs:2357
 
 ### Scenario: Archived dirty nonempty session yields Commit only
 
@@ -135,7 +149,7 @@ Caps and codex scopes SHALL yield empty chrome.
 - **AND** decline is absent
 
 > test: code
-> - crates/duckboard/src/area/change.rs:2347
+> - crates/duckboard/src/area/change.rs:2367
 
 ### Scenario: Empty exploration yields explore only
 
@@ -146,7 +160,7 @@ Caps and codex scopes SHALL yield empty chrome.
 - **AND** decline is absent
 
 > test: code
-> - crates/duckboard/src/area/change.rs:2362
+> - crates/duckboard/src/area/change.rs:2382
 
 ### Scenario: Nonempty exploration yields Create change only
 
@@ -157,7 +171,7 @@ Caps and codex scopes SHALL yield empty chrome.
 - **AND** decline is absent
 
 > test: code
-> - crates/duckboard/src/area/change.rs:2211
+> - crates/duckboard/src/area/change.rs:2213
 
 ### Scenario: Design without caps yields spec then step
 
@@ -166,7 +180,7 @@ Caps and codex scopes SHALL yield empty chrome.
 - **THEN** the lifecycle options are `/ds-spec` and `/ds-step` in that order
 
 > test: code
-> - crates/duckboard/src/area/change.rs:2199
+> - crates/duckboard/src/area/change.rs:2201
 
 ### Scenario: Caps without steps yield step then archive
 
@@ -175,31 +189,43 @@ Caps and codex scopes SHALL yield empty chrome.
 - **THEN** the lifecycle options are `/ds-step` and `/ds-archive` in that order
 
 > test: code
-> - crates/duckboard/src/area/change.rs:2187
+> - crates/duckboard/src/area/change.rs:2189
 
 ### Scenario: Open steps yield apply then review without gate
 
 - **GIVEN** an active change with at least one incomplete step and no reviews
+
 - **AND** a non-empty session transcript
+
 - **WHEN** obvious chrome is composed
-- **THEN** the lifecycle options are `/ds-apply` and `/ds-review` in that order
+
+- **THEN** the lifecycle options are `/ds-apply`, `/ds-review`, and `/ds-followup` in that
+  order
+
 - **AND** affirm is absent
+
 - **AND** decline is absent
 
 > test: code
-> - crates/duckboard/src/area/change.rs:2277
+> - crates/duckboard/src/area/change.rs:2285
 
 ### Scenario: Open steps with review yield apply only with gate
 
 - **GIVEN** an active change with at least one incomplete step and at least one review
+
 - **AND** a non-empty session transcript
+
 - **WHEN** obvious chrome is composed
-- **THEN** the only lifecycle option is `/ds-apply`
+
+- **THEN** the lifecycle options are `/ds-apply`, `/ds-review`, and `/ds-followup` in that
+  order
+
 - **AND** affirm is Confirm
+
 - **AND** decline is present
 
 > test: code
-> - crates/duckboard/src/area/change.rs:2293
+> - crates/duckboard/src/area/change.rs:2304
 
 ### Scenario: No open steps with review yield step then spec then archive with gate
 
@@ -209,28 +235,35 @@ Caps and codex scopes SHALL yield empty chrome.
 
 - **WHEN** obvious chrome is composed
 
-- **THEN** the lifecycle options are `/ds-step`, `/ds-spec`, and `/ds-archive` in that
-  order
+- **THEN** the lifecycle options are `/ds-step`, `/ds-spec`, `/ds-review`, `/ds-followup`,
+  and `/ds-archive` in that order
 
 - **AND** affirm is Confirm
 
 - **AND** decline is present
 
 > test: code
-> - crates/duckboard/src/area/change.rs:2314
+> - crates/duckboard/src/area/change.rs:2328
 
 ### Scenario: All steps complete nonempty session includes Confirm and Reject
 
 - **GIVEN** an active change whose steps are all complete
+
 - **AND** the change has no reviews
+
 - **AND** a non-empty session transcript
+
 - **WHEN** obvious chrome is composed
-- **THEN** the lifecycle options are `/ds-archive` and `/ds-review` in that order
+
+- **THEN** the lifecycle options are `/ds-archive`, `/ds-review`, and `/ds-followup` in
+  that order
+
 - **AND** affirm is Confirm
+
 - **AND** decline is present
 
 > test: code
-> - crates/duckboard/src/area/change.rs:2243
+> - crates/duckboard/src/area/change.rs:2248
 
 ## Requirement: Chrome visibility
 

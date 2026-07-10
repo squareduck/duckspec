@@ -53,7 +53,7 @@ concrete, ordered, and independently completable.
      gotchas, project-specific details).
    - **Cite the review for review-sourced steps.** When a step exists to act on
      the latest review's findings, name that review in the step's `## Context`
-     (e.g. "Addresses findings in `reviews/02-post-implementation.md`.") so the
+     (e.g. "Addresses findings in `reviews/02-review-post-implementation.md`.") so the
      applying agent can trace the work back to the critique.
 
 ## Formatting

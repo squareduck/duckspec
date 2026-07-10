@@ -109,10 +109,11 @@ problem.
 
 Suggested next actions:
 
-- `/ds-archive`
-- `/ds-review`
+- `/ds-review` — agent-led critique
+- `/ds-followup` — user-led course correction (same `reviews/` history log)
 
-Review before archive is the intended path.
+Critique before archive is the intended path. `/ds-archive` remains available when
+the user is ready to freeze (including when they skip further critique).
 
 **Work rules (not next-stage ranks):**
 
