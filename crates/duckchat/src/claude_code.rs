@@ -2,12 +2,14 @@
 //!
 //! Spawns `claude -p --output-format stream-json` per turn, parses its ndjson
 //! protocol, and forwards provider-neutral events. Multi-turn continuity is
-//! achieved via `--resume <session_id>`.
+//! achieved via `--resume <session_id>`. Cold runtimes (no process reuse) sit
+//! behind the harness-agnostic main/oneshot traits.
 
 mod discover;
 mod protocol;
 mod reply_suggest;
 mod run;
+mod runtime;
 mod spawn;
 mod title;
 
@@ -18,13 +20,13 @@ pub(crate) use discover::discover_commands;
 use std::path::Path;
 
 use async_trait::async_trait;
-use tokio::sync::mpsc;
 
-use crate::cancel::CancelToken;
 use crate::error::Error;
-use crate::event::AgentEvent;
 use crate::provider::{Capabilities, ModelInfo, Provider, SlashCommand};
-use crate::request::{ReplySuggestionRequest, TitleRequest, TurnOutcome, TurnRequest};
+use crate::request::{ReplySuggestionRequest, TitleRequest};
+use crate::runtime::{MainRuntime, OneshotRuntime};
+
+use runtime::{ClaudeMainRuntime, ClaudeOneshotRuntime};
 
 /// Model used for the one-shot `title_summary` call. Cheap, fast, plenty good
 /// for summarising a single exchange into a handful of words.
@@ -94,13 +96,12 @@ impl Provider for ClaudeCodeProvider {
         discover::discover_commands(project_root)
     }
 
-    async fn run_turn(
-        &self,
-        req: TurnRequest,
-        events: mpsc::Sender<AgentEvent>,
-        cancel: CancelToken,
-    ) -> Result<TurnOutcome, Error> {
-        run::run_turn(req, events, cancel).await
+    fn open_main_runtime(&self, working_dir: &Path) -> Box<dyn MainRuntime> {
+        Box::new(ClaudeMainRuntime::new(working_dir))
+    }
+
+    fn open_oneshot_runtime(&self, working_dir: &Path) -> Box<dyn OneshotRuntime> {
+        Box::new(ClaudeOneshotRuntime::new(working_dir))
     }
 
     async fn title_summary(

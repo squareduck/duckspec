@@ -10,9 +10,16 @@ use crate::cancel::CancelToken;
 use crate::error::Error;
 use crate::event::AgentEvent;
 use crate::request::{ReplySuggestionRequest, TitleRequest, TurnOutcome, TurnRequest};
+use crate::runtime::{MainRuntime, OneshotRuntime};
 
 /// A source of agent turns. Implementations may spawn subprocesses (Claude
 /// Code, opencode) or call LLM APIs directly.
+///
+/// Discovery (`list_models`, `list_commands`) stays on the provider. Live work
+/// goes through [`Self::open_main_runtime`] / [`Self::open_oneshot_runtime`].
+/// The free-standing `run_turn` / `title_summary` / `reply_suggestions`
+/// methods are thin transitional wrappers for callers that have not yet moved
+/// onto the handle/runtime path.
 #[async_trait]
 pub trait Provider: Send + Sync {
     /// Stable identifier, e.g. `"claude-code"`.
@@ -31,38 +38,33 @@ pub trait Provider: Send + Sync {
     /// provider, scoped to `project_root`.
     fn list_commands(&self, project_root: &Path) -> Vec<SlashCommand>;
 
-    /// Run one prompt turn, emitting events into `events` until the turn
-    /// completes, errors, or is cancelled. Returns the session id to persist.
+    /// Open a main-turn runtime bound to `working_dir`.
+    fn open_main_runtime(&self, working_dir: &Path) -> Box<dyn MainRuntime>;
+
+    /// Open a oneshot (title / reply-suggest) runtime bound to `working_dir`.
+    fn open_oneshot_runtime(&self, working_dir: &Path) -> Box<dyn OneshotRuntime>;
+
+    /// Transitional: open a cold main runtime and run one turn.
     async fn run_turn(
         &self,
         req: TurnRequest,
         events: mpsc::Sender<AgentEvent>,
         cancel: CancelToken,
-    ) -> Result<TurnOutcome, Error>;
+    ) -> Result<TurnOutcome, Error> {
+        let mut rt = self.open_main_runtime(&req.working_dir);
+        rt.run_turn(req, events, cancel).await
+    }
 
-    /// Summarise a single-turn exchange as a short session title. Expected to
-    /// use the provider's cheapest/fastest model — this is called once per
-    /// new chat as soon as the first assistant reply lands, so latency and
-    /// token cost both matter.
-    ///
-    /// `req.context_hints` are arbitrary lines the caller wants the
-    /// summariser to consider (e.g. "user is implementing step foo.md").
-    /// Returns a plain-text title (trimmed, no quotes, a handful of words).
-    /// Implementations should not invoke tools or resume a prior session.
+    /// Transitional: open a cold oneshot runtime and summarise a title.
+    /// Harness-specific prompt framing lives in each provider override when
+    /// needed; default is not provided because framing differs.
     async fn title_summary(
         &self,
         req: TitleRequest,
         working_dir: &std::path::Path,
     ) -> Result<String, Error>;
 
-    /// Suggest 0–3 short user replies for an empty chat composer after an
-    /// agent turn. Expected to use the provider's cheapest/fastest model
-    /// (same pick as [`Self::title_summary`]). Implementations should not
-    /// invoke tools or resume a prior session. Empty
-    /// `req.assistant_message` short-circuits to an empty list without a
-    /// model call.
-    ///
-    /// Return values are already parsed reply texts (not raw model output).
+    /// Transitional: open a cold oneshot runtime and suggest replies.
     async fn reply_suggestions(
         &self,
         req: ReplySuggestionRequest,

@@ -1,15 +1,11 @@
-# Chat default prompts
-
-Conversation-local empty-input defaults from a cheap-model oneshot: parse ordered `REPLY:`
-suggestions (heuristic passed only as a soft hint), show and arm them only after the
-oneshot settles, and drive empty Enter plus Tab cycling from that list alone.
+# @ Chat default prompts
 
 Conversation-local empty-input defaults: the lifecycle heuristic arms the list before any
 oneshot and after a failed or empty oneshot; a settled oneshot with parsed replies
 replaces the list. Show and arm under readiness rules; drive empty Enter plus Tab cycling
 from the effective list.
 
-## Pipeline
+## ~ Pipeline
 
 After a non-priming agent turn completes, the session harness runs a short oneshot on its
 cheapest available model. The request carries the last assistant message, the preceding
@@ -45,7 +41,7 @@ While a oneshot is outstanding, empty-input chrome shows a loading indicator ins
 list. Starting a new turn invalidates any in-flight oneshot so a late result cannot arm
 stale defaults.
 
-## Reply format and order
+## ~ Reply format and order
 
 The oneshot must answer only with lines of the form `REPLY: <text>`. Parsing keeps those
 lines in order, trims the text, drops empties, and hard-caps at three. Other lines are
@@ -66,7 +62,7 @@ it, place it in any slot, or invent different replies. On the effective list, th
 heuristic is the pre-oneshot and failed-oneshot fallback (single entry), not a post-merge
 into a non-empty oneshot result.
 
-## Readiness
+## ~ Readiness
 
 ```
 | State                         | Empty-input chrome     | Empty Enter              |
@@ -85,20 +81,3 @@ Superseded oneshot results (generation mismatch) are ignored and do not change t
 list. A new session with a heuristic is ready with that single default without waiting for
 a model. While a main turn is streaming, defaults chrome stays hidden even if a heuristic
 or settled oneshot list would otherwise be ready.
-
-## Empty composer
-
-When the input is empty and suggestions are ready, the effective list is the set of
-one-Enter defaults:
-
-- **Enter** sends the active entry (index into the list).
-
-- **Tab** / **Shift-Tab** move the active index with wrap, without filling the input.
-
-- The active entry is the primary row; other options are shown fainter so the current
-  default stays obvious.
-
-- Slash-command completion still owns Tab when its popup is visible.
-
-When the input is non-empty, normal typing and send apply; the default list is not used.
-While pending, empty Enter does not send a default; typed non-empty send is unchanged.

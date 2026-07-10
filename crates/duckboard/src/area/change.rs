@@ -845,6 +845,10 @@ fn obvious_command_from_artifacts(name: &str, project: &ProjectData) -> Option<S
 /// `state.selected_change`) ensures freshly-promoted sessions show the
 /// right placeholder even when the user is in another area at the time
 /// of promotion.
+///
+/// When no oneshot is pending and no non-empty oneshot-only list is armed,
+/// also seeds `agent_default_prompts` from the heuristic so empty Enter is
+/// ready without a model call.
 pub fn refresh_obvious_command(
     interactions: &mut HashMap<Scope, InteractionState>,
     project: &ProjectData,
@@ -863,8 +867,20 @@ pub fn refresh_obvious_command(
             Scope::Caps | Scope::Codex => continue,
         };
         for ax in ix.sessions.iter_mut() {
+            let prev_heuristic =
+                crate::default_prompts::heuristic_as_prompts(ax.obvious_command.as_deref());
+            // Reseed when ready and either empty or still holding only the
+            // previous heuristic (oneshot parse not armed).
+            let should_seed = !ax.default_prompts_pending
+                && (ax.agent_default_prompts.is_empty()
+                    || ax.agent_default_prompts == prev_heuristic);
             ax.obvious_command = cmd.clone();
             ax.scope_facts = facts.clone();
+            if should_seed {
+                ax.agent_default_prompts =
+                    crate::default_prompts::heuristic_as_prompts(cmd.as_deref());
+                ax.default_prompt_idx = 0;
+            }
         }
     }
 }

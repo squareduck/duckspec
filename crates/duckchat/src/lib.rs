@@ -15,6 +15,8 @@ pub mod hook;
 pub mod provider;
 pub mod reply_suggest;
 pub mod request;
+pub mod runtime;
+pub mod title;
 pub mod worker;
 
 pub mod claude_code;
@@ -31,4 +33,6 @@ pub use request::{
     Attachment, ReasoningMode, ReplySuggestionRequest, TitleRequest, ToolPolicy, TurnOutcome,
     TurnRequest,
 };
+pub use runtime::{MainRuntime, OneshotKind, OneshotRuntime};
+pub use title::{build_title_prompt, clean_title};
 pub use worker::{AgentCommand, AgentHandle, spawn_worker};

@@ -19,7 +19,7 @@ as the Claude harness.
 - **THEN** the loaded choice names the same harness and model
 
 > test: code
-> - crates/duckchat/src/provider.rs:181
+> - crates/duckchat/src/provider.rs:183
 
 ### Scenario: A legacy bare model id loads as the Claude harness
 
@@ -28,7 +28,7 @@ as the Claude harness.
 - **THEN** the loaded choice names the Claude harness and that model
 
 > test: code
-> - crates/duckchat/src/provider.rs:192
+> - crates/duckchat/src/provider.rs:194
 
 ## Requirement: Default model resolution
 

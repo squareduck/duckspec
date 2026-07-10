@@ -1,10 +1,11 @@
-//! A per-turn ACP (Agent Client Protocol) client over the grok child's stdio.
+//! An ACP (Agent Client Protocol) client over a long-lived grok child's stdio.
 //!
-//! ACP is JSON-RPC 2.0, one message per line. A turn's lifecycle is
-//! `initialize` → (`session/new` when no prior id, else `session/load`) →
-//! `session/prompt`. Requests carry an `id` and are answered by an `id`-matched
-//! response; `session/update` messages are notifications (the event stream);
-//! any agent→client request (e.g. a permission prompt) is auto-answered so the
+//! ACP is JSON-RPC 2.0, one message per line. A process-hot runtime holds one
+//! [`AcpTurn`] across turns: `initialize` once, then each turn runs
+//! (`session/new` when no prior id, else `session/load`) → `session/prompt`.
+//! Requests carry an `id` and are answered by an `id`-matched response;
+//! `session/update` messages are notifications (the event stream); any
+//! agent→client request (e.g. a permission prompt) is auto-answered so the
 //! turn never deadlocks. The child is spawned `--no-ask-user --always-approve`,
 //! so structured question prompts and permission round-trips should not occur —
 //! the auto-answer is a safety net, and a real interactive permission bridge is
@@ -12,6 +13,7 @@
 
 use std::path::Path;
 use std::pin::Pin;
+use std::time::Duration;
 
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncWrite, AsyncWriteExt, BufReader};
@@ -35,8 +37,8 @@ const PROTOCOL_VERSION: u64 = 1;
 type Reader = Pin<Box<dyn AsyncBufRead + Send + Unpin>>;
 type Writer = Pin<Box<dyn AsyncWrite + Send + Unpin>>;
 
-/// One grok agent turn: the child process plus a line-delimited JSON-RPC
-/// transport over its stdio.
+/// One grok agent process (or scripted peer): a line-delimited JSON-RPC
+/// transport over its stdio. Held across turns when process-hot.
 pub struct AcpTurn {
     /// The spawned `grok agent stdio` child. `None` in tests, which drive a
     /// scripted in-memory peer instead of a live process.
@@ -71,6 +73,26 @@ pub struct PromptResult {
 }
 
 impl AcpTurn {
+    /// Wrap an existing transport without a live child (tests / scripted peers).
+    #[cfg(test)]
+    pub(crate) fn from_transport(writer: Writer, reader: Reader) -> Self {
+        Self {
+            child: None,
+            writer,
+            reader,
+            next_id: 1,
+        }
+    }
+
+    /// True when the child is still running. Childless test peers are always
+    /// considered alive until the runtime drops them.
+    pub(crate) fn process_alive(&mut self) -> bool {
+        match self.child.as_mut() {
+            None => true,
+            Some(child) => matches!(child.try_wait(), Ok(None)),
+        }
+    }
+
     /// Spawn `grok --no-ask-user agent --always-approve stdio` in `cwd` and wrap
     /// its stdio as a JSON-RPC transport. Does not yet run the handshake — call
     /// [`AcpTurn::initialize`] next.
@@ -264,13 +286,9 @@ impl AcpTurn {
         .await?;
 
         loop {
-            let msg = self.read_message().await?;
-            // Cooperative cancellation: checked between protocol lines, matching
-            // the Claude path. A flipped flag kills the child and unwinds.
-            if cancel.is_cancelled() {
-                self.cancel().await;
-                return Err(Error::Cancelled);
-            }
+            // Cooperative cancellation while waiting for the next line, so a
+            // hung peer does not ignore cancel until the next message arrives.
+            let msg = self.read_message_cancellable(cancel).await?;
             let has_method = msg.get("method").is_some();
             match (has_method, msg.get("id")) {
                 // A response: `id` present, no `method`.
@@ -303,6 +321,20 @@ impl AcpTurn {
                     }
                 }
                 (false, None) => { /* malformed — ignore */ }
+            }
+        }
+    }
+
+    /// Read one JSON-RPC line, polling `cancel` while blocked.
+    async fn read_message_cancellable(&mut self, cancel: &CancelToken) -> Result<Value, Error> {
+        loop {
+            if cancel.is_cancelled() {
+                self.cancel().await;
+                return Err(Error::Cancelled);
+            }
+            match tokio::time::timeout(Duration::from_millis(25), self.read_message()).await {
+                Ok(result) => return result,
+                Err(_elapsed) => continue,
             }
         }
     }

@@ -1348,30 +1348,28 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
         Message::AgentEvent(key, evt) => {
             use agent::AgentEvent;
             let proj_root = state.project.project_root.clone();
-            // `(working_dir, scope_key, scope_kind, target_msg, command_hint_source, idea_description, harness)`.
+            // `(handle, scope_key, scope_kind, target_msg, command_hint_source, idea_description)`.
             // `command_hint_source` is the user-message-form text of the most
             // recent slash command — fed to `title_hints::build_hint` even
-            // when the target message itself carries no command. `harness` names
-            // the provider that runs the title summary (the session's resolved
-            // model harness).
+            // when the target message itself carries no command. Title summary
+            // runs through the chat's `AgentHandle` oneshot path (no cold
+            // provider construction).
             type TitleTaskInput = (
-                PathBuf,
+                duckchat::AgentHandle,
                 String,
                 scope::ScopeKind,
                 String,
                 Option<String>,
                 Option<String>,
-                String,
             );
             let mut title_task_input: Option<TitleTaskInput> = None;
-            // `(working_dir, assistant, user, available_commands, heuristic, harness, gen)`.
+            // `(handle, assistant, user, available_commands, heuristic, gen)`.
             type ReplyTaskInput = (
-                PathBuf,
+                duckchat::AgentHandle,
                 String,
                 Option<String>,
                 Vec<String>,
                 Option<String>,
-                String,
                 u64,
             );
             let mut reply_task_input: Option<ReplyTaskInput> = None;
@@ -1481,49 +1479,36 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                                 ax.scope_kind,
                                 scope::ScopeKind::Change | scope::ScopeKind::Exploration
                             )
-                            && let Some(handle) = ax.agent_handle.as_ref()
+                            && let Some(handle) = ax.agent_handle.clone()
                             && let Some(target) =
                                 chat_store::title_summarization_target(&ax.session)
                         {
-                            let harness = interaction::resolve_turn_model(
-                                ax.session.selected_model.as_ref(),
-                                ax.project_model_default.as_ref(),
-                            )
-                            .harness;
                             title_task_input = Some((
-                                handle.working_dir().to_path_buf(),
+                                handle,
                                 ax.session.scope.clone(),
                                 ax.scope_kind,
                                 target.message,
                                 target.command_hint_source,
                                 ax.idea_description.clone(),
-                                harness,
                             ));
                         }
                         // Reply-suggestion oneshot: every non-priming turn.
                         if !was_priming
-                            && let Some(handle) = ax.agent_handle.as_ref()
+                            && let Some(handle) = ax.agent_handle.clone()
                             && let Some((assistant, user)) =
                                 default_prompts::last_assistant_and_user(&ax.session)
                         {
-                            let working_dir = handle.working_dir().to_path_buf();
                             ax.begin_default_prompts_oneshot();
                             let prompts_gen = ax.default_prompts_gen;
-                            let harness = interaction::resolve_turn_model(
-                                ax.session.selected_model.as_ref(),
-                                ax.project_model_default.as_ref(),
-                            )
-                            .harness;
                             let cmds: Vec<String> =
                                 ax.chat_commands.iter().map(|c| c.name.clone()).collect();
                             let heuristic = ax.obvious_command.clone();
                             reply_task_input = Some((
-                                working_dir,
+                                handle,
                                 assistant,
                                 user,
                                 cmds,
                                 heuristic,
-                                harness,
                                 prompts_gen,
                             ));
                         }
@@ -1657,13 +1642,12 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
             let mut follow_tasks: Vec<Task<Message>> = vec![snap_task];
 
             if let Some((
-                working_dir,
+                handle,
                 scope_key,
                 scope_kind,
                 user,
                 command_hint_source,
                 idea_description,
-                harness,
             )) = title_task_input
             {
                 use duckchat::ContextHook;
@@ -1693,23 +1677,13 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                 let mut req = duckchat::TitleRequest::new(user);
                 req.context_hints = hints;
                 let route_key = key.clone();
+                // `AgentHandle` is `Clone`; move the clone into the async task
+                // so title summary uses the chat's oneshot runtime.
                 let work = async move {
-                    use duckchat::Provider;
-                    // Dispatch the summary on the session's harness — a grok
-                    // session's title model is grok-specific and vice versa.
-                    let result = match harness.as_str() {
-                        "grok" => {
-                            duckchat::grok::GrokProvider::new()
-                                .title_summary(req, &working_dir)
-                                .await
-                        }
-                        _ => {
-                            duckchat::claude_code::ClaudeCodeProvider::new()
-                                .title_summary(req, &working_dir)
-                                .await
-                        }
-                    };
-                    result.map_err(|e| e.to_string())
+                    handle
+                        .title_summary(req)
+                        .await
+                        .map_err(|e| e.to_string())
                 };
                 follow_tasks.push(Task::perform(work, move |result| {
                     Message::SessionTitleReady {
@@ -1720,35 +1694,24 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
             }
 
             if let Some((
-                working_dir,
+                handle,
                 assistant,
                 user,
                 available_commands,
                 lifecycle_heuristic,
-                harness,
                 prompts_gen,
             )) = reply_task_input
             {
                 let route_key = key.clone();
                 let work = async move {
-                    use duckchat::{Provider, ReplySuggestionRequest};
-                    let mut req = ReplySuggestionRequest::new(assistant);
+                    let mut req = duckchat::ReplySuggestionRequest::new(assistant);
                     req.user_message = user;
                     req.available_commands = available_commands;
                     req.lifecycle_heuristic = lifecycle_heuristic;
-                    let result = match harness.as_str() {
-                        "grok" => {
-                            duckchat::grok::GrokProvider::new()
-                                .reply_suggestions(req, &working_dir)
-                                .await
-                        }
-                        _ => {
-                            duckchat::claude_code::ClaudeCodeProvider::new()
-                                .reply_suggestions(req, &working_dir)
-                                .await
-                        }
-                    };
-                    result.map_err(|e| e.to_string())
+                    handle
+                        .reply_suggestions(req)
+                        .await
+                        .map_err(|e| e.to_string())
                 };
                 follow_tasks.push(Task::perform(work, move |result| {
                     Message::DefaultPromptsReady {
@@ -1792,15 +1755,18 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                 ax.default_prompts_gen,
                 prompts_gen,
                 result,
+                ax.obvious_command.as_deref(),
             ) else {
                 // Superseded generation — leave list and readiness unchanged.
                 return Task::none();
             };
+            // Effective list (oneshot parse or heuristic fallback) is ready.
             ax.agent_default_prompts = list;
             ax.default_prompts_pending = false;
-            let prompts = default_prompts::effective_prompts(&ax.agent_default_prompts);
-            ax.default_prompt_idx =
-                default_prompts::clamp_active_index(prompts.len(), ax.default_prompt_idx);
+            ax.default_prompt_idx = default_prompts::clamp_active_index(
+                ax.agent_default_prompts.len(),
+                ax.default_prompt_idx,
+            );
         }
         Message::ThemeChanged(mode) => {
             theme::set_mode(mode);

@@ -1162,11 +1162,12 @@ pub fn view<'a>(
         .transparent_bg(true)
         .on_submit(Msg::SendPressed);
 
-    // Defaults chrome under the input only when empty: loading while pending,
-    // list when ready. Never reserves height while the user is typing.
+    // Defaults chrome under the input only when empty and not mid-turn:
+    // loading while pending, list when ready. Hidden while streaming or typing.
     let defaults_chrome = crate::default_prompts::defaults_chrome(
         input_empty,
         default_prompts_pending,
+        status.is_streaming,
         default_prompts.len(),
     );
     let defaults_chrome_el: Option<Element<'a, Msg>> = match defaults_chrome {

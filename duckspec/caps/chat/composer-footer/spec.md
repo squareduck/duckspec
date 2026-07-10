@@ -19,7 +19,7 @@ would resume a session, or when the transcript is empty.
 - **THEN** the resend-history hint is shown
 
 > test: code
-> - crates/duckboard/src/widget/agent_chat.rs:1854
+> - crates/duckboard/src/widget/agent_chat.rs:1855
 
 ### Scenario: Hint hidden when next send would resume
 
@@ -29,7 +29,7 @@ would resume a session, or when the transcript is empty.
 - **THEN** the resend-history hint is not shown
 
 > test: code
-> - crates/duckboard/src/widget/agent_chat.rs:1866
+> - crates/duckboard/src/widget/agent_chat.rs:1867
 
 ### Scenario: Hint hidden when transcript is empty
 
@@ -39,7 +39,7 @@ would resume a session, or when the transcript is empty.
 - **THEN** the resend-history hint is not shown
 
 > test: code
-> - crates/duckboard/src/widget/agent_chat.rs:1878
+> - crates/duckboard/src/widget/agent_chat.rs:1879
 
 ## Requirement: Progressive usage readout
 
@@ -58,7 +58,7 @@ least 75%, the readout SHALL include used tokens, the window max, and the percen
 - **AND** the readout does not include absolute used or max token counts
 
 > test: code
-> - crates/duckboard/src/widget/agent_chat.rs:1890
+> - crates/duckboard/src/widget/agent_chat.rs:1891
 
 ### Scenario: Hot fill shows used, max, and percentage
 
@@ -68,7 +68,7 @@ least 75%, the readout SHALL include used tokens, the window max, and the percen
 - **THEN** the readout includes used tokens, the window max, and the fill percentage
 
 > test: code
-> - crates/duckboard/src/widget/agent_chat.rs:1904
+> - crates/duckboard/src/widget/agent_chat.rs:1905
 
 ## Requirement: Short closed model label
 
@@ -85,4 +85,4 @@ prefix.
 - **AND** the label does not include a harness prefix
 
 > test: code
-> - crates/duckboard/src/widget/agent_chat.rs:1916
+> - crates/duckboard/src/widget/agent_chat.rs:1917

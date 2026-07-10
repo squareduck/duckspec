@@ -355,11 +355,11 @@ pub struct AgentSession {
     pub agent_input_tokens: usize,
     pub agent_output_tokens: usize,
     /// Suggested /ds-* command for the current stage (without the leading slash).
-    /// Soft hint for the reply-suggestion oneshot only — not post-merged into
-    /// the empty-input list.
+    /// Soft hint on the reply-suggestion oneshot request, and the pre-oneshot /
+    /// failed-oneshot fallback for the empty-input default list (send form adds `/`).
     pub obvious_command: Option<String>,
-    /// Agent-sourced default prompts from the latest settled oneshot.
-    /// Ephemeral — not persisted. Effective list is this alone when ready.
+    /// Armed empty-input default prompts: non-empty oneshot parse when available,
+    /// otherwise the lifecycle heuristic seed/fallback. Ephemeral — not persisted.
     pub agent_default_prompts: Vec<String>,
     /// Monotonic generation; oneshot results apply only when gen matches.
     pub default_prompts_gen: u64,
@@ -1185,10 +1185,13 @@ fn handle_agent_chat(
                 // Streaming + empty input + no queue → no-op.
             } else {
                 let typed_opt = if typed.is_empty() {
-                    let prompts =
-                        crate::default_prompts::effective_prompts(&ax.agent_default_prompts);
+                    let prompts = crate::default_prompts::effective_prompts(
+                        &ax.agent_default_prompts,
+                        ax.obvious_command.as_deref(),
+                    );
                     crate::default_prompts::empty_submit_text(
                         ax.default_prompts_pending,
+                        ax.session.is_streaming,
                         &prompts,
                         ax.default_prompt_idx,
                     )
@@ -1211,10 +1214,13 @@ fn handle_agent_chat(
             if !ax.chat_input.text().trim().is_empty() {
                 return;
             }
-            let prompts =
-                crate::default_prompts::effective_prompts(&ax.agent_default_prompts);
+            let prompts = crate::default_prompts::effective_prompts(
+                &ax.agent_default_prompts,
+                ax.obvious_command.as_deref(),
+            );
             if !crate::default_prompts::can_cycle_defaults(
                 ax.default_prompts_pending,
+                ax.session.is_streaming,
                 prompts.len(),
             ) {
                 return;
@@ -1838,10 +1844,13 @@ pub fn handle_agent_chat_key(
 
     // Empty-input default-prompt cycle (only when completion is not consuming Tab).
     if *key == keyboard::Key::Named(Named::Tab) && ax.chat_input.text().trim().is_empty() {
-        let prompts =
-            crate::default_prompts::effective_prompts(&ax.agent_default_prompts);
+        let prompts = crate::default_prompts::effective_prompts(
+            &ax.agent_default_prompts,
+            ax.obvious_command.as_deref(),
+        );
         if crate::default_prompts::can_cycle_defaults(
             ax.default_prompts_pending,
+            ax.session.is_streaming,
             prompts.len(),
         ) {
             let delta: i8 = if mods.shift() { -1 } else { 1 };
@@ -2250,8 +2259,10 @@ pub fn view_column<'a, M: 'a + Clone>(
                     context_max: agent_chat::model_context_window(&effective_model),
                 };
                 let w = wrap.clone();
-                let default_prompts =
-                    crate::default_prompts::effective_prompts(&ax.agent_default_prompts);
+                let default_prompts = crate::default_prompts::effective_prompts(
+                    &ax.agent_default_prompts,
+                    ax.obvious_command.as_deref(),
+                );
                 let default_prompt_idx = crate::default_prompts::clamp_active_index(
                     default_prompts.len(),
                     ax.default_prompt_idx,
