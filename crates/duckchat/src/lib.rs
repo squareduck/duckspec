@@ -13,6 +13,7 @@ pub mod error;
 pub mod event;
 pub mod hook;
 pub mod provider;
+pub mod reply_suggest;
 pub mod request;
 pub mod worker;
 
@@ -25,5 +26,9 @@ pub use error::Error;
 pub use event::{AgentEvent, Usage};
 pub use hook::{ContextHook, HookOutput};
 pub use provider::{Capabilities, ModelInfo, ModelRef, Provider, SlashCommand};
-pub use request::{Attachment, ReasoningMode, TitleRequest, ToolPolicy, TurnOutcome, TurnRequest};
+pub use reply_suggest::parse_replies;
+pub use request::{
+    Attachment, ReasoningMode, ReplySuggestionRequest, TitleRequest, ToolPolicy, TurnOutcome,
+    TurnRequest,
+};
 pub use worker::{AgentCommand, AgentHandle, spawn_worker};

@@ -52,6 +52,8 @@ pub enum Msg {
     ChatScrolled(scrollable::Viewport),
     /// User picked a model from the meta-row selector.
     ModelSelected(ModelChoice),
+    /// Cycle empty-input default prompts (`+1` Tab, `-1` Shift-Tab).
+    CycleDefaultPrompt(i8),
 }
 
 // ── Model picker ─────────────────────────────────────────────────────────────
@@ -1045,7 +1047,10 @@ pub fn view<'a>(
     commands: &'a [SlashCommand],
     completion: &CompletionState,
     status: StatusInfo,
-    obvious_command: Option<&str>,
+    default_prompts: Vec<String>,
+    default_prompt_idx: usize,
+    // True while the reply-suggestion oneshot is outstanding.
+    default_prompts_pending: bool,
     pinned_selections: &'a [SelectionContext],
     tentative_selection: Option<&'a SelectionContext>,
     block_highlights: Vec<(
@@ -1145,8 +1150,10 @@ pub fn view<'a>(
     // Input area — promoted to the custom TextEdit widget so prompts get
     // markdown syntax highlighting and the full editor toolkit (undo,
     // word-nav, selection). Plain Enter sends via `on_submit`; Shift+Enter
-    // falls through to the default newline action.
-    let mut input = text_edit::TextEdit::new(input_value, Msg::InputAction)
+    // falls through to the default newline action. Grows via `fit_content`
+    // (sibling column layout — never stacked under the defaults list).
+    let input_empty = input_value.text().trim().is_empty();
+    let input = text_edit::TextEdit::new(input_value, Msg::InputAction)
         .id(CHAT_INPUT_ID)
         .show_gutter(false)
         .word_wrap(true)
@@ -1154,9 +1161,24 @@ pub fn view<'a>(
         .max_rows(CHAT_INPUT_MAX_ROWS)
         .transparent_bg(true)
         .on_submit(Msg::SendPressed);
-    if let Some(cmd) = obvious_command {
-        input = input.placeholder(format!("Press Enter to run /{cmd}"));
-    }
+
+    // Defaults chrome under the input only when empty: loading while pending,
+    // list when ready. Never reserves height while the user is typing.
+    let defaults_chrome = crate::default_prompts::defaults_chrome(
+        input_empty,
+        default_prompts_pending,
+        default_prompts.len(),
+    );
+    let defaults_chrome_el: Option<Element<'a, Msg>> = match defaults_chrome {
+        crate::default_prompts::DefaultsChrome::Hidden => None,
+        crate::default_prompts::DefaultsChrome::Loading => {
+            Some(view_default_prompts_loading())
+        }
+        crate::default_prompts::DefaultsChrome::List => Some(view_default_prompt_list(
+            &default_prompts,
+            default_prompt_idx,
+        )),
+    };
 
     let input_divider = rule::horizontal(1).style(|_theme: &iced::Theme| rule::Style {
         color: theme::border_color(),
@@ -1232,47 +1254,50 @@ pub fn view<'a>(
         })
         .width(Length::Fill);
 
+    // Build the composer column without zero-height placeholders — empty
+    // `Space` siblings still consume `column` spacing and inflated the gap
+    // above the default-prompt strip.
+    let mut composer_col = column![].spacing(theme::SPACING_XS);
+
     // Queue pill — renders above the input when a message is staged while the
     // agent is still streaming. Uses a read-only TextEdit so it matches the
     // shape of regular chat messages.
-    let queue_el: Element<'a, Msg> = match queue_editor {
-        Some(ed) => {
-            let editor = text_edit::TextEdit::new(ed, Msg::QueueAction)
-                .show_gutter(false)
-                .word_wrap(true)
-                .read_only(true)
-                .fit_content(true)
-                .transparent_bg(true);
-            let close_btn = button(
-                text("×")
-                    .size(theme::content_size())
-                    .color(theme::text_muted()),
-            )
-            .on_press(Msg::DiscardQueue)
-            .padding([0.0, theme::SPACING_XS])
-            .style(|_theme, _status| iced::widget::button::Style {
-                background: None,
-                ..Default::default()
-            });
-            let label = text("Queued (enter to interrupt and send, backspace to cancel)")
-                .size(theme::font_sm())
-                .color(theme::text_muted());
-            let header_row = row![
-                container(label).width(Length::Fill),
-                container(close_btn).align_y(iced::Alignment::Start),
-            ]
-            .spacing(theme::SPACING_XS)
-            .align_y(iced::Alignment::Center);
-            let pill_col = column![header_row, container(editor).width(Length::Fill)]
-                .spacing(theme::SPACING_XS);
+    if let Some(ed) = queue_editor {
+        let editor = text_edit::TextEdit::new(ed, Msg::QueueAction)
+            .show_gutter(false)
+            .word_wrap(true)
+            .read_only(true)
+            .fit_content(true)
+            .transparent_bg(true);
+        let close_btn = button(
+            text("×")
+                .size(theme::content_size())
+                .color(theme::text_muted()),
+        )
+        .on_press(Msg::DiscardQueue)
+        .padding([0.0, theme::SPACING_XS])
+        .style(|_theme, _status| iced::widget::button::Style {
+            background: None,
+            ..Default::default()
+        });
+        let label = text("Queued (enter to interrupt and send, backspace to cancel)")
+            .size(theme::font_sm())
+            .color(theme::text_muted());
+        let header_row = row![
+            container(label).width(Length::Fill),
+            container(close_btn).align_y(iced::Alignment::Start),
+        ]
+        .spacing(theme::SPACING_XS)
+        .align_y(iced::Alignment::Center);
+        let pill_col = column![header_row, container(editor).width(Length::Fill)]
+            .spacing(theme::SPACING_XS);
+        composer_col = composer_col.push(
             container(pill_col)
                 .padding([theme::SPACING_SM, theme::SPACING_MD])
                 .width(Length::Fill)
-                .style(theme::chat_queued_card)
-                .into()
-        }
-        None => Space::new().into(),
-    };
+                .style(theme::chat_queued_card),
+        );
+    }
 
     // Selection-context chips: pinned first, then the live tentative slot.
     // Iced 0.14's `Row::wrap()` lays children out across multiple lines
@@ -1280,7 +1305,7 @@ pub fn view<'a>(
     // above the input rather than forcing a horizontal scroll. Tab-source
     // labels are abbreviated to filename + minimal disambiguating
     // parents — long paths would otherwise get truncated by ellipsis.
-    let attachments_el: Element<'a, Msg> = if has_attachments {
+    if has_attachments {
         let mut all: Vec<&SelectionContext> = pinned_selections.iter().collect();
         if let Some(t) = tentative_selection {
             all.push(t);
@@ -1297,22 +1322,25 @@ pub fn view<'a>(
             .align_y(iced::Alignment::Center)
             .wrap()
             .vertical_spacing(theme::SPACING_XS);
-        container(wrapped)
-            .padding([0.0, theme::SPACING_SM])
-            .width(Length::Fill)
-            .into()
-    } else {
-        Space::new().into()
-    };
+        composer_col = composer_col.push(
+            container(wrapped)
+                .padding([0.0, theme::SPACING_SM])
+                .width(Length::Fill),
+        );
+    }
+
+    composer_col = composer_col.push(input);
+    if let Some(chrome) = defaults_chrome_el {
+        composer_col = composer_col.push(chrome);
+    }
+    composer_col = composer_col.push(meta_row);
 
     // Horizontal padding here sums with TextEdit's internal CONTENT_PAD (8px)
-    // to land the input's text at the same 12px the chat headers and the
-    // completion rows use.
-    let input_row =
-        container(column![queue_el, attachments_el, input, meta_row].spacing(theme::SPACING_XS))
-            .padding([theme::SPACING_SM, theme::SPACING_XS])
-            .width(Length::Fill)
-            .style(theme::chat_input);
+    // to land the input's text at the same 12px the chat headers use.
+    let input_row = container(composer_col)
+        .padding([theme::SPACING_SM, theme::SPACING_XS])
+        .width(Length::Fill)
+        .style(theme::chat_input);
 
     column![chat_area, completion_el, input_divider, input_row]
         .height(Length::Fill)
@@ -1576,6 +1604,82 @@ fn format_number(n: usize) -> String {
     }
     result
 }
+
+/// Quiet loading strip while the reply-suggestion oneshot is pending.
+fn view_default_prompts_loading<'a>() -> Element<'a, Msg> {
+    const CONTENT_PAD: f32 = 8.0;
+    container(
+        text("…")
+            .size(theme::content_size())
+            .color(theme::text_muted())
+            .font(theme::content_font()),
+    )
+    .padding(iced::Padding {
+        top: text_edit::CONTENT_PAD_Y,
+        right: 0.0,
+        bottom: text_edit::CONTENT_PAD_Y,
+        left: CONTENT_PAD,
+    })
+    .width(Length::Fill)
+    .into()
+}
+
+/// Default-prompt list in source order with `↳` on the active row. Active uses
+/// normal muted text; other rows are fainter so the current default stays clear.
+fn view_default_prompt_list<'a>(prompts: &[String], active_idx: usize) -> Element<'a, Msg> {
+    const CONTENT_PAD: f32 = 8.0;
+    const MARKER_W: f32 = 16.0;
+
+    let active = if prompts.is_empty() {
+        0
+    } else {
+        active_idx % prompts.len()
+    };
+
+    let mut col = column![].spacing(0.0);
+    for (i, prompt) in prompts.iter().enumerate() {
+        let is_active = i == active;
+        let color = if is_active {
+            theme::text_muted()
+        } else {
+            // Fainter than the active row (overlay0 @ ~45% opacity).
+            let mut c = theme::text_muted();
+            c.a *= 0.45;
+            c
+        };
+        let marker = if is_active { "↳" } else { "" };
+        let line = row![
+            container(
+                text(marker)
+                    .size(theme::content_size())
+                    .color(color)
+                    .font(theme::content_font()),
+            )
+            .width(Length::Fixed(MARKER_W))
+            .height(Length::Fixed(text_edit::LINE_HEIGHT))
+            .align_y(iced::Alignment::Center),
+            text(prompt.clone())
+                .size(theme::content_size())
+                .color(color)
+                .font(theme::content_font()),
+        ]
+        .spacing(0.0)
+        .align_y(iced::Alignment::Center)
+        .height(Length::Fixed(text_edit::LINE_HEIGHT));
+        col = col.push(line);
+    }
+
+    container(col)
+        .padding(iced::Padding {
+            top: text_edit::CONTENT_PAD_Y,
+            right: 0.0,
+            bottom: text_edit::CONTENT_PAD_Y,
+            left: CONTENT_PAD,
+        })
+        .width(Length::Fill)
+        .into()
+}
+
 
 // view_status_bar removed: model + context now blend into the input area
 // (see `view`), and stream state is conveyed by the streaming indicator.

@@ -8,8 +8,8 @@ use iced::Color;
 
 // ── Layout constants (shared with render) ─────────────────────────────────
 
-pub(crate) const LINE_HEIGHT: f32 = 20.0;
-pub(crate) const CONTENT_PAD_Y: f32 = 4.0;
+pub const LINE_HEIGHT: f32 = 20.0;
+pub const CONTENT_PAD_Y: f32 = 4.0;
 
 // ── Blocks ────────────────────────────────────────────────────────────────
 

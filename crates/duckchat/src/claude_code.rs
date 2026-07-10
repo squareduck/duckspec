@@ -6,6 +6,7 @@
 
 mod discover;
 mod protocol;
+mod reply_suggest;
 mod run;
 mod spawn;
 mod title;
@@ -23,7 +24,7 @@ use crate::cancel::CancelToken;
 use crate::error::Error;
 use crate::event::AgentEvent;
 use crate::provider::{Capabilities, ModelInfo, Provider, SlashCommand};
-use crate::request::{TitleRequest, TurnOutcome, TurnRequest};
+use crate::request::{ReplySuggestionRequest, TitleRequest, TurnOutcome, TurnRequest};
 
 /// Model used for the one-shot `title_summary` call. Cheap, fast, plenty good
 /// for summarising a single exchange into a handful of words.
@@ -108,5 +109,13 @@ impl Provider for ClaudeCodeProvider {
         working_dir: &Path,
     ) -> Result<String, Error> {
         title::title_summary(req, working_dir).await
+    }
+
+    async fn reply_suggestions(
+        &self,
+        req: ReplySuggestionRequest,
+        working_dir: &Path,
+    ) -> Result<Vec<String>, Error> {
+        reply_suggest::reply_suggestions(req, working_dir).await
     }
 }

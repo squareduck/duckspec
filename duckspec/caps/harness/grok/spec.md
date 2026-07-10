@@ -20,7 +20,7 @@ both cases the reported session id SHALL be surfaced for the caller to persist.
 - **AND** it surfaces the session id grok assigned
 
 > test: code
-> - crates/duckchat/src/grok/acp.rs:445
+> - crates/duckchat/src/grok/acp.rs:455
 
 ### Scenario: A turn with a prior session id resumes that session
 
@@ -29,7 +29,7 @@ both cases the reported session id SHALL be surfaced for the caller to persist.
 - **THEN** it opens the session by resuming that same id
 
 > test: code
-> - crates/duckchat/src/grok/acp.rs:485
+> - crates/duckchat/src/grok/acp.rs:495
 
 ## Requirement: Event translation
 
@@ -92,7 +92,7 @@ absent.
 - **AND** each returned model carries a context window
 
 > test: code
-> - crates/duckchat/src/grok.rs:410
+> - crates/duckchat/src/grok.rs:451
 
 ### Scenario: Title model falls back when the preferred fast model is absent
 
@@ -101,7 +101,7 @@ absent.
 - **THEN** it selects another available model rather than failing
 
 > test: code
-> - crates/duckchat/src/grok.rs:428
+> - crates/duckchat/src/grok.rs:469
 
 ## Requirement: Graceful unavailability
 
@@ -118,7 +118,7 @@ empty list and running a turn SHALL fail with a typed error rather than panickin
 - **AND** the turn fails with a typed error rather than panicking
 
 > test: code
-> - crates/duckchat/src/grok.rs:443
+> - crates/duckchat/src/grok.rs:484
 
 ## Requirement: Prompt attachments
 
@@ -141,7 +141,7 @@ unresolved `attach:` link SHALL be left as its original literal markdown text.
 - **AND** that block carries the attachment's media type and payload
 
 > test: code
-> - crates/duckchat/src/grok.rs:343
+> - crates/duckchat/src/grok.rs:384
 
 ### Scenario: Surrounding text is preserved as text blocks
 
@@ -155,7 +155,7 @@ unresolved `attach:` link SHALL be left as its original literal markdown text.
 - **AND** the text after the marker appears as a text content block after the image block
 
 > test: code
-> - crates/duckchat/src/grok.rs:363
+> - crates/duckchat/src/grok.rs:404
 
 ### Scenario: A non-image attachment is represented as text
 
@@ -166,7 +166,7 @@ unresolved `attach:` link SHALL be left as its original literal markdown text.
 - **AND** the content does not include an image content block for that attachment
 
 > test: code
-> - crates/duckchat/src/grok.rs:379
+> - crates/duckchat/src/grok.rs:420
 
 ### Scenario: An unresolved attach marker is left literal
 
@@ -176,4 +176,4 @@ unresolved `attach:` link SHALL be left as its original literal markdown text.
 - **THEN** the original markdown link remains as text content
 
 > test: code
-> - crates/duckchat/src/grok.rs:401
+> - crates/duckchat/src/grok.rs:442

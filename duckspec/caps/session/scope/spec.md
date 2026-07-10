@@ -104,7 +104,7 @@ the same session.
 - **THEN** the orientation is part of the message body sent on that turn
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:627
+> - crates/duckboard/src/area/interaction.rs:661
 
 ### Scenario: Orientation is present when the project has no AGENTS.md
 
@@ -113,7 +113,7 @@ the same session.
 - **THEN** the orientation is part of the message body sent on that turn
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:644
+> - crates/duckboard/src/area/interaction.rs:678
 
 ### Scenario: A resumed session does not repeat the orientation
 
@@ -122,7 +122,7 @@ the same session.
 - **THEN** the orientation is not included again
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:664
+> - crates/duckboard/src/area/interaction.rs:698
 
 ## Requirement: Current review in orientation
 

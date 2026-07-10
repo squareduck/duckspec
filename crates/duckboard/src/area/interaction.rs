@@ -355,8 +355,19 @@ pub struct AgentSession {
     pub agent_input_tokens: usize,
     pub agent_output_tokens: usize,
     /// Suggested /ds-* command for the current stage (without the leading slash).
-    /// Used as the "press Enter on empty input" shortcut and for placeholder text.
+    /// Soft hint for the reply-suggestion oneshot only — not post-merged into
+    /// the empty-input list.
     pub obvious_command: Option<String>,
+    /// Agent-sourced default prompts from the latest settled oneshot.
+    /// Ephemeral — not persisted. Effective list is this alone when ready.
+    pub agent_default_prompts: Vec<String>,
+    /// Monotonic generation; oneshot results apply only when gen matches.
+    pub default_prompts_gen: u64,
+    /// True while a reply-suggestion oneshot is outstanding for
+    /// `default_prompts_gen`. Empty Enter / Tab cycle stay disarmed.
+    pub default_prompts_pending: bool,
+    /// Index into the effective default-prompt list for Tab cycle / Enter.
+    pub default_prompt_idx: usize,
     /// Lifecycle facts for this session's change scope (phase, step progress,
     /// next stage). Refreshed alongside `obvious_command`; `None` for
     /// non-change scopes. Feeds the first-turn scope orientation blurb.
@@ -449,6 +460,10 @@ impl AgentSession {
             agent_input_tokens: 0,
             agent_output_tokens: 0,
             obvious_command: None,
+            agent_default_prompts: Vec::new(),
+            default_prompts_gen: 0,
+            default_prompts_pending: false,
+            default_prompt_idx: 0,
             scope_facts: None,
             queue_editor: None,
             idea_description: None,
@@ -463,6 +478,25 @@ impl AgentSession {
             pending_followup_prompt: None,
             needs_flush: false,
         }
+    }
+
+    /// Invalidate in-flight reply-suggestion oneshots and drop agent defaults.
+    /// No oneshot is outstanding for the new gen, so readiness is ready with an
+    /// empty list until the next TurnComplete spawns one. Called when a turn
+    /// starts streaming.
+    pub fn clear_agent_default_prompts(&mut self) {
+        self.default_prompts_gen = self.default_prompts_gen.wrapping_add(1);
+        self.agent_default_prompts.clear();
+        self.default_prompt_idx = 0;
+        self.default_prompts_pending = false;
+    }
+
+    /// Mark a new reply-suggestion oneshot as in flight for the current gen.
+    pub fn begin_default_prompts_oneshot(&mut self) {
+        self.default_prompts_gen = self.default_prompts_gen.wrapping_add(1);
+        self.agent_default_prompts.clear();
+        self.default_prompt_idx = 0;
+        self.default_prompts_pending = true;
     }
 
     /// The harness this session's next turn dispatches to, resolved through the
@@ -1151,7 +1185,13 @@ fn handle_agent_chat(
                 // Streaming + empty input + no queue → no-op.
             } else {
                 let typed_opt = if typed.is_empty() {
-                    ax.obvious_command.as_ref().map(|c| format!("/{c}"))
+                    let prompts =
+                        crate::default_prompts::effective_prompts(&ax.agent_default_prompts);
+                    crate::default_prompts::empty_submit_text(
+                        ax.default_prompts_pending,
+                        &prompts,
+                        ax.default_prompt_idx,
+                    )
                 } else {
                     Some(typed)
                 };
@@ -1166,6 +1206,27 @@ fn handle_agent_chat(
                     send_prompt_text(ax, text, highlighter);
                 }
             }
+        }
+        agent_chat::Msg::CycleDefaultPrompt(delta) => {
+            if !ax.chat_input.text().trim().is_empty() {
+                return;
+            }
+            let prompts =
+                crate::default_prompts::effective_prompts(&ax.agent_default_prompts);
+            if !crate::default_prompts::can_cycle_defaults(
+                ax.default_prompts_pending,
+                prompts.len(),
+            ) {
+                return;
+            }
+            ax.default_prompt_idx = crate::default_prompts::cycle_active_index(
+                prompts.len(),
+                ax.default_prompt_idx,
+                delta,
+            );
+            // Heuristic: Tab was handled for the chat input — keep Cmd-R etc.
+            // working and signal focus for the follow-up focus task.
+            ax.chat_input_focused = true;
         }
         agent_chat::Msg::CancelPressed => {
             if let Some(handle) = &ax.agent_handle {
@@ -1419,6 +1480,9 @@ pub fn recover_from_lost_session(ax: &mut AgentSession, highlighter: &SyntaxHigh
 /// the chat editor blocks. No-op if no agent handle is attached.
 pub fn send_prompt_text(ax: &mut AgentSession, text: String, highlighter: &SyntaxHighlighter) {
     use duckchat::{ContextHook, TurnRequest};
+
+    // Stale agent defaults must not outlive a new turn.
+    ax.clear_agent_default_prompts();
 
     let Some(handle) = &ax.agent_handle else {
         return;
@@ -1769,6 +1833,19 @@ pub fn handle_agent_chat_key(
         };
         if let Some(msg) = completion_msg {
             return AgentChatKeyResult::Dispatch(msg);
+        }
+    }
+
+    // Empty-input default-prompt cycle (only when completion is not consuming Tab).
+    if *key == keyboard::Key::Named(Named::Tab) && ax.chat_input.text().trim().is_empty() {
+        let prompts =
+            crate::default_prompts::effective_prompts(&ax.agent_default_prompts);
+        if crate::default_prompts::can_cycle_defaults(
+            ax.default_prompts_pending,
+            prompts.len(),
+        ) {
+            let delta: i8 = if mods.shift() { -1 } else { 1 };
+            return AgentChatKeyResult::Dispatch(agent_chat::Msg::CycleDefaultPrompt(delta));
         }
     }
 
@@ -2173,6 +2250,12 @@ pub fn view_column<'a, M: 'a + Clone>(
                     context_max: agent_chat::model_context_window(&effective_model),
                 };
                 let w = wrap.clone();
+                let default_prompts =
+                    crate::default_prompts::effective_prompts(&ax.agent_default_prompts);
+                let default_prompt_idx = crate::default_prompts::clamp_active_index(
+                    default_prompts.len(),
+                    ax.default_prompt_idx,
+                );
                 let chat_view = agent_chat::view(
                     &ax.session,
                     &ax.chat_blocks,
@@ -2183,7 +2266,9 @@ pub fn view_column<'a, M: 'a + Clone>(
                     &ax.chat_commands,
                     &ax.chat_completion,
                     status,
-                    ax.obvious_command.as_deref(),
+                    default_prompts,
+                    default_prompt_idx,
+                    ax.default_prompts_pending,
                     &ax.selection_pinned,
                     ax.selection_tentative.as_ref(),
                     block_highlights,

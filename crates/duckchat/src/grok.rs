@@ -25,7 +25,10 @@ use crate::cancel::CancelToken;
 use crate::error::Error;
 use crate::event::AgentEvent;
 use crate::provider::{Capabilities, ModelInfo, Provider, SlashCommand};
-use crate::request::{TitleRequest, TurnOutcome, TurnRequest};
+use crate::reply_suggest::{
+    REPLY_SUGGEST_INSTRUCTION, build_reply_suggest_prompt, parse_replies, should_skip_model,
+};
+use crate::request::{ReplySuggestionRequest, TitleRequest, TurnOutcome, TurnRequest};
 
 use acp::{AcpModel, AcpTurn};
 use event::map_update;
@@ -208,6 +211,44 @@ impl Provider for GrokProvider {
         turn.cancel().await;
 
         Ok(clean_title(&title))
+    }
+
+    async fn reply_suggestions(
+        &self,
+        req: ReplySuggestionRequest,
+        working_dir: &Path,
+    ) -> Result<Vec<String>, Error> {
+        if should_skip_model(&req) {
+            return Ok(Vec::new());
+        }
+
+        let mut turn = AcpTurn::spawn_with((self.spawn)(), working_dir).await?;
+        let init = turn.initialize().await?;
+        let model = pick_title_model(&init.models).ok_or_else(|| {
+            Error::Other("grok advertised no models for reply suggestions".into())
+        })?;
+
+        let session_id = turn.open(None, working_dir).await?;
+        let body = build_reply_suggest_prompt(&req);
+        let content = text_prompt_content(&format!("{REPLY_SUGGEST_INSTRUCTION}\n\n{body}"));
+
+        let mut raw = String::new();
+        turn.prompt(
+            &session_id,
+            &content,
+            &model,
+            None,
+            &mut |params| {
+                if let Some(AgentEvent::ContentDelta { text }) = map_update(params, None) {
+                    raw.push_str(&text);
+                }
+            },
+            &CancelToken::new(),
+        )
+        .await?;
+        turn.cancel().await;
+
+        Ok(parse_replies(&raw))
     }
 }
 

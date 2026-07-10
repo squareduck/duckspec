@@ -9,7 +9,7 @@ use tokio::sync::mpsc;
 use crate::cancel::CancelToken;
 use crate::error::Error;
 use crate::event::AgentEvent;
-use crate::request::{TitleRequest, TurnOutcome, TurnRequest};
+use crate::request::{ReplySuggestionRequest, TitleRequest, TurnOutcome, TurnRequest};
 
 /// A source of agent turns. Implementations may spawn subprocesses (Claude
 /// Code, opencode) or call LLM APIs directly.
@@ -54,6 +54,20 @@ pub trait Provider: Send + Sync {
         req: TitleRequest,
         working_dir: &std::path::Path,
     ) -> Result<String, Error>;
+
+    /// Suggest 0–3 short user replies for an empty chat composer after an
+    /// agent turn. Expected to use the provider's cheapest/fastest model
+    /// (same pick as [`Self::title_summary`]). Implementations should not
+    /// invoke tools or resume a prior session. Empty
+    /// `req.assistant_message` short-circuits to an empty list without a
+    /// model call.
+    ///
+    /// Return values are already parsed reply texts (not raw model output).
+    async fn reply_suggestions(
+        &self,
+        req: ReplySuggestionRequest,
+        working_dir: &std::path::Path,
+    ) -> Result<Vec<String>, Error>;
 }
 
 #[derive(Debug, Clone, Default)]

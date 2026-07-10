@@ -107,3 +107,33 @@ impl TitleRequest {
         }
     }
 }
+
+/// Input to `Provider::reply_suggestions`. Conversation-local: last messages,
+/// optional slash-command hints, and an optional lifecycle heuristic as a
+/// **soft** hint only — the model may omit it, place it anywhere, or invent
+/// other replies. Callers do not post-merge the heuristic into the result.
+#[derive(Debug, Clone)]
+pub struct ReplySuggestionRequest {
+    /// Latest assistant message text (required). Empty → empty suggestions.
+    pub assistant_message: String,
+    /// Immediately preceding user message text, when present.
+    pub user_message: Option<String>,
+    /// Slash command names the project exposes (e.g. `ds-spec`). Used only
+    /// to prime skill-first wording; not a hard allow-list — unknown `/…`
+    /// from the model is kept.
+    pub available_commands: Vec<String>,
+    /// Lifecycle / disk heuristic (e.g. `ds-step` or `/ds-step`) when the
+    /// session has one. Soft hint only — not forced into the result list.
+    pub lifecycle_heuristic: Option<String>,
+}
+
+impl ReplySuggestionRequest {
+    pub fn new(assistant_message: impl Into<String>) -> Self {
+        Self {
+            assistant_message: assistant_message.into(),
+            user_message: None,
+            available_commands: Vec::new(),
+            lifecycle_heuristic: None,
+        }
+    }
+}
