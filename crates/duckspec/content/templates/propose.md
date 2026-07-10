@@ -102,18 +102,14 @@ After writing, run `ds check` on the proposal to validate it.
 
 ## Handoff
 
-When the proposal is written and validated:
+When the proposal is written and validated, offer at most two ranked next
+actions (offer once; drop if declined):
 
-- If the change needs technical design work, suggest `/ds-design`: "The proposal
-  is done. This change has enough moving parts that a design doc would help —
-  want to run `/ds-design`?"
-- If the change is straightforward enough to go straight to specs, suggest
-  `/ds-spec`: "This is pretty clear-cut. Ready to spec the capabilities with
-  `/ds-spec`?"
-- If the user just wanted to capture the idea, suggest `/ds-archive`: "If this
-  is just an idea for later, we can archive the proposal as-is with
-  `/ds-archive`."
+- **Primary** — `/ds-design` (default after a proposal).
+- **Secondary** — `/ds-spec` (when the user may want to skip design for a
+  clear-cut change).
 
-Offer once. The user may want to refine the proposal further before moving on.
+Do not offer archive or other stages here. The user may refine the proposal
+further before moving on.
 
 ## After write

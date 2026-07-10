@@ -768,7 +768,7 @@ pub fn change_scope_facts(name: &str, project: &ProjectData) -> Option<ChangeSco
     // review under a proposal-only change. It never gates phase/next_command.
     let current_review = change.reviews.last().cloned();
 
-    // Steps exist → either apply (unfinished) or archive (all done).
+    // Steps exist → either apply (unfinished) or review (all done).
     if !change.steps.is_empty() {
         let steps_done = change
             .steps
@@ -789,7 +789,7 @@ pub fn change_scope_facts(name: &str, project: &ProjectData) -> Option<ChangeSco
             steps_done,
             step_count: change.steps.len(),
             active_step_tasks,
-            next_command: Some(if all_done { "ds-archive" } else { "ds-apply" }.into()),
+            next_command: Some(if all_done { "ds-review" } else { "ds-apply" }.into()),
             current_review,
         });
     }
@@ -2035,7 +2035,7 @@ mod breadcrumb_tests {
     }
 
     #[test]
-    fn obvious_all_steps_done_suggests_archive() {
+    fn obvious_all_steps_done_suggests_review() {
         let state = make_state("foo", &[]);
         let mut project = make_project(&["foo"], &[]);
         set_change(&mut project, "foo", |c| {
@@ -2046,7 +2046,7 @@ mod breadcrumb_tests {
         });
         assert_eq!(
             compute_obvious_command(&state, &project).as_deref(),
-            Some("ds-archive")
+            Some("ds-review")
         );
     }
 
@@ -2068,9 +2068,9 @@ mod breadcrumb_tests {
         assert_eq!(facts.next_command.as_deref(), Some("ds-apply"));
     }
 
-    /// @spec session/scope Lifecycle reflection: A change with all steps complete reports completion and the archive next-stage
+    /// @spec session/scope Lifecycle reflection: A change with all steps complete reports completion and the review next-stage
     #[test]
-    fn facts_all_steps_complete_report_completion_and_archive() {
+    fn facts_all_steps_complete_report_completion_and_review() {
         let mut project = make_project(&["foo"], &[]);
         set_change(&mut project, "foo", |c| {
             c.has_proposal = true;
@@ -2081,7 +2081,7 @@ mod breadcrumb_tests {
         let facts = change_scope_facts("foo", &project).expect("active change has facts");
         assert_eq!(facts.steps_done, facts.step_count);
         assert!(facts.step_count > 0, "completion is over real steps");
-        assert_eq!(facts.next_command.as_deref(), Some("ds-archive"));
+        assert_eq!(facts.next_command.as_deref(), Some("ds-review"));
     }
 
     /// @spec session/scope Lifecycle reflection: A change with only a proposal reports the design next-stage
@@ -2108,7 +2108,7 @@ mod breadcrumb_tests {
             .text
     }
 
-    // @spec session/scope Current review in orientation: Orientation reports the highest-numbered review as the current review
+    /// @spec session/scope Current review in orientation: Orientation reports the highest-numbered review as the current review
     #[test]
     fn orientation_reports_highest_numbered_review() {
         let mut project = make_project(&["foo"], &[]);
@@ -2121,8 +2121,8 @@ mod breadcrumb_tests {
 
         let text = orientation_for("foo", &project);
         assert!(
-            text.contains("reviews/02-post-implementation.md"),
-            "orientation must report the highest-numbered review: {text}"
+            text.contains("duckspec/changes/foo/reviews/02-post-implementation.md"),
+            "orientation must report the highest-numbered review at the full path: {text}"
         );
         assert!(
             !text.contains("reviews/01-initial.md"),

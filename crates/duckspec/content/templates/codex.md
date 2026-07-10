@@ -69,13 +69,12 @@ don't go through the change workflow.
 
 ## Handoff
 
-Codex is a side operation — it doesn't feed into a next stage. After writing
-entries:
+Codex is a side operation. After writing entries, at most one next action:
 
-- If the user was in the middle of a change, remind them where they were: "Codex
-  entry written. You were working on `<change-name>` — pick up where you left
-  off with `/ds-<stage>`."
-- If this was a standalone knowledge harvest, no further action needed: "Entry
-  saved. That's it unless you have more to capture."
+- Mid-change: **Primary** — resume the change with `/ds-<stage>` (name the
+  stage).
+- Standalone harvest: no next action — "Entry saved."
+
+Offer once if suggesting a resume; never stack a second rank.
 
 ## After write

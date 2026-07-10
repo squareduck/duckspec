@@ -89,7 +89,7 @@ change.";
     let Some(facts) = &scope.change_facts else {
         return format!(
             "Current duckspec scope: change `{name}`. Change artifacts live under \
-`changes/{name}/`. {authority}"
+`duckspec/changes/{name}/`. {authority}"
         );
     };
 
@@ -123,13 +123,15 @@ change.";
     // Advisory: surface the current review as an openable pointer when one
     // exists. Never alters progress or the suggested next stage.
     let review = match &facts.current_review {
-        Some(r) => format!(" Current review: `reviews/{r}` (latest)."),
+        Some(r) => {
+            format!(" Current review: `duckspec/changes/{name}/reviews/{r}` (latest).")
+        }
         None => String::new(),
     };
 
     format!(
         "Current duckspec scope: change `{name}`. Change artifacts live under \
-`changes/{name}/`. {progress}{next}{review} {authority}"
+`duckspec/changes/{name}/`. {progress}{next}{review} {authority}"
     )
 }
 
@@ -153,12 +155,13 @@ a change directory to exist."
                     .to_string()
             }
             ScopeKind::Caps => {
-                "Current duckspec scope: the project's capability tree (caps). See `caps.md` \
-and `project.md` in the project root."
+                "Current duckspec scope: the project's capability tree (caps). See \
+`duckspec/caps/` and `duckspec/project.md`."
                     .to_string()
             }
             ScopeKind::Codex => {
-                "Current duckspec scope: the project's codex. See `codex.md` in the project root."
+                "Current duckspec scope: the project's codex. See `duckspec/codex/` and \
+`duckspec/project.md`."
                     .to_string()
             }
         };
@@ -241,6 +244,10 @@ mod tests {
             "orientation must name the scoped change: {text}"
         );
         assert!(
+            text.contains("duckspec/changes/foo/"),
+            "orientation must state the project-root change path: {text}"
+        );
+        assert!(
             text.contains("act on THIS change by default"),
             "orientation must establish the change as the default command target: {text}"
         );
@@ -287,12 +294,43 @@ mod tests {
             "caps orientation should describe the capability tree: {text}"
         );
         assert!(
+            text.contains("duckspec/caps/") && text.contains("duckspec/project.md"),
+            "caps orientation must point at duckspec/caps/ and duckspec/project.md: {text}"
+        );
+        assert!(
             !text.contains("Suggested next stage"),
             "caps orientation must not report a change next-stage: {text}"
         );
         assert!(
             !text.contains("steps done"),
             "caps orientation must not report change progress: {text}"
+        );
+    }
+
+    /// @spec session/scope Non-change scope orientation: A codex scope points at the codex tree
+    #[test]
+    fn codex_orientation_points_at_codex_tree() {
+        let scope = SessionScope {
+            kind: ScopeKind::Codex,
+            scope_key: "codex".into(),
+            change_facts: None,
+        };
+        let text = orientation(&scope);
+        assert!(
+            text.contains("codex"),
+            "codex orientation should describe the codex scope: {text}"
+        );
+        assert!(
+            text.contains("duckspec/codex/") && text.contains("duckspec/project.md"),
+            "codex orientation must point at duckspec/codex/ and duckspec/project.md: {text}"
+        );
+        assert!(
+            !text.contains("Suggested next stage"),
+            "codex orientation must not report a change next-stage: {text}"
+        );
+        assert!(
+            !text.contains("steps done"),
+            "codex orientation must not report change progress: {text}"
         );
     }
 }

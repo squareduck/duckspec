@@ -94,15 +94,15 @@ After writing all steps, run `ds check` on the steps directory.
 
 When all steps are written and validated:
 
-- Suggest starting implementation: "Steps are ready. Run `/ds-apply` to start
-  implementing step 01."
-- If coverage is incomplete, flag it: "N scenarios are not covered by any step
-  task. Want to add them before proceeding?"
-- If step ordering seems unclear, suggest resolving dependencies before
-  proceeding.
+- **Primary** — `/ds-apply` (only ranked next action). Steps just written still
+  have open work; do not offer archive.
+- If coverage is incomplete or ordering is unclear, fix that *before* the
+  handoff suggestion (work rules, not a second next-stage rank).
 - Don't run `ds audit <change>` now. The change-scoped audit is a progress
   check for `/ds-apply` — before any step is implemented it only reports every
   `test: code` scenario as pending, which is the expected pre-implementation
   state, not a finding to act on.
+
+Offer the apply handoff once; drop if declined.
 
 ## After write

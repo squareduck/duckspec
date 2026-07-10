@@ -27,7 +27,7 @@ written.
 - **AND** the entries are the first three reply texts in source order
 
 > test: code
-> - crates/duckchat/src/reply_suggest.rs:124
+> - crates/duckchat/src/reply_suggest.rs:142
 
 ### Scenario: No matching lines yields an empty list
 
@@ -36,7 +36,7 @@ written.
 - **THEN** the list is empty
 
 > test: code
-> - crates/duckchat/src/reply_suggest.rs:137
+> - crates/duckchat/src/reply_suggest.rs:155
 
 ### Scenario: Unknown slash text is preserved
 
@@ -45,7 +45,7 @@ written.
 - **THEN** the list contains that slash text unchanged
 
 > test: code
-> - crates/duckchat/src/reply_suggest.rs:144
+> - crates/duckchat/src/reply_suggest.rs:162
 
 ## Requirement: Oneshot request framing
 
@@ -69,7 +69,7 @@ suggestion list without calling the model.
 - **THEN** the request includes that heuristic as a soft hint
 
 > test: code
-> - crates/duckchat/src/reply_suggest.rs:157
+> - crates/duckchat/src/reply_suggest.rs:175
 
 ### Scenario: Ordering guidance is present in the instruction
 
@@ -81,7 +81,7 @@ suggestion list without calling the model.
   negative when appropriate
 
 > test: code
-> - crates/duckchat/src/reply_suggest.rs:169
+> - crates/duckchat/src/reply_suggest.rs:187
 
 ### Scenario: Empty assistant yields empty list without a model call
 
@@ -91,7 +91,7 @@ suggestion list without calling the model.
 - **AND** no model call is made
 
 > test: code
-> - crates/duckchat/src/reply_suggest.rs:187
+> - crates/duckchat/src/reply_suggest.rs:245
 
 ### Scenario: Long assistant message is truncated to its last lines
 
@@ -101,7 +101,7 @@ suggestion list without calling the model.
 - **AND** a truncation marker is present
 
 > test: code
-> - crates/duckchat/src/reply_suggest.rs:199
+> - crates/duckchat/src/reply_suggest.rs:257
 
 ### Scenario: Long user message is truncated to its last lines
 
@@ -111,7 +111,7 @@ suggestion list without calling the model.
 - **AND** a truncation marker is present
 
 > test: code
-> - crates/duckchat/src/reply_suggest.rs:239
+> - crates/duckchat/src/reply_suggest.rs:297
 
 ## Requirement: Effective default-prompt list
 

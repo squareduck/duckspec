@@ -142,7 +142,7 @@ Depth 2 or 3 → same plus `/ds-step` → `/ds-apply` for the tests (and
 
 ## Handoff
 
-Hand off to `/ds-propose` with a clean summary:
+**Primary** — `/ds-propose` only, with a clean summary (no secondary):
 
 > Ready to draft the proposal. Suggested slice:
 >
@@ -154,10 +154,9 @@ Hand off to `/ds-propose` with a clean summary:
 > - **Test work:** <none | add N tests | add N tests + design test infra>
 > - **Marker plan:** <N test:code, M test:manual>
 >
-> Run `/ds-propose` to draft the proposal, then `/ds-spec` to write the
-> capabilities.
+> Run `/ds-propose` to draft the proposal.
 
-Offer the handoff once. If the user wants to keep refining the slice or the
-test plan first, drop the suggestion and stay in the conversation.
+Offer once. If the user wants to keep refining the slice or the test plan
+first, drop the suggestion and stay in the conversation.
 
 ## After write

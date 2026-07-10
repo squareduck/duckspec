@@ -88,15 +88,17 @@ After writing, run `ds check` on the design to validate it.
 
 ## Handoff
 
-When the design is written and validated:
+When the design is written and validated, offer at most two ranked next actions
+(offer once; drop if declined):
 
-- If there are open questions, flag them: "There are N open questions in the
-  design. Want to resolve them before moving to specs?"
-- When ready for specs, suggest `/ds-spec`: "The design is solid. Ready to spec
-  the capabilities with `/ds-spec`?"
-- If the design revealed that the proposal scope needs adjustment, suggest
-  revisiting it before proceeding.
-
-Offer once. The user may want to iterate on the design further.
+- **If open questions remain:**
+  - **Primary** — resolve those open questions (stay in design / edit the
+    design).
+  - **Secondary** — `/ds-spec` only if the user insists on moving on with
+    questions still open.
+- **If no open questions:**
+  - **Primary** — `/ds-spec`.
+  - **Secondary** — `/ds-step` (when skipping straight to planning is
+    plausible).
 
 ## After write

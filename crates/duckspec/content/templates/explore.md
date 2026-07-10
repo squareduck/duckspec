@@ -115,31 +115,27 @@ suggest `/ds-codex` instead.
 
 ## Handoff
 
-**Do not push the user toward the next stage.** Exploration has no required
-ending. The conversation might:
+**Do not push.** Exploration has no required ending — clarity alone is a fine
+outcome. When the conversation *does* identify concrete work, offer at most two
+ranked next actions (**Primary**, then **Secondary** if any). Offer once; if
+the user declines, drop it.
 
-- Just provide clarity → that's fine, no artifact needed
-- Need to continue later → "We can pick this up anytime"
-- Reveal codex-worthy knowledge → suggest `/ds-codex`
+**When a change for this work does not exist yet:**
 
-**If exploring within an active change**, suggest the next stage based on the
-change's current phase:
+- **Primary** — create the change (`ds create change <name>`) — empty folder
+  only; no artifacts yet.
+- **Secondary** — `/ds-propose` — after the change exists, or if the user wants
+  to name and propose in one motion.
 
-- Change has no proposal → suggest `/ds-propose`
-- Change has a proposal but no design → suggest `/ds-design` (if the change
-  warrants one) or `/ds-spec`
-- Change has specs but no steps → suggest `/ds-step`
-- Change has steps with unchecked tasks → suggest `/ds-apply`
-- Change is fully implemented → suggest `/ds-archive`
+**When a change for this work already exists:**
 
-**If exploring without a change context**, and the conversation identifies
-concrete work:
+- **Primary** — `/ds-propose` (or the stage the change is actually ready for,
+  if later than propose — but still one primary only).
+- No secondary unless the user asks for options.
 
-- "This feels solid enough to start a change. Want to create one and run
-  `/ds-propose`?"
+Codex-worthy knowledge only (no change): suggest `/ds-codex` as the single
+next action — that is a side path, not a second rank next to create/propose.
 
-When suggesting a transition, offer once and move on. If the user doesn't take
-the suggestion, drop it. Don't ask again. **Sometimes the thinking IS the
-value.**
+**Sometimes the thinking IS the value.**
 
 ## After write

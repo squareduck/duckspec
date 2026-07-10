@@ -151,15 +151,11 @@ Present capabilities **one at a time**. Don't batch all specs into a single gate
 
 ## Handoff
 
-When all capabilities from the proposal's scope are specced and validated:
+When all capabilities from the proposal's scope are specced and validated,
+offer at most two ranked next actions (offer once; drop if declined):
 
-- If the change needs implementation, suggest `/ds-step`: "All capabilities are
-  specced. Ready to break this into implementation steps with `/ds-step`?"
-- If this is a spec-refinement-only change (no code), suggest `/ds-archive`: "No
-  implementation needed — ready to archive with `/ds-archive`?"
-- If writing specs revealed scope issues, suggest revisiting the proposal or
-  design before proceeding.
-
-Offer once. The user may want to refine specs further.
+- **Primary** — `/ds-step` (default after specs).
+- **Secondary** — `/ds-archive` (for no-code / refinement-only changes that
+  need no implementation steps).
 
 ## After write

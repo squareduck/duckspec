@@ -92,15 +92,23 @@ batch checkboxes.
 
 ## Handoff
 
-When all tasks in the current step are checked:
+When all tasks in the current step are checked, offer at most two ranked next
+actions (offer once; drop if declined). Operational notes below are work rules,
+not extra ranks.
 
-- If there are more steps with unchecked tasks: "Step NN is complete. The next
-  step is NN+1: `<name>`. Run `/ds-apply` in a new session to continue." The
-  scoped audit's remaining pending scenarios are that upcoming work — expected,
-  not a problem.
-- If all steps are complete: "All steps are done. Ready to archive with
-  `/ds-archive`?" Confirm the scoped audit is clean (no errors, no pending)
-  first — that's what archive-ready looks like.
+**Ranked next actions:**
+
+- **Unfinished steps remain:**
+  - **Primary** — `/ds-apply` for the next step (name it). No secondary.
+  - Remaining scoped-audit pending scenarios for later steps are expected, not
+    a problem.
+- **All steps complete and scoped audit is clean** (no errors, no pending):
+  - **Primary** — `/ds-review`.
+  - **Secondary** — `/ds-archive`.
+  - Review before archive is the intended path.
+
+**Work rules (not next-stage ranks):**
+
 - **If applying this step changed the ground a later step stands on, append a
   note to that step's `## Context`.** When an outcome here invalidates or
   shifts what a downstream step assumed — a design assumption that moved, a
