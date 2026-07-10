@@ -152,6 +152,9 @@ impl State {
     /// state so stale tabs / interactions from the previous project are
     /// discarded, then refreshes audit and recents.
     fn open_project(&mut self, path: PathBuf) {
+        // Strip trailing separators / canonicalize so recents, data-dir hashes,
+        // and grok session cwd keys stay stable across picker vs recents open.
+        let path = duckchat::normalize_cwd(&path);
         tracing::info!(path = %path.display(), "opening project");
         self.project = ProjectData::open(&path);
         // Mirror the root into the path_link global so editors and terminals
@@ -1357,6 +1360,9 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
             // tool call, committed to `pending_bindings` once the `ax` borrow
             // below is released.
             let mut staged_binding: Option<(String, String)> = None;
+            // SessionNotFound (or stringified equivalent): clear the dead id and
+            // re-dispatch after this block so we can borrow `highlighter`.
+            let mut recover_lost_session = false;
             {
                 let Some(ax) = state.agent_session_mut(&key) else {
                     return Task::none();
@@ -1477,19 +1483,42 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                         }
                     }
                     AgentEvent::Error(msg) => {
-                        tracing::error!(key, "agent error: {msg}");
-                        ax.session.is_streaming = false;
-                        // Drop priming state so a failed AGENTS.md priming
-                        // doesn't fire its follow-up against a half-broken
-                        // session. The user will retype if they want to retry.
-                        ax.priming_in_flight = false;
-                        ax.pending_followup_prompt = None;
-                        ax.session.messages.push(chat_store::ChatMessage {
-                            role: chat_store::Role::System,
-                            content: vec![chat_store::ContentBlock::Text(format!("Error: {msg}"))],
-                            timestamp: String::new(),
-                            is_priming: false,
-                        });
+                        // Defensive: stringified session-not-found (older
+                        // workers / odd protocol shapes) still recovers.
+                        if duckchat::Error::Protocol(msg.clone()).is_session_not_found() {
+                            tracing::warn!(
+                                key,
+                                "agent session not found (via Error); recovering as fresh session"
+                            );
+                            recover_lost_session = true;
+                        } else {
+                            tracing::error!(key, "agent error: {msg}");
+                            ax.session.is_streaming = false;
+                            // Drop priming state so a failed AGENTS.md priming
+                            // doesn't fire its follow-up against a half-broken
+                            // session. The user will retype if they want to retry.
+                            ax.priming_in_flight = false;
+                            ax.pending_followup_prompt = None;
+                            ax.session.messages.push(chat_store::ChatMessage {
+                                role: chat_store::Role::System,
+                                content: vec![chat_store::ContentBlock::Text(format!(
+                                    "Error: {msg}"
+                                ))],
+                                timestamp: String::new(),
+                                is_priming: false,
+                            });
+                        }
+                    }
+                    AgentEvent::SessionNotFound => {
+                        // grok session/load (or equivalent) could not find the
+                        // stored id — typically a cwd-key mismatch or prune.
+                        // Drop the dead id and re-dispatch the last user turn
+                        // with a history preamble so the chat unblocks.
+                        tracing::warn!(
+                            key,
+                            "agent session not found; recovering as fresh session"
+                        );
+                        recover_lost_session = true;
                     }
                     AgentEvent::SessionIdUpdated { session_id } => {
                         // Stamp the id with the harness that produced it so a
@@ -1533,6 +1562,9 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
             let ax = resolve_session_mut(interactions, &key);
             let mut should_snap_to_bottom = false;
             if let Some(ax) = ax {
+                if recover_lost_session {
+                    interaction::recover_from_lost_session(ax, highlighter);
+                }
                 let is_streaming = ax.session.is_streaming;
                 interaction::rebuild_chat_editor(ax, highlighter);
                 should_snap_to_bottom = ax.stick_to_bottom;

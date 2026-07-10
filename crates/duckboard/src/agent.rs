@@ -97,6 +97,8 @@ pub enum AgentEvent {
     SessionIdUpdated {
         session_id: String,
     },
+    /// Stored resume id is dead; UI should clear it and re-dispatch with history.
+    SessionNotFound,
     TurnComplete,
     Error(String),
     ProcessExited,
@@ -154,6 +156,10 @@ async fn drive_provider<P: duckchat::Provider + 'static>(
 ) {
     use iced::futures::SinkExt;
 
+    // Same cwd normalization grok uses for session keys — keep the worker's
+    // working_dir and ACP `cwd` on one stable form.
+    let project_root = duckchat::normalize_cwd(&project_root);
+
     let commands = provider.list_commands(&project_root);
 
     let (ev_tx, mut ev_rx) = mpsc::channel::<duckchat::AgentEvent>(256);
@@ -194,6 +200,7 @@ async fn drive_provider<P: duckchat::Provider + 'static>(
             duckchat::AgentEvent::SessionIdUpdated { session_id } => {
                 AgentEvent::SessionIdUpdated { session_id }
             }
+            duckchat::AgentEvent::SessionNotFound => AgentEvent::SessionNotFound,
             duckchat::AgentEvent::TurnComplete => AgentEvent::TurnComplete,
             duckchat::AgentEvent::Error(msg) => AgentEvent::Error(msg),
         };

@@ -31,6 +31,11 @@ pub enum AgentEvent {
     /// The provider assigned or rotated a session id for this conversation.
     /// Callers should persist this to enable multi-turn resume.
     SessionIdUpdated { session_id: String },
+    /// A stored resume id could not be loaded (session file missing / cwd key
+    /// mismatch). The worker has already forgotten the id; the UI should drop
+    /// its persisted copy and re-dispatch the turn as a fresh session with a
+    /// history preamble.
+    SessionNotFound,
     /// The agent finished its turn successfully.
     TurnComplete,
     /// An error occurred during the turn.

@@ -701,6 +701,35 @@ mod tests {
     }
 
     #[test]
+    fn recover_from_lost_session_clears_dead_resume_id() {
+        // After session/load FS_NOT_FOUND the stored id must not stick around
+        // and wedge every subsequent send. Without an agent handle we only
+        // clear + stop streaming (retry needs a handle).
+        let mut ax = AgentSession::new("exploration-1".to_string(), ScopeKind::Exploration);
+        ax.session.agent_session_id = Some("019f489b-dead".to_string());
+        ax.session.session_harness = Some("grok".to_string());
+        ax.session.selected_model = Some(ModelRef::new("grok", "grok-4.5"));
+        ax.session.is_streaming = true;
+        ax.session.messages.push(ChatMessage {
+            role: Role::User,
+            content: vec![ContentBlock::Text("hello".into())],
+            timestamp: String::new(),
+            is_priming: false,
+        });
+        assert!(ax.resumable_session_id().is_some());
+
+        let hl = SyntaxHighlighter::new();
+        recover_from_lost_session(&mut ax, &hl);
+
+        assert!(ax.session.agent_session_id.is_none());
+        assert!(ax.session.session_harness.is_none());
+        assert!(ax.resumable_session_id().is_none());
+        assert!(!ax.session.is_streaming);
+        // Transcript is left intact for the next send / handle-backed retry.
+        assert_eq!(ax.session.messages.len(), 1);
+    }
+
+    #[test]
     fn render_skips_empty_list() {
         assert!(render_selection_attachments(&[]).is_none());
     }
@@ -1279,6 +1308,110 @@ fn assemble_priming_body(agents_md: Option<&str>, scope_blurb: Option<&str>) -> 
          (\".\") and wait for my actual instructions.",
         parts.join("\n\n"),
     )
+}
+
+/// Drop a dead agent resume id and re-dispatch the last user turn as a fresh
+/// session with a history preamble.
+///
+/// Used when grok `session/load` returns `FS_NOT_FOUND` (cwd-key mismatch or
+/// pruned session file). The user message is already on the transcript from the
+/// failed attempt — this does not push a second copy. Worker-side resume state
+/// is cleared so the retry opens `session/new`.
+pub fn recover_from_lost_session(ax: &mut AgentSession, highlighter: &SyntaxHighlighter) {
+    use crate::chat_store::{ContentBlock, Role};
+    use duckchat::{ContextHook, TurnRequest};
+
+    ax.session.agent_session_id = None;
+    ax.session.session_harness = None;
+    ax.priming_in_flight = false;
+    // Don't fire a stashed follow-up against a half-broken resume; the retry
+    // below re-sends from the transcript.
+    ax.pending_followup_prompt = None;
+
+    if let Some(handle) = ax.agent_handle.as_ref() {
+        handle.clear_session_id();
+    }
+
+    // Last non-priming user message is the turn that failed mid-resume.
+    let Some((last_idx, text)) = ax.session.messages.iter().enumerate().rev().find_map(|(i, m)| {
+        if m.role != Role::User || m.is_priming {
+            return None;
+        }
+        m.content.iter().find_map(|b| match b {
+            ContentBlock::Text(t) if !t.is_empty() => Some((i, t.clone())),
+            _ => None,
+        })
+    }) else {
+        ax.session.is_streaming = false;
+        if let Some(handle) = ax.agent_handle.as_ref()
+            && let Err(e) = crate::chat_store::save_session(&ax.session, Some(handle.working_dir()))
+        {
+            tracing::error!("failed to persist cleared session id: {e}");
+        }
+        rebuild_chat_editor(ax, highlighter);
+        return;
+    };
+
+    let history = &ax.session.messages[..last_idx];
+    let prompt = if history.is_empty() {
+        text.clone()
+    } else {
+        build_history_preamble(history) + &text
+    };
+
+    let mut system_additions = Vec::new();
+    let scope = crate::scope::SessionScope {
+        kind: ax.scope_kind,
+        scope_key: ax.session.scope.clone(),
+        change_facts: ax.scope_facts.clone(),
+    };
+    if let Some(out) = crate::scope::CurrentScopeHook.compute(&scope) {
+        system_additions.push(out.text);
+    }
+    system_additions.push(PATH_REFERENCE_NOTE.to_string());
+
+    // Idea description: re-inject on recovery so the fresh session still sees it.
+    if let Some(desc) = ax.idea_description.as_ref()
+        && !desc.trim().is_empty()
+    {
+        system_additions.push(format!("Idea description:\n\n{desc}"));
+        ax.session.last_seeded_description = Some(desc.clone());
+    }
+
+    let Some(handle) = ax.agent_handle.as_ref() else {
+        ax.session.is_streaming = false;
+        rebuild_chat_editor(ax, highlighter);
+        return;
+    };
+
+    ax.session.is_streaming = true;
+    ax.session.pending_text.clear();
+    ax.session.pending_reasoning.clear();
+    if let Err(e) = crate::chat_store::save_session(&ax.session, Some(handle.working_dir())) {
+        tracing::error!("failed to persist session after resume loss: {e}");
+    }
+    if ax.stick_to_bottom {
+        ax.pending_snap_to_bottom = true;
+    }
+
+    let mut req = TurnRequest::new(prompt, handle.working_dir().to_path_buf());
+    req.system_additions = system_additions;
+    req.model = Some(
+        resolve_turn_model(
+            ax.session.selected_model.as_ref(),
+            ax.project_model_default.as_ref(),
+        )
+        .model,
+    );
+    // Attachments already went out with the failed attempt (or were empty).
+    // Don't re-take from input — leave as empty for the recovery turn.
+    handle.send_turn(req);
+
+    rebuild_chat_editor(ax, highlighter);
+    tracing::info!(
+        scope = %ax.session.scope,
+        "re-dispatched last user turn after lost agent session"
+    );
 }
 
 /// Send `text` as a new user turn on the active agent handle. Pushes the user

@@ -8,6 +8,7 @@
 
 mod attach;
 pub mod cancel;
+pub mod cwd;
 pub mod error;
 pub mod event;
 pub mod hook;
@@ -19,6 +20,7 @@ pub mod claude_code;
 pub mod grok;
 
 pub use cancel::CancelToken;
+pub use cwd::normalize_cwd;
 pub use error::Error;
 pub use event::{AgentEvent, Usage};
 pub use hook::{ContextHook, HookOutput};

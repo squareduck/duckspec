@@ -19,7 +19,8 @@ use tokio::process::{Child, Command};
 use tokio::sync::mpsc;
 
 use crate::cancel::CancelToken;
-use crate::error::Error;
+use crate::cwd::normalize_cwd;
+use crate::error::{self, Error};
 use crate::event::AgentEvent;
 use crate::request::ReasoningMode;
 
@@ -135,8 +136,13 @@ impl AcpTurn {
     /// Open the session for this turn: `session/new` when `session_id` is
     /// `None`, else `session/load` to resume the given id. Returns the resolved
     /// session id — the one grok assigns for a new session, or the resumed id.
+    ///
+    /// `cwd` is normalized before it is sent so create and resume share one
+    /// on-disk key (trailing-slash variants otherwise fork the session store).
+    /// A `session/load` that fails because the path is gone maps to
+    /// [`Error::SessionNotFound`] so the caller can drop the id and retry.
     pub async fn open(&mut self, session_id: Option<&str>, cwd: &Path) -> Result<String, Error> {
-        let cwd = cwd.to_string_lossy().into_owned();
+        let cwd = normalize_cwd(cwd).to_string_lossy().into_owned();
         match session_id {
             None => {
                 let params = json!({ "cwd": cwd, "mcpServers": [] });
@@ -271,6 +277,10 @@ impl AcpTurn {
                 (false, Some(resp_id)) => {
                     if resp_id == &json!(id) {
                         if let Some(err) = msg.get("error") {
+                            if method == "session/load" && error::rpc_error_is_session_not_found(err)
+                            {
+                                return Err(Error::SessionNotFound);
+                            }
                             return Err(Error::Protocol(format!(
                                 "grok {method} failed: {err}"
                             )));
@@ -499,5 +509,33 @@ mod tests {
         let req = last_request(&written);
         assert_eq!(req["method"], "session/load");
         assert_eq!(req["params"]["sessionId"], "sess-123");
+    }
+
+    #[tokio::test]
+    async fn open_load_missing_session_is_session_not_found() {
+        // Real cinnabar failure shape: cwd-key mismatch or pruned session file.
+        let response = r#"{"jsonrpc":"2.0","id":1,"error":{"code":-32603,"data":{"code":"FS_NOT_FOUND","detail":"No such file or directory (os error 2)"},"message":"Path not found."}}
+"#;
+        let (mut turn, _written) = scripted(response);
+
+        let err = turn
+            .open(Some("019f489b-dead"), Path::new("/proj/"))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, Error::SessionNotFound));
+        assert!(err.is_session_not_found());
+    }
+
+    #[tokio::test]
+    async fn open_normalizes_trailing_slash_on_cwd() {
+        let (mut turn, written) =
+            scripted("{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"sessionId\":\"s1\"}}\n");
+
+        let _ = turn.open(None, Path::new("/no/such/proj/path/")).await;
+
+        let req = last_request(&written);
+        assert_eq!(req["method"], "session/new");
+        // Missing path still strips trailing separators so create/resume keys match.
+        assert_eq!(req["params"]["cwd"], "/no/such/proj/path");
     }
 }

@@ -25,6 +25,8 @@ pub enum AgentCommand {
     /// previously-persisted conversation — the caller knows the id before the
     /// worker has seen a turn.
     SetSessionId(String),
+    /// Forget any stored resume id (e.g. after [`AgentEvent::SessionNotFound`]).
+    ClearSessionId,
     /// Stop processing further commands and return.
     Shutdown,
 }
@@ -51,6 +53,11 @@ impl AgentHandle {
 
     pub fn set_session_id(&self, session_id: String) {
         let _ = self.tx.send(AgentCommand::SetSessionId(session_id));
+    }
+
+    /// Drop any worker-side resume id so the next turn opens a fresh session.
+    pub fn clear_session_id(&self) {
+        let _ = self.tx.send(AgentCommand::ClearSessionId);
     }
 
     pub fn cancel(&self) {
@@ -137,6 +144,15 @@ pub fn spawn_worker<P: Provider + 'static>(
                             .send(AgentEvent::TurnComplete)
                             .await
                             .map_err(|_| ()),
+                        Err(e) if e.is_session_not_found() => {
+                            // Dead resume id — forget it so a retry opens
+                            // session/new instead of looping on session/load.
+                            session_id = None;
+                            events
+                                .send(AgentEvent::SessionNotFound)
+                                .await
+                                .map_err(|_| ())
+                        }
                         Err(e) => events
                             .send(AgentEvent::Error(e.to_string()))
                             .await
@@ -150,6 +166,9 @@ pub fn spawn_worker<P: Provider + 'static>(
                 }
                 AgentCommand::SetSessionId(sid) => {
                     session_id = Some(sid);
+                }
+                AgentCommand::ClearSessionId => {
+                    session_id = None;
                 }
                 AgentCommand::Shutdown => break,
             }
