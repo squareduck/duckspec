@@ -1,16 +1,9 @@
 # Doc schema
 
-A capability doc is the **human-readable counterpart** to its paired spec.
-Readers go to the spec to learn exactly how a capability behaves; they go to
-the doc to learn about the capability — what it is, how the pieces fit, how to
-reason about it.
-
-A well-formed doc describes the capability itself: its behavior, lifecycle,
-states, modes, error handling, interactions with other capabilities, and
-whatever else a reader needs to understand what the capability is. It reuses the
-spec's vocabulary so a reader can cross-reference without translation.
-Rationale, alternatives considered, and open questions belong in proposals and
-codex entries — not here.
+A capability doc is the **human-readable counterpart** to its paired spec: what
+the capability is, how pieces fit, and how to reason about it. The spec is the
+exact contract; the doc is orientation. Shared vocabulary with the spec; no
+rationale, alternatives, or open questions (those belong in proposals or codex).
 
 ## Structure
 
@@ -19,95 +12,82 @@ codex entries — not here.
 
 <1-2 sentence summary>
 
-<freeform markdown content>
+<body>
 ```
+
+Body is freeform markdown (headings, prose, lists, tables, diagrams, code).
 
 ## Rules
 
-- H1 title is required and must match the paired spec's H1 exactly.
-- A summary paragraph directly follows the H1.
-- The body may contain any markdown: headers, prose, lists, code blocks, quotes,
-  images, links.
-- No structural validation beyond the H1 and summary.
+- Path: `duckspec/caps/<capability-path>/doc.md` or, in a change,
+  `duckspec/changes/<name>/caps/<capability-path>/doc.md`
+- H1 title required and **identical** to the paired spec's H1
+- Non-empty summary paragraph follows the H1 directly
+- No further structural rules on the body
 
 ## Quality
 
-- **A minimal doc is for scaffolding, not for shipping.** H1 + summary is the
-  structural minimum that satisfies pairing during early work. A shipped
-  capability's doc covers the capability as a reader would need to understand
-  it. Don't pad with content that restates the spec, but don't stop at the
-  summary either.
-- **Name H2s after what the capability actually has**, not after generic
-  doc-template sections. Prefer `Session lifecycle`, `Token format`, `Retry
-  behavior`, `Error handling`, `Concurrency`, `Rate limits` — whatever shape
-  the capability actually has. Avoid generic sections like `Overview`, `Design
-  decisions`, `Open questions`, `Rationale` — those either belong under the H1
-  as prose or in a proposal or codex entry.
-- **Tables and ASCII diagrams are tools, not decoration.** Use a table when
-  listing parallel items with shared attributes (states, modes, error
-  conditions, config options). Use an ASCII diagram when a flow, state machine,
-  or structural relationship is genuinely easier to see than to read. When
-  prose handles it, use prose. Both MUST be authored inside plain fenced code
-  blocks — the formatter would otherwise reflow or corrupt them.
-- **Written for a cold reader.** The audience is someone who walks up to this
-  file with no knowledge of the change, the proposal, the design, or any
-  previous version of the spec. The proposal, design, and steps are ephemeral
-  and archived away with the change — don't reference `proposal.md`,
-  `design.md`, or anything else under `changes/` or `archive/`, since those
-  paths won't exist alongside the merged doc. Don't narrate the change either,
-  with phrases like "previously", "before the fix", or "now also supports" —
-  they assume a reader who saw the before.
+- **Useful depth.** Cover what a reader needs (behavior, lifecycle, states,
+  modes, errors, interactions). Do not pad by restating the spec line-for-line;
+  do not stop at summary alone when the capability has real shape
+- **Domain H2s.** Name sections after what the capability has (`Session
+  lifecycle`, `Error handling`, …) - not generic shells (`Overview`, `Design
+  decisions`, `Open questions`, `Rationale`)
+- **Cold reader.** Present tense; no references to `proposal.md`, `design.md`,
+  `changes/`, or `archive/`; no transition narration ("previously", "now also")
+- Body markdown follows `style` (load only if not already in context) - tables
+  and diagrams in plain fenced blocks when the host expects that
 
 ## Formatting
 
-After writing or updating this artifact, run `ds format <path>` to apply
-canonical formatting (line wrap, indentation, blank lines).
-
-Use fenced code blocks for tables and diagrams; add a `<language>` tag to
-fences that contain real code.
+After write or edit: `ds format <path>`. Presentation follows `style` - load only
+if not already in context.
 
 ## Example
 
 ````markdown
 # Authentication
 
-Allows users to sign in with email and password. Primary auth mechanism for
-consumer accounts. Sessions are opaque server-side tokens that expire on idle
-and are invalidated on explicit sign-out.
+Email-password sign-in for consumer accounts. Sessions are opaque server-side
+tokens that expire on idle and invalidate on sign-out.
 
 ## Session lifecycle
 
 ```
-  sign-in ──▶ active ──idle 30m──▶ expired
-                │                     │
-              sign-out              sign-in
-                │                     │
-                ▼                     ▼
-             revoked              (new session)
+                         sign-in
+                            │
+                            ▼
+                 ┌──────────┐  idle 30m  ┌──────────┐
+                 │  active  │ ─────────► │ expired  │
+                 └────┬─────┘            └──────────┘
+                      │
+                      │ sign-out
+                      ▼
+                 ┌──────────┐
+                 │ revoked  │
+                 └──────────┘
 ```
 
-A session moves from `active` to `expired` after 30 minutes with no
-authenticated request. Expired sessions cannot be reactivated — the user must
-sign in again, which issues a new session.
+A session moves from `active` to `expired` after 30 minutes without an
+authenticated request. Expired and revoked sessions are not reactivated; a new
+sign-in issues a new session.
 
 ## Error handling
 
-Invalid credentials return a generic error regardless of which field was
-wrong, to prevent user enumeration. Repeated failures from one IP are
-throttled.
-
 ```
 | Condition        | User-facing response     | Log tag           |
-|------------------|--------------------------|-------------------|
+| ---------------- | ------------------------ | ----------------- |
 | Unknown email    | "Invalid credentials"    | `auth.miss`       |
 | Wrong password   | "Invalid credentials"    | `auth.miss`       |
 | Unverified email | "Verify your email"      | `auth.unverified` |
 | Throttled        | "Try again in N minutes" | `auth.throttle`   |
 ```
 
+Invalid credentials use one generic user-facing error (no field enumeration).
+Repeated failures from one IP are throttled.
+
 ## Credentials
 
-Passwords are stored as argon2id hashes with a per-user salt. The hash
-parameters are fixed at write time; rotating them requires forcing a password
-reset on the affected users.
+Passwords are argon2id hashes with a per-user salt. Hash parameters are fixed at
+write time; rotating them requires a password reset for affected users.
 ````

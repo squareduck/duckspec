@@ -1,7 +1,8 @@
 # Spec delta schema
 
 A spec delta describes **modifications** to an existing capability spec. Every
-header carries a marker declaring what operation to perform on the source spec.
+heading carries a marker for the operation on the source. Merged bodies must
+still satisfy the full **spec** schema.
 
 ## Structure
 
@@ -21,43 +22,46 @@ header carries a marker declaring what operation to perform on the source spec.
 
 ## Markers
 
-| Marker | Name    | Operation                                      |
-| ------ | ------- | ---------------------------------------------- |
-| `+`    | add     | Insert new header and body                     |
-| `-`    | remove  | Delete header and entire subtree               |
-| `~`    | replace | Replace body and all children                  |
-| `=`    | rename  | Rename header, preserve children               |
-| `@`    | anchor  | Optionally replace body, descend into children |
+| Marker | Name | Operation |
+| --- | --- | --- |
+| `+` | add | Insert new header and body |
+| `-` | remove | Delete header and entire subtree |
+| `~` | replace | Replace body and all children |
+| `=` | rename | Rename header; preserve children |
+| `@` | anchor | Optionally replace body; descend into children |
 
 ## Rules
 
-- Every H1, H2, and H3 must carry a marker. Unmarked headers are invalid.
-- `+` targets a header that does not exist in the source.
-- `-`, `~`, `=`, `@` target headers that exist in the source.
-- `-` entries must have an empty body.
-- `=` entries contain only the new name on the first non-blank line after the
-  header. No other content.
-- `@` is not valid on H3 (scenarios have no children — use `~`).
-- Each header name at a given level appears at most once.
-- Entries appear in canonical order within each level: `=` → `-` → `~` → `@` →
-  `+`.
+- Path: `duckspec/changes/<name>/caps/<capability-path>/spec.delta.md`
+- Every H1, H2, and H3 carries a marker; unmarked headers are invalid
+- Marker is one character, then exactly one ASCII space, then heading text
+- `+` is not valid on H1
+- `+` targets a header that does not exist in the source
+- `-`, `~`, `=`, `@` target headers that exist in the source
+- `-` entries have an empty body
+- `=` entries: only the new name on the first non-blank line after the header
+- `@` is not valid on H3 (scenarios have no children - use `~`)
+- Each header name appears at most once at a given level
+- Canonical order within each level: `=` then `-` then `~` then `@` then `+`
+  (parser sorts; author in any order)
+- Children of `~` and `+` are content (no markers on nested headings under them
+  as operations)
+- Scenario and requirement bodies under `+` / `~` / `@` follow **spec** GWT and
+  marker rules (`ds schema spec`)
 
 ## Quality
 
-- Prefer deltas over full-file replacements. Deltas make the change visible —
-  reviewers see exactly what moved.
-- Use `@` (anchor) to add scenarios to an existing requirement without
-  disturbing its prose or other scenarios.
-- When renaming and modifying, use `=` for the rename and a separate `@` entry
-  with the new name for the modification.
+- **Lightest touch.** Prefer `@` + `+` children over rewriting whole requirements
+- **Rename then edit.** Rename with `=`, then `@` (or `~`) under the **new** name
+  for body changes
+- **Merged result is a cold-reader spec.** Bodies are present-tense contract
+  text, not change narration
+- Body markdown follows `style` (load only if not already in context)
 
 ## Formatting
 
-After writing or updating this artifact, run `ds format <path>` to apply
-canonical formatting (line wrap, indentation, blank lines).
-
-Use fenced code blocks for tables and diagrams; add a `<language>` tag to
-fences that contain real code.
+After write or edit: `ds format <path>`. Presentation follows `style` - load only
+if not already in context.
 
 ## Example
 

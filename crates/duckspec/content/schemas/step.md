@@ -1,8 +1,8 @@
 # Step schema
 
-A step is a **self-contained unit of implementation work**, sized to fit in a
-single agent session. Steps are ordered, and each is processed in its own
-`/ds-apply` invocation.
+A step is a **self-contained unit of implementation work** for a change: ordered
+tasks (and optional prerequisites, context, and outcomes) an implementer can
+execute. Files live under the change’s `steps/` directory.
 
 ## Structure
 
@@ -18,99 +18,79 @@ single agent session. Steps are ordered, and each is processed in its own
 
 ## Context
 
-<freeform prose: background the applying agent needs>
+<background the implementer needs that is not already in design or proposal>
 
 ## Tasks
 
 - [ ] 1. <task description>
   - [ ] 1.1 <subtask>
-  - [ ] 1.2 <subtask>
 - [ ] 2. <task description>
 - [ ] 3. @spec <capability-path> <Requirement>: <Scenario>
 
 ## Outcomes
 
-<only added when there's something new and valuable for the next session — see Rules>
+<only when something non-obvious must carry forward - see Quality>
 ```
+
+`## Tasks` is required. `## Prerequisites`, `## Context`, and `## Outcomes` are
+present only when they have content.
 
 ## Rules
 
-- Step files live at `changes/<name>/steps/NN-<slug>.md`.
-- `NN` is a two-digit zero-padded number (step order).
-- `<slug>` is the H1 title slugified to kebab-case.
-- `## Tasks` is required with at least one task.
-- `## Prerequisites`, `## Context`, `## Outcomes` are optional.
-- **`## Outcomes` is omitted by default.** Only add it when the
-  implementation produced something the next session or the user needs to
-  know that isn't already obvious from the code, the design, or the
-  checked-off tasks: an unexpected discovery, a deviation from the design,
-  a follow-up that didn't fit, a non-obvious decision the next step
-  depends on. If the step went as planned, leave Outcomes off — a "we did
-  what the tasks said" summary is noise.
-- Tasks use checkboxes with numeric prefixes (`1.`, `2.`, ...).
-- Subtasks nest one level deep. Deeper nesting is invalid.
-- A step is complete when all checkboxes are checked.
-- The current step is the lowest-numbered step with unchecked tasks.
+- Path: `duckspec/changes/<change-name>/steps/NN-<slug>.md`
+- `NN` is two-digit zero-padded order; `<slug>` is the H1 slugified to kebab-case
+- H1 title and a non-empty summary paragraph after it are required
+- `## Tasks` is required and must contain at least one task
+- Tasks are checkboxes with numeric prefixes (`1.`, `2.`, …)
+- Subtasks nest at most one level (`1.1`, `1.2`, …); deeper nesting is invalid
+- A step is complete when all of its checkboxes are checked
 
-**Task content:**
+**Task body** is either:
 
-- Freeform text describing work to do, or
-- A single `@spec <capability-path> <Requirement>: <Scenario>` backlink — a
-  scenario implementation task. The backlink MUST be written as a single
-  unbroken line. `ds format` preserves long `@spec` lines, but if the
-  reference is already wrapped across line breaks `ds format` will not
-  rejoin it — the continuation becomes an orphan paragraph, the task
-  silently keeps only the first line, and `ds audit` reports the truncated
-  scenario as unresolved.
+- freeform work description, or
+- a single `@spec <capability-path> <Requirement>: <Scenario>` on one unbroken
+  line (scenario implementation task). Do not wrap `@spec` across lines -
+  continuation becomes an orphan and the scenario reference is lost.
 
-**Prerequisite content:**
+**Prerequisite body** is either:
 
-- `@step <slug>` — reference to another step in the same change. Slug only — do
-  **not** include the `NN-` filename prefix. The reference MUST be a single
-  unbroken line; do not wrap it.
-- Freeform text — any other precondition.
+- `@step <slug>` - another step in the same change; slug only (no `NN-` prefix);
+  one unbroken line, or
+- freeform text for any other precondition
 
 ## Quality
 
-- **Right-size steps.** Each step should be completable in one agent session. If
-  a step has more than 7-8 tasks, it's probably too big.
-- **Scenario tasks come from the spec.** Every `test: code` scenario in the
-  change's specs must appear as an `@spec` task in some step. Don't leave
-  scenarios uncovered.
-- **Tasks are concrete.** "Implement X" not "Figure out X." If you need to
-  figure something out, that's a Context paragraph or an unresolved open
-  question in the design.
-- **Order tasks by dependency.** Within a step, tasks should flow top-to-bottom:
-  create the table before writing the query that uses it.
-- **Prerequisites are informational.** The CLI doesn't enforce them, but the
-  applying agent reads them to understand dependencies.
-- **Context is the exception, not the rule.** Include a Context section only
-  when the applying agent needs information the change's design and proposal
-  don't provide — e.g., no design exists, or the design doesn't cover this
-  step's implementation details. If the design already describes what this step
-  implements, omit Context; don't duplicate.
+- **Session-sized.** Completable as one focused unit of work; split when the
+  task list becomes a grab bag.
+- **Concrete tasks.** Actionable work (“add column X”), not research placeholders.
+- **Dependency order.** Within a step, earlier tasks enable later ones.
+- **Scenario coverage.** Every `test: code` scenario the change introduces should
+  appear as an `@spec` task in some step.
+- **Context sparingly.** Only when the implementer needs material not already in
+  design or proposal - do not duplicate them.
+- **Outcomes sparingly.** Only for something the next session or reader needs
+  that is not obvious from code, design, or checked tasks (discovery, deviation,
+  handoff fact). No “we did the tasks” summary.
+- Body markdown follows `style` (load only if not already in context).
 
 ## Formatting
 
-After writing or updating this artifact, run `ds format <path>` to apply
-canonical formatting (line wrap, indentation, blank lines).
-
-Use fenced code blocks for tables and diagrams; add a `<language>` tag to
-fences that contain real code.
+After write or edit: `ds format <path>`. Presentation follows `style` - load only
+if not already in context. `ds format` preserves long single-line `@spec` tasks;
+it does not rejoin a reference already broken across lines.
 
 ## Example
 
 ```markdown
 # Implement session expiration
 
-Add server-side session timeout logic and cover the scenarios with integration
-tests.
+Add server-side session timeout and cover it with integration tests.
 
 ## Tasks
 
-- [ ] 1. Add `last_accessed_at` column to the `sessions` table
-- [ ] 2. Update session middleware to refresh `last_accessed_at` on each request
-- [ ] 3. Add expiration check to `session_from_request()`
+- [ ] 1. Add `last_accessed_at` to the `sessions` table
+- [ ] 2. Refresh `last_accessed_at` on each authenticated request
+- [ ] 3. Enforce idle expiration in `session_from_request()`
 - [ ] 4. @spec auth Session expiration: Idle timeout
 - [ ] 5. @spec auth Session expiration: Activity resets the timer
 ```

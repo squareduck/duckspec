@@ -1,8 +1,9 @@
 # Doc delta schema
 
-A doc delta describes **modifications** to an existing capability doc. Uses the
-same marker system as spec deltas. Content under each header is freeform (no GWT
-scenarios — this is a doc, not a spec).
+A doc delta describes **modifications** to an existing capability doc. Same
+marker system as **spec delta**; bodies are freeform (no GWT). Merged result
+must still satisfy the **doc** schema (including H1 match with the paired
+spec after merge).
 
 ## Structure
 
@@ -16,48 +17,41 @@ scenarios — this is a doc, not a spec).
 <freeform content>
 ```
 
+Deeper headings under a section follow the same marker rules when present.
+
 ## Markers
 
-Same markers as spec deltas:
-
-| Marker | Name    | Operation                                      |
-| ------ | ------- | ---------------------------------------------- |
-| `+`    | add     | Insert new section                             |
-| `-`    | remove  | Delete section and subtree                     |
-| `~`    | replace | Replace section content                        |
-| `=`    | rename  | Rename section header                          |
-| `@`    | anchor  | Optionally replace body, descend into children |
+| Marker | Name | Operation |
+| --- | --- | --- |
+| `+` | add | Insert new section |
+| `-` | remove | Delete section and subtree |
+| `~` | replace | Replace section content |
+| `=` | rename | Rename section header |
+| `@` | anchor | Optionally replace body; descend into children |
 
 ## Rules
 
-- Every H1, H2, and H3 must carry a marker.
-- Same validation rules as spec deltas: canonical order, uniqueness, existence
-  constraints.
-- Content is freeform under each header — no GWT or test markers.
+- Path: `duckspec/changes/<name>/caps/<capability-path>/doc.delta.md`
+- Same marker mechanics as `ds schema spec-delta`: every heading marked; space
+  after marker; no `+` on H1; existence rules for `+` vs `-`/`~`/`=`/`@`; empty
+  body on `-`; rename name-only line on `=`; uniqueness; canonical order
+  `=` `-` `~` `@` `+`
+- Content under headers is freeform markdown - no GWT or test markers
+- Bodies under `+` / `~` / `@` follow **doc** quality (`ds schema doc`)
 
 ## Quality
 
-- **Deltas produce a doc for a cold reader.** The `+` and `~` bodies you write
-  are merged into a doc whose readers have no knowledge of the change, the
-  proposal, the design, or what the section looked like before. The proposal,
-  design, and steps are ephemeral and archived away with the change — don't
-  reference `proposal.md`, `design.md`, or anything else under `changes/` or
-  `archive/`, since those paths won't exist alongside the merged doc. Don't
-  narrate the transition either, with phrases like "previously", "used to", or
-  "now also" — rewrite in present tense to describe what is.
-- **Keep the doc's tables, diagrams, and prose in step with spec changes.** A
-  spec delta that adds a new failure mode usually implies a doc delta that
-  adds a row to an error table or a paragraph explaining the mode. A spec
-  delta that renames a state usually implies touching the lifecycle diagram.
-  Don't let the doc drift from the capability it documents.
+- **Cold reader.** Present-tense description of what is; no change narration
+  ("previously", "now also"); no links into `changes/` or `archive/`
+- **Keep pace with the spec.** Spec deltas that add modes, errors, or states
+  usually need matching doc updates (tables, diagrams, prose)
+- **Lightest touch.** Prefer `@` / `+` / targeted `~` over full-file rewrites
+- Body markdown follows `style` (load only if not already in context)
 
 ## Formatting
 
-After writing or updating this artifact, run `ds format <path>` to apply
-canonical formatting (line wrap, indentation, blank lines).
-
-Use fenced code blocks for tables and diagrams; add a `<language>` tag to
-fences that contain real code.
+After write or edit: `ds format <path>`. Presentation follows `style` - load only
+if not already in context.
 
 ## Example
 
@@ -66,14 +60,13 @@ fences that contain real code.
 
 ## ~ Error handling
 
-Invalid credentials return a generic error regardless of which field was
-wrong, to prevent user enumeration. Repeated failures from one IP are
-throttled, and sustained failures across multiple IPs trigger a temporary
-account lock.
+Invalid credentials return a generic error regardless of which field was wrong,
+to prevent user enumeration. Repeated failures from one IP are throttled;
+sustained failures across many IPs trigger a temporary account lock.
 
 ```
 | Condition        | User-facing response     | Log tag           |
-|------------------|--------------------------|-------------------|
+| ---------------- | ------------------------ | ----------------- |
 | Unknown email    | "Invalid credentials"    | `auth.miss`       |
 | Wrong password   | "Invalid credentials"    | `auth.miss`       |
 | Unverified email | "Verify your email"      | `auth.unverified` |
@@ -84,6 +77,6 @@ account lock.
 ## + Remember me
 
 Trusted devices may opt into a 30-day session via a "remember me" checkbox at
-sign-in. The extended session binds to the device fingerprint and is revoked
-if the fingerprint changes.
+sign-in. The extended session binds to the device fingerprint and is revoked if
+the fingerprint changes.
 ````

@@ -1,10 +1,8 @@
-# Project constitution schema
+# Project schema
 
-`project.md` captures **project-wide principles and constraints** that agents
-should always consider. It acts as a constitution for duckspec work: what is
-true regardless of which capability or change you are looking at.
-
-Optional. Projects that don't need one can omit it.
+`duckspec/project.md` is the **project constitution**: what the project is and
+durable high-level facts agents should always consider. Optional - omit when
+unused. Edited directly; not carried through a change.
 
 ## Structure
 
@@ -13,50 +11,51 @@ Optional. Projects that don't need one can omit it.
 
 <1-2 sentence summary>
 
-<freeform markdown content>
+<body>
 ```
+
+Body is freeform markdown (headings, lists, tables, diagrams, prose).
 
 ## Rules
 
-- H1 title is required.
-- A summary paragraph directly follows the H1.
-- The body may contain any markdown.
-- At most one `project.md` at `duckspec/project.md`.
-- Edited directly — not carried through a change.
+- H1 title is required
+- A non-empty summary paragraph follows the H1 directly
+- No structural rules on the body beyond parseable markdown
+- At most one file: `duckspec/project.md`
+- Edited in place - no deltas, no change folder copy
 
 ## Quality
 
-- Write things that are **always true**: engineering principles, hard
-  constraints, testing philosophy, out-of-scope boundaries.
-- Don't duplicate what's in AGENTS.md or CLAUDE.md — those are agent
-  configuration, this is project knowledge.
-- Keep it concise. If project.md grows past two screens, some of its content
-  probably belongs in codex entries.
+- **What the project is.** Identity, purpose, and durable high-level facts -
+  stack, shape, standing principles - not a change log and not a backlog of
+  what is out of scope for some future effort.
+- **Always true.** Content should still hold next year; session and feature
+  narratives belong elsewhere.
+- **Not agent config.** Do not duplicate `AGENTS.md` / harness instructions;
+  this is project knowledge agents should *consider*, not runtime prompt wiring.
+- **Lean.** Prefer a short constitution. Past about two screens, split lasting
+  topics into codex entries.
+- Body markdown follows `style` (load only if not already in context).
 
 ## Formatting
 
-After writing or updating this artifact, run `ds format <path>` to apply
-canonical formatting (line wrap, indentation, blank lines).
-
-Use fenced code blocks for tables and diagrams; add a `<language>` tag to
-fences that contain real code.
+After write or edit: `ds format <path>`. Presentation follows `style` - load only
+if not already in context.
 
 ## Example
 
 ```markdown
 # acme-api
 
-A REST API for the Acme product suite, written in Rust with a strong preference
-for explicit error handling and small crates.
+REST API for the Acme suite - Rust, explicit errors, small crates.
 
-## Engineering principles
+## Shape
 
-- **Filesystem is the source of truth.** No metadata in frontmatter or sidecars.
-- **Library first.** Features start as library APIs and surface through CLIs
-  only after the library is stable.
+- Library-first crates; thin CLI and HTTP adapters
+- Filesystem is the source of truth - no frontmatter or sidecar metadata
 
-## Out of scope
+## Principles
 
-- GUI applications (separate repo)
-- Cloud-hosted variants
+- Typed errors in libraries; `anyhow` only at binary boundaries
+- Spec-backed behavior for user-visible contracts
 ```

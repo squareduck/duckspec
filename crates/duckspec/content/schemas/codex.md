@@ -1,11 +1,8 @@
-# Codex entry schema
+# Codex schema
 
-A codex entry captures **cross-cutting knowledge** that spans capabilities or
-stands outside them: architecture overviews, domain glossaries, design
-philosophy, engineering conventions.
-
-Codex entries are edited directly — no deltas, no change workflow, no archive
-lifecycle.
+A codex entry is **cross-cutting project knowledge** no single capability owns:
+architecture, glossaries, design philosophy, engineering conventions. Edited
+directly under `duckspec/codex/` - no change, delta, or archive lifecycle.
 
 ## Structure
 
@@ -14,49 +11,50 @@ lifecycle.
 
 <1-2 sentence summary>
 
-<freeform markdown content>
+<body>
 ```
+
+Body is freeform markdown (headings, lists, tables, diagrams, prose).
 
 ## Rules
 
-- H1 title is required.
-- A summary paragraph directly follows the H1.
-- The body may contain any markdown.
-- No structural validation beyond the H1 and summary.
-- Codex entry paths use kebab-case, no whitespace.
+- H1 title is required
+- A non-empty summary paragraph follows the H1 directly
+- No structural rules on the body beyond parseable markdown
+- Path under `duckspec/codex/`: kebab-case segments, no whitespace; may nest
+  (`codex/domain/billing.md`)
+- One topic per entry file
 
 ## Quality
 
-- **Write codex entries for knowledge that no single capability owns.** If it
-  belongs to one capability, put it in that capability's doc instead.
-- Keep entries focused. One entry per topic. A glossary is one entry;
-  architecture is another.
-- Summaries are used by `ds index` — make them informative enough to orient a
-  reader scanning the index.
+- **Placement.** If one capability owns it, put it in that capability’s doc
+  instead. If it is always-true project constitution, prefer `project.md`.
+- **Focus.** One entry per topic - glossary, architecture, and conventions are
+  separate entries, not one dump.
+- **Index-ready summary.** `ds index` shows the summary; make it orient a
+  scanner without opening the file.
+- **Durable.** Strip session-specific context; write for a reader months later.
+- Body markdown follows `style` (load only if not already in context).
 
 ## Formatting
 
-After writing or updating this artifact, run `ds format <path>` to apply
-canonical formatting (line wrap, indentation, blank lines).
-
-Use fenced code blocks for tables and diagrams; add a `<language>` tag to
-fences that contain real code.
+After write or edit: `ds format <path>`. Presentation (tables, fences, diagrams)
+follows `style` - load only if not already in context.
 
 ## Example
 
 ```markdown
 # Error handling conventions
 
-All crates in this workspace use a two-tier error strategy: typed enums in
-libraries, anyhow wrapping in binaries.
+Libraries use typed `thiserror` enums; binaries use `anyhow` at the boundary.
 
 ## Library crates
 
-Use `thiserror` to define per-module error enums. Each variant carries enough
-context to diagnose the failure without access to the call site.
+Define per-module error enums with enough context to diagnose without the call
+site.
 
 ## Binary crates
 
-Use `anyhow::Result` at the application boundary. Attach context with
-`.context()` at each layer crossing.
+Use `anyhow::Result` at the application edge. Attach `.context()` at layer
+crossings.
 ```

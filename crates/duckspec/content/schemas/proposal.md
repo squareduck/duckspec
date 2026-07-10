@@ -1,8 +1,8 @@
 # Proposal schema
 
-A proposal describes **why** a change is needed and **what** it will do at a
-high level. It is the pitch for the work — not the design, not the spec, not the
-plan. Keep it short and persuasive.
+A proposal is the **pitch** for a change: **what** we want and **why** - before
+design and before capability layout. It is not architecture, not a caps list, not
+an impact analysis. Those come later (design, then specs).
 
 ## Structure
 
@@ -15,89 +15,66 @@ plan. Keep it short and persuasive.
 
 <why this change, why now>
 
-## Scope
+## Intent
 
-### New capabilities
-- `<capability-path>` — <one-line description>
+<what should be true when this change succeeds - outcomes, behaviors, constraints
+on the problem. Product/user language, not module or capability paths.>
 
-### Modified capabilities
-- `<capability-path>` — <what changes and why>
+## Non-goals
 
-### Out of scope
-- <what this change deliberately does NOT touch>
-
-## Impact
-
-<affected code, APIs, dependencies, breaking changes>
+<what this change deliberately does not try to solve>
 ```
+
+Recommended sections, not enforced by `ds check` beyond H1 + summary.
 
 ## Rules
 
-- H1 title is required.
-- A summary paragraph directly follows the H1.
-- The body is freeform markdown — the sections above are recommended, not
-  enforced by `ds check`.
+- H1 title is required
+- A non-empty summary paragraph follows the H1 directly
+- Body is freeform markdown; the Structure skeleton is the expected shape
+- Path: `duckspec/changes/<change-name>/proposal.md`
 
 ## Quality
 
-- **Motivation** answers "why" and "why now", not "what". If the motivation
-  section reads like a feature list, it belongs in Scope.
-- **Scope** is the contract between proposal and later stages. Name exact
-  capability paths — the spec author works directly from this list. Be explicit
-  about what is out of scope to prevent drift.
-- **Impact** is for downstream effects: breaking changes, migration needs,
-  affected teams or systems. Skip it if the change is self-contained.
-- The entire proposal should fit on one screen. If it doesn't, the change is
-  probably too big — split it.
+- **Motivation** answers why and why now - not a solution design.
+- **Intent** is the success picture: what becomes true, for whom, under what
+  constraints. Stay above capabilities and code. Naming exact `caps/` paths or
+  listing files is premature here; design and spec discover structure.
+- **Non-goals** bound the problem so later stages do not silently expand it.
+  Feature-level, not “we will not touch crate X” unless that *is* the product
+  boundary.
+- Short and scannable. Persuasive pitch, not a mini-design.
+- Body markdown follows `style` (load only if not already in context).
 
 ## Formatting
 
-After writing or updating this artifact, run `ds format <path>` to apply
-canonical formatting (line wrap, indentation, blank lines).
-
-Use fenced code blocks for tables and diagrams; add a `<language>` tag to
-fences that contain real code.
+After write or edit: `ds format <path>`. Presentation follows `style` - load only
+if not already in context.
 
 ## Example
 
 ```markdown
 # Add Google OAuth login
 
-Introduce Google as a third-party login option to reduce signup friction for new
-users.
+Let users sign in with Google so signup is not blocked on inventing a password.
 
 ## Motivation
 
-Analytics show 40% of signup drop-offs happen at password creation. Google OAuth
-removes that friction for the largest user segment.
+Analytics show 40% of signup drop-offs happen at password creation. The largest
+segment already has a Google account; meeting them there should recover that
+funnel without weakening account security.
 
-## Scope
+## Intent
 
-  caps/
-  ├── auth/
-  │   ├── spec.md          (modified — session middleware fallback)
-  │   └── google/           ← NEW
-  │       └── spec.md       (OAuth 2.0 login flow)
-  └── ...
+- A new user can create a session with Google in one consent flow
+- Returning Google users land in the same account they used before
+- Password-based signup remains available; OAuth is an additional path
+- Failure modes (denied consent, IdP outage) leave the user able to try again
+  or use password signup
 
-### New capabilities
-- `auth/google` — Google OAuth 2.0 login flow
+## Non-goals
 
-### Modified capabilities
-- `auth` — add fallback to OAuth identity in session middleware
-
-### Out of scope
-- Apple Sign In (deferred to a later change)
-- Account linking UI for existing email-password users
-
-## Impact
-
-  ┌──────────┐    ┌──────────────┐    ┌─────────┐
-  │ Login UI │───→│ Auth service  │───→│   DB    │
-  └──────────┘    └──────────────┘    └─────────┘
-       ↑ button       ↑ routes         ↑ table
-
-- New `oauth_identities` table in the database
-- New dependency on Google OAuth client library
-- Login page UI gains a "Sign in with Google" button
+- Apple or other IdPs in this change
+- Linking an existing email/password account to Google from settings
+- Changing session lifetime or auth factors beyond accepting a Google identity
 ```
