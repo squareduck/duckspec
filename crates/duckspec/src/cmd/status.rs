@@ -2,6 +2,8 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use duckpond::artifact::spec::TestMarkerKind;
+use duckpond::change_coverage;
+use duckpond::config::Config;
 use duckpond::layout::{self, ArtifactKind};
 use duckpond::merge::{self, Merged};
 use duckpond::parse;
@@ -228,7 +230,6 @@ fn status_change(
     let mut review_files = Vec::new();
     let mut has_proposal = false;
     let mut has_design = false;
-    let mut spec_files = Vec::new();
 
     for file_path in &files {
         let canonical = file_path
@@ -242,10 +243,7 @@ fn status_change(
         };
         match kind {
             ArtifactKind::SpecDelta | ArtifactKind::DocDelta => deltas += 1,
-            ArtifactKind::ChangeCapSpec => {
-                new_caps += 1;
-                spec_files.push((file_path.clone(), relative.to_path_buf()));
-            }
+            ArtifactKind::ChangeCapSpec => new_caps += 1,
             ArtifactKind::ChangeCapDoc => new_caps += 1,
             ArtifactKind::Step => step_files.push((file_path.clone(), relative.to_path_buf())),
             ArtifactKind::Review => review_files.push((file_path.clone(), relative.to_path_buf())),
@@ -284,66 +282,39 @@ fn status_change(
         eprintln!("    {}", cap_parts.join(", ").dimmed());
     }
 
-    // Spec coverage — collect scenarios needing backlinks from new cap specs
-    let mut needs_backlink = Vec::new();
-    let mut covered = 0usize;
-    let mut total_scenarios = 0usize;
+    // Progress coverage from resolving source @spec backlinks (not marker paths).
+    let project_root = duckspec_root
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("duckspec/ has no parent directory"))?;
+    let config = Config::load(duckspec_root).map_err(|e| anyhow::anyhow!("{e}"))?;
+    let coverage = change_coverage::for_change(duckspec_root, project_root, &config, change_name)
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
 
-    for (file_path, relative) in &spec_files {
-        let source = std::fs::read_to_string(file_path)?;
-        let cap_path = extract_change_cap_path(relative);
-        collect_spec_coverage(
-            &source,
-            &cap_path,
-            &mut needs_backlink,
-            &mut covered,
-            &mut total_scenarios,
+    for err in &coverage.merge_errors {
+        eprintln!(
+            "    {} {} ({}): {}",
+            "×".red(),
+            err.target.display(),
+            err.change_name,
+            err.error
         );
     }
 
-    // Also check deltas — merge and find new scenarios.
-    let caps_dir = duckspec_root.join("caps");
-    for file_path in &collect_files(change_dir)? {
-        let canonical = file_path
-            .canonicalize()
-            .unwrap_or_else(|_| file_path.clone());
-        let Some(relative) = canonical.strip_prefix(canonical_root).ok() else {
-            continue;
-        };
-        if layout::classify(relative) != Some(ArtifactKind::SpecDelta) {
-            continue;
-        }
-
-        let delta_source = std::fs::read_to_string(file_path)?;
-        let cap_path = extract_change_cap_path(relative);
-        let target = caps_dir.join(&cap_path).join("spec.md");
-        if !target.is_file() {
-            continue;
-        }
-
-        let source = std::fs::read_to_string(&target)?;
-        let (new_needs, new_covered, _new_total) =
-            delta_new_coverage(&source, &delta_source, &cap_path);
-        covered += new_covered;
-        total_scenarios += new_covered + new_needs.len();
-        needs_backlink.extend(new_needs);
-    }
-
-    if total_scenarios > 0 {
+    let linked = coverage.linked.len();
+    let open = coverage.open.len();
+    let total = linked + open;
+    if total > 0 {
         eprintln!();
         eprintln!("    {}", "test coverage:".bold());
-        if covered > 0 || !needs_backlink.is_empty() {
-            let total = covered + needs_backlink.len();
-            eprintln!(
-                "      {}/{} scenarios with backlinks",
-                covered.to_string().green(),
-                total
-            );
-        }
-        if !needs_backlink.is_empty() {
-            eprintln!("      {}", "missing:".dimmed());
-            for tag in &needs_backlink {
-                eprintln!("        {}", format!("@spec {tag}").yellow());
+        eprintln!(
+            "      {}/{} scenarios linked",
+            linked.to_string().green(),
+            total
+        );
+        if !coverage.open.is_empty() {
+            eprintln!("      {}", "open:".dimmed());
+            for key in &coverage.open {
+                eprintln!("        {}", format!("@spec {}", key.display()).yellow());
             }
         }
     }
@@ -725,11 +696,6 @@ fn extract_cap_path_from_relative(relative: &Path) -> String {
         return components[caps_idx + 1..components.len() - 1].join("/");
     }
     String::new()
-}
-
-/// Extract cap path from a change file path.
-fn extract_change_cap_path(relative: &Path) -> String {
-    extract_cap_path_from_relative(relative)
 }
 
 fn count_caps(duckspec_root: &Path) -> anyhow::Result<usize> {

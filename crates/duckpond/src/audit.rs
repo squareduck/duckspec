@@ -812,12 +812,15 @@ fn scenario_is_test_code(req: &Requirement, scn: &Scenario) -> bool {
 // Change scenarios (post-merge)
 // ---------------------------------------------------------------------------
 
-struct ChangeScenario {
-    key: ScenarioKey,
-    test_code: bool,
+/// A scenario projected from a change (new cap or delta-introduced).
+/// Shared with [`crate::change_coverage`] for progress snapshots.
+pub(crate) struct ChangeScenario {
+    pub(crate) key: ScenarioKey,
+    pub(crate) test_code: bool,
 }
 
-fn build_change_scenarios(
+/// Project scenarios introduced by a change (new caps + delta-new only).
+pub(crate) fn build_change_scenarios(
     duckspec_root: &Path,
     canonical_root: &Path,
     change_dir: &Path,
@@ -911,7 +914,8 @@ fn build_change_scenarios(
 // Source backlink scanning
 // ---------------------------------------------------------------------------
 
-fn scan_source_files(
+/// Scan project source for `@spec` backlinks using the configured boundary.
+pub(crate) fn scan_source_files(
     project_root: &Path,
     duckspec_root: &Path,
     config: &Config,
@@ -1059,7 +1063,7 @@ pub fn would_be_orphaned(
     Ok(orphans)
 }
 
-fn backlink_key_set(backlinks: &[SourceBacklink]) -> HashSet<ScenarioKey> {
+pub(crate) fn backlink_key_set(backlinks: &[SourceBacklink]) -> HashSet<ScenarioKey> {
     backlinks
         .iter()
         .map(|bl| ScenarioKey {

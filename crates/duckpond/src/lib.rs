@@ -1,6 +1,7 @@
 pub mod artifact;
 pub mod audit;
 pub mod backlink;
+pub mod change_coverage;
 pub mod check;
 pub mod config;
 pub mod error;
