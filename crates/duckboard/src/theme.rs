@@ -617,7 +617,8 @@ pub fn chat_user_card(_theme: &Theme) -> container::Style {
     }
 }
 
-/// Neutral obvious-chrome chip (non-enter lifecycle options).
+/// Untinted obvious-chrome chip base (muted paper). Tint helpers mix ~8% color
+/// into this surface for numbered / enter / reject roles.
 pub fn chat_obvious_chip_neutral(_theme: &Theme) -> container::Style {
     let mut border = border_color();
     border.a *= 0.55;
@@ -634,52 +635,38 @@ pub fn chat_obvious_chip_neutral(_theme: &Theme) -> container::Style {
     }
 }
 
-/// Very subtle green chip — Confirm / Commit / Create change, or the ⌘↩ lifecycle
-/// target when no affirm.
-/// Starts from the neutral chrome chip and tints only slightly so it stays quiet.
+/// Quiet light-blue chip — multi-option numbered lifecycle (⌘1…⌘n).
+/// Same ~8% tint strength as enter/reject.
+pub fn chat_obvious_chip_numbered(_theme: &Theme) -> container::Style {
+    tint_obvious_chip(_theme, accent())
+}
+
+/// Very subtle green chip — Confirm / Commit / Create change, dual enter, or
+/// single-option lifecycle.
 pub fn chat_obvious_chip_enter(_theme: &Theme) -> container::Style {
-    let mut style = chat_obvious_chip_neutral(_theme);
-    let green = success();
-    if let Some(bg) = style.background.as_mut() {
-        if let iced::Background::Color(c) = bg {
-            // ~8% green into the muted base — hint, not a painted button.
-            *c = Color {
-                r: c.r * 0.92 + green.r * 0.08,
-                g: c.g * 0.92 + green.g * 0.08,
-                b: c.b * 0.92 + green.b * 0.08,
-                a: c.a,
-            };
-        }
-    }
-    let mut border = green;
-    border.a *= 0.18;
-    // Keep neutral border mostly; only a faint green lean.
-    let mut n = border_color();
-    n.a *= 0.55;
-    style.border.color = Color {
-        r: n.r * 0.75 + border.r * 0.25,
-        g: n.g * 0.75 + border.g * 0.25,
-        b: n.b * 0.75 + border.b * 0.25,
-        a: n.a.max(border.a),
-    };
-    style
+    tint_obvious_chip(_theme, success())
 }
 
 /// Very subtle red chip — Reject.
 pub fn chat_obvious_chip_reject(_theme: &Theme) -> container::Style {
+    tint_obvious_chip(_theme, error())
+}
+
+/// Mix ~8% of `tint` into the muted chrome base (fill + faint border lean).
+fn tint_obvious_chip(_theme: &Theme, tint: Color) -> container::Style {
     let mut style = chat_obvious_chip_neutral(_theme);
-    let red = error();
     if let Some(bg) = style.background.as_mut() {
         if let iced::Background::Color(c) = bg {
+            // ~8% tint into the muted base — hint, not a painted button.
             *c = Color {
-                r: c.r * 0.92 + red.r * 0.08,
-                g: c.g * 0.92 + red.g * 0.08,
-                b: c.b * 0.92 + red.b * 0.08,
+                r: c.r * 0.92 + tint.r * 0.08,
+                g: c.g * 0.92 + tint.g * 0.08,
+                b: c.b * 0.92 + tint.b * 0.08,
                 a: c.a,
             };
         }
     }
-    let mut border = red;
+    let mut border = tint;
     border.a *= 0.18;
     let mut n = border_color();
     n.a *= 0.55;

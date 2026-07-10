@@ -151,6 +151,56 @@ pub fn decline_chip_label() -> String {
     "⌘⌫  Reject".to_string()
 }
 
+/// True when multi-option lifecycle owns ⌘↩ and should render twice: blue
+/// numbered row for lifecycle[0], plus green enter chip at the bottom.
+///
+/// Multi = more than one lifecycle option and no affirm. Single lifecycle
+/// (e.g. `/ds-explore`) and affirm-present chrome do not dual-present.
+pub fn dual_enter_lifecycle(chrome: &ObviousChrome) -> bool {
+    chrome.affirm.is_none() && chrome.lifecycle.len() > 1
+}
+
+/// Friendly action text for the enter dual chip: strip leading `/ds-` or
+/// `ds-`, then title-case the remainder (e.g. `/ds-apply` → `Apply`).
+pub fn lifecycle_friendly_name(action: &str) -> String {
+    let s = action.trim();
+    let rest = if let Some(r) = s.strip_prefix("/ds-") {
+        r
+    } else if let Some(r) = s.strip_prefix("ds-") {
+        r
+    } else {
+        s.strip_prefix('/').unwrap_or(s)
+    };
+    title_case_segment(rest)
+}
+
+/// Key-first enter dual label, e.g. `⌘↩  Apply`.
+pub fn lifecycle_enter_chip_label(action: &str) -> String {
+    format!("⌘↩  {}", lifecycle_friendly_name(action))
+}
+
+/// Spacer height above chrome so chips sit at the bottom of the chat viewport
+/// when natural content is shorter than the viewport.
+///
+/// `content_h` is the laid-out scroll content height *including* the previous
+/// spacer. Subtract `prev_pad` to recover natural height.
+pub fn chrome_bottom_pad(viewport_h: f32, content_h: f32, prev_pad: f32) -> f32 {
+    let natural = (content_h - prev_pad).max(0.0);
+    (viewport_h - natural).max(0.0)
+}
+
+fn title_case_segment(s: &str) -> String {
+    let mut chars = s.chars();
+    match chars.next() {
+        None => String::new(),
+        Some(first) => {
+            let mut out = first.to_uppercase().collect::<String>();
+            out.extend(chars.flat_map(|c| c.to_lowercase()));
+            out
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -367,6 +417,95 @@ mod tests {
         let decline = decline_chip_label();
         assert!(decline.starts_with("⌘⌫"), "label={decline}");
         assert!(decline.contains("Reject"), "label={decline}");
+    }
+
+    // @spec chat/obvious-bubble Chip display: Multi lifecycle without affirm dual-presents first option
+    #[test]
+    fn multi_lifecycle_without_affirm_dual_presents_first_option() {
+        // GIVEN chrome with two or more lifecycle options and no affirm
+        let chrome = sample_lifecycle_chrome();
+        assert!(chrome.lifecycle.len() > 1);
+        assert!(chrome.affirm.is_none());
+        // WHEN dual-enter presentation is derived
+        // THEN dual-enter is active for the first lifecycle option
+        assert!(dual_enter_lifecycle(&chrome));
+        // AND that option retains its numbered lifecycle chip label
+        let first = chrome.lifecycle.first().expect("first");
+        let numbered = lifecycle_chip_label(1, first);
+        assert!(numbered.starts_with("⌘1"), "label={numbered}");
+        assert!(numbered.contains(first.as_str()), "label={numbered}");
+    }
+
+    // @spec chat/obvious-bubble Chip display: Single lifecycle does not dual-present
+    #[test]
+    fn single_lifecycle_does_not_dual_present() {
+        // GIVEN chrome with exactly one lifecycle option and no affirm
+        let chrome = ObviousChrome {
+            lifecycle: vec!["/ds-explore".into()],
+            affirm: None,
+            decline: false,
+        };
+        // WHEN dual-enter presentation is derived
+        // THEN dual-enter is not active
+        assert!(!dual_enter_lifecycle(&chrome));
+    }
+
+    // @spec chat/obvious-bubble Chip display: Affirm present does not dual-present lifecycle
+    #[test]
+    fn affirm_present_does_not_dual_present_lifecycle() {
+        // GIVEN chrome with one or more lifecycle options and affirm present
+        let chrome = sample_gate_chrome();
+        assert!(!chrome.lifecycle.is_empty());
+        assert!(chrome.affirm.is_some());
+        // WHEN dual-enter presentation is derived
+        // THEN dual-enter is not active
+        assert!(!dual_enter_lifecycle(&chrome));
+    }
+
+    // @spec chat/obvious-bubble Chip display: Enter dual label is hotkey then friendly name with original send text
+    #[test]
+    fn enter_dual_label_is_hotkey_then_friendly_name_with_original_send_text() {
+        // GIVEN a first lifecycle option `/ds-apply` and dual-enter is active
+        let action = "/ds-apply";
+        let chrome = ObviousChrome {
+            lifecycle: vec![action.into(), "/ds-review".into(), "/ds-followup".into()],
+            affirm: None,
+            decline: false,
+        };
+        assert!(dual_enter_lifecycle(&chrome));
+        // WHEN the enter dual chip label and send text are derived
+        let label = lifecycle_enter_chip_label(action);
+        let send = chrome.lifecycle.first().cloned().expect("first");
+        // THEN the label starts with the ⌘↩ hotkey
+        assert!(label.starts_with("⌘↩"), "label={label}");
+        // AND the label includes `Apply` after the hotkey
+        assert!(label.contains("Apply"), "label={label}");
+        // AND the label does not include `/ds-apply` as the action text
+        assert!(
+            !label.contains(action),
+            "friendly label must not embed the slash command: {label}"
+        );
+        // AND the send text is exactly `/ds-apply`
+        assert_eq!(send, action);
+        assert_eq!(lifecycle_friendly_name(action), "Apply");
+    }
+
+    // @spec chat/obvious-bubble Chrome bottom pad: Short content yields positive pad
+    #[test]
+    fn short_content_yields_positive_pad() {
+        // GIVEN viewport 400, content 100 including previous pad 0
+        // WHEN the chrome bottom pad is derived
+        // THEN the pad height is 300
+        assert_eq!(chrome_bottom_pad(400.0, 100.0, 0.0), 300.0);
+    }
+
+    // @spec chat/obvious-bubble Chrome bottom pad: Content at or above viewport yields zero pad
+    #[test]
+    fn content_at_or_above_viewport_yields_zero_pad() {
+        // GIVEN viewport 400, content 500 including previous pad 0
+        // WHEN the chrome bottom pad is derived
+        // THEN the pad height is 0
+        assert_eq!(chrome_bottom_pad(400.0, 500.0, 0.0), 0.0);
     }
 
     // @spec chat/obvious-bubble Ephemeral chrome: Visible chrome is not a stored user message

@@ -1059,6 +1059,8 @@ pub fn view<'a>(
     obvious_chrome: &'a crate::obvious_bubble::ObviousChrome,
     // Global auto messages setting — when false, chips are not shown.
     auto_messages: bool,
+    // Spacer above chrome when history is shorter than the viewport.
+    chrome_top_pad: f32,
     pinned_selections: &'a [SelectionContext],
     tentative_selection: Option<&'a SelectionContext>,
     block_highlights: Vec<(
@@ -1105,7 +1107,8 @@ pub fn view<'a>(
 
     // Obvious chrome — key-first action chips after real transcript content,
     // above the composer. Not stored messages; activation sends via
-    // `Msg::SendObviousAction`.
+    // `Msg::SendObviousAction`. Optional top pad pins chips to the bottom of
+    // the viewport when history is short (still inside the scroll column).
     let input_empty = input_value.text().trim().is_empty();
     if crate::obvious_bubble::chrome_visible(
         status.is_streaming,
@@ -1113,6 +1116,13 @@ pub fn view<'a>(
         obvious_chrome,
         auto_messages,
     ) {
+        if chrome_top_pad > 0.0 {
+            chat_col = chat_col.push(
+                Space::new()
+                    .width(Length::Fill)
+                    .height(chrome_top_pad),
+            );
+        }
         chat_col = chat_col.push(view_obvious_chrome(obvious_chrome));
     }
 
@@ -1629,33 +1639,48 @@ fn format_number(n: usize) -> String {
 /// Tint for an obvious-chrome chip background.
 #[derive(Clone, Copy)]
 enum ObviousChipTone {
-    /// Default muted chrome.
-    Neutral,
-    /// Confirm / Commit / Create change, or the lifecycle option bound to ⌘↩ when no affirm.
+    /// Multi-option numbered lifecycle (⌘1…⌘n) — quiet light blue.
+    Numbered,
+    /// Affirm, dual enter lifecycle, or single-option lifecycle/affirm.
     Enter,
     /// Reject.
     Reject,
 }
 
-/// Multi-option obvious chrome: lifecycle chips (⌘1…) then optional gate row
-/// (Confirm/Reject, Commit, or Create change). View chrome only until activation sends.
+/// Multi-option obvious chrome: lifecycle chips (⌘1…) then optional dual enter
+/// and/or gate row. View chrome only until activation sends.
 fn view_obvious_chrome<'a>(
     chrome: &'a crate::obvious_bubble::ObviousChrome,
 ) -> Element<'a, Msg> {
-    use crate::obvious_bubble::{affirm_chip_label, decline_chip_label, lifecycle_chip_label};
+    use crate::obvious_bubble::{
+        affirm_chip_label, decline_chip_label, dual_enter_lifecycle, lifecycle_chip_label,
+        lifecycle_enter_chip_label,
+    };
 
     let mut col = column![].spacing(theme::SPACING_XS);
-    // When there is no affirm row, ⌘↩ hits lifecycle[0] — green that chip.
-    let enter_is_first_lifecycle = chrome.affirm.is_none();
+    let dual = dual_enter_lifecycle(chrome);
+    // Single lifecycle, no affirm → green enter chip (not dual, not blue).
+    let single_lifecycle_enter = chrome.affirm.is_none() && chrome.lifecycle.len() == 1;
 
     for (i, action) in chrome.lifecycle.iter().enumerate() {
         let label = lifecycle_chip_label(i + 1, action);
-        let tone = if enter_is_first_lifecycle && i == 0 {
+        let tone = if single_lifecycle_enter && i == 0 {
             ObviousChipTone::Enter
         } else {
-            ObviousChipTone::Neutral
+            // Multi-option list (with or without affirm) uses numbered blue.
+            ObviousChipTone::Numbered
         };
         col = col.push(view_obvious_chip(label, action.clone(), tone));
+    }
+
+    if dual {
+        if let Some(action) = chrome.lifecycle.first() {
+            col = col.push(view_obvious_chip(
+                lifecycle_enter_chip_label(action),
+                action.clone(),
+                ObviousChipTone::Enter,
+            ));
+        }
     }
 
     match (chrome.affirm, chrome.decline) {
@@ -1698,24 +1723,24 @@ fn view_obvious_chrome<'a>(
         .into()
 }
 
-/// One muted action chip: hotkey-first label; click sends `action` only.
+/// One action chip: hotkey-first label; click sends `action` only.
+/// Label ink uses secondary text (full alpha) for readable contrast on quiet
+/// tinted fills in both light and dark themes — shared for all tones.
 fn view_obvious_chip<'a>(
     label: String,
     action: String,
     tone: ObviousChipTone,
 ) -> Element<'a, Msg> {
-    let mut label_color = theme::text_muted();
-    label_color.a *= 0.95;
     let body = text(label)
         .size(theme::content_size())
-        .color(label_color)
+        .color(theme::text_secondary())
         .font(theme::content_font());
 
     let card = container(body)
         .padding([theme::SPACING_SM, theme::SPACING_MD])
         .width(Length::Fill)
         .style(move |t| match tone {
-            ObviousChipTone::Neutral => theme::chat_obvious_chip_neutral(t),
+            ObviousChipTone::Numbered => theme::chat_obvious_chip_numbered(t),
             ObviousChipTone::Enter => theme::chat_obvious_chip_enter(t),
             ObviousChipTone::Reject => theme::chat_obvious_chip_reject(t),
         });

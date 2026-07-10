@@ -27,7 +27,7 @@ Deferred materialization SHALL NOT drop stream text from the session.
   run for those deltas
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:964
+> - crates/duckboard/src/area/interaction.rs:978
 
 ### Scenario: Reasoning deltas accumulate on the session without materialization
 
@@ -42,7 +42,7 @@ Deferred materialization SHALL NOT drop stream text from the session.
   run for those deltas
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:991
+> - crates/duckboard/src/area/interaction.rs:1005
 
 ## Requirement: Bounded materialization while streaming
 
@@ -71,7 +71,7 @@ event, without waiting for a stream UI tick and regardless of stick-to-bottom.
 - **THEN** chat UI materialization does not run for those deltas alone
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:1017
+> - crates/duckboard/src/area/interaction.rs:1031
 
 ### Scenario: Stream UI tick materializes accumulated session answer text into the chat UI
 
@@ -87,7 +87,7 @@ event, without waiting for a stream UI tick and regardless of stick-to-bottom.
 - **AND** the live answer presented by the chat UI includes that session answer text
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:1053
+> - crates/duckboard/src/area/interaction.rs:1067
 
 ### Scenario: Stream UI tick skips materialize while scrolled up in history
 
@@ -98,7 +98,7 @@ event, without waiting for a stream UI tick and regardless of stick-to-bottom.
 - **AND** the session still holds the accumulated pure-content text
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:1086
+> - crates/duckboard/src/area/interaction.rs:1100
 
 ### Scenario: Re-sticking to bottom materializes deferred content
 
@@ -112,7 +112,7 @@ event, without waiting for a stream UI tick and regardless of stick-to-bottom.
 - **AND** the live answer presented by the chat UI includes the deferred session text
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:1104
+> - crates/duckboard/src/area/interaction.rs:1118
 
 ### Scenario: Tool use materializes the chat UI immediately with an Activity row
 
@@ -122,7 +122,7 @@ event, without waiting for a stream UI tick and regardless of stick-to-bottom.
 - **AND** the chat UI includes an Activity row for that tool
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:1133
+> - crates/duckboard/src/area/interaction.rs:1147
 
 ### Scenario: Turn complete materializes the final answer immediately
 
@@ -136,7 +136,7 @@ event, without waiting for a stream UI tick and regardless of stick-to-bottom.
   UI tick
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:1175
+> - crates/duckboard/src/area/interaction.rs:1189
 
 ## Requirement: Settled and live editor refresh
 
@@ -165,7 +165,7 @@ still keep their editors.
 - **AND** that editor is not replaced by a newly constructed editor for the same lines
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:1232
+> - crates/duckboard/src/area/interaction.rs:1246
 
 ### Scenario: Suffix-growing live answer refreshes in place
 
@@ -179,7 +179,7 @@ still keep their editors.
 - **AND** the editor is not constructed as a brand-new editor from the full joined text
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:1272
+> - crates/duckboard/src/area/interaction.rs:1286
 
 ### Scenario: Block list reshape uses full rebuild for affected indices
 
@@ -194,7 +194,7 @@ still keep their editors.
 - **AND** any earlier block whose lines are unchanged keeps its existing editor
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:1312
+> - crates/duckboard/src/area/interaction.rs:1326
 
 ## Requirement: Hybrid layout reuse
 

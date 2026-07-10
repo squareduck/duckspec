@@ -393,6 +393,17 @@ pub struct AgentSession {
     /// (offset unchanged but content bounds grew). Without this distinction
     /// the latter would race the auto-snap task and unstick us.
     pub last_chat_offset_y: Option<f32>,
+    /// Last chat scrollable viewport height (logical px) from `ChatScrolled`.
+    /// Ephemeral — not persisted.
+    pub chat_viewport_height: Option<f32>,
+    /// Last scroll content height including chrome pad (logical px).
+    /// Ephemeral — not persisted.
+    pub chat_content_height: Option<f32>,
+    /// Spacer above obvious chrome so short history pins chips above the
+    /// composer. Recomputed on scroll notifications via
+    /// [`crate::obvious_bubble::chrome_bottom_pad`]. Ephemeral — not
+    /// persisted.
+    pub chrome_top_pad: f32,
     /// Set by `send_prompt_text` when the user submits while sticking to the
     /// bottom: the user's message lands in the transcript immediately but the
     /// agent's first event may take a moment, so the auto-snap path keyed on
@@ -474,6 +485,9 @@ impl AgentSession {
             idea_description: None,
             stick_to_bottom: true,
             last_chat_offset_y: None,
+            chat_viewport_height: None,
+            chat_content_height: None,
+            chrome_top_pad: 0.0,
             pending_snap_to_bottom: false,
             pending_chat_autoscroll: None,
             selection_pinned: Vec::new(),
@@ -1757,6 +1771,28 @@ fn handle_agent_chat(
             {
                 ax.stick_to_bottom = false;
             }
+
+            // Bottom-pin pad for obvious chrome: recompute whenever the
+            // scrollable reports viewport/content bounds. When chrome is
+            // hidden, force pad to 0 so the next show starts clean.
+            ax.chat_viewport_height = Some(bounds.height);
+            ax.chat_content_height = Some(content.height);
+            let input_empty = ax.chat_input.text().trim().is_empty();
+            if crate::obvious_bubble::chrome_visible(
+                ax.session.is_streaming,
+                input_empty,
+                &ax.obvious_chrome,
+                auto_messages,
+            ) {
+                ax.chrome_top_pad = crate::obvious_bubble::chrome_bottom_pad(
+                    bounds.height,
+                    content.height,
+                    ax.chrome_top_pad,
+                );
+            } else {
+                ax.chrome_top_pad = 0.0;
+            }
+
             // Re-engaging stick while pure-content dirtiness was deferred
             // (user was reading history): paint the live answer now.
             if ax.stick_to_bottom
@@ -3020,6 +3056,7 @@ pub fn view_column<'a, M: 'a + Clone>(
                     ax.default_prompts_pending,
                     &ax.obvious_chrome,
                     auto_messages,
+                    ax.chrome_top_pad,
                     &ax.selection_pinned,
                     ax.selection_tentative.as_ref(),
                     block_highlights,
