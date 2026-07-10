@@ -701,7 +701,8 @@ pub fn update(
         }
     }
 
-    refresh_obvious_command(interactions, project);
+    let vcs_dirty = !state.changed_files.is_empty();
+    refresh_obvious_chrome(interactions, project, vcs_dirty);
     // Cheap: one `read_dir` per exploration. Keeps `Exploration.session_count`
     // in sync so the close-button arming logic doesn't `read_dir` per frame.
     crate::chat_store::recount_explorations(
@@ -727,7 +728,7 @@ fn compute_obvious_command(state: &State, project: &ProjectData) -> Option<Strin
 }
 
 /// A change's lifecycle position, derived from its artifact and step state.
-/// Drives both the `obvious_command` placeholder and the per-session scope
+/// Drives both the obvious chrome lifecycle list and the per-session scope
 /// orientation blurb, so the two never disagree about where a change stands.
 #[derive(Debug, Clone)]
 pub struct ChangeScopeFacts {
@@ -741,12 +742,35 @@ pub struct ChangeScopeFacts {
     /// any. `StepCompletion::Done` does not carry its total, so a full task
     /// aggregate is not recoverable — this reports only the active step.
     pub active_step_tasks: Option<(usize, usize)>,
-    /// Suggested next `/ds-*` command (without the leading slash).
+    /// First lifecycle option (bare name) — orientation + oneshot soft hint.
     pub next_command: Option<String>,
+    /// Full ordered bare skill names for multi-option chrome (no leading `/`).
+    pub lifecycle_commands: Vec<String>,
     /// The change's current review — the highest-numbered review filename
     /// (`NN-<slug>.md`), or `None` when the change has no reviews. Advisory:
     /// surfaced in the orientation but never affects `phase`/`next_command`.
     pub current_review: Option<String>,
+}
+
+fn scope_facts(
+    phase: &'static str,
+    steps_done: usize,
+    step_count: usize,
+    active_step_tasks: Option<(usize, usize)>,
+    lifecycle: &[&str],
+    current_review: Option<String>,
+) -> ChangeScopeFacts {
+    let lifecycle_commands: Vec<String> = lifecycle.iter().map(|s| (*s).to_string()).collect();
+    let next_command = lifecycle_commands.first().cloned();
+    ChangeScopeFacts {
+        phase,
+        steps_done,
+        step_count,
+        active_step_tasks,
+        next_command,
+        lifecycle_commands,
+        current_review,
+    }
 }
 
 /// Inspect a change directory's artifact and step state and return its
@@ -768,7 +792,7 @@ pub fn change_scope_facts(name: &str, project: &ProjectData) -> Option<ChangeSco
     // review under a proposal-only change. It never gates phase/next_command.
     let current_review = change.reviews.last().cloned();
 
-    // Steps exist → either apply (unfinished) or archive (all done).
+    // Steps exist → apply (unfinished) or archive+review (all done).
     if !change.steps.is_empty() {
         let steps_done = change
             .steps
@@ -780,54 +804,132 @@ pub fn change_scope_facts(name: &str, project: &ProjectData) -> Option<ChangeSco
             StepCompletion::Partial(done, total) => Some((done, total)),
             _ => None,
         });
-        return Some(ChangeScopeFacts {
-            phase: if all_done {
-                "all steps complete"
-            } else {
-                "implementing steps"
-            },
-            steps_done,
-            step_count: change.steps.len(),
-            active_step_tasks,
-            next_command: Some(if all_done { "ds-archive" } else { "ds-apply" }.into()),
-            current_review,
+        return Some(if all_done {
+            scope_facts(
+                "all steps complete",
+                steps_done,
+                change.steps.len(),
+                active_step_tasks,
+                &["ds-archive", "ds-review"],
+                current_review,
+            )
+        } else {
+            scope_facts(
+                "implementing steps",
+                steps_done,
+                change.steps.len(),
+                active_step_tasks,
+                &["ds-apply", "ds-review"],
+                current_review,
+            )
         });
     }
 
-    // Caps specced but no steps yet → implementation comes next. Design is
-    // optional (a change can go proposal → spec → step), so its presence can't
-    // tell a feature change apart from a spec-refinement-only one — the two are
-    // structurally identical on disk. We suggest `ds-step` for both: it's the
-    // common case, and when it's wrong the `/ds-step` agent redirects a no-code
-    // change to archive. Suggesting `ds-archive` here would instead risk
-    // archiving unimplemented specs — the spec drift duckspec exists to prevent.
+    // Caps on disk, no steps — multi-option: step / more-spec / no-code archive.
     if !change.cap_tree.is_empty() {
-        return Some(ChangeScopeFacts {
-            phase: "specs drafted, steps not yet written",
-            steps_done: 0,
-            step_count: 0,
-            active_step_tasks: None,
-            next_command: Some("ds-step".into()),
+        return Some(scope_facts(
+            "specs drafted, steps not yet written",
+            0,
+            0,
+            None,
+            &["ds-step", "ds-spec", "ds-archive"],
             current_review,
-        });
+        ));
     }
 
-    // No caps yet — walk the feature-flow ladder.
-    let (phase, next) = if change.has_design {
-        ("design drafted, specs not yet written", "ds-spec")
-    } else if change.has_proposal {
-        ("proposal drafted, design not yet written", "ds-design")
-    } else {
-        ("newly created, no artifacts yet", "ds-propose")
-    };
-    Some(ChangeScopeFacts {
-        phase,
-        steps_done: 0,
-        step_count: 0,
-        active_step_tasks: None,
-        next_command: Some(next.into()),
+    // No caps yet — feature-flow ladder (design optional).
+    if change.has_design {
+        return Some(scope_facts(
+            "design drafted, specs not yet written",
+            0,
+            0,
+            None,
+            &["ds-spec"],
+            current_review,
+        ));
+    }
+    if change.has_proposal {
+        return Some(scope_facts(
+            "proposal drafted, design not yet written",
+            0,
+            0,
+            None,
+            &["ds-design", "ds-spec"],
+            current_review,
+        ));
+    }
+    Some(scope_facts(
+        "newly created, no artifacts yet",
+        0,
+        0,
+        None,
+        &["ds-propose"],
         current_review,
-    })
+    ))
+}
+
+/// Compose multi-option obvious chrome from scope, project disk state, session
+/// emptiness, and VCS dirty flag. Pure — does not touch session storage.
+pub fn build_obvious_chrome(
+    scope: &Scope,
+    project: &ProjectData,
+    session_empty: bool,
+    vcs_dirty: bool,
+) -> crate::obvious_bubble::ObviousChrome {
+    use crate::obvious_bubble::{Affirm, ObviousChrome, format_lifecycle_command};
+
+    match scope {
+        Scope::Caps | Scope::Codex => ObviousChrome::default(),
+        Scope::Exploration(_) => {
+            if session_empty {
+                ObviousChrome {
+                    lifecycle: format_lifecycle_command("ds-explore")
+                        .into_iter()
+                        .collect(),
+                    affirm: None,
+                    decline: false,
+                }
+            } else {
+                ObviousChrome::default()
+            }
+        }
+        Scope::Change(name) => {
+            let is_archived = project.archived_changes.iter().any(|c| c.name == *name);
+            if is_archived {
+                if !session_empty && vcs_dirty {
+                    return ObviousChrome {
+                        lifecycle: Vec::new(),
+                        affirm: Some(Affirm::Commit),
+                        decline: false,
+                    };
+                }
+                return ObviousChrome::default();
+            }
+
+            let Some(facts) = change_scope_facts(name, project) else {
+                return ObviousChrome::default();
+            };
+
+            let lifecycle: Vec<String> = facts
+                .lifecycle_commands
+                .iter()
+                .filter_map(|c| format_lifecycle_command(c))
+                .collect();
+
+            // Gate row only on nonempty active-change sessions (not Commit path).
+            let (affirm, decline) = if session_empty {
+                (None, false)
+            } else {
+                (Some(Affirm::Confirm), true)
+            };
+
+            ObviousChrome {
+                lifecycle,
+                affirm,
+                decline,
+            }
+        }
+    }
 }
 
 /// Suggested next `/ds-*` command for a change, derived from its lifecycle
@@ -840,34 +942,32 @@ fn obvious_command_from_artifacts(name: &str, project: &ProjectData) -> Option<S
     change_scope_facts(name, project).and_then(|f| f.next_command)
 }
 
-/// Refresh the `obvious_command` on every session of every change /
+/// Refresh `obvious_chrome` and `scope_facts` on every session of every change /
 /// exploration interaction. Iterating all scopes (rather than only
-/// `state.selected_change`) ensures freshly-promoted sessions show the
-/// right placeholder even when the user is in another area at the time
-/// of promotion.
+/// `state.selected_change`) ensures freshly-promoted sessions show the right
+/// chrome even when the user is in another area at the time of promotion.
 ///
-/// Does not seed `agent_default_prompts` — the composer list is oneshot-parse
-/// only. The lifecycle command remains for orientation soft-hint and the
-/// obvious bubble.
-pub fn refresh_obvious_command(
+/// Per-session emptiness drives the Confirm/Reject gate; `vcs_dirty` drives
+/// post-archive Commit. Does not seed `agent_default_prompts` — the composer
+/// list is oneshot-parse only. Soft hint uses lifecycle[0] / `next_command`.
+pub fn refresh_obvious_chrome(
     interactions: &mut HashMap<Scope, InteractionState>,
     project: &ProjectData,
+    vcs_dirty: bool,
 ) {
     for (scope, ix) in interactions.iter_mut() {
-        // Facts are computed once per change scope; non-change scopes carry
-        // none. The placeholder command derives from the same facts so the two
-        // never disagree.
+        if matches!(scope, Scope::Caps | Scope::Codex) {
+            continue;
+        }
+        // Facts once per change scope; non-change scopes carry none.
         let facts = match scope {
             Scope::Change(name) => change_scope_facts(name, project),
             Scope::Exploration(_) | Scope::Caps | Scope::Codex => None,
         };
-        let cmd = match scope {
-            Scope::Exploration(_) => Some("ds-explore".into()),
-            Scope::Change(_) => facts.as_ref().and_then(|f| f.next_command.clone()),
-            Scope::Caps | Scope::Codex => continue,
-        };
         for ax in ix.sessions.iter_mut() {
-            ax.obvious_command = cmd.clone();
+            let session_empty = ax.session.messages.is_empty();
+            ax.obvious_chrome =
+                build_obvious_chrome(scope, project, session_empty, vcs_dirty);
             ax.scope_facts = facts.clone();
         }
     }
@@ -2036,6 +2136,84 @@ mod breadcrumb_tests {
             compute_obvious_command(&state, &project).as_deref(),
             Some("ds-archive")
         );
+    }
+
+    // @spec chat/obvious-bubble Chrome composition: Caps without steps yield step then spec then archive
+    #[test]
+    fn chrome_caps_without_steps_yield_step_then_spec_then_archive() {
+        let mut project = make_project(&["foo"], &[]);
+        set_change(&mut project, "foo", |c| {
+            c.has_proposal = true;
+            c.cap_tree = vec![tree_node("caps/auth")];
+        });
+        let chrome = build_obvious_chrome(&Scope::Change("foo".into()), &project, true, false);
+        assert_eq!(
+            chrome.lifecycle,
+            vec!["/ds-step", "/ds-spec", "/ds-archive"]
+        );
+    }
+
+    // @spec chat/obvious-bubble Chrome composition: All steps complete yield archive then review
+    #[test]
+    fn chrome_all_steps_complete_yield_archive_then_review() {
+        let mut project = make_project(&["foo"], &[]);
+        set_change(&mut project, "foo", |c| {
+            c.has_proposal = true;
+            c.has_design = true;
+            c.cap_tree = vec![tree_node("caps/auth")];
+            c.steps = vec![step(true), step(true)];
+        });
+        let chrome = build_obvious_chrome(&Scope::Change("foo".into()), &project, true, false);
+        assert_eq!(chrome.lifecycle, vec!["/ds-archive", "/ds-review"]);
+    }
+
+    // @spec chat/obvious-bubble Chrome composition: Nonempty change session includes Confirm and Reject
+    #[test]
+    fn chrome_nonempty_change_session_includes_confirm_and_reject() {
+        let mut project = make_project(&["foo"], &[]);
+        set_change(&mut project, "foo", |c| c.has_proposal = true);
+        let chrome = build_obvious_chrome(&Scope::Change("foo".into()), &project, false, false);
+        assert_eq!(
+            chrome.affirm,
+            Some(crate::obvious_bubble::Affirm::Confirm)
+        );
+        assert!(chrome.decline);
+    }
+
+    // @spec chat/obvious-bubble Chrome composition: Empty change session omits gate row
+    #[test]
+    fn chrome_empty_change_session_omits_gate_row() {
+        let mut project = make_project(&["foo"], &[]);
+        set_change(&mut project, "foo", |c| c.has_proposal = true);
+        let chrome = build_obvious_chrome(&Scope::Change("foo".into()), &project, true, false);
+        assert!(chrome.affirm.is_none());
+        assert!(!chrome.decline);
+    }
+
+    // @spec chat/obvious-bubble Chrome composition: Archived dirty nonempty session yields Commit only
+    #[test]
+    fn chrome_archived_dirty_nonempty_session_yields_commit_only() {
+        let project = make_project(&[], &["2026-04-20-01-foo"]);
+        let chrome = build_obvious_chrome(
+            &Scope::Change("2026-04-20-01-foo".into()),
+            &project,
+            false,
+            true,
+        );
+        assert_eq!(chrome.affirm, Some(crate::obvious_bubble::Affirm::Commit));
+        assert!(chrome.lifecycle.is_empty());
+        assert!(!chrome.decline);
+    }
+
+    // @spec chat/obvious-bubble Chrome composition: Empty exploration yields explore only
+    #[test]
+    fn chrome_empty_exploration_yields_explore_only() {
+        let project = make_project(&[], &[]);
+        let chrome =
+            build_obvious_chrome(&Scope::Exploration("exploration-1".into()), &project, true, false);
+        assert_eq!(chrome.lifecycle, vec!["/ds-explore"]);
+        assert!(chrome.affirm.is_none());
+        assert!(!chrome.decline);
     }
 
     /// @spec session/scope Lifecycle reflection: A change with unfinished steps reports remaining work and the apply next-stage

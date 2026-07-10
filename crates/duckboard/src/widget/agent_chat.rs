@@ -33,8 +33,9 @@ pub enum Msg {
     /// Action from the chat input editor.
     InputAction(text_edit::EditorAction),
     SendPressed,
-    /// Activate the lifecycle obvious bubble (⌘↩ / click) when visible.
-    SendObvious,
+    /// Activate an obvious-chrome action (key or chip click). Payload is the
+    /// action send text only (not the hotkey label).
+    SendObviousAction(String),
     CancelPressed,
     CompletionAccept,
     CompletionNext,
@@ -1053,8 +1054,8 @@ pub fn view<'a>(
     default_prompt_idx: usize,
     // True while the reply-suggestion oneshot is outstanding.
     default_prompts_pending: bool,
-    // Lifecycle next command for the obvious bubble (send form derived in view).
-    obvious_command: Option<&'a str>,
+    // Multi-option obvious chrome (send form derived in view; multi-chip in step 04).
+    obvious_chrome: &'a crate::obvious_bubble::ObviousChrome,
     pinned_selections: &'a [SelectionContext],
     tentative_selection: Option<&'a SelectionContext>,
     block_highlights: Vec<(
@@ -1099,18 +1100,12 @@ pub fn view<'a>(
         );
     }
 
-    // Lifecycle obvious bubble — greyed faux user chrome after real transcript
-    // content, above the composer. Not a stored message; activation sends via
-    // `Msg::SendObvious`.
+    // Obvious chrome — key-first action chips after real transcript content,
+    // above the composer. Not stored messages; activation sends via
+    // `Msg::SendObviousAction`.
     let input_empty = input_value.text().trim().is_empty();
-    if crate::obvious_bubble::bubble_visible(
-        status.is_streaming,
-        input_empty,
-        obvious_command,
-    ) {
-        if let Some(send_text) = crate::obvious_bubble::bubble_send_text(obvious_command) {
-            chat_col = chat_col.push(view_obvious_bubble(send_text));
-        }
+    if crate::obvious_bubble::chrome_visible(status.is_streaming, input_empty, obvious_chrome) {
+        chat_col = chat_col.push(view_obvious_chrome(obvious_chrome));
     }
 
     let chat_scroll = scrollable(chat_col)
@@ -1623,31 +1618,102 @@ fn format_number(n: usize) -> String {
     result
 }
 
-/// Greyed faux user bubble for the lifecycle next command + ⌘↩ hint.
-/// View chrome only — not part of the transcript until activation sends.
-fn view_obvious_bubble<'a>(send_text: String) -> Element<'a, Msg> {
-    let mut hint_color = theme::text_muted();
-    hint_color.a *= 0.75;
-    let body = row![
-        text(send_text)
-            .size(theme::content_size())
-            .color(theme::text_muted())
-            .font(theme::content_font()),
-        Space::new().width(Length::Fill),
-        text("⌘↩")
-            .size(theme::font_sm())
-            .color(hint_color),
-    ]
-    .spacing(theme::SPACING_SM)
-    .align_y(iced::Alignment::Center);
+/// Tint for an obvious-chrome chip background.
+#[derive(Clone, Copy)]
+enum ObviousChipTone {
+    /// Default muted chrome.
+    Neutral,
+    /// Confirm / Commit, or the lifecycle option bound to ⌘↩ when no affirm.
+    Enter,
+    /// Reject.
+    Reject,
+}
+
+/// Multi-option obvious chrome: lifecycle chips (⌘1…) then optional gate row
+/// (Confirm/Reject or Commit). View chrome only until activation sends.
+fn view_obvious_chrome<'a>(
+    chrome: &'a crate::obvious_bubble::ObviousChrome,
+) -> Element<'a, Msg> {
+    use crate::obvious_bubble::{affirm_chip_label, decline_chip_label, lifecycle_chip_label};
+
+    let mut col = column![].spacing(theme::SPACING_XS);
+    // When there is no affirm row, ⌘↩ hits lifecycle[0] — green that chip.
+    let enter_is_first_lifecycle = chrome.affirm.is_none();
+
+    for (i, action) in chrome.lifecycle.iter().enumerate() {
+        let label = lifecycle_chip_label(i + 1, action);
+        let tone = if enter_is_first_lifecycle && i == 0 {
+            ObviousChipTone::Enter
+        } else {
+            ObviousChipTone::Neutral
+        };
+        col = col.push(view_obvious_chip(label, action.clone(), tone));
+    }
+
+    match (chrome.affirm, chrome.decline) {
+        (Some(affirm), true) => {
+            let gate = row![
+                view_obvious_chip(
+                    affirm_chip_label(affirm),
+                    affirm.send_text().to_string(),
+                    ObviousChipTone::Enter,
+                ),
+                view_obvious_chip(
+                    decline_chip_label(),
+                    "Reject".into(),
+                    ObviousChipTone::Reject,
+                ),
+            ]
+            .spacing(theme::SPACING_SM);
+            col = col.push(gate);
+        }
+        (Some(affirm), false) => {
+            col = col.push(view_obvious_chip(
+                affirm_chip_label(affirm),
+                affirm.send_text().to_string(),
+                ObviousChipTone::Enter,
+            ));
+        }
+        (None, true) => {
+            col = col.push(view_obvious_chip(
+                decline_chip_label(),
+                "Reject".into(),
+                ObviousChipTone::Reject,
+            ));
+        }
+        (None, false) => {}
+    }
+
+    container(col)
+        .padding([0.0, theme::SPACING_SM])
+        .width(Length::Fill)
+        .into()
+}
+
+/// One muted action chip: hotkey-first label; click sends `action` only.
+fn view_obvious_chip<'a>(
+    label: String,
+    action: String,
+    tone: ObviousChipTone,
+) -> Element<'a, Msg> {
+    let mut label_color = theme::text_muted();
+    label_color.a *= 0.95;
+    let body = text(label)
+        .size(theme::content_size())
+        .color(label_color)
+        .font(theme::content_font());
 
     let card = container(body)
         .padding([theme::SPACING_SM, theme::SPACING_MD])
         .width(Length::Fill)
-        .style(theme::chat_obvious_bubble);
+        .style(move |t| match tone {
+            ObviousChipTone::Neutral => theme::chat_obvious_chip_neutral(t),
+            ObviousChipTone::Enter => theme::chat_obvious_chip_enter(t),
+            ObviousChipTone::Reject => theme::chat_obvious_chip_reject(t),
+        });
 
-    let clickable = button(card)
-        .on_press(Msg::SendObvious)
+    button(card)
+        .on_press(Msg::SendObviousAction(action))
         .padding(0.0)
         .width(Length::Fill)
         .style(|_theme, status| {
@@ -1660,11 +1726,7 @@ fn view_obvious_bubble<'a>(send_text: String) -> Element<'a, Msg> {
                 | iced::widget::button::Status::Pressed => base,
                 _ => base,
             }
-        });
-
-    container(clickable)
-        .padding([0.0, theme::SPACING_SM])
-        .width(Length::Fill)
+        })
         .into()
 }
 

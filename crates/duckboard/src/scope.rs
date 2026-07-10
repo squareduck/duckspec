@@ -235,6 +235,7 @@ mod tests {
                 step_count: 3,
                 active_step_tasks: Some((2, 5)),
                 next_command: Some("ds-apply".into()),
+                lifecycle_commands: vec!["ds-apply".into(), "ds-review".into()],
                 current_review: None,
             }),
         };
@@ -268,6 +269,7 @@ mod tests {
                 step_count: 2,
                 active_step_tasks: None,
                 next_command: Some("ds-archive".into()),
+                lifecycle_commands: vec!["ds-archive".into(), "ds-review".into()],
                 current_review: None,
             }),
         };

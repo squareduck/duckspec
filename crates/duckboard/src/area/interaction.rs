@@ -354,10 +354,10 @@ pub struct AgentSession {
     pub model_dirty: bool,
     pub agent_input_tokens: usize,
     pub agent_output_tokens: usize,
-    /// Suggested /ds-* command for the current stage (without the leading slash).
-    /// Soft hint on the reply-suggestion oneshot request and empty-send form for
-    /// the obvious bubble (composer list does not use this).
-    pub obvious_command: Option<String>,
+    /// Multi-option obvious chrome (lifecycle / affirm / decline). Ephemeral —
+    /// refreshed from disk + session emptiness + VCS dirty; not persisted.
+    /// Soft hint for oneshot uses lifecycle[0] only (composer list does not).
+    pub obvious_chrome: crate::obvious_bubble::ObviousChrome,
     /// Armed empty-input default prompts: settled non-empty oneshot parse only.
     /// Ephemeral — not persisted. Never seeded from the lifecycle heuristic.
     pub agent_default_prompts: Vec<String>,
@@ -369,7 +369,7 @@ pub struct AgentSession {
     /// Index into the effective default-prompt list for Tab cycle / Enter.
     pub default_prompt_idx: usize,
     /// Lifecycle facts for this session's change scope (phase, step progress,
-    /// next stage). Refreshed alongside `obvious_command`; `None` for
+    /// next stage). Refreshed alongside `obvious_chrome`; `None` for
     /// non-change scopes. Feeds the first-turn scope orientation blurb.
     pub scope_facts: Option<crate::area::change::ChangeScopeFacts>,
     /// Pending message staged while the agent is streaming. Sent automatically
@@ -459,7 +459,7 @@ impl AgentSession {
             model_dirty: false,
             agent_input_tokens: 0,
             agent_output_tokens: 0,
-            obvious_command: None,
+            obvious_chrome: crate::obvious_bubble::ObviousChrome::default(),
             agent_default_prompts: Vec::new(),
             default_prompts_gen: 0,
             default_prompts_pending: false,
@@ -1160,13 +1160,15 @@ fn handle_agent_chat(
         agent_chat::Msg::ToggleCollapse(idx) => {
             agent_chat::toggle_collapse(&mut ax.chat_collapse, idx);
         }
-        agent_chat::Msg::SendObvious => {
-            // Lifecycle bubble only — never the oneshot default-prompt list.
+        agent_chat::Msg::SendObviousAction(text) => {
+            // Obvious chrome only — never the oneshot default-prompt list.
+            // Chips pass the resolved action string; re-check visibility so a
+            // stale click while typing/streaming is a no-op.
             let input_empty = ax.chat_input.text().trim().is_empty();
-            if let Some(text) = crate::obvious_bubble::activation_send_text(
+            if crate::obvious_bubble::chrome_visible(
                 ax.session.is_streaming,
                 input_empty,
-                ax.obvious_command.as_deref(),
+                &ax.obvious_chrome,
             ) {
                 send_prompt_text(ax, text, highlighter);
             }
@@ -1863,20 +1865,52 @@ pub fn handle_agent_chat_key(
         }
     }
 
-    // ⌘↩ / Ctrl+Enter — activate the lifecycle obvious bubble when visible.
+    // Obvious chrome hotkeys — only when chrome is visible (idle + empty input).
     // Plain Enter stays on empty-submit (list only) via TextEdit `on_submit`.
-    if *key == keyboard::Key::Named(Named::Enter)
-        && mods.command()
-        && !mods.shift()
-        && !mods.alt()
     {
         let input_empty = ax.chat_input.text().trim().is_empty();
-        if crate::obvious_bubble::bubble_visible(
+        let chrome_vis = crate::obvious_bubble::chrome_visible(
             ax.session.is_streaming,
             input_empty,
-            ax.obvious_command.as_deref(),
-        ) {
-            return AgentChatKeyResult::Dispatch(agent_chat::Msg::SendObvious);
+            &ax.obvious_chrome,
+        );
+        if chrome_vis && mods.command() && !mods.shift() && !mods.alt() {
+            // ⌘↩ → affirm or lifecycle[0]
+            if *key == keyboard::Key::Named(Named::Enter) {
+                if let Some(text) =
+                    crate::obvious_bubble::resolve_cmd_enter(&ax.obvious_chrome)
+                {
+                    return AgentChatKeyResult::Dispatch(agent_chat::Msg::SendObviousAction(
+                        text,
+                    ));
+                }
+            }
+            // ⌘⌫ → Reject when decline set
+            if *key == keyboard::Key::Named(Named::Backspace) {
+                if let Some(text) =
+                    crate::obvious_bubble::resolve_cmd_backspace(&ax.obvious_chrome)
+                {
+                    return AgentChatKeyResult::Dispatch(agent_chat::Msg::SendObviousAction(
+                        text,
+                    ));
+                }
+            }
+            // ⌘1…⌘9 → lifecycle[n]
+            if let keyboard::Key::Character(c) = key {
+                if c.len() == 1 {
+                    let ch = c.chars().next().unwrap_or('\0');
+                    if ch.is_ascii_digit() && ch != '0' {
+                        let digit = ch.to_digit(10).unwrap_or(0) as u8;
+                        if let Some(text) =
+                            crate::obvious_bubble::resolve_cmd_digit(&ax.obvious_chrome, digit)
+                        {
+                            return AgentChatKeyResult::Dispatch(
+                                agent_chat::Msg::SendObviousAction(text),
+                            );
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -2300,7 +2334,7 @@ pub fn view_column<'a, M: 'a + Clone>(
                     default_prompts,
                     default_prompt_idx,
                     ax.default_prompts_pending,
-                    ax.obvious_command.as_deref(),
+                    &ax.obvious_chrome,
                     &ax.selection_pinned,
                     ax.selection_tentative.as_ref(),
                     block_highlights,

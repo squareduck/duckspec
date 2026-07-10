@@ -1145,9 +1145,14 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                     &state.highlighter,
                 );
                 // SelectIdea spawns the exploration session with
-                // `obvious_command: None`; refresh so the chat input renders
-                // its `/ds-explore` placeholder hint (mirrors ideas.rs).
-                area::change::refresh_obvious_command(&mut state.interactions, &state.project);
+                // empty chrome; refresh so the chat input renders lifecycle
+                // chrome (mirrors ideas.rs).
+                let dirty = !state.change.changed_files.is_empty();
+                area::change::refresh_obvious_chrome(
+                    &mut state.interactions,
+                    &state.project,
+                    dirty,
+                );
                 return focus_chat_input();
             }
             if let area::ideas::Message::OpenChange(ref change_name) = msg {
@@ -1503,7 +1508,19 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                             let prompts_gen = ax.default_prompts_gen;
                             let cmds: Vec<String> =
                                 ax.chat_commands.iter().map(|c| c.name.clone()).collect();
-                            let heuristic = ax.obvious_command.clone();
+                            // Soft hint: first lifecycle option (bare name),
+                            // matching orientation next_command — never the
+                            // oneshot composer list seed.
+                            let heuristic = ax
+                                .obvious_chrome
+                                .lifecycle
+                                .first()
+                                .map(|s| s.trim_start_matches('/').to_string())
+                                .or_else(|| {
+                                    ax.scope_facts
+                                        .as_ref()
+                                        .and_then(|f| f.next_command.clone())
+                                });
                             reply_task_input = Some((
                                 handle,
                                 assistant,
@@ -3233,7 +3250,8 @@ fn reload_and_reconcile(state: &mut State) -> bool {
         );
     }
 
-    area::change::refresh_obvious_command(&mut state.interactions, &state.project);
+    let dirty = !state.change.changed_files.is_empty();
+    area::change::refresh_obvious_chrome(&mut state.interactions, &state.project, dirty);
     archived_any
 }
 
@@ -3654,6 +3672,9 @@ fn refresh_changed_files(state: &mut State) {
     if let Some(root) = &state.project.project_root {
         state.change.set_changed_files(vcs::changed_files(root));
     }
+    // Commit chrome depends on dirty; recompose when the file list updates.
+    let dirty = !state.change.changed_files.is_empty();
+    area::change::refresh_obvious_chrome(&mut state.interactions, &state.project, dirty);
 }
 
 /// Re-read any open `file:`-prefixed tabs whose underlying path matches
@@ -3852,7 +3873,7 @@ fn update_focused_column(state: &mut State, message: &Message) {
                     | ChatMsg::ChatAction(_, _)
                     | ChatMsg::QueueAction(_)
                     | ChatMsg::SendPressed
-                    | ChatMsg::SendObvious
+                    | ChatMsg::SendObviousAction(_)
                     | ChatMsg::ChatScrolled(_)
                     | ChatMsg::CycleDefaultPrompt(_)
             );

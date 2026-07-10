@@ -616,9 +616,8 @@ pub fn chat_user_card(_theme: &Theme) -> container::Style {
     }
 }
 
-/// Ghost lifecycle bubble — same shape as a user card, muted so it reads as
-/// chrome rather than a committed transcript message.
-pub fn chat_obvious_bubble(_theme: &Theme) -> container::Style {
+/// Neutral obvious-chrome chip (non-enter lifecycle options).
+pub fn chat_obvious_chip_neutral(_theme: &Theme) -> container::Style {
     let mut border = border_color();
     border.a *= 0.55;
     let mut bg = bg_base();
@@ -632,6 +631,63 @@ pub fn chat_obvious_bubble(_theme: &Theme) -> container::Style {
         },
         ..Default::default()
     }
+}
+
+/// Very subtle green chip — Confirm / Commit, or the ⌘↩ lifecycle target when no affirm.
+/// Starts from the neutral chrome chip and tints only slightly so it stays quiet.
+pub fn chat_obvious_chip_enter(_theme: &Theme) -> container::Style {
+    let mut style = chat_obvious_chip_neutral(_theme);
+    let green = success();
+    if let Some(bg) = style.background.as_mut() {
+        if let iced::Background::Color(c) = bg {
+            // ~8% green into the muted base — hint, not a painted button.
+            *c = Color {
+                r: c.r * 0.92 + green.r * 0.08,
+                g: c.g * 0.92 + green.g * 0.08,
+                b: c.b * 0.92 + green.b * 0.08,
+                a: c.a,
+            };
+        }
+    }
+    let mut border = green;
+    border.a *= 0.18;
+    // Keep neutral border mostly; only a faint green lean.
+    let mut n = border_color();
+    n.a *= 0.55;
+    style.border.color = Color {
+        r: n.r * 0.75 + border.r * 0.25,
+        g: n.g * 0.75 + border.g * 0.25,
+        b: n.b * 0.75 + border.b * 0.25,
+        a: n.a.max(border.a),
+    };
+    style
+}
+
+/// Very subtle red chip — Reject.
+pub fn chat_obvious_chip_reject(_theme: &Theme) -> container::Style {
+    let mut style = chat_obvious_chip_neutral(_theme);
+    let red = error();
+    if let Some(bg) = style.background.as_mut() {
+        if let iced::Background::Color(c) = bg {
+            *c = Color {
+                r: c.r * 0.92 + red.r * 0.08,
+                g: c.g * 0.92 + red.g * 0.08,
+                b: c.b * 0.92 + red.b * 0.08,
+                a: c.a,
+            };
+        }
+    }
+    let mut border = red;
+    border.a *= 0.18;
+    let mut n = border_color();
+    n.a *= 0.55;
+    style.border.color = Color {
+        r: n.r * 0.75 + border.r * 0.25,
+        g: n.g * 0.75 + border.g * 0.25,
+        b: n.b * 0.75 + border.b * 0.25,
+        a: n.a.max(border.a),
+    };
+    style
 }
 
 pub fn chat_queued_card(_theme: &Theme) -> container::Style {

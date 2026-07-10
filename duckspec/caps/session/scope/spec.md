@@ -43,7 +43,7 @@ report completion.
 - **AND** it suggests the apply stage as the next step
 
 > test: code
-> - crates/duckboard/src/area/change.rs:2041
+> - crates/duckboard/src/area/change.rs:2219
 
 ### Scenario: A change with only a proposal reports the design next-stage
 
@@ -52,7 +52,7 @@ report completion.
 - **THEN** it suggests the design stage as the next step
 
 > test: code
-> - crates/duckboard/src/area/change.rs:2075
+> - crates/duckboard/src/area/change.rs:2253
 
 ### Scenario: A change with all steps complete reports completion and the archive next-stage
 
@@ -62,7 +62,7 @@ report completion.
 - **AND** it suggests the archive stage as the next step
 
 > test: code
-> - crates/duckboard/src/area/change.rs:2059
+> - crates/duckboard/src/area/change.rs:2237
 
 ## Requirement: Non-change scope orientation
 
@@ -79,7 +79,7 @@ scope and SHALL NOT report change progress or a change next-stage.
 - **AND** it does not report change progress or a change next-stage
 
 > test: code
-> - crates/duckboard/src/scope.rs:285
+> - crates/duckboard/src/scope.rs:287
 
 ### Scenario: A capability-tree scope carries no change facts
 
@@ -90,7 +90,7 @@ scope and SHALL NOT report change progress or a change next-stage.
 - **AND** it does not report change progress or a change next-stage
 
 > test: code
-> - crates/duckboard/src/scope.rs:308
+> - crates/duckboard/src/scope.rs:310
 
 ### Scenario: A codex scope points at the codex tree
 
@@ -101,7 +101,7 @@ scope and SHALL NOT report change progress or a change next-stage.
 - **AND** it does not report change progress or a change next-stage
 
 > test: code
-> - crates/duckboard/src/scope.rs:335
+> - crates/duckboard/src/scope.rs:337
 
 ## Requirement: Reliable first-turn delivery
 
@@ -158,7 +158,7 @@ reviews SHALL NOT affect the change's reported progress or its suggested next st
   `duckspec/changes/{name}/reviews/{filename}`
 
 > test: code
-> - crates/duckboard/src/area/change.rs:2099
+> - crates/duckboard/src/area/change.rs:2277
 
 ### Scenario: A change with no reviews reports no current review
 
@@ -167,7 +167,7 @@ reviews SHALL NOT affect the change's reported progress or its suggested next st
 - **THEN** it does not report a current review
 
 > test: code
-> - crates/duckboard/src/area/change.rs:2121
+> - crates/duckboard/src/area/change.rs:2299
 
 ### Scenario: Adding a review does not change the suggested next stage
 
@@ -177,4 +177,4 @@ reviews SHALL NOT affect the change's reported progress or its suggested next st
 - **THEN** both report the same suggested next stage
 
 > test: code
-> - crates/duckboard/src/area/change.rs:2136
+> - crates/duckboard/src/area/change.rs:2314

@@ -1,12 +1,15 @@
-# Chat obvious bubble
-
-Lifecycle next-command as a greyed faux user bubble and ⌘↩ send path — independent of
-oneshot composer suggestions.
+# @ Chat obvious bubble
 
 Ranked lifecycle `/ds-*` action chips plus optional affirm and decline, with key-first
 labels and dual-purpose ⌘↩ — independent of oneshot composer suggestions.
 
-## Surfaces
+## - Send text
+
+## - Activation
+
+## - When there is no command
+
+## ~ Surfaces
 
 Two empty-composer affordances stay separate:
 
@@ -24,7 +27,7 @@ unless the oneshot happens to emit the same text.
 
 Chips are action affordances (hotkey then action), not faux user messages.
 
-## Visibility
+## ~ Visibility
 
 ```
 | Condition                              | Chrome   |
@@ -39,7 +42,7 @@ Chips are action affordances (hotkey then action), not faux user messages.
 While the oneshot is still in flight, chrome remains available so the lifecycle path does
 not wait on the model.
 
-## Categories and keys
+## + Categories and keys
 
 ```
 | Kind      | Content              | Key   | Send text        |
@@ -52,7 +55,7 @@ not wait on the model.
 ⌘↩ resolves to affirm when present, otherwise the first lifecycle option, otherwise
 nothing. ⌘⌫ sends `Reject` only when decline is present.
 
-## Composition
+## + Composition
 
 ```
 | Phase / condition                         | Lifecycle                         | Affirm  | Decline |
@@ -72,7 +75,7 @@ nothing. ⌘⌫ sends `Reject` only when decline is present.
 `*` Gate row (Confirm + Reject) only when the change session transcript is non-empty.
 Empty change sessions show lifecycle only.
 
-## Display and activation
+## + Display and activation
 
 Each chip label places the hotkey before the action (e.g. `⌘1  /ds-step`, `⌘↩  Confirm`,
 `⌘⌫  Reject`). Activation (matching key or chip click) sends the action string only
@@ -81,7 +84,7 @@ through the same path as typing that text and submitting.
 Before activation, chips are view chrome only — not part of the persisted transcript.
 After send, the message is a normal user bubble in history.
 
-## Soft hint
+## + Soft hint
 
 The first lifecycle option (when any) remains a soft hint on the reply-suggestion oneshot
 request. Orientation's single suggested next stage matches that same first lifecycle
