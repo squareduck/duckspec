@@ -16,7 +16,7 @@ use crate::scope::ScopeKind;
 use crate::theme;
 use crate::widget::{
     agent_chat, collapsible, interaction_toggle, list_view,
-    text_edit::{self, Block, EditorState, Pos},
+    text_edit::{self, Block, BlockKind, EditorState, Pos},
 };
 
 /// Appended to the system prompt on a session's first turn so the model's
@@ -433,6 +433,11 @@ pub struct AgentSession {
     /// coalesced eager flush and the turn-boundary save. Transient — never
     /// persisted.
     pub needs_flush: bool,
+    /// True when `session` transcript may have changed since the last
+    /// `materialize_chat_ui`. Pure content/reasoning deltas set this without
+    /// rebuilding editors; `StreamTick` and structural events drain it.
+    /// Transient — never persisted.
+    pub chat_ui_dirty: bool,
 }
 
 impl AgentSession {
@@ -477,6 +482,7 @@ impl AgentSession {
             priming_in_flight: false,
             pending_followup_prompt: None,
             needs_flush: false,
+            chat_ui_dirty: false,
         }
     }
 
@@ -946,6 +952,429 @@ mod tests {
             vec!["a.rs L1".to_string(), "chat: User #5 L1-2".to_string()]
         );
     }
+
+    // ── chat/stream-ui: session apply + bounded materialize ───────────────
+
+    fn streaming_session() -> AgentSession {
+        let mut ax = AgentSession::new("stream-ui-test".into(), ScopeKind::Change);
+        ax.session.is_streaming = true;
+        ax
+    }
+
+    // @spec chat/stream-ui Session apply before materialize: Content deltas accumulate on the session without materialization
+    #[test]
+    fn content_deltas_accumulate_without_materialization() {
+        let mut ax = streaming_session();
+        let blocks_before = ax.chat_blocks.len();
+
+        let ks1 = apply_answer_content_delta(&mut ax.session, "hello");
+        ax.chat_ui_dirty = true;
+        assert!(!ks1);
+        assert!(!should_materialize_chat_ui(
+            &crate::agent::AgentEvent::ContentDelta {
+                text: "hello".into()
+            },
+            true,
+            ks1,
+        ));
+
+        let ks2 = apply_answer_content_delta(&mut ax.session, " world");
+        ax.chat_ui_dirty = true;
+        assert!(!ks2);
+
+        assert_eq!(ax.session.pending_text, "hello world");
+        // Materialize was never called — UI still empty of the live answer.
+        assert_eq!(ax.chat_blocks.len(), blocks_before);
+        assert!(ax.chat_ui_dirty);
+    }
+
+    // @spec chat/stream-ui Session apply before materialize: Reasoning deltas accumulate on the session without materialization
+    #[test]
+    fn reasoning_deltas_accumulate_without_materialization() {
+        let mut ax = streaming_session();
+        let blocks_before = ax.chat_blocks.len();
+
+        let ks1 = apply_reasoning_content_delta(&mut ax.session, "think");
+        ax.chat_ui_dirty = true;
+        assert!(!ks1);
+        assert!(!should_materialize_chat_ui(
+            &crate::agent::AgentEvent::ReasoningDelta {
+                text: "think".into()
+            },
+            true,
+            ks1,
+        ));
+
+        let ks2 = apply_reasoning_content_delta(&mut ax.session, " more");
+        ax.chat_ui_dirty = true;
+        assert!(!ks2);
+
+        assert_eq!(ax.session.pending_reasoning, "think more");
+        assert_eq!(ax.chat_blocks.len(), blocks_before);
+        assert!(ax.chat_ui_dirty);
+    }
+
+    // @spec chat/stream-ui Bounded materialization while streaming: Pure content deltas alone do not materialize the chat UI
+    #[test]
+    fn pure_content_deltas_alone_do_not_materialize() {
+        assert!(!should_materialize_chat_ui(
+            &crate::agent::AgentEvent::ContentDelta {
+                text: "x".into()
+            },
+            true,
+            false,
+        ));
+        assert!(!should_materialize_chat_ui(
+            &crate::agent::AgentEvent::ReasoningDelta {
+                text: "y".into()
+            },
+            true,
+            false,
+        ));
+        // Kind switch is structural even for content deltas.
+        assert!(should_materialize_chat_ui(
+            &crate::agent::AgentEvent::ContentDelta {
+                text: "x".into()
+            },
+            true,
+            true,
+        ));
+        // Structural events always materialize.
+        assert!(is_structural_chat_event(&crate::agent::AgentEvent::ToolUse {
+            id: "1".into(),
+            name: "Bash".into(),
+            input: "ls".into(),
+        }));
+        assert!(is_structural_chat_event(
+            &crate::agent::AgentEvent::TurnComplete
+        ));
+    }
+
+    // @spec chat/stream-ui Bounded materialization while streaming: Stream UI tick materializes accumulated session answer text into the chat UI
+    #[test]
+    fn stream_ui_tick_materializes_accumulated_answer() {
+        let mut ax = streaming_session();
+        ax.stick_to_bottom = true;
+        apply_answer_content_delta(&mut ax.session, "batch one");
+        apply_answer_content_delta(&mut ax.session, " batch two");
+        ax.chat_ui_dirty = true;
+        assert_eq!(ax.session.pending_text, "batch one batch two");
+        assert!(ax.chat_blocks.is_empty());
+        assert!(should_materialize_on_stream_tick(
+            ax.session.is_streaming,
+            ax.chat_ui_dirty,
+            ax.stick_to_bottom,
+        ));
+
+        // StreamTick path: materialize while dirty + streaming + stick.
+        let hl = SyntaxHighlighter::new();
+        materialize_chat_ui(&mut ax, &hl);
+
+        assert!(!ax.chat_ui_dirty);
+        let joined: String = ax
+            .chat_blocks
+            .iter()
+            .flat_map(|b| b.lines.iter().cloned())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            joined.contains("batch one batch two"),
+            "materialized UI must include accumulated pending answer: {joined:?}"
+        );
+    }
+
+    // @spec chat/stream-ui Bounded materialization while streaming: Stream UI tick skips materialize while scrolled up in history
+    #[test]
+    fn stream_ui_tick_skips_materialize_when_scrolled_up() {
+        let mut ax = streaming_session();
+        ax.stick_to_bottom = false;
+        apply_answer_content_delta(&mut ax.session, "while reading history");
+        ax.chat_ui_dirty = true;
+        assert!(!should_materialize_on_stream_tick(
+            ax.session.is_streaming,
+            ax.chat_ui_dirty,
+            ax.stick_to_bottom,
+        ));
+        // Session still holds the text; UI not rebuilt.
+        assert_eq!(ax.session.pending_text, "while reading history");
+        assert!(ax.chat_blocks.is_empty());
+        assert!(ax.chat_ui_dirty);
+    }
+
+    // @spec chat/stream-ui Bounded materialization while streaming: Re-sticking to bottom materializes deferred content
+    #[test]
+    fn restick_to_bottom_materializes_deferred_content() {
+        let mut ax = streaming_session();
+        ax.stick_to_bottom = false;
+        apply_answer_content_delta(&mut ax.session, "deferred while up");
+        ax.chat_ui_dirty = true;
+        assert!(ax.chat_blocks.is_empty());
+
+        // User scrolls back to bottom → stick re-engages → materialize.
+        ax.stick_to_bottom = true;
+        let hl = SyntaxHighlighter::new();
+        if ax.stick_to_bottom && ax.chat_ui_dirty && ax.session.is_streaming {
+            materialize_chat_ui(&mut ax, &hl);
+        }
+
+        assert!(!ax.chat_ui_dirty);
+        let joined: String = ax
+            .chat_blocks
+            .iter()
+            .flat_map(|b| b.lines.iter().cloned())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            joined.contains("deferred while up"),
+            "re-stick must paint deferred answer: {joined:?}"
+        );
+    }
+
+    // @spec chat/stream-ui Bounded materialization while streaming: Tool use materializes the chat UI immediately with an Activity row
+    #[test]
+    fn tool_use_materializes_immediately_with_activity_row() {
+        let mut ax = streaming_session();
+        assert!(should_materialize_chat_ui(
+            &crate::agent::AgentEvent::ToolUse {
+                id: "t1".into(),
+                name: "Bash".into(),
+                input: "echo hi".into(),
+            },
+            true,
+            false,
+        ));
+
+        flush_all_pending(&mut ax.session);
+        ax.session.messages.push(ChatMessage {
+            role: Role::Assistant,
+            content: vec![ContentBlock::ToolUse {
+                id: "t1".into(),
+                name: "Bash".into(),
+                input: "echo hi".into(),
+            }],
+            timestamp: String::new(),
+            is_priming: false,
+        });
+        ax.chat_ui_dirty = true;
+
+        let hl = SyntaxHighlighter::new();
+        materialize_chat_ui(&mut ax, &hl);
+
+        assert!(!ax.chat_ui_dirty);
+        let has_activity = ax
+            .chat_blocks
+            .iter()
+            .any(|b| matches!(b.kind, BlockKind::Activity | BlockKind::ToolUse));
+        assert!(
+            has_activity,
+            "expected an Activity/tool block after tool use materialize; blocks={:?}",
+            ax.chat_blocks.iter().map(|b| &b.kind).collect::<Vec<_>>()
+        );
+    }
+
+    // @spec chat/stream-ui Bounded materialization while streaming: Turn complete materializes the final answer immediately
+    #[test]
+    fn turn_complete_materializes_final_answer_immediately() {
+        let mut ax = streaming_session();
+        apply_answer_content_delta(&mut ax.session, "final answer body");
+        ax.chat_ui_dirty = true;
+
+        assert!(should_materialize_chat_ui(
+            &crate::agent::AgentEvent::TurnComplete,
+            true,
+            false,
+        ));
+
+        // TurnComplete apply: flush pending, stop streaming, materialize now.
+        flush_all_pending(&mut ax.session);
+        ax.session.is_streaming = false;
+        let hl = SyntaxHighlighter::new();
+        materialize_chat_ui(&mut ax, &hl);
+
+        assert!(!ax.chat_ui_dirty);
+        assert!(!ax.session.is_streaming);
+        let joined: String = ax
+            .chat_blocks
+            .iter()
+            .flat_map(|b| b.lines.iter().cloned())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            joined.contains("final answer body"),
+            "final answer must paint without waiting for another tick: {joined:?}"
+        );
+    }
+
+    // ── chat/stream-ui: settled + live editor refresh ─────────────────────
+
+    #[test]
+    fn plan_editor_refresh_suffix_and_reshape() {
+        let a = vec!["hello".into()];
+        let b = vec!["hello".into(), "world".into()];
+        assert_eq!(
+            plan_editor_refresh(&a, &a),
+            EditorRefreshKind::Reuse
+        );
+        assert_eq!(
+            plan_editor_refresh(&a, &b),
+            EditorRefreshKind::InPlace { dirty_from: 1 }
+        );
+        assert_eq!(
+            plan_editor_refresh(&["hel".into()], &["hello".into()]),
+            EditorRefreshKind::InPlace { dirty_from: 0 }
+        );
+        assert_eq!(
+            plan_editor_refresh(&["a".into(), "b".into()], &["a".into(), "c".into()]),
+            EditorRefreshKind::FullRebuild
+        );
+    }
+
+    // @spec chat/stream-ui Settled and live editor refresh: Unchanged settled block keeps its editor across materialize
+    #[test]
+    fn unchanged_settled_block_keeps_editor_across_materialize() {
+        let mut ax = streaming_session();
+        ax.session.messages.push(ChatMessage {
+            role: Role::User,
+            content: vec![ContentBlock::Text("user asks".into())],
+            timestamp: String::new(),
+            is_priming: false,
+        });
+        apply_answer_content_delta(&mut ax.session, "first");
+        let hl = SyntaxHighlighter::new();
+        materialize_chat_ui(&mut ax, &hl);
+
+        let user_idx = ax
+            .chat_blocks
+            .iter()
+            .position(|b| b.kind == BlockKind::User)
+            .expect("user block");
+        let user_version = ax.chat_editors[user_idx].highlight_version;
+        // Mark the settled editor so a full replace would reset version to 0
+        // only if we wrongly rebuild — reuse must preserve this value.
+        ax.chat_editors[user_idx].highlight_version = 7;
+        let user_version = 7.max(user_version);
+
+        apply_answer_content_delta(&mut ax.session, " more");
+        materialize_chat_ui(&mut ax, &hl);
+
+        let user_idx = ax
+            .chat_blocks
+            .iter()
+            .position(|b| b.kind == BlockKind::User)
+            .expect("user block");
+        assert_eq!(
+            ax.chat_editors[user_idx].highlight_version, user_version,
+            "settled user block must keep its editor (version) across live-answer growth"
+        );
+        assert_eq!(ax.chat_blocks[user_idx].lines, vec!["user asks".to_string()]);
+    }
+
+    // @spec chat/stream-ui Settled and live editor refresh: Suffix-growing live answer refreshes in place
+    #[test]
+    fn suffix_growing_live_answer_refreshes_in_place() {
+        let mut ax = streaming_session();
+        apply_answer_content_delta(&mut ax.session, "line one");
+        let hl = SyntaxHighlighter::new();
+        materialize_chat_ui(&mut ax, &hl);
+
+        let ans_idx = ax
+            .chat_blocks
+            .iter()
+            .position(|b| b.kind == BlockKind::Assistant)
+            .expect("answer block");
+        // Bump so a FullRebuild (fresh EditorState::new → version 0) is
+        // distinguishable from InPlace (version + 1).
+        ax.chat_editors[ans_idx].highlight_version = 3u64;
+        let v_before: u64 = 3;
+
+        apply_answer_content_delta(&mut ax.session, "\nline two");
+        materialize_chat_ui(&mut ax, &hl);
+
+        let ans_idx = ax
+            .chat_blocks
+            .iter()
+            .position(|b| b.kind == BlockKind::Assistant)
+            .expect("answer block");
+        assert_eq!(
+            ax.chat_editors[ans_idx].highlight_version,
+            v_before.wrapping_add(1),
+            "suffix growth must refresh in place (bump version), not EditorState::new"
+        );
+        let lines = &ax.chat_editors[ans_idx].lines;
+        assert!(
+            lines.iter().any(|l| l.contains("line two"))
+                || lines.join("\n").contains("line two"),
+            "live answer must include suffix: {lines:?}"
+        );
+        let _ = v_before;
+    }
+
+    // @spec chat/stream-ui Settled and live editor refresh: Block list reshape uses full rebuild for affected indices
+    #[test]
+    fn block_list_reshape_full_rebuild_for_affected_keeps_settled() {
+        let mut ax = streaming_session();
+        ax.session.messages.push(ChatMessage {
+            role: Role::User,
+            content: vec![ContentBlock::Text("user asks".into())],
+            timestamp: String::new(),
+            is_priming: false,
+        });
+        apply_answer_content_delta(&mut ax.session, "partial answer");
+        let hl = SyntaxHighlighter::new();
+        materialize_chat_ui(&mut ax, &hl);
+
+        let user_idx = ax
+            .chat_blocks
+            .iter()
+            .position(|b| b.kind == BlockKind::User)
+            .expect("user");
+        ax.chat_editors[user_idx].highlight_version = 9;
+
+        // Structural reshape: flush answer, insert a tool, then more answer.
+        flush_all_pending(&mut ax.session);
+        ax.session.messages.push(ChatMessage {
+            role: Role::Assistant,
+            content: vec![ContentBlock::ToolUse {
+                id: "t1".into(),
+                name: "Bash".into(),
+                input: "ls".into(),
+            }],
+            timestamp: String::new(),
+            is_priming: false,
+        });
+        apply_answer_content_delta(&mut ax.session, "after tool");
+        materialize_chat_ui(&mut ax, &hl);
+
+        let user_idx = ax
+            .chat_blocks
+            .iter()
+            .position(|b| b.kind == BlockKind::User)
+            .expect("user still present");
+        assert_eq!(
+            ax.chat_editors[user_idx].highlight_version, 9,
+            "unchanged earlier block keeps editor through reshape"
+        );
+
+        let has_activity = ax
+            .chat_blocks
+            .iter()
+            .any(|b| matches!(b.kind, BlockKind::Activity | BlockKind::ToolUse));
+        assert!(has_activity, "reshape must include Activity for the tool");
+
+        let has_post_tool_answer = ax.chat_blocks.iter().any(|b| {
+            b.kind == BlockKind::Assistant
+                && (b.lines.join("\n").contains("after tool")
+                    || b.lines.iter().any(|l| l.contains("after tool")))
+        });
+        assert!(
+            has_post_tool_answer,
+            "expected a live answer after the tool; blocks={:?}",
+            ax.chat_blocks
+                .iter()
+                .map(|b| (b.kind, b.lines.clone()))
+                .collect::<Vec<_>>()
+        );
+    }
 }
 
 // ── Shared messages ─────────────────────────────────────────────────────────
@@ -1320,12 +1749,22 @@ fn handle_agent_chat(
             // preserved.
             let prev_offset = ax.last_chat_offset_y;
             ax.last_chat_offset_y = Some(offset_y);
+            let was_stuck = ax.stick_to_bottom;
             if at_bottom {
                 ax.stick_to_bottom = true;
             } else if let Some(prev) = prev_offset
                 && offset_y + f32::EPSILON < prev
             {
                 ax.stick_to_bottom = false;
+            }
+            // Re-engaging stick while pure-content dirtiness was deferred
+            // (user was reading history): paint the live answer now.
+            if ax.stick_to_bottom
+                && !was_stuck
+                && ax.chat_ui_dirty
+                && ax.session.is_streaming
+            {
+                materialize_chat_ui(ax, highlighter);
             }
         }
     }
@@ -1449,7 +1888,7 @@ pub fn recover_from_lost_session(ax: &mut AgentSession, highlighter: &SyntaxHigh
         {
             tracing::error!("failed to persist cleared session id: {e}");
         }
-        rebuild_chat_editor(ax, highlighter);
+        materialize_chat_ui(ax, highlighter);
         return;
     };
 
@@ -1481,7 +1920,7 @@ pub fn recover_from_lost_session(ax: &mut AgentSession, highlighter: &SyntaxHigh
 
     let Some(handle) = ax.agent_handle.as_ref() else {
         ax.session.is_streaming = false;
-        rebuild_chat_editor(ax, highlighter);
+        materialize_chat_ui(ax, highlighter);
         return;
     };
 
@@ -1508,7 +1947,7 @@ pub fn recover_from_lost_session(ax: &mut AgentSession, highlighter: &SyntaxHigh
     // Don't re-take from input — leave as empty for the recovery turn.
     handle.send_turn(req);
 
-    rebuild_chat_editor(ax, highlighter);
+    materialize_chat_ui(ax, highlighter);
     tracing::info!(
         scope = %ax.session.scope,
         "re-dispatched last user turn after lost agent session"
@@ -1599,7 +2038,7 @@ pub fn send_prompt_text(ax: &mut AgentSession, text: String, highlighter: &Synta
         ax.chat_input = EditorState::new("");
         rehighlight_input(&mut ax.chat_input, highlighter);
         ax.chat_completion.visible = false;
-        rebuild_chat_editor(ax, highlighter);
+        materialize_chat_ui(ax, highlighter);
         return;
     }
 
@@ -1719,7 +2158,7 @@ pub fn send_prompt_text(ax: &mut AgentSession, text: String, highlighter: &Synta
     // Drop the tentative attachment — it rode this turn but is not pinned.
     // Pinned attachments persist across messages until Cmd-R clears them.
     ax.selection_tentative = None;
-    rebuild_chat_editor(ax, highlighter);
+    materialize_chat_ui(ax, highlighter);
 }
 
 /// Re-run markdown syntax highlighting on the chat input.
@@ -1790,6 +2229,98 @@ fn build_history_preamble(messages: &[crate::chat_store::ChatMessage]) -> String
 
 // ── Chat editor ─────────────────────────────────────────────────────────────
 
+/// How to refresh one chat block editor during materialize.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EditorRefreshKind {
+    /// Lines unchanged — keep the existing editor as-is.
+    Reuse,
+    /// Live answer/thinking grew by suffix only — mutate lines in place.
+    InPlace { dirty_from: usize },
+    /// Kind change, non-suffix edit, or new index — full `EditorState::new`.
+    FullRebuild,
+}
+
+/// Decide how to refresh an editor given previous and next block lines.
+fn plan_editor_refresh(old_lines: &[String], new_lines: &[String]) -> EditorRefreshKind {
+    if old_lines == new_lines {
+        return EditorRefreshKind::Reuse;
+    }
+    if let Some(dirty_from) = suffix_growth_dirty_from(old_lines, new_lines) {
+        return EditorRefreshKind::InPlace { dirty_from };
+    }
+    EditorRefreshKind::FullRebuild
+}
+
+/// If `new_lines` is a suffix growth of `old_lines`, return the first dirty
+/// line index. Shared complete-line prefix, last shared line may extend
+/// (new starts with old), then optional additional lines.
+fn suffix_growth_dirty_from(old: &[String], new: &[String]) -> Option<usize> {
+    if new.len() < old.len() || old.is_empty() {
+        return None;
+    }
+    let last = old.len() - 1;
+    for i in 0..last {
+        if old.get(i) != new.get(i) {
+            return None;
+        }
+    }
+    let old_last = &old[last];
+    let new_last = new.get(last)?;
+    if !new_last.starts_with(old_last.as_str()) {
+        return None;
+    }
+    if new_last != old_last {
+        Some(last)
+    } else if new.len() > old.len() {
+        Some(old.len())
+    } else {
+        // Equal content — caller should have hit Reuse via `==`.
+        None
+    }
+}
+
+fn make_highlighted_editor(lines: &[String], highlighter: &SyntaxHighlighter) -> EditorState {
+    let content = lines.join("\n");
+    let mut editor = EditorState::new(&content);
+    let syntax = highlighter.find_syntax("md");
+    editor.highlight_spans = Some(highlighter.highlight_lines(&editor.lines, syntax));
+    editor
+}
+
+/// Update an existing editor's line buffer to `new_lines` and re-highlight.
+/// Keeps editor identity (`highlight_version` bumps; not a fresh `EditorState::new`).
+fn refresh_editor_in_place(
+    editor: &mut EditorState,
+    new_lines: &[String],
+    dirty_from: usize,
+    highlighter: &SyntaxHighlighter,
+) {
+    let lines = std::sync::Arc::make_mut(&mut editor.lines);
+    lines.clear();
+    lines.extend(new_lines.iter().cloned());
+    if lines.is_empty() {
+        lines.push(String::new());
+    }
+
+    // Markdown highlighting is stateful from line 0, so re-run the full pass
+    // into the same editor. `dirty_from` documents the first changed line for
+    // callers/tests; the expensive win is not constructing a new EditorState.
+    let _ = dirty_from;
+    let syntax = highlighter.find_syntax("md");
+    editor.highlight_spans = Some(highlighter.highlight_lines(lines, syntax));
+    editor.highlight_version = editor.highlight_version.wrapping_add(1);
+
+    let last = editor.lines.len().saturating_sub(1);
+    editor.cursor.line = editor.cursor.line.min(last);
+    let col_max = editor.lines[editor.cursor.line].len();
+    editor.cursor.col = editor.cursor.col.min(col_max);
+    if let Some(a) = editor.anchor.as_mut() {
+        a.line = a.line.min(last);
+        let acol = editor.lines[a.line].len();
+        a.col = a.col.min(acol);
+    }
+}
+
 /// Rebuild the per-block chat editors for the given session.
 pub fn rebuild_chat_editor(ax: &mut AgentSession, highlighter: &SyntaxHighlighter) {
     // Segment model → collapse policy → editor blocks (index-aligned).
@@ -1799,23 +2330,140 @@ pub fn rebuild_chat_editor(ax: &mut AgentSession, highlighter: &SyntaxHighlighte
 
     let mut new_editors = Vec::with_capacity(new_blocks.len());
     for (i, block) in new_blocks.iter().enumerate() {
-        if i < ax.chat_editors.len()
-            && i < ax.chat_blocks.len()
-            && ax.chat_blocks[i].lines == block.lines
-        {
-            let existing = std::mem::replace(&mut ax.chat_editors[i], EditorState::new(""));
-            new_editors.push(existing);
+        if i < ax.chat_editors.len() && i < ax.chat_blocks.len() {
+            let plan = plan_editor_refresh(&ax.chat_blocks[i].lines, &block.lines);
+            match plan {
+                EditorRefreshKind::Reuse => {
+                    let existing =
+                        std::mem::replace(&mut ax.chat_editors[i], EditorState::new(""));
+                    new_editors.push(existing);
+                }
+                EditorRefreshKind::InPlace { dirty_from } => {
+                    let mut existing =
+                        std::mem::replace(&mut ax.chat_editors[i], EditorState::new(""));
+                    refresh_editor_in_place(
+                        &mut existing,
+                        &block.lines,
+                        dirty_from,
+                        highlighter,
+                    );
+                    new_editors.push(existing);
+                }
+                EditorRefreshKind::FullRebuild => {
+                    new_editors.push(make_highlighted_editor(&block.lines, highlighter));
+                }
+            }
         } else {
-            let content = block.lines.join("\n");
-            let mut editor = EditorState::new(&content);
-            let syntax = highlighter.find_syntax("md");
-            editor.highlight_spans = Some(highlighter.highlight_lines(&editor.lines, syntax));
-            new_editors.push(editor);
+            new_editors.push(make_highlighted_editor(&block.lines, highlighter));
         }
     }
 
     ax.chat_editors = new_editors;
     ax.chat_blocks = new_blocks;
+}
+
+/// Rebuild chat blocks/editors from `ax.session` and clear `chat_ui_dirty`.
+pub fn materialize_chat_ui(ax: &mut AgentSession, highlighter: &SyntaxHighlighter) {
+    rebuild_chat_editor(ax, highlighter);
+    ax.chat_ui_dirty = false;
+}
+
+/// Flush pending reasoning into a committed assistant message (no-op if empty).
+pub fn flush_pending_reasoning(session: &mut ChatSession) {
+    if !session.pending_reasoning.is_empty() {
+        let text = std::mem::take(&mut session.pending_reasoning);
+        session.messages.push(ChatMessage {
+            role: Role::Assistant,
+            content: vec![ContentBlock::Reasoning(text)],
+            timestamp: String::new(),
+            is_priming: false,
+        });
+    }
+}
+
+/// Flush pending answer text into a committed assistant message (no-op if empty).
+pub fn flush_pending_text(session: &mut ChatSession) {
+    if !session.pending_text.is_empty() {
+        let text = std::mem::take(&mut session.pending_text);
+        session.messages.push(ChatMessage {
+            role: Role::Assistant,
+            content: vec![ContentBlock::Text(text)],
+            timestamp: String::new(),
+            is_priming: false,
+        });
+    }
+}
+
+/// Flush both pending reasoning and answer buffers.
+pub fn flush_all_pending(session: &mut ChatSession) {
+    flush_pending_reasoning(session);
+    flush_pending_text(session);
+}
+
+/// Apply an answer content delta to the session. Returns `true` when this
+/// delta kind-switched away from pending reasoning (structural for the UI).
+pub fn apply_answer_content_delta(session: &mut ChatSession, text: &str) -> bool {
+    let kind_switch = !session.pending_reasoning.is_empty();
+    flush_pending_reasoning(session);
+    session.pending_text.push_str(text);
+    kind_switch
+}
+
+/// Apply a reasoning content delta to the session. Returns `true` when this
+/// delta kind-switched away from pending answer text (structural for the UI).
+pub fn apply_reasoning_content_delta(session: &mut ChatSession, text: &str) -> bool {
+    let kind_switch = !session.pending_text.is_empty();
+    flush_pending_text(session);
+    session.pending_reasoning.push_str(text);
+    kind_switch
+}
+
+/// Whether the chat UI must materialize immediately for this agent event.
+///
+/// Pure answer/reasoning content deltas while streaming are deferred to the
+/// stream UI tick unless `kind_switch` is true (the opposite pending buffer was
+/// flushed). Structural events always materialize.
+pub fn should_materialize_chat_ui(
+    evt: &crate::agent::AgentEvent,
+    is_streaming: bool,
+    kind_switch: bool,
+) -> bool {
+    use crate::agent::AgentEvent;
+    if kind_switch {
+        return true;
+    }
+    match evt {
+        AgentEvent::ToolUse { .. }
+        | AgentEvent::ToolResult { .. }
+        | AgentEvent::TurnComplete
+        | AgentEvent::Error(_)
+        | AgentEvent::ProcessExited
+        | AgentEvent::SessionNotFound => true,
+        AgentEvent::ContentDelta { .. } | AgentEvent::ReasoningDelta { .. } => !is_streaming,
+        AgentEvent::Ready(_)
+        | AgentEvent::CommandsAvailable(_)
+        | AgentEvent::UsageUpdate { .. }
+        | AgentEvent::SessionIdUpdated { .. } => false,
+    }
+}
+
+/// True for events that always reshape or close the live transcript UI.
+pub fn is_structural_chat_event(evt: &crate::agent::AgentEvent) -> bool {
+    should_materialize_chat_ui(evt, true, false)
+}
+
+/// Whether a stream UI tick should materialize pure-content dirtiness.
+///
+/// When the user has scrolled up to read history (`!stick_to_bottom`), skip
+/// materialize so the chat column is not rebuilt at tick cadence under their
+/// scroll. Session text still accumulates; the next structural event, turn
+/// end, or re-stick to bottom drains the dirty flag.
+pub fn should_materialize_on_stream_tick(
+    is_streaming: bool,
+    chat_ui_dirty: bool,
+    stick_to_bottom: bool,
+) -> bool {
+    is_streaming && chat_ui_dirty && stick_to_bottom
 }
 
 fn handle_chat_action_on(editor: &mut EditorState, action: crate::widget::text_edit::EditorAction) {
@@ -2158,7 +2806,7 @@ pub fn ensure_sessions_with_label(
     } else {
         for session in loaded {
             let mut ax = AgentSession::from_session(session, scope_kind);
-            rebuild_chat_editor(&mut ax, highlighter);
+            materialize_chat_ui(&mut ax, highlighter);
             state.sessions.push(ax);
         }
         // Re-reconcile with the caller's preferred label (load_sessions_for

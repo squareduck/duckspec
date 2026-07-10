@@ -1408,10 +1408,15 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
             let mut recover_lost_session = false;
             // Copy before mutably borrowing the session (config lives on `state`).
             let agent_input_hints = state.config.chat.agent_input_hints;
+            // Structural / kind-switch events force an immediate chat UI
+            // materialize; pure content deltas only set `chat_ui_dirty` and
+            // wait for StreamTick (see chat/stream-ui).
+            let mut force_materialize = false;
             {
                 let Some(ax) = state.agent_session_mut(&key) else {
                     return Task::none();
                 };
+                let streaming_before = ax.session.is_streaming;
                 match evt {
                     AgentEvent::Ready(handle) => {
                         // Seed the worker with a persisted session id so the next
@@ -1430,16 +1435,30 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                         ax.chat_commands = commands;
                     }
                     AgentEvent::ContentDelta { text } => {
-                        // Kind switch away from reasoning — commit thoughts first.
-                        flush_pending_reasoning(&mut ax.session);
-                        ax.session.pending_text.push_str(&text);
+                        let kind_switch =
+                            interaction::apply_answer_content_delta(&mut ax.session, &text);
                         ax.needs_flush = true;
+                        ax.chat_ui_dirty = true;
+                        if interaction::should_materialize_chat_ui(
+                            &AgentEvent::ContentDelta { text: String::new() },
+                            streaming_before,
+                            kind_switch,
+                        ) {
+                            force_materialize = true;
+                        }
                     }
                     AgentEvent::ReasoningDelta { text } => {
-                        // Kind switch away from answer — commit prose first.
-                        flush_pending_text(&mut ax.session);
-                        ax.session.pending_reasoning.push_str(&text);
+                        let kind_switch =
+                            interaction::apply_reasoning_content_delta(&mut ax.session, &text);
                         ax.needs_flush = true;
+                        ax.chat_ui_dirty = true;
+                        if interaction::should_materialize_chat_ui(
+                            &AgentEvent::ReasoningDelta { text: String::new() },
+                            streaming_before,
+                            kind_switch,
+                        ) {
+                            force_materialize = true;
+                        }
                     }
                     AgentEvent::ToolUse { id, name, input } => {
                         // Attribute a change folder to this session at the
@@ -1452,7 +1471,7 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                         {
                             staged_binding = Some((slug, ax.session.scope.clone()));
                         }
-                        flush_all_pending(&mut ax.session);
+                        interaction::flush_all_pending(&mut ax.session);
                         ax.session.messages.push(chat_store::ChatMessage {
                             role: chat_store::Role::Assistant,
                             content: vec![chat_store::ContentBlock::ToolUse { id, name, input }],
@@ -1460,6 +1479,8 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                             is_priming: false,
                         });
                         ax.needs_flush = true;
+                        ax.chat_ui_dirty = true;
+                        force_materialize = true;
                     }
                     AgentEvent::ToolResult { id, name, output } => {
                         ax.session.messages.push(chat_store::ChatMessage {
@@ -1473,10 +1494,14 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                             is_priming: false,
                         });
                         ax.needs_flush = true;
+                        ax.chat_ui_dirty = true;
+                        force_materialize = true;
                     }
                     AgentEvent::TurnComplete => {
-                        flush_all_pending(&mut ax.session);
+                        interaction::flush_all_pending(&mut ax.session);
                         ax.session.is_streaming = false;
+                        ax.chat_ui_dirty = true;
+                        force_materialize = true;
                         // Detect the AGENTS.md priming turn and stage the
                         // user's actual first message for dispatch in the
                         // post-match block (where we can borrow `highlighter`
@@ -1584,6 +1609,8 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                                 timestamp: String::new(),
                                 is_priming: false,
                             });
+                            ax.chat_ui_dirty = true;
+                            force_materialize = true;
                         }
                     }
                     AgentEvent::SessionNotFound => {
@@ -1628,6 +1655,8 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                         // Belt: do not leave reply-suggestion chrome on loading
                         // when the worker is gone with no DefaultPromptsReady.
                         ax.clear_agent_default_prompts();
+                        // Paint any deferred stream tail and drop streaming chrome.
+                        force_materialize = true;
                     }
                 }
             }
@@ -1644,10 +1673,15 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
             if let Some(ax) = ax {
                 if recover_lost_session {
                     interaction::recover_from_lost_session(ax, highlighter);
+                    force_materialize = true;
                 }
                 let is_streaming = ax.session.is_streaming;
-                interaction::rebuild_chat_editor(ax, highlighter);
-                should_snap_to_bottom = ax.stick_to_bottom;
+                // Materialize immediately on structural events / kind switches /
+                // recovery; pure content while streaming waits for StreamTick.
+                if force_materialize || (ax.chat_ui_dirty && !is_streaming) {
+                    interaction::materialize_chat_ui(ax, highlighter);
+                    should_snap_to_bottom = ax.stick_to_bottom;
+                }
                 if !is_streaming {
                     ax.esc_count = 0;
                     // An abrupt turn end (Error / ProcessExited) leaves
@@ -1823,6 +1857,37 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
         }
         Message::StreamTick => {
             widget::streaming_indicator::bump_tick();
+            // Drain deferred pure-content materialize only while the user is
+            // following the live answer (stick-to-bottom). Scrolled-up readers
+            // keep session text accumulating without 10 Hz column rebuilds.
+            let mut should_snap = false;
+            {
+                let State {
+                    interactions,
+                    highlighter,
+                    ..
+                } = state;
+                for ix in interactions.values_mut() {
+                    let active = ix.active_session;
+                    for (i, ax) in ix.sessions.iter_mut().enumerate() {
+                        if interaction::should_materialize_on_stream_tick(
+                            ax.session.is_streaming,
+                            ax.chat_ui_dirty,
+                            ax.stick_to_bottom,
+                        ) {
+                            interaction::materialize_chat_ui(ax, highlighter);
+                            if i == active {
+                                should_snap = true;
+                            }
+                        }
+                    }
+                }
+            }
+            if should_snap {
+                return iced::widget::operation::snap_to_end(
+                    widget::agent_chat::CHAT_SCROLLABLE_ID,
+                );
+            }
         }
         Message::TerminalAutoscrollTick => {
             for ix in state.interactions.values_mut() {
@@ -4810,35 +4875,6 @@ pub fn open_artifact_tab(
 }
 
 // ── Agent helpers ───────────────────────────────────────────────────────────
-
-fn flush_pending_reasoning(session: &mut chat_store::ChatSession) {
-    if !session.pending_reasoning.is_empty() {
-        let text = std::mem::take(&mut session.pending_reasoning);
-        session.messages.push(chat_store::ChatMessage {
-            role: chat_store::Role::Assistant,
-            content: vec![chat_store::ContentBlock::Reasoning(text)],
-            timestamp: String::new(),
-            is_priming: false,
-        });
-    }
-}
-
-fn flush_pending_text(session: &mut chat_store::ChatSession) {
-    if !session.pending_text.is_empty() {
-        let text = std::mem::take(&mut session.pending_text);
-        session.messages.push(chat_store::ChatMessage {
-            role: chat_store::Role::Assistant,
-            content: vec![chat_store::ContentBlock::Text(text)],
-            timestamp: String::new(),
-            is_priming: false,
-        });
-    }
-}
-
-fn flush_all_pending(session: &mut chat_store::ChatSession) {
-    flush_pending_reasoning(session);
-    flush_pending_text(session);
-}
 
 /// Apply a title-summary result to the session identified by `key`, and —
 /// if the session belongs to an exploration scope — also update the

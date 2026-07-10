@@ -105,8 +105,9 @@ struct InternalState {
     follow_after_key: bool,
     /// Cached hybrid layout for the `md_tables` path. Shared by layout,
     /// update, and draw via `RefCell` so draw can fill on a cold miss without
-    /// a mutable tree. Invalidated when `HybridLayoutKey` changes.
-    hybrid_layout: RefCell<Option<(HybridLayoutKey, EditorLayout)>>,
+    /// a mutable tree. Invalidated when `HybridLayoutKey` changes. Stored as
+    /// `Arc` so cache hits share geometry without deep-cloning the table tree.
+    hybrid_layout: RefCell<Option<(HybridLayoutKey, Arc<EditorLayout>)>>,
 }
 
 /// A URL or file-path reference found at a click/hover position in the
@@ -471,23 +472,24 @@ impl EditorLayout {
 
 /// Get-or-compute hybrid layout, cached on `InternalState` until pane width,
 /// wrap flag, or lines identity/version changes. Used by layout, update, and
-/// draw so a frame only runs `layout_tables` once for matching keys.
+/// draw so a frame only runs `layout_tables` once for matching keys. Cache hits
+/// return a cheap `Arc` clone (shared geometry, no deep table-tree copy).
 fn cached_hybrid_layout(
     internal: &InternalState,
     lines: &Arc<Vec<String>>,
     highlight_version: u64,
     pane_chars: usize,
     word_wrap: bool,
-) -> EditorLayout {
+) -> Arc<EditorLayout> {
     let key = HybridLayoutKey::new(lines, highlight_version, pane_chars, word_wrap);
     let mut cache = internal.hybrid_layout.borrow_mut();
     if let Some((k, ed)) = cache.as_ref()
         && *k == key
     {
-        return ed.clone();
+        return Arc::clone(ed);
     }
-    let ed = EditorLayout::compute(lines, pane_chars, word_wrap);
-    *cache = Some((key, ed.clone()));
+    let ed = Arc::new(EditorLayout::compute(lines, pane_chars, word_wrap));
+    *cache = Some((key, Arc::clone(&ed)));
     ed
 }
 
@@ -1021,7 +1023,7 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for TextEdit<'a, M> {
                 bounds.height,
                 content_height,
                 wrap.as_ref(),
-                hybrid.as_ref(),
+                hybrid.as_deref(),
             ) {
                 shell.publish((self.on_action)(EditorAction::Scroll {
                     dy: target - self.state.scroll_y,
@@ -1055,7 +1057,7 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for TextEdit<'a, M> {
                             internal,
                             self.state,
                             wrap.as_ref(),
-                            hybrid.as_ref(),
+                            hybrid.as_deref(),
                             scroll_y,
                             &hover,
                         )
@@ -1078,7 +1080,7 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for TextEdit<'a, M> {
                         internal,
                         self.state,
                         wrap.as_ref(),
-                        hybrid.as_ref(),
+                        hybrid.as_deref(),
                         scroll_y,
                     );
 
@@ -1104,7 +1106,7 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for TextEdit<'a, M> {
                         *viewport,
                         internal,
                         wrap.as_ref(),
-                        hybrid.as_ref(),
+                        hybrid.as_deref(),
                         shell,
                     );
                 } else {
@@ -1119,7 +1121,7 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for TextEdit<'a, M> {
                             internal,
                             self.state,
                             wrap.as_ref(),
-                            hybrid.as_ref(),
+                            hybrid.as_deref(),
                             scroll_y,
                         );
                         detect_link_at(self.state, click_pos)
@@ -1156,7 +1158,7 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for TextEdit<'a, M> {
                         mouse::ScrollDelta::Pixels { x, y } => (-*y, -*x),
                     };
                     let content_w_px =
-                        content_width_px(self.word_wrap, hybrid.as_ref(), self.state, cell_w);
+                        content_width_px(self.word_wrap, hybrid.as_deref(), self.state, cell_w);
                     let viewport_w = bounds.width - internal.gutter_width;
                     shell.publish((self.on_action)(EditorAction::Scroll {
                         dy,
@@ -1330,7 +1332,7 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for TextEdit<'a, M> {
                             *viewport,
                             internal,
                             wrap.as_ref(),
-                            hybrid.as_ref(),
+                            hybrid.as_deref(),
                             shell,
                         );
                     }
@@ -1563,7 +1565,7 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for TextEdit<'a, M> {
 
                 // Table band: row bg → match highlights → selection → cell
                 // text → rules → link underline (no `|`).
-                if let (Some(ref ed), Some((region_i, row_i))) = (hybrid.as_ref(), table_paint) {
+                if let (Some(ref ed), Some((region_i, row_i))) = (hybrid.as_deref(), table_paint) {
                     if let Some(region) = ed.tables.regions.get(region_i)
                         && let Some(trow) = region.rows.get(row_i)
                     {
@@ -3082,16 +3084,19 @@ mod hybrid_layout_tests {
         let b = cached_hybrid_layout(&internal, &src, 0, 80, true);
         assert_eq!(a.total_visual_rows, b.total_visual_rows);
         assert_eq!(a.tables.regions.len(), 1);
-        // Same key → single entry in the cache cell.
+        // Same key → shared Arc, single entry in the cache cell.
+        assert!(Arc::ptr_eq(&a, &b));
         assert!(internal.hybrid_layout.borrow().is_some());
 
         // Pane change invalidates.
         let narrow = cached_hybrid_layout(&internal, &src, 0, 20, true);
         assert_eq!(narrow.pane_chars, 20);
+        assert!(!Arc::ptr_eq(&a, &narrow));
 
-        // Version bump invalidates even with the same Arc ptr.
+        // Version bump invalidates even with the same lines Arc ptr.
         let bumped = cached_hybrid_layout(&internal, &src, 1, 20, true);
         assert_eq!(bumped.total_visual_rows, narrow.total_visual_rows);
+        assert!(!Arc::ptr_eq(&narrow, &bumped));
 
         // Direct compute still matches cached results.
         let direct = EditorLayout::compute(&src, 80, true);
@@ -3101,5 +3106,53 @@ mod hybrid_layout_tests {
             via_cache.content_width_chars,
             direct.content_width_chars
         );
+    }
+
+    // @spec chat/stream-ui Hybrid layout reuse: Second hybrid layout request with the same key does not recompute tables
+    #[test]
+    fn same_key_does_not_recompute_tables() {
+        let src = Arc::new(lines(&[
+            "| Col1 | Col2 | Col3 |",
+            "| ---- | ---- | ---- |",
+            "| a    | b    | c    |",
+            "| d    | e    | f    |",
+        ]));
+        let internal = InternalState::default();
+        let first = cached_hybrid_layout(&internal, &src, 0, 80, true);
+        assert_eq!(first.tables.regions.len(), 1);
+        let first_ptr = Arc::as_ptr(&first);
+
+        // Same key again: must return the same cached Arc (no second compute).
+        let second = cached_hybrid_layout(&internal, &src, 0, 80, true);
+        assert!(
+            Arc::ptr_eq(&first, &second),
+            "same key must reuse cached layout without recomputing"
+        );
+        assert_eq!(Arc::as_ptr(&second), first_ptr);
+        assert_eq!(second.tables.regions[0].rows.len(), first.tables.regions[0].rows.len());
+    }
+
+    // @spec chat/stream-ui Hybrid layout reuse: Cache hit shares layout geometry without deep-cloning the tree
+    #[test]
+    fn cache_hit_shares_layout_without_deep_clone() {
+        let src = Arc::new(lines(&[
+            "| Name | Value |",
+            "| ---- | ----- |",
+            "| alpha | beta |",
+            "| gamma | delta |",
+        ]));
+        let internal = InternalState::default();
+        let a = cached_hybrid_layout(&internal, &src, 0, 60, true);
+        let b = cached_hybrid_layout(&internal, &src, 0, 60, true);
+
+        // Shared Arc: consumers read the same allocation (no deep tree clone).
+        assert!(Arc::ptr_eq(&a, &b));
+        assert_eq!(Arc::strong_count(&a), 3); // a, b, and the cache entry
+
+        // Geometry is readable through either handle.
+        assert_eq!(a.total_visual_rows, b.total_visual_rows);
+        assert_eq!(a.content_width_chars, b.content_width_chars);
+        assert_eq!(a.tables.regions.len(), b.tables.regions.len());
+        assert!(!a.tables.regions.is_empty());
     }
 }

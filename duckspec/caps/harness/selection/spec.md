@@ -45,7 +45,7 @@ SHALL yield grok-4.5.
 - **THEN** the resolved model is grok-4.5 on the grok harness
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:648
+> - crates/duckboard/src/area/interaction.rs:654
 
 ### Scenario: A per-chat pin overrides a project default
 
@@ -54,7 +54,7 @@ SHALL yield grok-4.5.
 - **THEN** the resolved model is the per-chat pin
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:659
+> - crates/duckboard/src/area/interaction.rs:665
 
 ## Requirement: Harness dispatch
 
