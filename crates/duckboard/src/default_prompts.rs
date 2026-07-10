@@ -47,9 +47,7 @@ pub fn effective_prompts(
         return Vec::new();
     }
     if session_empty {
-        return crate::obvious_bubble::bubble_send_text(first_lifecycle)
-            .into_iter()
-            .collect();
+        return heuristic_as_prompts(first_lifecycle);
     }
     if !agent_input_hints {
         return Vec::new();

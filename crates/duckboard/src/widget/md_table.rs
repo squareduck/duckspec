@@ -129,7 +129,6 @@ pub fn source_to_visual(layout: &TableLayout, pos: Pos) -> Option<TableVisualPos
             .iter()
             .enumerate()
             .find(|(_, f)| char_in_cell >= f.char_start && char_in_cell < f.char_end)
-            .map(|(i, f)| (i, f))
             .or_else(|| {
                 // Caret at fragment end / past last → last fragment whose end
                 // matches, else the final fragment.
@@ -138,7 +137,6 @@ pub fn source_to_visual(layout: &TableLayout, pos: Pos) -> Option<TableVisualPos
                     .enumerate()
                     .rev()
                     .find(|(_, f)| char_in_cell == f.char_end)
-                    .map(|(i, f)| (i, f))
                     .or_else(|| {
                         cell.fragments
                             .last()

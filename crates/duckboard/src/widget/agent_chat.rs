@@ -1733,14 +1733,14 @@ fn view_obvious_chrome<'a>(
         col = col.push(view_obvious_chip(label, action.clone(), tone));
     }
 
-    if dual {
-        if let Some(action) = chrome.lifecycle.first() {
-            col = col.push(view_obvious_chip(
-                lifecycle_enter_chip_label(action),
-                action.clone(),
-                ObviousChipTone::Enter,
-            ));
-        }
+    if dual
+        && let Some(action) = chrome.lifecycle.first()
+    {
+        col = col.push(view_obvious_chip(
+            lifecycle_enter_chip_label(action),
+            action.clone(),
+            ObviousChipTone::Enter,
+        ));
     }
 
     match (chrome.affirm, chrome.decline) {

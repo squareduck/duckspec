@@ -456,18 +456,18 @@ mod tests {
         ) -> Result<TurnOutcome, Error> {
             self.turn_count += 1;
             // First turn may hang until cancelled (for cancel/re-warm tests).
-            if self.turn_count == 1 {
-                if let Some(hang) = &self.hang_first_turn {
-                    hang.notify_one();
-                    loop {
-                        if cancel.is_cancelled() {
-                            self.hot = false;
-                            self.log.main_cancelled_turns.fetch_add(1, Ordering::SeqCst);
-                            self.hang_released.store(true, Ordering::SeqCst);
-                            return Err(Error::Cancelled);
-                        }
-                        tokio::time::sleep(Duration::from_millis(5)).await;
+            if self.turn_count == 1
+                && let Some(hang) = &self.hang_first_turn
+            {
+                hang.notify_one();
+                loop {
+                    if cancel.is_cancelled() {
+                        self.hot = false;
+                        self.log.main_cancelled_turns.fetch_add(1, Ordering::SeqCst);
+                        self.hang_released.store(true, Ordering::SeqCst);
+                        return Err(Error::Cancelled);
                     }
+                    tokio::time::sleep(Duration::from_millis(5)).await;
                 }
             }
             if cancel.is_cancelled() {

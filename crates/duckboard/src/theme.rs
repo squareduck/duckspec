@@ -655,16 +655,14 @@ pub fn chat_obvious_chip_reject(_theme: &Theme) -> container::Style {
 /// Mix ~8% of `tint` into the muted chrome base (fill + faint border lean).
 fn tint_obvious_chip(_theme: &Theme, tint: Color) -> container::Style {
     let mut style = chat_obvious_chip_neutral(_theme);
-    if let Some(bg) = style.background.as_mut() {
-        if let iced::Background::Color(c) = bg {
-            // ~8% tint into the muted base — hint, not a painted button.
-            *c = Color {
-                r: c.r * 0.92 + tint.r * 0.08,
-                g: c.g * 0.92 + tint.g * 0.08,
-                b: c.b * 0.92 + tint.b * 0.08,
-                a: c.a,
-            };
-        }
+    if let Some(iced::Background::Color(c)) = style.background.as_mut() {
+        // ~8% tint into the muted base — hint, not a painted button.
+        *c = Color {
+            r: c.r * 0.92 + tint.r * 0.08,
+            g: c.g * 0.92 + tint.g * 0.08,
+            b: c.b * 0.92 + tint.b * 0.08,
+            a: c.a,
+        };
     }
     let mut border = tint;
     border.a *= 0.18;

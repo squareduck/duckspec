@@ -463,6 +463,7 @@ pub enum Message {
 
 // ── Update ───────────────────────────────────────────────────────────────────
 
+#[allow(clippy::too_many_arguments)] // area update: state + tabs + interaction + project + flags
 pub fn update(
     state: &mut State,
     tabs: &mut tab_bar::TabState,

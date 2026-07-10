@@ -52,9 +52,7 @@ pub enum SaveAction {
 /// `cmd+n` today. Content focus opens the new-file modal in every area;
 /// otherwise area-scoped behavior takes over.
 pub fn keybind_new(state: &State) -> Option<NewAction> {
-    if state.project.project_root.is_none() {
-        return None;
-    }
+    state.project.project_root.as_ref()?;
     if state.focused_column == Some(FocusedColumn::Content) {
         return Some(NewAction::OpenNewFile);
     }

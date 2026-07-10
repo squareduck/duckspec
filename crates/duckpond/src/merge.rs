@@ -34,7 +34,7 @@ pub enum MergeValidateError {
 pub fn summarize_errors<E: std::fmt::Display>(errors: &[E]) -> String {
     match errors.split_first() {
         None => String::new(),
-        Some((first, rest)) if rest.is_empty() => first.to_string(),
+        Some((first, [])) => first.to_string(),
         Some((first, rest)) => format!("{first} (and {} more)", rest.len()),
     }
 }

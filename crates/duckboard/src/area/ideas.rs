@@ -182,6 +182,7 @@ pub enum Message {
 
 // ── Update ───────────────────────────────────────────────────────────────────
 
+#[allow(clippy::too_many_arguments)] // area update: state + tabs + interaction + project + flags
 pub fn update(
     state: &mut State,
     tabs: &mut tab_bar::TabState,
@@ -429,6 +430,7 @@ fn current_body(tabs: &tab_bar::TabState, path: &Path) -> String {
     idea_store::read_body(path).unwrap_or_default()
 }
 
+#[allow(clippy::too_many_arguments)] // mirrors area update signature for interaction routing
 fn handle_interaction(
     state: &mut State,
     _tabs: &mut tab_bar::TabState,
@@ -1132,8 +1134,10 @@ mod tests {
         let old_path = PathBuf::from("/ideas/change/my-idea.md");
         let new_path = PathBuf::from("/ideas/archive/my-idea.md");
 
-        let mut state = State::default();
-        state.selected = Some(old_path.clone());
+        let mut state = State {
+            selected: Some(old_path.clone()),
+            ..State::default()
+        };
         let mut tabs = tab_bar::TabState::default();
 
         refresh_after_move(&mut state, &mut tabs, &old_path, &new_path, "My idea");
@@ -1147,8 +1151,10 @@ mod tests {
         let old_path = PathBuf::from("/ideas/change/my-idea.md");
         let new_path = PathBuf::from("/ideas/archive/my-idea.md");
 
-        let mut state = State::default();
-        state.selected = Some(old_path.clone());
+        let mut state = State {
+            selected: Some(old_path.clone()),
+            ..State::default()
+        };
         let mut tabs = tab_bar::TabState::default();
         tabs.open_preview(
             pinned_tab_id(&old_path),

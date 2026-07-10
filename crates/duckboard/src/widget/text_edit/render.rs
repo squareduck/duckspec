@@ -692,9 +692,7 @@ impl<'a, M> TextEdit<'a, M> {
         wrap: Option<&WrapLayout>,
         hybrid: Option<&EditorLayout>,
     ) -> Option<f32> {
-        if self.max_rows.is_none() {
-            return None;
-        }
+        self.max_rows?;
         let max_scroll = (content_height - viewport_height).max(0.0);
         if max_scroll <= 0.0 {
             return None;
@@ -721,6 +719,7 @@ impl<'a, M> TextEdit<'a, M> {
         ((target - cur).abs() > 0.5).then_some(target)
     }
 
+    #[allow(clippy::too_many_arguments)] // drag needs geometry + both layout modes + shell
     fn drag_frame(
         &self,
         pos: Point,
@@ -1565,7 +1564,7 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for TextEdit<'a, M> {
 
                 // Table band: row bg → match highlights → selection → cell
                 // text → rules → link underline (no `|`).
-                if let (Some(ref ed), Some((region_i, row_i))) = (hybrid.as_deref(), table_paint) {
+                if let (Some(ed), Some((region_i, row_i))) = (hybrid.as_deref(), table_paint) {
                     if let Some(region) = ed.tables.regions.get(region_i)
                         && let Some(trow) = region.rows.get(row_i)
                     {
@@ -2182,9 +2181,7 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for TextEdit<'a, M> {
                 // Horizontal scrollbar when content is wider than the pane
                 // (unwrapped lines, or hybrid tables that overflow at MIN_COL).
                 let h_scroll_chars = if let Some(ref ed) = hybrid {
-                    if ed.content_width_chars > ed.pane_chars {
-                        ed.content_width_chars
-                    } else if !self.word_wrap {
+                    if ed.content_width_chars > ed.pane_chars || !self.word_wrap {
                         ed.content_width_chars
                     } else {
                         0
@@ -2348,6 +2345,7 @@ fn table_byte_range_spans(
 
 /// Paint selection as quads clipped to the cell fragment(s) on this visual
 /// sub-row that intersect the source selection.
+#[allow(clippy::too_many_arguments)] // table paint: geometry + selection range + metrics
 fn paint_table_selection(
     renderer: &mut iced::Renderer,
     trow: &md_table::TableRow,
@@ -2403,6 +2401,7 @@ fn paint_table_selection(
 /// Paint find/search match quads clipped to cell fragments on this visual
 /// sub-row. Mirrors the prose path: muted bg for every match, stronger accent
 /// fill (+ optional border) for the current candidate.
+#[allow(clippy::too_many_arguments)] // table paint: geometry + highlight ranges + metrics
 fn paint_table_highlights(
     renderer: &mut iced::Renderer,
     trow: &md_table::TableRow,
@@ -2467,6 +2466,7 @@ fn paint_table_highlights(
 
 /// Draw cmd-hover link underline under fragment slices that overlap the
 /// hovered link's char range on this visual row.
+#[allow(clippy::too_many_arguments)] // table paint: geometry + hover + metrics
 fn paint_table_link_underline(
     renderer: &mut iced::Renderer,
     trow: &md_table::TableRow,
@@ -2526,6 +2526,7 @@ fn paint_table_link_underline(
 
 /// Draw vertical column rules and a horizontal bottom edge for the current
 /// visual band of a table row.
+#[allow(clippy::too_many_arguments)] // table paint: region + row band + metrics
 fn paint_table_rules(
     renderer: &mut iced::Renderer,
     region: &md_table::TableRegion,
@@ -2769,6 +2770,7 @@ fn detect_link_at(state: &EditorState, pos: Pos) -> Option<LinkHover> {
 }
 
 /// True when canvas-local `point` falls within the cells underlined for `hover`.
+#[allow(clippy::too_many_arguments)] // hit-test needs full layout context + hover
 fn pos_in_hover(
     point: Point,
     bounds: Rectangle,

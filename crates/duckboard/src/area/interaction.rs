@@ -16,7 +16,7 @@ use crate::scope::ScopeKind;
 use crate::theme;
 use crate::widget::{
     agent_chat, collapsible, interaction_toggle, list_view,
-    text_edit::{self, Block, BlockKind, EditorState, Pos},
+    text_edit::{self, Block, EditorState, Pos},
 };
 
 /// Appended to the system prompt on a session's first turn so the model's
@@ -647,6 +647,7 @@ impl InteractionState {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::widget::text_edit::BlockKind;
 
     /// Build the scope orientation blurb the way `send_prompt_text` does, so
     /// the priming-body tests assert against the real hook output.
@@ -2514,6 +2515,7 @@ pub fn should_materialize_chat_ui(
 }
 
 /// True for events that always reshape or close the live transcript UI.
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn is_structural_chat_event(evt: &crate::agent::AgentEvent) -> bool {
     should_materialize_chat_ui(evt, true, false)
 }
@@ -2607,49 +2609,47 @@ pub fn handle_agent_chat_key(
 
     // Obvious chrome hotkeys — only when chrome is visible (idle + empty input).
     // Plain Enter stays on empty-submit (list only) via TextEdit `on_submit`.
-    {
+    if mods.command() && !mods.shift() && !mods.alt() {
         let input_empty = ax.chat_input.text().trim().is_empty();
-        let chrome_vis = crate::obvious_bubble::chrome_visible(
-            ax.session.is_streaming,
-            input_empty,
-            &ax.obvious_chrome,
-            auto_messages,
-        );
-        if chrome_vis && mods.command() && !mods.shift() && !mods.alt() {
-            // ⌘↩ → affirm or lifecycle[0]
-            if *key == keyboard::Key::Named(Named::Enter) {
-                if let Some(text) =
-                    crate::obvious_bubble::resolve_cmd_enter(&ax.obvious_chrome)
-                {
+        // ⌘↩ → affirm or lifecycle[0]
+        if *key == keyboard::Key::Named(Named::Enter)
+            && let Some(text) = crate::obvious_bubble::resolve_cmd_enter_when_visible(
+                ax.session.is_streaming,
+                input_empty,
+                &ax.obvious_chrome,
+                auto_messages,
+            )
+        {
+            return AgentChatKeyResult::Dispatch(agent_chat::Msg::SendObviousAction(text));
+        }
+        // ⌘⌫ → Reject when decline set
+        if *key == keyboard::Key::Named(Named::Backspace)
+            && let Some(text) = crate::obvious_bubble::resolve_cmd_backspace_when_visible(
+                ax.session.is_streaming,
+                input_empty,
+                &ax.obvious_chrome,
+                auto_messages,
+            )
+        {
+            return AgentChatKeyResult::Dispatch(agent_chat::Msg::SendObviousAction(text));
+        }
+        // ⌘1…⌘9 → lifecycle[n]
+        if let keyboard::Key::Character(c) = key
+            && c.len() == 1
+        {
+            let ch = c.chars().next().unwrap_or('\0');
+            if ch.is_ascii_digit() && ch != '0' {
+                let digit = ch.to_digit(10).unwrap_or(0) as u8;
+                if let Some(text) = crate::obvious_bubble::resolve_cmd_digit_when_visible(
+                    ax.session.is_streaming,
+                    input_empty,
+                    &ax.obvious_chrome,
+                    auto_messages,
+                    digit,
+                ) {
                     return AgentChatKeyResult::Dispatch(agent_chat::Msg::SendObviousAction(
                         text,
                     ));
-                }
-            }
-            // ⌘⌫ → Reject when decline set
-            if *key == keyboard::Key::Named(Named::Backspace) {
-                if let Some(text) =
-                    crate::obvious_bubble::resolve_cmd_backspace(&ax.obvious_chrome)
-                {
-                    return AgentChatKeyResult::Dispatch(agent_chat::Msg::SendObviousAction(
-                        text,
-                    ));
-                }
-            }
-            // ⌘1…⌘9 → lifecycle[n]
-            if let keyboard::Key::Character(c) = key {
-                if c.len() == 1 {
-                    let ch = c.chars().next().unwrap_or('\0');
-                    if ch.is_ascii_digit() && ch != '0' {
-                        let digit = ch.to_digit(10).unwrap_or(0) as u8;
-                        if let Some(text) =
-                            crate::obvious_bubble::resolve_cmd_digit(&ax.obvious_chrome, digit)
-                        {
-                            return AgentChatKeyResult::Dispatch(
-                                agent_chat::Msg::SendObviousAction(text),
-                            );
-                        }
-                    }
                 }
             }
         }
@@ -2727,6 +2727,7 @@ fn completion_accept(ax: &mut AgentSession, highlighter: &SyntaxHighlighter) {
 /// agent sessions exist while the chat tab is showing, and keep the
 /// `terminal_focused` latch in sync with the active tab + visibility.
 /// Suitable for the common `other =>` arm shared by Caps, Codex, and Change.
+#[allow(clippy::too_many_arguments)] // side-effect layer needs scope identity + project root + flags
 pub fn update_with_side_effects(
     state: &mut InteractionState,
     msg: Msg,
