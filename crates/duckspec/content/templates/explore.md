@@ -48,14 +48,21 @@ Do not create a second change when an existing one already covers the topic.
 Follow `style`. Exploration is freeform with diagrams and tables when useful.
 Gate and handoff use meta cards as in Write gate and Handoff.
 
+Never soft-propose a write in prose ("we can open a change named…", "if you
+want this tracked…"). When you are ready to create a change or update
+`project.md`, emit the full write gate (trailing `next` meta card required).
+Disagreement is freeform chat - do not offer `reject` tokens.
+
 ## Write gate
 
-**Optional writes** - only when the conversation reaches them:
+**Optional writes** - only when the conversation reaches them. When it does,
+the gate is mandatory chrome, not a verbal offer.
 
 ### Create change
 
-When new work does not fit an existing change, confirm then create an **empty**
-folder (no proposal/spec inside):
+When new work does not fit an existing change and is ready to track, present
+the write gate, wait for `confirm`, then create an **empty** folder (no
+proposal/spec inside):
 
 ```markdown
 > **write**
@@ -69,7 +76,6 @@ folder (no proposal/spec inside):
 > **next**
 >
 > `confirm`  create change
-> `reject`
 ```
 
 After confirmation: `ds create change <name>`.
@@ -90,16 +96,18 @@ When durable constitution-level facts emerge (new or live project):
 > **next**
 >
 > `confirm`  write project.md
-> `reject`
 ```
 
 After confirmation: write/format/check `project.md`.
 
 ## Handoff
 
-**Do not push.** Clarity alone is a fine ending. When concrete next work is
-clear, emit a `next` meta card (≤3 lines, short UI labels, rank order). Include
-only lines that apply:
+**Do not push.** Clarity alone is a fine ending. While still exploring with
+nothing to write, omit the `next` meta card.
+
+When concrete next work is clear **and no write gate is open**, emit a `next`
+meta card (≤3 lines, short UI labels, rank order). Include only lines that
+apply:
 
 - After an empty change was just created: `/ds-propose` - draft proposal
 - Change already exists: `/ds-propose` - draft proposal (or the stage it is
@@ -108,7 +116,6 @@ only lines that apply:
 - Durable cross-cutting knowledge only: `/ds-codex` - capture codex entry
 
 Creating a change uses the Write gate (`confirm` create change), not a handoff
-slash command. Omit the `next` meta card while still exploring. Do not
-auto-start stages.
+slash command and not freeform "shall we create…". Do not auto-start stages.
 
 ## After write
