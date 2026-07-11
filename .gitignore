@@ -1,3 +1,5 @@
 /target
 /dist
 .DS_Store
+# Local convenience shim for the Just task runner.
+Makefile

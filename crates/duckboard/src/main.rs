@@ -385,6 +385,12 @@ enum Message {
         key: String,
         result: Result<String, String>,
     },
+    // User-requested title refresh — same oneshot path as SessionTitleReady
+    // but force-overwrites an existing session title / exploration label.
+    SessionTitleRefreshReady {
+        key: String,
+        result: Result<String, String>,
+    },
     // Result of the reply-suggestion oneshot after a turn. `prompts_gen` must
     // match the session's `default_prompts_gen` or the result is dropped.
     DefaultPromptsReady {
@@ -1043,6 +1049,9 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                         Message::NewFile(widget::new_file::Msg::OpenAt(String::new())),
                     );
                 }
+                area::change::Message::RefreshExplorationTitle(exp_id) => {
+                    return start_exploration_title_refresh(state, &exp_id);
+                }
                 msg => {
                     let toggled_files = matches!(
                         &msg,
@@ -1051,6 +1060,17 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                     );
                     let needs_focus = matches!(msg, area::change::Message::AddExploration)
                         || is_chat_focus_msg(extract_change_interaction_msg(&msg));
+                    // Second click on a selected exploration opens rename.
+                    let focus_rename = matches!(
+                        &msg,
+                        area::change::Message::SelectChange(name)
+                            if state.change.selected_change.as_deref() == Some(name.as_str())
+                                && state
+                                    .change
+                                    .explorations
+                                    .iter()
+                                    .any(|e| e.id == *name)
+                    );
                     area::change::update(
                         &mut state.change,
                         &mut state.tabs,
@@ -1060,6 +1080,9 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                         &state.highlighter,
                         state.config.chat.agent_input_hints,
                         );
+                    if focus_rename && state.change.renaming_exploration.is_some() {
+                        return iced::widget::operation::focus(area::change::RENAME_INPUT_ID);
+                    }
                     if needs_focus {
                         return focus_chat_input();
                     }
@@ -1824,18 +1847,26 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
             return Task::batch(follow_tasks);
         }
         Message::SessionTitleReady { key, result } => {
-            let title = match result {
-                Ok(t) if !t.trim().is_empty() => t.trim().to_string(),
-                Ok(_) => {
-                    tracing::warn!(key, "title summariser returned empty string");
-                    return Task::none();
+            let Some(title) = chat_store::accept_title_summary_result(&result) else {
+                match &result {
+                    Ok(_) => tracing::warn!(key, "title summariser returned empty string"),
+                    Err(e) => tracing::warn!(key, "title summary failed: {e}"),
                 }
-                Err(e) => {
-                    tracing::warn!(key, "title summary failed: {e}");
-                    return Task::none();
-                }
+                return Task::none();
             };
+            // Auto first-turn titles use force=false; user refresh reuses this
+            // message with force via SessionTitleRefreshReady.
             apply_session_title(state, &key, &title);
+        }
+        Message::SessionTitleRefreshReady { key, result } => {
+            let Some(title) = chat_store::accept_title_summary_result(&result) else {
+                match &result {
+                    Ok(_) => tracing::warn!(key, "title refresh returned empty string"),
+                    Err(e) => tracing::warn!(key, "title refresh failed: {e}"),
+                }
+                return Task::none();
+            };
+            apply_session_title_inner(state, &key, &title, true);
         }
         Message::DefaultPromptsReady {
             key,
@@ -1929,6 +1960,16 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
             return iced::window::close(id);
         }
         Message::KeyPress(key, mods, text) => {
+            // Escape cancels an open exploration rename in the CHANGE list.
+            if matches!(&key, keyboard::Key::Named(keyboard::key::Named::Escape))
+                && state.change.renaming_exploration.is_some()
+            {
+                return update(
+                    state,
+                    Message::Change(area::change::Message::CancelRenameExploration),
+                );
+            }
+
             // Disarm any pending dirty-tab close on the next keypress.
             // Snapshot first so Cmd-W can still consult the previously
             // armed value within this same key handler. Any other key
@@ -2588,34 +2629,35 @@ fn take_pending_chat_snap(state: &mut State) -> Task<Message> {
 /// Drain `pending_priming_recollapse` flags into delayed
 /// [`Message::RecollapsePriming`] tasks so an expanded Setup block auto-hides
 /// after [`widget::agent_chat::PRIMING_RECOLLAPSE_SECS`].
+///
+/// Safe to call more than once per tick: sessions clear their flag on take.
+/// Must run on the `Message::Interaction` early-return path (via
+/// [`route_interaction`]) as well as the fall-through end of `update`.
 fn take_pending_priming_recollapse(state: &mut State) -> Task<Message> {
-    let mut tasks = Vec::new();
+    let mut jobs = Vec::new();
     for ix in state.interactions.values_mut() {
-        let ix_id = ix.instance_id;
-        for ax in &mut ix.sessions {
-            if let Some((idx, expand_gen)) = ax.pending_priming_recollapse.take() {
-                let key = format!("{ix_id}/{}", ax.session.id);
-                let delay = std::time::Duration::from_secs(
-                    widget::agent_chat::PRIMING_RECOLLAPSE_SECS,
-                );
-                tasks.push(Task::perform(
-                    async move {
-                        tokio::time::sleep(delay).await;
-                    },
-                    move |_| Message::RecollapsePriming {
-                        key,
-                        idx,
-                        expand_gen,
-                    },
-                ));
-            }
-        }
+        jobs.extend(ix.take_pending_priming_recollapses());
     }
-    if tasks.is_empty() {
-        Task::none()
-    } else {
-        Task::batch(tasks)
+    if jobs.is_empty() {
+        return Task::none();
     }
+    let delay = std::time::Duration::from_secs(widget::agent_chat::PRIMING_RECOLLAPSE_SECS);
+    let tasks: Vec<_> = jobs
+        .into_iter()
+        .map(|(key, idx, expand_gen)| {
+            Task::perform(
+                async move {
+                    tokio::time::sleep(delay).await;
+                },
+                move |_| Message::RecollapsePriming {
+                    key,
+                    idx,
+                    expand_gen,
+                },
+            )
+        })
+        .collect();
+    Task::batch(tasks)
 }
 
 /// True when any chat session has an accumulated edge auto-scroll delta from a
@@ -4579,6 +4621,10 @@ fn switch_area(state: &mut State, target: Area) {
 /// Route a top-level `Message::Interaction` to the active area's update fn.
 /// Single source of truth so chat/terminal events fall into the right
 /// per-area session-management semantics (multi-session for Change, etc).
+///
+/// Always drains pending priming re-collapse timers: the chat column wraps as
+/// `Message::Interaction` and early-returns here, so it never hits the
+/// fall-through drain at the end of `update`.
 fn route_interaction(state: &mut State, msg: interaction::Msg) -> Task<Message> {
     let needs_focus = is_chat_focus_msg(Some(&msg));
     match state.active_area {
@@ -4591,7 +4637,7 @@ fn route_interaction(state: &mut State, msg: interaction::Msg) -> Task<Message> 
                 &state.project,
                 &state.highlighter,
                 state.config.chat.agent_input_hints,
-                );
+            );
         }
         Area::Caps => {
             let ix = state.interactions.entry(scope::Scope::Caps).or_default();
@@ -4603,7 +4649,7 @@ fn route_interaction(state: &mut State, msg: interaction::Msg) -> Task<Message> 
                 &state.project,
                 &state.highlighter,
                 state.config.chat.agent_input_hints,
-                );
+            );
         }
         Area::Codex => {
             let ix = state.interactions.entry(scope::Scope::Codex).or_default();
@@ -4615,7 +4661,7 @@ fn route_interaction(state: &mut State, msg: interaction::Msg) -> Task<Message> 
                 &state.project,
                 &state.highlighter,
                 state.config.chat.agent_input_hints,
-                );
+            );
         }
         Area::Ideas => {
             area::ideas::update(
@@ -4626,15 +4672,16 @@ fn route_interaction(state: &mut State, msg: interaction::Msg) -> Task<Message> 
                 &state.project,
                 &state.highlighter,
                 state.config.chat.agent_input_hints,
-                );
+            );
         }
         Area::Dashboard | Area::Settings => {}
     }
-    if needs_focus {
+    let focus = if needs_focus {
         focus_chat_input()
     } else {
         Task::none()
-    }
+    };
+    Task::batch([focus, take_pending_priming_recollapse(state)])
 }
 
 /// Tag a set of line indices with `LineBgKind::Match` so they stand out
@@ -5017,6 +5064,71 @@ pub fn open_artifact_tab(
 /// exploration's display_name so the dashboard/list show the new title.
 /// Re-reconciles the owning interaction's session display names and persists.
 fn apply_session_title(state: &mut State, key: &str, title: &str) {
+    apply_session_title_inner(state, key, title, false);
+}
+
+/// User-requested title refresh for an exploration's active session. No-ops
+/// when streaming, when there is no summarizable content, or when the agent
+/// handle is not warm yet.
+fn start_exploration_title_refresh(state: &mut State, exp_id: &str) -> Task<Message> {
+    let scope = scope::Scope::Exploration(exp_id.to_string());
+    let Some(ix) = state.interactions.get(&scope) else {
+        return Task::none();
+    };
+    let Some(ax) = ix.active() else {
+        return Task::none();
+    };
+    if ax.session.is_streaming {
+        return Task::none();
+    }
+    let Some(target) = chat_store::title_refresh_target(&ax.session) else {
+        return Task::none();
+    };
+    let Some(handle) = ax.agent_handle.clone() else {
+        return Task::none();
+    };
+    let route_key = format!("{}/{}", ix.instance_id, ax.session.id);
+    let scope_key = exp_id.to_string();
+    let idea_description = ax.idea_description.clone();
+
+    let mut hints = Vec::new();
+    if let Some(src) = target.command_hint_source.as_deref()
+        && let Some(hint) = title_hints::build_hint(src, &scope_key, &state.project)
+    {
+        hints.push(hint);
+    }
+    let scope_input = scope::SessionScope {
+        kind: scope::ScopeKind::Exploration,
+        scope_key: scope_key.clone(),
+        change_facts: None,
+    };
+    {
+        use duckchat::ContextHook;
+        if let Some(out) = scope::CurrentScopeHook.compute(&scope_input) {
+            hints.push(out.text);
+        }
+    }
+    if let Some(idea_hint) = title_hints::build_idea_hint(idea_description.as_deref()) {
+        hints.push(idea_hint);
+    }
+    let mut req = duckchat::TitleRequest::new(target.message);
+    req.context_hints = hints;
+    let work = async move {
+        handle
+            .title_summary(req)
+            .await
+            .map_err(|e| e.to_string())
+    };
+    Task::perform(work, move |result| Message::SessionTitleRefreshReady {
+        key: route_key.clone(),
+        result,
+    })
+}
+
+/// Apply a title summary to a session. When `force` is true (user-requested
+/// refresh), overwrite an existing title; automatic first-turn titles still
+/// only set when unset.
+fn apply_session_title_inner(state: &mut State, key: &str, title: &str, force: bool) {
     let proj_root = state.project.project_root.clone();
 
     // Look up the session and mark it titled. Collect the info we need
@@ -5025,10 +5137,9 @@ fn apply_session_title(state: &mut State, key: &str, title: &str) {
         let Some(ax) = state.agent_session_mut(key) else {
             return;
         };
-        if ax.session.title.is_some() {
+        if !chat_store::apply_session_title_value(&mut ax.session, title, force) {
             return;
         }
-        ax.session.title = Some(title.to_string());
         if let Err(e) = chat_store::save_session(&ax.session, proj_root.as_deref()) {
             tracing::error!(key, "failed to save chat session after title: {e}");
         }

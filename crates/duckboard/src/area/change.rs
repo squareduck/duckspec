@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use iced::Element;
-use iced::widget::{Space, button, column, container, row, text};
+use iced::widget::{Space, button, column, container, row, svg, text, text_input};
 
 use crate::chat_store::Exploration;
 use crate::data::{ChangeData, ProjectData, StepCompletion, TreeNode};
@@ -27,6 +27,10 @@ const ICON_STEP_DONE: &[u8] = include_bytes!("../../assets/icon_step_done.svg");
 const ICON_STEP_PARTIAL: &[u8] = include_bytes!("../../assets/icon_step_partial.svg");
 const ICON_EXPLORE: &[u8] = include_bytes!("../../assets/icon_explore.svg");
 const ICON_IDEAS: &[u8] = include_bytes!("../../assets/icon_idea.svg");
+const ICON_REFRESH: &[u8] = include_bytes!("../../assets/icon_refresh.svg");
+
+/// `text_input::Id` for the inline exploration rename field.
+pub const RENAME_INPUT_ID: &str = "change-exploration-rename";
 
 /// Section key for the Files explorer in `expanded_sections`. Absent by
 /// default — the explorer starts collapsed with its header pinned to the
@@ -85,6 +89,10 @@ pub struct State {
     /// `reload_and_reconcile` to attribute the new folder to the session that
     /// created it. Not persisted; not cleaned up (changes are infrequent).
     pub pending_bindings: HashMap<String, String>,
+    /// Exploration id currently being renamed inline, if any.
+    pub renaming_exploration: Option<String>,
+    /// Draft text for the active rename input.
+    pub rename_draft: String,
 }
 
 impl State {
@@ -113,6 +121,8 @@ impl State {
             armed_remove_exploration: None,
             list_scroll: 0.0,
             pending_bindings: HashMap::new(),
+            renaming_exploration: None,
+            rename_draft: String::new(),
         }
     }
 
@@ -381,6 +391,18 @@ pub fn archive_change(
     crate::chat_store::rename_scope(old_name, archived_name, project_root);
 }
 
+fn refresh_button<'a>(on_press: Message) -> Element<'a, Message> {
+    let icon = svg(svg::Handle::from_memory(ICON_REFRESH))
+        .width(list_view::ICON_SIZE)
+        .height(list_view::ICON_SIZE)
+        .style(theme::svg_tint(theme::text_muted()));
+    button(icon)
+        .on_press(on_press)
+        .padding(0.0)
+        .style(theme::icon_button)
+        .into()
+}
+
 /// Rewrite tab IDs that reference a change being archived so breadcrumbs, the
 /// path header below the tab bar, and content lookups point to the new archive
 /// location. Handles artifact tabs (`changes/<old>/…`) and VCS diff tabs
@@ -459,6 +481,15 @@ pub enum Message {
     /// the project root. Intercepted by `main::update`.
     AddFile,
     ScrollList(f32),
+    /// Draft text for the active exploration rename input.
+    RenameDraft(String),
+    /// Commit the open exploration rename (Enter in the rename field).
+    CommitRenameExploration,
+    /// Abandon the open exploration rename without writing.
+    CancelRenameExploration,
+    /// Re-run the title summarizer for the exploration's active session.
+    /// Intercepted by `main::update` (needs AgentHandle + oneshot Task).
+    RefreshExplorationTitle(String),
 }
 
 // ── Update ───────────────────────────────────────────────────────────────────
@@ -475,9 +506,26 @@ pub fn update(
 ) {
     match message {
         Message::SelectChange(name) => {
+            // Second click on an already-selected exploration opens rename.
+            if state.selected_change.as_deref() == Some(name.as_str())
+                && state.explorations.iter().any(|e| e.id == name)
+            {
+                let draft = state
+                    .explorations
+                    .iter()
+                    .find(|e| e.id == name)
+                    .map(|e| e.display_name.clone())
+                    .unwrap_or_default();
+                state.renaming_exploration = Some(name);
+                state.rename_draft = draft;
+                return;
+            }
+
             state.selected_change = Some(name.clone());
             state.expanded_nodes.clear();
             state.armed_remove_exploration = None;
+            state.renaming_exploration = None;
+            state.rename_draft.clear();
 
             let is_exploration = state.explorations.iter().any(|e| e.id == name);
             if !is_exploration
@@ -612,6 +660,44 @@ pub fn update(
             // Intercepted by `main::update` so the async diff-highlight
             // `Task` can be propagated to the runtime.
         }
+        Message::RenameDraft(text) => {
+            state.rename_draft = text;
+        }
+        Message::CommitRenameExploration => {
+            let Some(id) = state.renaming_exploration.take() else {
+                return;
+            };
+            let draft = std::mem::take(&mut state.rename_draft);
+            let root = project.project_root.as_deref();
+            let changed = if let Some(exp) = state.explorations.iter_mut().find(|e| e.id == id) {
+                crate::chat_store::rename_exploration(exp, &draft)
+            } else {
+                false
+            };
+            if changed {
+                crate::chat_store::save_explorations(
+                    &state.explorations,
+                    state.exploration_counter,
+                    root,
+                );
+                let label = state
+                    .explorations
+                    .iter()
+                    .find(|e| e.id == id)
+                    .map(|e| e.display_name.clone())
+                    .unwrap_or(draft);
+                if let Some(ix) = interactions.get_mut(&Scope::Exploration(id)) {
+                    interaction::reconcile_display_names(&mut ix.sessions, &label);
+                }
+            }
+        }
+        Message::CancelRenameExploration => {
+            state.renaming_exploration = None;
+            state.rename_draft.clear();
+        }
+        Message::RefreshExplorationTitle(_) => {
+            // Intercepted by `main::update` (oneshot Task).
+        }
         Message::AddExploration => {
             state.exploration_counter += 1;
             let exp = Exploration::new(state.exploration_counter);
@@ -620,6 +706,8 @@ pub fn update(
             state.explorations.push(exp);
             state.selected_change = Some(id.clone());
             state.armed_remove_exploration = None;
+            state.renaming_exploration = None;
+            state.rename_draft.clear();
             crate::chat_store::save_explorations(
                 &state.explorations,
                 state.exploration_counter,
@@ -1040,6 +1128,29 @@ pub fn view_list<'a>(
     for exp in state.explorations.iter().filter(|e| e.idea_path.is_none()) {
         let is_selected = state.selected_change.as_deref() == Some(exp.id.as_str());
         let is_hovered = state.hovered_exploration.as_deref() == Some(exp.id.as_str());
+        let is_renaming = state.renaming_exploration.as_deref() == Some(exp.id.as_str());
+
+        if is_renaming {
+            let input: Element<'a, Message> = text_input("Exploration name", &state.rename_draft)
+                .id(RENAME_INPUT_ID)
+                .on_input(Message::RenameDraft)
+                .on_submit(Message::CommitRenameExploration)
+                .padding([theme::SPACING_XS, theme::SPACING_SM])
+                .size(theme::font_md())
+                .into();
+            let r = ListRow::new("")
+                .selected(true)
+                .icon(ICON_EXPLORE)
+                .after_icon(input)
+                .on_hover(
+                    Message::HoverExploration(exp.id.clone()),
+                    Message::UnhoverExploration(exp.id.clone()),
+                );
+            // Enter commits via on_submit; leave selection to cancel.
+            rows.push(r);
+            continue;
+        }
+
         let mut r = ListRow::new(exp.display_name.as_str())
             .selected(is_selected)
             .on_press(Message::SelectChange(exp.id.clone()))
@@ -1047,6 +1158,10 @@ pub fn view_list<'a>(
                 Message::HoverExploration(exp.id.clone()),
                 Message::UnhoverExploration(exp.id.clone()),
             );
+        if is_hovered || is_selected {
+            let refresh = refresh_button(Message::RefreshExplorationTitle(exp.id.clone()));
+            r = r.after_icon(refresh);
+        }
         if is_hovered {
             let armed = state.armed_remove_exploration.as_deref() == Some(exp.id.as_str());
             // Skip the arming step when there's nothing to lose — first
@@ -1823,6 +1938,8 @@ mod breadcrumb_tests {
             list_scroll: 0.0,
             known_file_dirs: HashSet::new(),
             pending_bindings: HashMap::new(),
+            renaming_exploration: None,
+            rename_draft: String::new(),
         }
     }
 
@@ -1922,6 +2039,8 @@ mod breadcrumb_tests {
             list_scroll: 0.0,
             known_file_dirs: HashSet::new(),
             pending_bindings: HashMap::new(),
+            renaming_exploration: None,
+            rename_draft: String::new(),
         };
         let project = make_project(&[], &[]);
         assert_eq!(compute_obvious_command(&state, &project), None);

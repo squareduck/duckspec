@@ -285,6 +285,17 @@ pub fn error() -> Color {
     pick(macchiato::RED, latte::RED)
 }
 
+/// Name-token color for a slash completion entry by kind.
+/// System / Workflow / Agent are pairwise distinct.
+pub fn slash_command_name_color(kind: duckchat::SlashCommandKind) -> Color {
+    use duckchat::SlashCommandKind;
+    match kind {
+        SlashCommandKind::System => accent(),
+        SlashCommandKind::Workflow => success(),
+        SlashCommandKind::Agent => text_primary(),
+    }
+}
+
 #[allow(dead_code)]
 pub fn mauve() -> Color {
     pick(macchiato::MAUVE, latte::MAUVE)

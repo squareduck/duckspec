@@ -22,6 +22,7 @@ use duckchat::{ModelInfo, ModelRef};
 use crate::agent::SlashCommand;
 use crate::area::interaction::{self, SelectionContext};
 use crate::chat_store::{ChatSession, ContentBlock, Role};
+use crate::slash_commands::{slash_kind_rank, slash_kind_row_tag};
 use crate::theme;
 use crate::widget::collapsible;
 use crate::widget::streaming_indicator;
@@ -1972,16 +1973,27 @@ fn view_completion_col<'a>(
     for (i, &(cmd_idx, _score)) in filtered.iter().enumerate() {
         let cmd = &commands[cmd_idx];
         let is_selected = i == selected;
-        let label = row![
+        let name_color = theme::slash_command_name_color(cmd.kind);
+        let mut label = row![
             text(format!("/{}", cmd.name))
                 .size(theme::font_sm())
-                .color(theme::text_primary()),
-            Space::new().width(theme::SPACING_SM),
-            text(&cmd.description)
-                .size(theme::font_sm())
-                .color(theme::text_muted()),
-        ]
-        .align_y(iced::Alignment::Center);
+                .color(name_color),
+        ];
+        if let Some(tag) = slash_kind_row_tag(cmd.kind) {
+            label = label.push(Space::new().width(theme::SPACING_SM)).push(
+                text(tag)
+                    .size(theme::font_sm())
+                    .color(theme::text_muted()),
+            );
+        }
+        label = label
+            .push(Space::new().width(theme::SPACING_SM))
+            .push(
+                text(&cmd.description)
+                    .size(theme::font_sm())
+                    .color(theme::text_muted()),
+            )
+            .align_y(iced::Alignment::Center);
         items = items.push(
             container(label)
                 .width(Length::Fill)
@@ -2017,14 +2029,19 @@ fn completion_divider<'a>() -> Element<'a, Msg> {
 // ── Fuzzy matching ──────────────────────────────────────────────────────────
 
 /// Filter and score commands by fuzzy-matching `query` against command names.
-/// Returns `(index_into_commands, score)` sorted by descending score.
+/// Returns `(index_into_commands, score)` sorted by descending score, then
+/// System → Workflow → Agent on ties.
 pub fn filter_commands(commands: &[SlashCommand], query: &str) -> Vec<(usize, i32)> {
     let mut matches: Vec<(usize, i32)> = commands
         .iter()
         .enumerate()
         .filter_map(|(i, cmd)| fuzzy_score(query, &cmd.name).map(|s| (i, s)))
         .collect();
-    matches.sort_by(|a, b| b.1.cmp(&a.1));
+    matches.sort_by(|a, b| {
+        b.1.cmp(&a.1).then_with(|| {
+            slash_kind_rank(commands[a.0].kind).cmp(&slash_kind_rank(commands[b.0].kind))
+        })
+    });
     matches
 }
 
@@ -2066,6 +2083,7 @@ fn fuzzy_score(query: &str, target: &str) -> Option<i32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use duckchat::SlashCommandKind;
 
     fn model(harness: &str, id: &str, window: Option<usize>) -> ModelInfo {
         ModelInfo {
@@ -2074,6 +2092,61 @@ mod tests {
             display: id.to_string(),
             context_window: window,
         }
+    }
+
+    fn cmd(name: &str, kind: SlashCommandKind) -> SlashCommand {
+        SlashCommand {
+            name: name.into(),
+            description: name.into(),
+            kind,
+        }
+    }
+
+    /// @spec chat/slash-commands Kind cues in completion: Name token color maps by kind
+    #[test]
+    fn name_token_color_maps_by_kind() {
+        // GIVEN completion rows for System, Workflow, and Agent entries
+        // WHEN name-token colors are resolved
+        let sys = theme::slash_command_name_color(SlashCommandKind::System);
+        let wf = theme::slash_command_name_color(SlashCommandKind::Workflow);
+        let agent = theme::slash_command_name_color(SlashCommandKind::Agent);
+        // THEN the three kinds resolve to three different colors
+        assert_ne!(sys, wf);
+        assert_ne!(sys, agent);
+        assert_ne!(wf, agent);
+    }
+
+    /// @spec chat/slash-commands Kind cues in completion: System rows include a sys tag
+    #[test]
+    fn system_rows_include_a_sys_tag() {
+        // GIVEN a System completion entry
+        // WHEN the completion row tag is resolved
+        // THEN the row includes a `sys` tag
+        assert_eq!(
+            slash_kind_row_tag(SlashCommandKind::System),
+            Some("sys")
+        );
+        assert_eq!(slash_kind_row_tag(SlashCommandKind::Workflow), None);
+        assert_eq!(slash_kind_row_tag(SlashCommandKind::Agent), None);
+    }
+
+    /// @spec chat/slash-commands Kind cues in completion: Equal fuzzy scores order System, Workflow, Agent
+    #[test]
+    fn equal_fuzzy_scores_order_system_workflow_agent() {
+        // GIVEN three catalog entries of kinds System, Workflow, Agent that all score equally
+        // (empty query scores every name 0)
+        let commands = vec![
+            cmd("agent-cmd", SlashCommandKind::Agent),
+            cmd("sys-cmd", SlashCommandKind::System),
+            cmd("ds-cmd", SlashCommandKind::Workflow),
+        ];
+        // WHEN the filtered completion list is built
+        let filtered = filter_commands(&commands, "");
+        // THEN those three appear in order System, then Workflow, then Agent
+        assert_eq!(filtered.len(), 3);
+        assert_eq!(commands[filtered[0].0].kind, SlashCommandKind::System);
+        assert_eq!(commands[filtered[1].0].kind, SlashCommandKind::Workflow);
+        assert_eq!(commands[filtered[2].0].kind, SlashCommandKind::Agent);
     }
 
     /// @spec harness/model-picker Harness-grouped choices: Choices present each model under its harness

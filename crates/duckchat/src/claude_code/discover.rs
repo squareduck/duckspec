@@ -3,7 +3,7 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::provider::SlashCommand;
+use crate::provider::{SlashCommand, SlashCommandKind};
 
 pub fn discover_commands(project_root: &Path) -> Vec<SlashCommand> {
     let mut commands = Vec::new();
@@ -43,20 +43,9 @@ pub fn discover_commands(project_root: &Path) -> Vec<SlashCommand> {
         }
     }
 
-    // Built-in Claude Code commands (not discoverable from filesystem).
-    let builtins = [
-        ("clear", "Clear conversation history"),
-        ("compact", "Summarize and compact conversation"),
-        ("cost", "Show token usage and cost"),
-        ("help", "Show available commands"),
-        ("model", "Switch the model"),
-    ];
-    for (name, desc) in builtins {
-        commands.push(SlashCommand {
-            name: name.into(),
-            description: desc.into(),
-        });
-    }
+    // Filesystem skills/commands only — Claude interactive TUI builtins
+    // (clear/compact/cost/help/model) are not real duckboard handlers and must
+    // not pollute Grok (or headless Claude) completion lists.
 
     commands.sort_by(|a, b| a.name.cmp(&b.name));
     commands.dedup_by(|a, b| a.name == b.name);
@@ -82,7 +71,12 @@ fn scan_command_dir(dir: &Path, commands: &mut Vec<SlashCommand>) {
             continue;
         }
         let description = parse_frontmatter_description(&path).unwrap_or_default();
-        commands.push(SlashCommand { name, description });
+        // Kind is re-tagged when duckboard merges the completion catalog.
+        commands.push(SlashCommand {
+            name,
+            description,
+            kind: SlashCommandKind::Agent,
+        });
     }
 }
 
@@ -109,7 +103,11 @@ fn scan_skills_dir(dir: &Path, commands: &mut Vec<SlashCommand>) {
             continue;
         }
         let description = parse_frontmatter_description(&skill_file).unwrap_or_default();
-        commands.push(SlashCommand { name, description });
+        commands.push(SlashCommand {
+            name,
+            description,
+            kind: SlashCommandKind::Agent,
+        });
     }
 }
 

@@ -27,7 +27,9 @@ pub use cwd::normalize_cwd;
 pub use error::Error;
 pub use event::{AgentEvent, Usage};
 pub use hook::{ContextHook, HookOutput};
-pub use provider::{Capabilities, ModelInfo, ModelRef, Provider, SlashCommand};
+pub use provider::{
+    Capabilities, ModelInfo, ModelRef, Provider, SlashCommand, SlashCommandKind,
+};
 pub use reply_suggest::parse_replies;
 pub use request::{
     Attachment, ReasoningMode, ReplySuggestionRequest, TitleRequest, ToolPolicy, TurnOutcome,
