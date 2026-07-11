@@ -35,10 +35,10 @@ only bindings.
 ```
 | Situation | Binding? | Outcome |
 | --- | --- | --- |
-| Exploration's agent ran `ds create change foo` | yes | `foo` adopts that exploration |
-| Change `foo` created out-of-band | no | `foo` left standalone |
-| Working-copy restored `foo`'s directory | no | `foo` left standalone |
-| `foo` unarchived | no | `foo` left standalone |
+| Exploration's agent ran `ds create change foo` | yes | `foo` adopts that exploration; chat input focused |
+| Change `foo` created out-of-band | no | `foo` left standalone; no forced chat focus |
+| Working-copy restored `foo`'s directory | no | `foo` left standalone; no forced chat focus |
+| `foo` unarchived | no | `foo` left standalone; no forced chat focus |
 ```
 
 When a change is left standalone, nothing is lost: any exploration the user was viewing
@@ -59,3 +59,11 @@ example, typed directly into a terminal) will not automatically pull that termin
 exploration chat into the change. This is a deliberate, minor loss of convenience in
 exchange for never misattributing an unrelated chat. The chat remains available under its
 original scope and can be referenced there.
+
+## Chat focus after promotion
+
+When a binding authorizes promotion, the exploration's chat migrates to the change scope
+and the chat input is given keyboard focus again. Scope migration remounts chat UI;
+without an explicit refocus the user would have to click the input to keep typing. Unbound
+new directories never promote and do not force focus onto the chat input — focus behavior
+for those detections stays as it was.

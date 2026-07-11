@@ -512,6 +512,20 @@ impl AgentSession {
         self.default_prompts_pending = true;
     }
 
+    /// First lifecycle option for empty-session next-action bootstrap.
+    /// Exploration → explore; change → facts ladder head; caps/codex → none.
+    /// Independent of agent input hints (oneshot-only gate).
+    pub fn lifecycle_bootstrap(&self) -> Option<&str> {
+        match self.scope_kind {
+            ScopeKind::Exploration => Some("ds-explore"),
+            ScopeKind::Change => self
+                .scope_facts
+                .as_ref()
+                .and_then(|f| f.next_command.as_deref()),
+            ScopeKind::Caps | ScopeKind::Codex => None,
+        }
+    }
+
     /// Rebuild `next_actions` from empty-session lifecycle bootstrap or the
     /// trailing `next` card on the last non-priming assistant message.
     ///
@@ -520,10 +534,7 @@ impl AgentSession {
     /// preserved while the list is unchanged.
     pub fn refresh_next_actions(&mut self, after_turn: bool) {
         let session_empty = self.session.messages.is_empty();
-        let bootstrap = self
-            .scope_facts
-            .as_ref()
-            .and_then(|f| f.next_command.as_deref());
+        let bootstrap = self.lifecycle_bootstrap();
         let last_assistant = if session_empty {
             None
         } else {
@@ -692,6 +703,57 @@ mod tests {
             })
             .expect("scope hook always produces orientation")
             .text
+    }
+
+    // @spec chat/default-prompts Next-action list: Empty exploration session seeds explore
+    #[test]
+    fn empty_exploration_session_seeds_explore() {
+        // GIVEN an empty exploration session transcript
+        let mut ax = AgentSession::new("exploration-1".into(), ScopeKind::Exploration);
+        assert!(ax.session.messages.is_empty());
+        // WHEN the next-action list is built
+        ax.refresh_next_actions(false);
+        // THEN the list is exactly the explore stage command in empty-send form
+        assert_eq!(ax.next_actions.len(), 1);
+        assert_eq!(ax.next_actions[0].send, "/ds-explore");
+    }
+
+    // @spec chat/default-prompts Next-action list: Empty change session with unfinished steps seeds apply
+    #[test]
+    fn empty_change_session_with_unfinished_steps_seeds_apply() {
+        // GIVEN an empty change session with unfinished steps (first lifecycle = apply)
+        let mut ax = AgentSession::new("foo".into(), ScopeKind::Change);
+        ax.scope_facts = Some(crate::area::change::ChangeScopeFacts {
+            phase: "implementing steps",
+            steps_done: 0,
+            step_count: 2,
+            active_step_tasks: Some((0, 3)),
+            next_command: Some("ds-apply".into()),
+            current_review: None,
+        });
+        assert!(ax.session.messages.is_empty());
+        // WHEN the next-action list is built
+        ax.refresh_next_actions(false);
+        // THEN the list is exactly the apply stage command in empty-send form
+        assert_eq!(ax.next_actions.len(), 1);
+        assert_eq!(ax.next_actions[0].send, "/ds-apply");
+    }
+
+    // @spec chat/default-prompts Agent input hints gate: Empty-session next actions remain when agent input hints disabled
+    #[test]
+    fn empty_session_next_actions_remain_when_agent_input_hints_disabled() {
+        // GIVEN agent input hints disabled + empty session + first lifecycle option
+        let agent_input_hints = false;
+        let mut ax = AgentSession::new("exploration-1".into(), ScopeKind::Exploration);
+        assert!(ax.session.messages.is_empty());
+        // WHEN the next-action list is built
+        ax.refresh_next_actions(false);
+        // THEN the list is exactly that single lifecycle option in empty-send form
+        // (hints only gate oneshot — not next-action bootstrap)
+        assert!(!agent_input_hints);
+        assert!(ax.session_oneshot_prompts(agent_input_hints).is_empty());
+        assert_eq!(ax.next_actions.len(), 1);
+        assert_eq!(ax.next_actions[0].send, "/ds-explore");
     }
 
     /// @spec harness/selection Default model resolution: An empty cascade resolves to grok-4.5

@@ -456,7 +456,7 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
             return restore_chat_scroll(state);
         }
         Message::Refresh => {
-            reload_and_reconcile(state);
+            let outcome = reload_and_reconcile(state);
             let mut tasks: Vec<Task<Message>> = Vec::new();
             refresh_open_tabs(state, &mut tasks);
             refresh_changed_files(state);
@@ -469,6 +469,11 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
             }
             state.project.revalidate();
             tracing::info!("project reloaded");
+            // Bound exploration→change promotion remounts the chat tree —
+            // re-focus so the user can keep typing without a re-click.
+            if outcome.promoted {
+                tasks.push(focus_chat_input());
+            }
             return Task::batch(tasks);
         }
         Message::FileFinder(msg) => {
@@ -881,10 +886,17 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                 }
             }
 
-            if tree_changed && reload_and_reconcile(state) {
-                // Tab IDs were rewritten to new archive paths; re-read
-                // their content from disk so editors reflect the moved files.
-                refresh_open_tabs(state, &mut highlight_tasks);
+            if tree_changed {
+                let outcome = reload_and_reconcile(state);
+                if outcome.archived {
+                    // Tab IDs were rewritten to new archive paths; re-read
+                    // their content from disk so editors reflect the moved files.
+                    refresh_open_tabs(state, &mut highlight_tasks);
+                }
+                if outcome.promoted {
+                    // Bound promotion remounts chat under the change scope.
+                    highlight_tasks.push(focus_chat_input());
+                }
             }
 
             if vcs_state_changed && let Some(root) = project_root.as_deref() {
@@ -3292,7 +3304,10 @@ fn route_promotion(state: &mut State, exp_id: &str, new_name: &str) {
 /// attributes a change to an unrelated exploration. Because the binding is
 /// consumed, a later re-detection of the same directory finds none and does
 /// not promote again.
-fn promote_bound_exploration(state: &mut State, new_name: &str) {
+///
+/// Returns `true` when a binding was consumed and promotion ran (callers
+/// should re-focus the chat input after the scope remount).
+fn promote_bound_exploration(state: &mut State, new_name: &str) -> bool {
     if let Some(exploration_id) = state.change.pending_bindings.remove(new_name) {
         tracing::info!(
             from = exploration_id,
@@ -3300,15 +3315,24 @@ fn promote_bound_exploration(state: &mut State, new_name: &str) {
             "promoting exploration to real change"
         );
         route_promotion(state, &exploration_id, new_name);
+        true
+    } else {
+        false
     }
+}
+
+/// Result of reloading project data and reconciling local UI state.
+struct ReconcileOutcome {
+    /// Tab IDs were rewritten for an external archival — refresh open tabs.
+    archived: bool,
+    /// A bound exploration was promoted into a new change — re-focus chat.
+    promoted: bool,
 }
 
 /// Reload `ProjectData` and reconcile duckboard-local state: promote a selected
 /// exploration if a new change appeared, migrate subscriptions when a change
-/// was archived externally, and refresh the obvious-command hint. Returns
-/// `true` when tab IDs were rewritten for an external archival, so the caller
-/// can refresh open-tab contents from disk.
-fn reload_and_reconcile(state: &mut State) -> bool {
+/// was archived externally, and refresh the obvious-command hint.
+fn reload_and_reconcile(state: &mut State) -> ReconcileOutcome {
     use std::collections::HashSet;
 
     let old_change_names: HashSet<String> = state
@@ -3330,6 +3354,7 @@ fn reload_and_reconcile(state: &mut State) -> bool {
     // it — but only on the authoritative `ds create change` binding. An unbound
     // new directory (out-of-band creation, unarchive, VCS reappearance) is left
     // standalone; focus never attributes it.
+    let mut promoted = false;
     if let Some(new_name) = state
         .project
         .active_changes
@@ -3337,7 +3362,7 @@ fn reload_and_reconcile(state: &mut State) -> bool {
         .find(|c| !old_change_names.contains(&c.name))
         .map(|c| c.name.clone())
     {
-        promote_bound_exploration(state, &new_name);
+        promoted = promote_bound_exploration(state, &new_name);
     }
 
     // Detect new archived change directories and migrate subscriptions from
@@ -3389,7 +3414,10 @@ fn reload_and_reconcile(state: &mut State) -> bool {
 
     let dirty = !state.change.changed_files.is_empty();
     area::change::refresh_obvious_chrome(&mut state.interactions, &state.project, dirty);
-    archived_any
+    ReconcileOutcome {
+        archived: archived_any,
+        promoted,
+    }
 }
 
 /// Migrate an idea-owned exploration's interaction state from
@@ -5681,6 +5709,64 @@ mod tests {
                 .get(&scope::Scope::Exploration(exp_id.to_string()))
                 .unwrap();
             assert!(ix.sessions.iter().any(|s| s.session.id == "sess-x"));
+        });
+    }
+
+    // @spec exploration/promotion Chat focus after bound promotion: Bound promotion restores chat input focus
+    #[test]
+    fn bound_promotion_restores_chat_input_focus() {
+        // GIVEN an exploration whose agent created a change by name
+        let tmp = FsTmp::new();
+        with_home(tmp.path(), || {
+            let mut state = State::new();
+            let exp_id = "exploration-focus";
+            let new_name = "focus-change";
+            seed_exploration(&mut state, exp_id, "sess-focus");
+            state
+                .change
+                .pending_bindings
+                .insert(new_name.to_string(), exp_id.to_string());
+
+            // WHEN promotion is evaluated
+            let promoted = promote_bound_exploration(&mut state, new_name);
+
+            // THEN the exploration is promoted into the change AND chat focus
+            // is requested (callers batch focus_chat_input when promoted).
+            assert!(
+                promoted,
+                "bound promotion must request chat input focus"
+            );
+            assert!(state
+                .interactions
+                .contains_key(&scope::Scope::Change(new_name.to_string())));
+        });
+    }
+
+    // @spec exploration/promotion Chat focus after bound promotion: Unbound new change does not force chat input focus
+    #[test]
+    fn unbound_new_change_does_not_force_chat_input_focus() {
+        // GIVEN a newly-present change with no binding AND chat not focused
+        let tmp = FsTmp::new();
+        with_home(tmp.path(), || {
+            let mut state = State::new();
+            let exp_id = "exploration-unbound-focus";
+            seed_exploration(&mut state, exp_id, "sess-ub");
+            state.active_area = Area::Change;
+            state.change.selected_change = Some(exp_id.to_string());
+            let new_name = "standalone-change";
+            // No binding; chat_input_focused stays false (default).
+
+            // WHEN promotion is evaluated
+            let promoted = promote_bound_exploration(&mut state, new_name);
+
+            // THEN no exploration is promoted AND focus is not forced
+            assert!(
+                !promoted,
+                "unbound detection must not request chat input focus"
+            );
+            assert!(!state
+                .interactions
+                .contains_key(&scope::Scope::Change(new_name.to_string())));
         });
     }
 

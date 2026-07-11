@@ -145,7 +145,7 @@ presented — neither as a suggestion row nor as a loading indicator.
 - **AND** a loading indicator is shown
 
 > test: code
-> - crates/duckboard/src/default_prompts.rs:492
+> - crates/duckboard/src/default_prompts.rs:482
 
 ### Scenario: Empty Cmd-Enter is a no-op while oneshot pending
 
@@ -155,7 +155,7 @@ presented — neither as a suggestion row nor as a loading indicator.
 - **THEN** no oneshot suggestion is sent
 
 > test: code
-> - crates/duckboard/src/default_prompts.rs:507
+> - crates/duckboard/src/default_prompts.rs:497
 
 ### Scenario: Empty Enter still sends next action while oneshot pending
 
@@ -166,7 +166,7 @@ presented — neither as a suggestion row nor as a loading indicator.
 - **THEN** the sent text is that active next-action entry
 
 > test: code
-> - crates/duckboard/src/default_prompts.rs:453
+> - crates/duckboard/src/default_prompts.rs:443
 
 ### Scenario: Ready after settle arms the oneshot row
 
@@ -178,7 +178,7 @@ presented — neither as a suggestion row nor as a loading indicator.
 - **AND** empty Cmd-Enter sends that suggestion
 
 > test: code
-> - crates/duckboard/src/default_prompts.rs:518
+> - crates/duckboard/src/default_prompts.rs:508
 
 ### Scenario: Superseded generation does not arm oneshot
 
@@ -187,7 +187,7 @@ presented — neither as a suggestion row nor as a loading indicator.
 - **THEN** the session's ready oneshot suggestion is unchanged
 
 > test: code
-> - crates/duckboard/src/default_prompts.rs:535
+> - crates/duckboard/src/default_prompts.rs:525
 
 ### Scenario: Main turn in progress hides oneshot chrome
 
@@ -199,7 +199,7 @@ presented — neither as a suggestion row nor as a loading indicator.
 - **AND** a oneshot loading indicator is not shown
 
 > test: code
-> - crates/duckboard/src/default_prompts.rs:542
+> - crates/duckboard/src/default_prompts.rs:532
 
 ### Scenario: Timed-out or failed oneshot settles to ready empty
 
@@ -212,7 +212,7 @@ presented — neither as a suggestion row nor as a loading indicator.
 - **AND** no oneshot suggestion string is shown when the failure produced no parse
 
 > test: code
-> - crates/duckboard/src/default_prompts.rs:561
+> - crates/duckboard/src/default_prompts.rs:551
 
 ### Scenario: Agent handle ends while oneshot pending becomes ready
 
@@ -224,7 +224,7 @@ presented — neither as a suggestion row nor as a loading indicator.
 - **AND** oneshot suggestions are ready
 
 > test: code
-> - crates/duckboard/src/default_prompts.rs:582
+> - crates/duckboard/src/default_prompts.rs:572
 
 ## Requirement: Agent input hints gate
 
@@ -233,9 +233,9 @@ after turns. The setting SHALL default to disabled. When agent input hints is di
 reply-suggestion oneshot SHALL NOT be started after a non-priming turn completes. When
 agent input hints is enabled, oneshot launch follows the non-priming turn rules of this
 capability (assistant text present and other launch conditions). There is no separate
-auto-messages setting that suppresses oneshots or next-action lists.
-
-> test: code
+auto-messages setting that suppresses oneshots or next-action lists. Empty-session
+next-action bootstrap and the next-action list SHALL NOT depend on the agent input hints
+setting.
 
 ### Scenario: Default agent input hints setting is disabled
 
@@ -244,7 +244,7 @@ auto-messages setting that suppresses oneshots or next-action lists.
 - **THEN** it is disabled
 
 > test: code
-> - crates/duckboard/src/config.rs:243
+> - crates/duckboard/src/config.rs:235
 
 ### Scenario: Oneshot launch requires agent input hints enabled
 
@@ -254,7 +254,18 @@ auto-messages setting that suppresses oneshots or next-action lists.
 - **THEN** a reply-suggestion oneshot is not started
 
 > test: code
-> - crates/duckboard/src/default_prompts.rs:480
+> - crates/duckboard/src/default_prompts.rs:470
+
+### Scenario: Empty-session next actions remain when agent input hints disabled
+
+- **GIVEN** agent input hints disabled
+- **AND** an empty session transcript
+- **AND** a first lifecycle option for that session
+- **WHEN** the next-action list is built
+- **THEN** the list is exactly that single lifecycle option in empty-send form
+
+> test: code
+> - crates/duckboard/src/area/interaction.rs:742
 
 ## Requirement: Next-action list
 
@@ -268,7 +279,11 @@ trailing `next` meta card, the list SHALL be empty. Settled oneshot suggestion s
 SHALL NOT be appended, merged, or substituted into the next-action list. Disk lifecycle
 options beyond the empty-session bootstrap SHALL NOT fill the list after the first turn.
 
-> test: code
+For an empty exploration session, the first lifecycle option SHALL be the explore stage
+command. For an empty change session, the first lifecycle option SHALL be the first option
+of that change's lifecycle ladder from its artifact and step state. Sessions with no
+lifecycle ladder (including caps and codex) SHALL have no first lifecycle option from this
+bootstrap.
 
 ### Scenario: Empty session seeds first lifecycle
 
@@ -278,7 +293,7 @@ options beyond the empty-session bootstrap SHALL NOT fill the list after the fir
 - **THEN** the list is exactly that single lifecycle option
 
 > test: code
-> - crates/duckboard/src/default_prompts.rs:285
+> - crates/duckboard/src/default_prompts.rs:275
 
 ### Scenario: Empty session without lifecycle yields empty
 
@@ -288,7 +303,7 @@ options beyond the empty-session bootstrap SHALL NOT fill the list after the fir
 - **THEN** the list is empty
 
 > test: code
-> - crates/duckboard/src/default_prompts.rs:298
+> - crates/duckboard/src/default_prompts.rs:288
 
 ### Scenario: Non-empty session uses trailing next actions only
 
@@ -304,7 +319,7 @@ options beyond the empty-session bootstrap SHALL NOT fill the list after the fir
 - **THEN** the list is exactly those two trailing next send tokens in order
 
 > test: code
-> - crates/duckboard/src/default_prompts.rs:308
+> - crates/duckboard/src/default_prompts.rs:298
 
 ### Scenario: Non-empty session without trailing next yields empty
 
@@ -315,7 +330,7 @@ options beyond the empty-session bootstrap SHALL NOT fill the list after the fir
 - **THEN** the list is empty
 
 > test: code
-> - crates/duckboard/src/default_prompts.rs:328
+> - crates/duckboard/src/default_prompts.rs:318
 
 ### Scenario: Oneshot results do not enter the next-action list
 
@@ -326,7 +341,26 @@ options beyond the empty-session bootstrap SHALL NOT fill the list after the fir
 - **THEN** the list is empty
 
 > test: code
-> - crates/duckboard/src/default_prompts.rs:337
+> - crates/duckboard/src/default_prompts.rs:327
+
+### Scenario: Empty exploration session seeds explore
+
+- **GIVEN** an empty exploration session transcript
+- **WHEN** the next-action list is built
+- **THEN** the list is exactly the explore stage command in empty-send form
+
+> test: code
+> - crates/duckboard/src/area/interaction.rs:708
+
+### Scenario: Empty change session with unfinished steps seeds apply
+
+- **GIVEN** an empty change session transcript
+- **AND** that change has at least one unfinished step
+- **WHEN** the next-action list is built
+- **THEN** the list is exactly the apply stage command in empty-send form
+
+> test: code
+> - crates/duckboard/src/area/interaction.rs:721
 
 ## Requirement: Next-action empty-input send and cycle
 
@@ -352,7 +386,7 @@ list is non-empty (and the main turn is not streaming).
 - **THEN** the sent text is the send text of the entry at the active index
 
 > test: code
-> - crates/duckboard/src/default_prompts.rs:352
+> - crates/duckboard/src/default_prompts.rs:342
 
 ### Scenario: Empty submit is a no-op when the next-action list is empty
 
@@ -362,7 +396,7 @@ list is non-empty (and the main turn is not streaming).
 - **THEN** no next-action message is sent
 
 > test: code
-> - crates/duckboard/src/default_prompts.rs:374
+> - crates/duckboard/src/default_prompts.rs:364
 
 ### Scenario: Tab cycles next actions with wrap
 
@@ -374,7 +408,7 @@ list is non-empty (and the main turn is not streaming).
 - **AND** the composer input remains empty
 
 > test: code
-> - crates/duckboard/src/default_prompts.rs:400
+> - crates/duckboard/src/default_prompts.rs:390
 
 ### Scenario: Multi next shows a tab-available marker
 
@@ -384,7 +418,7 @@ list is non-empty (and the main turn is not streaming).
 - **THEN** a tab-available marker is shown before the ghost text
 
 > test: code
-> - crates/duckboard/src/default_prompts.rs:426
+> - crates/duckboard/src/default_prompts.rs:416
 
 ## Requirement: Oneshot empty-input send
 
@@ -405,7 +439,7 @@ Enter). Empty Shift-Enter SHALL NOT send the oneshot suggestion.
 - **THEN** the sent text is that oneshot suggestion
 
 > test: code
-> - crates/duckboard/src/default_prompts.rs:599
+> - crates/duckboard/src/default_prompts.rs:589
 
 ### Scenario: Empty Cmd-Enter is a no-op when no oneshot suggestion
 
@@ -416,7 +450,7 @@ Enter). Empty Shift-Enter SHALL NOT send the oneshot suggestion.
 - **THEN** no oneshot suggestion is sent
 
 > test: code
-> - crates/duckboard/src/default_prompts.rs:609
+> - crates/duckboard/src/default_prompts.rs:599
 
 ### Scenario: Empty Enter does not send the oneshot suggestion
 
@@ -428,7 +462,7 @@ Enter). Empty Shift-Enter SHALL NOT send the oneshot suggestion.
 - **THEN** no message is sent
 
 > test: code
-> - crates/duckboard/src/default_prompts.rs:624
+> - crates/duckboard/src/default_prompts.rs:614
 
 ## Requirement: Oneshot presentation
 
@@ -448,7 +482,7 @@ or ellipsize the displayed value for length.
 - **THEN** a Cmd-Enter marker is shown before the suggestion text
 
 > test: code
-> - crates/duckboard/src/default_prompts.rs:637
+> - crates/duckboard/src/default_prompts.rs:627
 
 ### Scenario: Long oneshot soft-wraps without clipping
 

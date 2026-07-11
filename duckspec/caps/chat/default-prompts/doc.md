@@ -15,23 +15,25 @@ with empty Cmd-Enter.
 Two empty-composer surfaces stay separate:
 
 ```
-| Surface        | Source                                      | Empty-input chrome                    | Send key   |
-|----------------|---------------------------------------------|-------------------------------|------------|
-| Next actions   | Empty session: lifecycle[0]; else trailing `next` | Ghost + optional tab marker before ghost | Enter      |
-| Oneshot hint   | Cheap-model `REPLY:` when agent input hints on  | Single under-input row + ⌘↩ marker | Cmd-Enter  |
+| Surface      | Source                                                         | Empty-input chrome                         | Send key  |
+|--------------|----------------------------------------------------------------|--------------------------------------------|-----------|
+| Next actions | Empty session: scope lifecycle[0]; else trailing `next`        | Ghost + optional tab marker before ghost   | Enter     |
+| Oneshot hint | Cheap-model `REPLY:` when agent input hints on                 | Single under-input row + ⌘↩ marker         | Cmd-Enter |
 ```
 
-Next actions never list under the input. Oneshot never fills the next-action list or
-ghost. Missing trailing `next` after the first turn means no next-action ghost — not a
-disk-phase fallback.
+Empty-session lifecycle[0] is scope-derived: exploration → explore stage command; change →
+first option of that change's artifact/step ladder; caps and codex → none. That bootstrap
+does not use the agent input hints setting. Next actions never list under the input.
+Oneshot never fills the next-action list or ghost. Missing trailing `next` after the first
+turn means no next-action ghost — not a disk-phase fallback.
 
 ## Next-action list
 
 ```
-session empty + lifecycle[0]
+session empty + lifecycle[0] (scope-derived)
     │
     ▼
-next-actions = [lifecycle[0]]   (ready immediately)
+next-actions = [lifecycle[0]]   (ready immediately; not gated by agent input hints)
 
 session empty, no lifecycle[0]
     │

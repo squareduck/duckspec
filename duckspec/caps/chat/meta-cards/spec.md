@@ -33,7 +33,7 @@ recognition, even when they begin with `>`.
 - **AND** the card's inclusive line range covers exactly those three blockquote lines
 
 > test: code
-> - crates/duckboard/src/meta_card.rs:212
+> - crates/duckboard/src/meta_card.rs:210
 
 ### Scenario: Ordinary blockquote is not a meta card
 
@@ -45,7 +45,7 @@ recognition, even when they begin with `>`.
 - **THEN** no meta card is produced for that run
 
 > test: code
-> - crates/duckboard/src/meta_card.rs:237
+> - crates/duckboard/src/meta_card.rs:235
 
 ### Scenario: Known-kind line inside a fenced code block is not a meta card
 
@@ -57,7 +57,7 @@ recognition, even when they begin with `>`.
 - **THEN** no meta card is produced from that line
 
 > test: code
-> - crates/duckboard/src/meta_card.rs:252
+> - crates/duckboard/src/meta_card.rs:250
 
 ## Requirement: Trailing next actions
 
@@ -85,7 +85,7 @@ ignored.
 - **THEN** the action list has exactly those two send texts in source order
 
 > test: code
-> - crates/duckboard/src/meta_card.rs:269
+> - crates/duckboard/src/meta_card.rs:267
 
 ### Scenario: Non-trailing next card yields no actions
 
@@ -97,7 +97,7 @@ ignored.
 - **THEN** the action list is empty
 
 > test: code
-> - crates/duckboard/src/meta_card.rs:290
+> - crates/duckboard/src/meta_card.rs:288
 
 ### Scenario: Actions capped at three in source order
 
@@ -111,7 +111,7 @@ ignored.
 - **AND** those entries are the first three send texts in source order
 
 > test: code
-> - crates/duckboard/src/meta_card.rs:307
+> - crates/duckboard/src/meta_card.rs:305
 
 ### Scenario: Body line without a token is skipped
 
@@ -125,7 +125,7 @@ ignored.
 - **AND** they are the tokens from the two token-bearing lines in source order
 
 > test: code
-> - crates/duckboard/src/meta_card.rs:328
+> - crates/duckboard/src/meta_card.rs:326
 
 ### Scenario: Reason after the token is not part of send text
 
@@ -139,4 +139,4 @@ ignored.
 - **AND** the reason text is not included in the send text
 
 > test: code
-> - crates/duckboard/src/meta_card.rs:348
+> - crates/duckboard/src/meta_card.rs:346

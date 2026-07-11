@@ -213,7 +213,7 @@ text and from search-match and diff line backgrounds.
 - **THEN** every line index in that range has a meta-card line background
 
 > test: code
-> - crates/duckboard/src/meta_card.rs:370
+> - crates/duckboard/src/meta_card.rs:368
 
 ### Scenario: Non-meta lines on the same Answer do not get meta-card background
 
@@ -225,4 +225,4 @@ text and from search-match and diff line backgrounds.
 - **THEN** the ordinary prose lines do not have a meta-card line background
 
 > test: code
-> - crates/duckboard/src/meta_card.rs:394
+> - crates/duckboard/src/meta_card.rs:392

@@ -232,4 +232,4 @@ options and cancel; until then, chrome remains empty and therefore not shown.
 - **AND** cancel is not set
 
 > test: code
-> - crates/duckboard/src/area/change.rs:2119
+> - crates/duckboard/src/area/change.rs:2115

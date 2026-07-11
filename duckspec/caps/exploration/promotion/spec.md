@@ -24,7 +24,7 @@ exploration is currently selected.
 - **AND** the exploration's chat sessions are accessible under the change's scope
 
 > test: code
-> - crates/duckboard/src/main.rs:5623
+> - crates/duckboard/src/main.rs:5651
 
 ### Scenario: Unbound change adopts no exploration
 
@@ -35,7 +35,7 @@ exploration is currently selected.
 - **AND** the selected exploration's chat sessions remain under their own scope
 
 > test: code
-> - crates/duckboard/src/main.rs:5655
+> - crates/duckboard/src/main.rs:5683
 
 ## Requirement: Bindings are single-use
 
@@ -52,4 +52,35 @@ already promoted — does not promote an exploration again.
 - **THEN** no exploration is promoted into the change
 
 > test: code
-> - crates/duckboard/src/main.rs:5687
+> - crates/duckboard/src/main.rs:5773
+
+## Requirement: Chat focus after bound promotion
+
+When a newly-present change directory is promoted into from a binding, duckboard SHALL
+restore keyboard focus to the chat input after that promotion so the user can continue
+typing without re-selecting the input. Detecting a newly-present change directory with no
+binding SHALL NOT force chat input focus as a result of that detection alone.
+
+> test: code
+
+### Scenario: Bound promotion restores chat input focus
+
+- **GIVEN** an exploration whose agent created a change by name
+- **AND** that change's directory is detected as newly present
+- **WHEN** promotion is evaluated
+- **THEN** the exploration is promoted into that change
+- **AND** the chat input has keyboard focus
+
+> test: code
+> - crates/duckboard/src/main.rs:5715
+
+### Scenario: Unbound new change does not force chat input focus
+
+- **GIVEN** a change directory detected as newly present with no binding for its name
+- **AND** the chat input does not have keyboard focus
+- **WHEN** promotion is evaluated
+- **THEN** no exploration is promoted into the change
+- **AND** the chat input still does not have keyboard focus
+
+> test: code
+> - crates/duckboard/src/main.rs:5745
