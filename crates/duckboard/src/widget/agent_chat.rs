@@ -3050,14 +3050,12 @@ mod tests {
         assert!(blocks[0].is_priming);
         assert_eq!(blocks[0].label, "Setup");
         assert!(!blocks[2].is_priming);
-        assert_eq!(
-            priming_collapsed_label(&blocks[0].lines),
-            "Setup · 3 lines"
-        );
     }
 
+    /// @spec chat/transcript Collapse defaults: User-expanded priming is not force-collapsed by sync
     #[test]
-    fn expanded_priming_stays_open_until_recollapse() {
+    fn user_expanded_priming_is_not_force_collapsed_by_sync() {
+        // GIVEN a priming User segment the user has expanded.
         let mut session = ChatSession::new("test".into());
         session.messages.push(crate::chat_store::ChatMessage {
             role: Role::User,
@@ -3069,21 +3067,65 @@ mod tests {
         let mut states = Vec::new();
         sync_collapse_states(&mut states, &segs);
         assert!(states[0].collapsed);
-
-        // User expands Setup.
         toggle_collapse(&mut states, 0);
         assert!(!states[0].collapsed);
         assert!(states[0].user_set);
 
-        // Sync must not force it shut (timer owns re-hide).
+        // WHEN collapse state is synced again without a timed re-collapse.
         sync_collapse_states(&mut states, &segs);
+
+        // THEN the priming User segment remains expanded.
         assert!(
             !states[0].collapsed,
             "user-expanded priming must not be force-collapsed by sync"
         );
+    }
 
-        // Timer fires.
+    /// @spec chat/transcript Collapse defaults: Timed re-collapse forces priming collapsed
+    #[test]
+    fn timed_recollapse_forces_priming_collapsed() {
+        // GIVEN a priming User segment that is currently expanded.
+        let mut session = ChatSession::new("test".into());
+        session.messages.push(crate::chat_store::ChatMessage {
+            role: Role::User,
+            content: vec![ContentBlock::Text("priming body".into())],
+            timestamp: String::new(),
+            is_priming: true,
+        });
+        let segs = build_transcript_segments(&session);
+        let mut states = Vec::new();
+        sync_collapse_states(&mut states, &segs);
+        toggle_collapse(&mut states, 0);
+        assert!(!states[0].collapsed);
+
+        // WHEN the priming re-collapse path runs for that segment.
         recollapse_priming(&mut states, 0);
+
+        // THEN the priming User segment is collapsed.
         assert!(states[0].collapsed);
+    }
+
+    /// @spec chat/transcript Segment presentation: Priming collapsed label uses Setup and line count
+    #[test]
+    fn priming_collapsed_label_uses_setup_and_line_count() {
+        // GIVEN a priming User segment whose body has a known number of lines.
+        let lines = vec![
+            "Project conventions…".to_string(),
+            String::new(),
+            "reply with a single dot (.)".to_string(),
+        ];
+
+        // WHEN the collapsed label for that segment is produced.
+        let label = priming_collapsed_label(&lines);
+
+        // THEN the label includes Setup and that line count.
+        assert!(
+            label.contains("Setup"),
+            "collapsed priming label should name Setup: {label}"
+        );
+        assert!(
+            label.contains("3 lines"),
+            "collapsed priming label should include line count: {label}"
+        );
     }
 }
