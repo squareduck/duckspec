@@ -468,7 +468,9 @@ impl AgentSession {
             agent_handle: None,
             chat_input: EditorState::new(""),
             input_attachments: HashMap::new(),
-            chat_commands: Vec::new(),
+            // System registry is duckboard-owned — available before harness
+            // discovery fills in Workflow/Agent entries.
+            chat_commands: crate::slash_commands::system_registry(),
             chat_completion: agent_chat::CompletionState::default(),
             chat_blocks: Vec::new(),
             chat_editors: Vec::new(),

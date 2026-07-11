@@ -29,6 +29,15 @@ pub fn is_system_command_name(name: &str) -> bool {
     system_registry().iter().any(|c| c.name == name)
 }
 
+/// Agent prompt for re-dispatching a transcript user message (lost-session
+/// recovery). `None` when the message was a local system command (no agent).
+pub fn agent_prompt_for_recovery(user_text: &str) -> Option<String> {
+    match parse_submit_slash(user_text) {
+        SubmitSlash::LocalHelp => None,
+        SubmitSlash::Agent { prompt, .. } => Some(prompt),
+    }
+}
+
 /// Parse a composer submit into local system vs agent (with optional `//` escape).
 pub fn parse_submit_slash(text: &str) -> SubmitSlash {
     let trimmed = text.trim();

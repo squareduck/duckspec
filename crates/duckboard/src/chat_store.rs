@@ -282,14 +282,19 @@ fn starts_with_slash_command(text: &str) -> bool {
     rest.chars().next().is_some_and(|c| !c.is_whitespace())
 }
 
-/// True when `text` is exactly a slash command with no trailing content
+/// True when `text` is exactly a single-slash command with no trailing content
 /// (e.g. `/ds-apply`, `   /ds-apply  `). Leading/trailing whitespace is
 /// ignored; anything else after the command token makes it non-bare.
+/// Double-slash escape forms (`//help`) are not bare.
 pub fn is_bare_slash_command(text: &str) -> bool {
     let trimmed = text.trim();
     let Some(rest) = trimmed.strip_prefix('/') else {
         return false;
     };
+    // Second leading `/` is the agent escape form (`//name`), not bare `/name`.
+    if rest.starts_with('/') {
+        return false;
+    }
     !rest.is_empty() && !rest.chars().any(char::is_whitespace)
 }
 
