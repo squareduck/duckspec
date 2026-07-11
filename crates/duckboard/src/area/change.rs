@@ -747,8 +747,6 @@ pub struct ChangeScopeFacts {
     pub active_step_tasks: Option<(usize, usize)>,
     /// First lifecycle option (bare name) — orientation + oneshot soft hint.
     pub next_command: Option<String>,
-    /// Full ordered bare skill names for multi-option chrome (no leading `/`).
-    pub lifecycle_commands: Vec<String>,
     /// The change's current review — the highest-numbered review filename
     /// (`NN-<slug>.md`), or `None` when the change has no reviews. Surfaced in
     /// orientation; when present, also steers the review-aware lifecycle arms.
@@ -763,15 +761,13 @@ fn scope_facts(
     lifecycle: &[&str],
     current_review: Option<String>,
 ) -> ChangeScopeFacts {
-    let lifecycle_commands: Vec<String> = lifecycle.iter().map(|s| (*s).to_string()).collect();
-    let next_command = lifecycle_commands.first().cloned();
+    let next_command = lifecycle.first().map(|s| (*s).to_string());
     ChangeScopeFacts {
         phase,
         steps_done,
         step_count,
         active_step_tasks,
         next_command,
-        lifecycle_commands,
         current_review,
     }
 }

@@ -7,16 +7,6 @@
 use crate::chat_store::{ChatMessage, ChatSession, ContentBlock, Role};
 use crate::meta_card::{NextAction, trailing_next_actions};
 
-/// Build the send-form heuristic entry (leading `/`), or empty if none.
-///
-/// Shares empty-send formatting with [`crate::obvious_bubble::bubble_send_text`].
-pub fn heuristic_as_prompts(obvious_command: Option<&str>) -> Vec<String> {
-    match crate::obvious_bubble::bubble_send_text(obvious_command) {
-        Some(text) => vec![text],
-        None => Vec::new(),
-    }
-}
-
 /// Trim and drop empties from a oneshot parse (order preserved).
 pub fn oneshot_replies_trimmed(oneshot_replies: &[String]) -> Vec<String> {
     oneshot_replies
@@ -401,7 +391,7 @@ Done.
     #[test]
     fn tab_cycles_next_actions_with_wrap() {
         // GIVEN empty composer, ≥2 next actions, Tab at last index
-        let actions = vec![
+        let actions = [
             NextAction {
                 send: "a".into(),
                 reason: None,
@@ -464,7 +454,7 @@ Done.
             Some("/ds-spec")
         );
         // Tab still cycles multi next while pending.
-        let multi = vec![
+        let multi = [
             NextAction {
                 send: "a".into(),
                 reason: None,
@@ -648,17 +638,4 @@ Done.
         assert_eq!(display, vec!["a"]);
     }
 
-    #[test]
-    fn heuristic_as_prompts_adds_leading_slash() {
-        assert_eq!(
-            heuristic_as_prompts(Some("ds-explore")),
-            vec!["/ds-explore"]
-        );
-        assert_eq!(
-            heuristic_as_prompts(Some("/ds-spec")),
-            vec!["/ds-spec"]
-        );
-        assert!(heuristic_as_prompts(None).is_empty());
-        assert!(heuristic_as_prompts(Some("  ")).is_empty());
-    }
 }

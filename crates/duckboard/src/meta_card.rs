@@ -158,11 +158,9 @@ fn blockquote_content(line: &str) -> &str {
     let trimmed = line.trim_start();
     if trimmed == ">" {
         ""
-    } else if let Some(rest) = trimmed.strip_prefix("> ") {
-        rest
     } else {
-        // Caller only passes blockquote lines.
-        ""
+        // Caller only passes blockquote lines; bare `>` handled above.
+        trimmed.strip_prefix("> ").unwrap_or_default()
     }
 }
 

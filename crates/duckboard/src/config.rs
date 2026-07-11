@@ -23,7 +23,7 @@ pub struct Config {
 }
 
 /// Global chat UI flags (all projects / instances).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ChatConfig {
     /// Under-input agent (oneshot) suggestions after a turn. Default off.
@@ -61,14 +61,6 @@ impl Default for Config {
             projects: ProjectsConfig::default(),
             model_defaults: HashMap::new(),
             chat: ChatConfig::default(),
-        }
-    }
-}
-
-impl Default for ChatConfig {
-    fn default() -> Self {
-        Self {
-            agent_input_hints: false,
         }
     }
 }

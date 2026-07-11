@@ -2486,10 +2486,10 @@ pub fn rebuild_chat_editor(ax: &mut AgentSession, highlighter: &SyntaxHighlighte
             new_editors.push(make_highlighted_editor(&block.lines, highlighter));
         }
         // Answer blocks: tint meta-card lines after lines are finalized.
-        if block.kind == crate::widget::text_edit::BlockKind::Assistant {
-            if let Some(ed) = new_editors.last_mut() {
-                apply_meta_card_line_backgrounds(ed);
-            }
+        if block.kind == crate::widget::text_edit::BlockKind::Assistant
+            && let Some(ed) = new_editors.last_mut()
+        {
+            apply_meta_card_line_backgrounds(ed);
         }
     }
 
@@ -2662,14 +2662,15 @@ pub fn handle_agent_chat_key(
     }
 
     // Empty-input next-action cycle (only when completion is not consuming Tab).
-    if *key == keyboard::Key::Named(Named::Tab) && ax.chat_input.text().trim().is_empty() {
-        if crate::default_prompts::can_cycle_next_actions(
+    if *key == keyboard::Key::Named(Named::Tab)
+        && ax.chat_input.text().trim().is_empty()
+        && crate::default_prompts::can_cycle_next_actions(
             ax.session.is_streaming,
             ax.next_actions.len(),
-        ) {
-            let delta: i8 = if mods.shift() { -1 } else { 1 };
-            return AgentChatKeyResult::Dispatch(agent_chat::Msg::CycleNextAction(delta));
-        }
+        )
+    {
+        let delta: i8 = if mods.shift() { -1 } else { 1 };
+        return AgentChatKeyResult::Dispatch(agent_chat::Msg::CycleNextAction(delta));
     }
 
     // Obvious chrome hotkeys — only when chrome is visible (idle + empty input).

@@ -629,7 +629,7 @@ pub fn chat_user_card(_theme: &Theme) -> container::Style {
 }
 
 /// Untinted obvious-chrome chip base (muted paper). Tint helpers mix ~8% color
-/// into this surface for numbered / enter / reject roles.
+/// into this surface for numbered / reject roles.
 pub fn chat_obvious_chip_neutral(_theme: &Theme) -> container::Style {
     let mut border = border_color();
     border.a *= 0.55;
@@ -647,15 +647,9 @@ pub fn chat_obvious_chip_neutral(_theme: &Theme) -> container::Style {
 }
 
 /// Quiet light-blue chip — multi-option numbered lifecycle (⌘1…⌘n).
-/// Same ~8% tint strength as enter/reject.
+/// Same ~8% tint strength as reject.
 pub fn chat_obvious_chip_numbered(_theme: &Theme) -> container::Style {
     tint_obvious_chip(_theme, accent())
-}
-
-/// Very subtle green chip — Confirm / Commit / Create change, dual enter, or
-/// single-option lifecycle.
-pub fn chat_obvious_chip_enter(_theme: &Theme) -> container::Style {
-    tint_obvious_chip(_theme, success())
 }
 
 /// Very subtle red chip — Reject.
