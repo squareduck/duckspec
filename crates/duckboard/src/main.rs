@@ -24,6 +24,7 @@ mod keybinds;
 mod path_env;
 mod path_link;
 mod scope;
+mod slash_commands;
 mod theme;
 mod title_hints;
 mod vcs;
@@ -314,6 +315,14 @@ enum Message {
     /// Shared interaction-column messages (sessions, terminals, agent input).
     /// Routed to `state.interactions[active_scope]`.
     Interaction(interaction::Msg),
+    /// Delayed re-collapse of an expanded priming Setup block. `key` is
+    /// `<instance_id>/<session_id>`; `expand_gen` must still match
+    /// `AgentSession::priming_expand_gen` or the timer is ignored.
+    RecollapsePriming {
+        key: String,
+        idx: usize,
+        expand_gen: u64,
+    },
     // File finder
     FileFinder(widget::file_finder::Msg),
     // Project-wide text search
@@ -1333,6 +1342,17 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
             // vs Ideas pre/post-promotion) runs.
             return route_interaction(state, msg);
         }
+        Message::RecollapsePriming {
+            key,
+            idx,
+            expand_gen,
+        } => {
+            if let Some(ax) = state.agent_session_mut(&key)
+                && ax.priming_expand_gen == expand_gen
+            {
+                widget::agent_chat::recollapse_priming(&mut ax.chat_collapse, idx);
+            }
+        }
         // Clipboard → PTY paste.
         Message::TerminalPaste(key, Some(text)) => {
             if let Some(ix) = state.interaction_mut(&key)
@@ -1433,7 +1453,10 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                     }
                     AgentEvent::CommandsAvailable(commands) => {
                         tracing::info!(key, count = commands.len(), "slash commands discovered");
-                        ax.chat_commands = commands;
+                        ax.chat_commands = slash_commands::build_completion_catalog(
+                            slash_commands::system_registry(),
+                            commands,
+                        );
                     }
                     AgentEvent::ContentDelta { text } => {
                         let tripped_before = ax.session.answer_thrash_tripped;
@@ -2452,7 +2475,10 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
             }
         }
     }
-    take_pending_chat_snap(state)
+    Task::batch([
+        take_pending_chat_snap(state),
+        take_pending_priming_recollapse(state),
+    ])
 }
 
 /// Mirror the active content tab's selection into the active chat session's
@@ -2556,6 +2582,39 @@ fn take_pending_chat_snap(state: &mut State) -> Task<Message> {
         iced::widget::operation::snap_to_end(widget::agent_chat::CHAT_SCROLLABLE_ID)
     } else {
         Task::none()
+    }
+}
+
+/// Drain `pending_priming_recollapse` flags into delayed
+/// [`Message::RecollapsePriming`] tasks so an expanded Setup block auto-hides
+/// after [`widget::agent_chat::PRIMING_RECOLLAPSE_SECS`].
+fn take_pending_priming_recollapse(state: &mut State) -> Task<Message> {
+    let mut tasks = Vec::new();
+    for ix in state.interactions.values_mut() {
+        let ix_id = ix.instance_id;
+        for ax in &mut ix.sessions {
+            if let Some((idx, expand_gen)) = ax.pending_priming_recollapse.take() {
+                let key = format!("{ix_id}/{}", ax.session.id);
+                let delay = std::time::Duration::from_secs(
+                    widget::agent_chat::PRIMING_RECOLLAPSE_SECS,
+                );
+                tasks.push(Task::perform(
+                    async move {
+                        tokio::time::sleep(delay).await;
+                    },
+                    move |_| Message::RecollapsePriming {
+                        key,
+                        idx,
+                        expand_gen,
+                    },
+                ));
+            }
+        }
+    }
+    if tasks.is_empty() {
+        Task::none()
+    } else {
+        Task::batch(tasks)
     }
 }
 

@@ -435,6 +435,13 @@ pub struct AgentSession {
     /// Cleared on cancel/error so a backed-out priming doesn't strand a
     /// phantom command.
     pub pending_followup_prompt: Option<String>,
+    /// Bumped each time the priming Setup block is expanded or manually
+    /// re-collapsed. Delayed re-collapse tasks carry a generation and
+    /// no-op when it no longer matches.
+    pub priming_expand_gen: u64,
+    /// When set after expanding the priming Setup block, main schedules a
+    /// delayed re-collapse of `(segment_idx, expand_gen)` then clears this flag.
+    pub pending_priming_recollapse: Option<(usize, u64)>,
     /// True when messages have been streamed into this session since its last
     /// persist. Set by the message-mutating `AgentEvent`s, cleared by the
     /// coalesced eager flush and the turn-boundary save. Transient — never
@@ -490,6 +497,8 @@ impl AgentSession {
             chat_input_focused: false,
             priming_in_flight: false,
             pending_followup_prompt: None,
+            priming_expand_gen: 0,
+            pending_priming_recollapse: None,
             needs_flush: false,
             chat_ui_dirty: false,
         }
@@ -1908,7 +1917,32 @@ fn handle_agent_chat(
             }
         }
         agent_chat::Msg::ToggleCollapse(idx) => {
+            let was_collapsed = ax
+                .chat_collapse
+                .get(idx)
+                .map(|s| s.collapsed)
+                .unwrap_or(false);
+            let is_priming = ax
+                .chat_blocks
+                .get(idx)
+                .map(|b| b.is_priming)
+                .unwrap_or(false);
             agent_chat::toggle_collapse(&mut ax.chat_collapse, idx);
+            if is_priming {
+                let now_collapsed = ax
+                    .chat_collapse
+                    .get(idx)
+                    .map(|s| s.collapsed)
+                    .unwrap_or(false);
+                // Bump generation so any prior timer is stale. On expand,
+                // schedule a re-hide after PRIMING_RECOLLAPSE_SECS.
+                ax.priming_expand_gen = ax.priming_expand_gen.wrapping_add(1);
+                if was_collapsed && !now_collapsed {
+                    ax.pending_priming_recollapse = Some((idx, ax.priming_expand_gen));
+                } else {
+                    ax.pending_priming_recollapse = None;
+                }
+            }
         }
         agent_chat::Msg::SendObviousAction(text) => {
             // Obvious chrome only — never the oneshot default-prompt list.

@@ -36,6 +36,10 @@ pub struct Block {
     pub kind: BlockKind,
     pub label: String,
     pub lines: Vec<String>,
+    /// True for the synthetic first-turn AGENTS.md / orientation priming
+    /// user message. Drives collapsible presentation in the chat transcript;
+    /// ignored by non-chat block-aware editors.
+    pub is_priming: bool,
 }
 
 /// Identifies what a visible line maps to within the block structure.

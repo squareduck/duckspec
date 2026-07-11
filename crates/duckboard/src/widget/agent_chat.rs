@@ -290,6 +290,9 @@ pub struct CompletionState {
 pub enum TranscriptSeg {
     User {
         lines: Vec<String>,
+        /// Synthetic first-turn AGENTS.md / orientation inject. Starts
+        /// collapsed so scroll-to-top lands on the real first user message.
+        is_priming: bool,
     },
     System {
         lines: Vec<String>,
@@ -349,6 +352,7 @@ pub fn build_transcript_segments(session: &ChatSession) -> Vec<TranscriptSeg> {
                     activity_index.clear();
                     segs.push(TranscriptSeg::User {
                         lines: text_lines(t),
+                        is_priming: msg.is_priming,
                     });
                 }
                 (Role::System, ContentBlock::Text(t)) => {
@@ -533,12 +537,17 @@ pub struct CollapseState {
     pub user_set: bool,
 }
 
+/// Seconds after a manual expand of the priming Setup block before it
+/// auto-hides again. Mid of the 10–20s product range.
+pub const PRIMING_RECOLLAPSE_SECS: u64 = 15;
+
 /// First-sight default: live Thinking/Activity expanded; settled collapsed.
-/// Non-collapsible kinds (Answer, User, System) are never collapsed.
+/// Priming User starts collapsed. Other User / Answer / System stay open.
 fn first_sight_collapsed(seg: &TranscriptSeg) -> bool {
     match seg {
         TranscriptSeg::Thinking { live, .. } | TranscriptSeg::Activity { live, .. } => !live,
-        TranscriptSeg::User { .. }
+        TranscriptSeg::User { is_priming: true, .. } => true,
+        TranscriptSeg::User { is_priming: false, .. }
         | TranscriptSeg::System { .. }
         | TranscriptSeg::Answer { .. } => false,
     }
@@ -558,7 +567,9 @@ fn has_following_answer(segs: &[TranscriptSeg], idx: usize) -> bool {
 ///   [`build_transcript_segments`]).
 /// - Auto-collapses untoggled Activity when a following Answer appears or the
 ///   turn settles (`live == false`).
-/// - Leaves `user_set` segments alone for auto-collapse.
+/// - Keeps untoggled priming User collapsed (first-sight and on rebuild).
+/// - Leaves `user_set` segments alone for auto-collapse (priming re-hide after
+///   expand is a separate timer, not this sync path).
 ///
 /// Thinking `live` means open-in-turn (streaming, no following Answer), not
 /// "still receiving ReasoningDelta", so tool phases keep Thinking expanded.
@@ -587,7 +598,11 @@ pub fn sync_collapse_states(states: &mut Vec<CollapseState>, segs: &[TranscriptS
                     states[i].collapsed = true;
                 }
             }
-            TranscriptSeg::User { .. }
+            TranscriptSeg::User { is_priming: true, .. } => {
+                // Stay folded until the user clicks to inspect.
+                states[i].collapsed = true;
+            }
+            TranscriptSeg::User { is_priming: false, .. }
             | TranscriptSeg::System { .. }
             | TranscriptSeg::Answer { .. } => {
                 states[i].collapsed = false;
@@ -602,6 +617,26 @@ pub fn toggle_collapse(states: &mut [CollapseState], idx: usize) {
     if let Some(state) = states.get_mut(idx) {
         state.collapsed = !state.collapsed;
         state.user_set = true;
+    }
+}
+
+/// Collapsed label for the synthetic priming user message.
+pub fn priming_collapsed_label(lines: &[String]) -> String {
+    let n = lines.len();
+    if n == 1 {
+        "Setup · 1 line".to_string()
+    } else {
+        format!("Setup · {n} lines")
+    }
+}
+
+/// Force-collapse a priming segment after the expand timer. Callers gate on
+/// expand generation so stale timers no-op.
+pub fn recollapse_priming(states: &mut [CollapseState], idx: usize) {
+    if let Some(state) = states.get_mut(idx) {
+        state.collapsed = true;
+        // Keep `user_set` so sync does not fight a later re-expand path that
+        // also marks user_set; the timed re-hide is intentional UX.
     }
 }
 
@@ -690,15 +725,24 @@ pub fn tool_status_glyph(status: ToolRowStatus) -> &'static str {
 pub fn blocks_from_segments(segs: &[TranscriptSeg]) -> Vec<Block> {
     segs.iter()
         .map(|seg| match seg {
-            TranscriptSeg::User { lines } => Block {
+            TranscriptSeg::User {
+                lines,
+                is_priming,
+            } => Block {
                 kind: BlockKind::User,
-                label: "User".to_string(),
+                label: if *is_priming {
+                    "Setup".to_string()
+                } else {
+                    "User".to_string()
+                },
                 lines: lines.clone(),
+                is_priming: *is_priming,
             },
             TranscriptSeg::System { lines } => Block {
                 kind: BlockKind::System,
                 label: "System".to_string(),
                 lines: lines.clone(),
+                is_priming: false,
             },
             TranscriptSeg::Thinking { lines, live } => Block {
                 kind: BlockKind::Reasoning,
@@ -708,6 +752,7 @@ pub fn blocks_from_segments(segs: &[TranscriptSeg]) -> Vec<Block> {
                     "Thinking".to_string()
                 },
                 lines: lines.clone(),
+                is_priming: false,
             },
             TranscriptSeg::Answer { lines, live } => Block {
                 kind: BlockKind::Assistant,
@@ -717,11 +762,13 @@ pub fn blocks_from_segments(segs: &[TranscriptSeg]) -> Vec<Block> {
                     "Assistant".to_string()
                 },
                 lines: lines.clone(),
+                is_priming: false,
             },
             TranscriptSeg::Activity { tools, .. } => Block {
                 kind: BlockKind::Activity,
                 label: activity_collapsed_label(tools),
                 lines: activity_body_lines(tools),
+                is_priming: false,
             },
         })
         .collect()
@@ -1459,7 +1506,8 @@ pub fn measure_scroll_bounds() -> iced::Task<(f32, f32)> {
 
 /// Render a single chat block, Zed-style calm transcript:
 ///
-/// - **User**: bordered card on the "paper" surface (no label, no chevron).
+/// - **User** (normal): bordered card on the "paper" surface (no label, no chevron).
+/// - **User** (priming Setup): collapsible muted header; user-card body when open.
 /// - **Answer / System**: plain text flowing on the chat background.
 /// - **Thinking**: muted collapsible header; body when expanded.
 /// - **Activity**: framed group card with quiet tool rows when expanded.
@@ -1477,6 +1525,9 @@ fn view_block<'a>(
         }
         BlockKind::Activity | BlockKind::ToolUse | BlockKind::ToolResult => {
             view_activity_block(idx, block, editor, collapsed, hl_ranges, hl_current)
+        }
+        BlockKind::User if block.is_priming => {
+            view_priming_user_block(idx, block, editor, collapsed, hl_ranges, hl_current)
         }
         BlockKind::User | BlockKind::Assistant | BlockKind::System => {
             view_prose_block(idx, block, editor, hl_ranges, hl_current)
@@ -1520,6 +1571,70 @@ fn view_prose_block<'a>(
             .into(),
         _ => padded.into(),
     }
+}
+
+/// Priming Setup user message: collapsible so scroll-to-top skips the
+/// AGENTS.md / orientation inject. Starts collapsed; expand on click;
+/// auto-hides again after [`PRIMING_RECOLLAPSE_SECS`].
+fn view_priming_user_block<'a>(
+    idx: usize,
+    block: &'a Block,
+    editor: Option<&'a EditorState>,
+    collapsed: bool,
+    hl_ranges: Vec<text_edit::HighlightRange>,
+    hl_current: Option<text_edit::HighlightRange>,
+) -> Element<'a, Msg> {
+    let has_content = !block.lines.is_empty();
+    let body_shown = has_content && !collapsed && editor.is_some();
+    let header_label = if collapsed {
+        priming_collapsed_label(&block.lines)
+    } else {
+        block.label.clone()
+    };
+    let label = text(header_label)
+        .size(theme::content_size())
+        .font(theme::content_font())
+        .color(theme::text_muted());
+    let header_row = row![collapsible::chevron(!collapsed), label]
+        .spacing(theme::SPACING_XS)
+        .align_y(iced::Alignment::Center);
+    let header_content: Element<'a, Msg> = button(header_row)
+        .on_press(Msg::ToggleCollapse(idx))
+        .padding(0.0)
+        .style(|_theme, _status| iced::widget::button::Style {
+            background: None,
+            ..Default::default()
+        })
+        .into();
+    let header = container(header_content)
+        .padding([theme::SPACING_XS, theme::SPACING_MD])
+        .width(Length::Fill);
+
+    let mut col = column![header].width(Length::Fill);
+    if body_shown && let Some(ed) = editor {
+        let content = text_edit::TextEdit::new(ed, move |action| Msg::ChatAction(idx, action))
+            .show_gutter(false)
+            .word_wrap(true)
+            .md_tables(true)
+            .read_only(true)
+            .fit_content(true)
+            .transparent_bg(true)
+            .highlights(hl_ranges, hl_current);
+        let padded = container(content)
+            .padding([theme::SPACING_SM, theme::SPACING_MD])
+            .width(Length::Fill)
+            .style(theme::chat_user_card);
+        col = col.push(
+            container(padded)
+                .padding([0.0, theme::SPACING_SM])
+                .width(Length::Fill),
+        );
+    }
+
+    container(col)
+        .padding([0.0, theme::SPACING_SM])
+        .width(Length::Fill)
+        .into()
 }
 
 /// Thinking: collapsible muted header; expanded body is the thought text.
@@ -2865,5 +2980,110 @@ mod tests {
             "settled Activity should be collapsed"
         );
         assert!(!states[0].user_set);
+    }
+
+    /// @spec chat/transcript Collapse defaults: Priming Setup starts collapsed
+    #[test]
+    fn priming_setup_starts_collapsed() {
+        // GIVEN a session whose first user message is the synthetic priming inject.
+        let mut session = ChatSession::new("test".into());
+        session.messages.push(crate::chat_store::ChatMessage {
+            role: Role::User,
+            content: vec![ContentBlock::Text(
+                "Project conventions from AGENTS.md…\n\nDo not respond — reply with a single dot (.)"
+                    .into(),
+            )],
+            timestamp: String::new(),
+            is_priming: true,
+        });
+        session.messages.push(crate::chat_store::ChatMessage {
+            role: Role::Assistant,
+            content: vec![ContentBlock::Text(".".into())],
+            timestamp: String::new(),
+            is_priming: false,
+        });
+        session.messages.push(crate::chat_store::ChatMessage {
+            role: Role::User,
+            content: vec![ContentBlock::Text("real first message".into())],
+            timestamp: String::new(),
+            is_priming: false,
+        });
+
+        let segs = build_transcript_segments(&session);
+        assert!(
+            matches!(
+                &segs[0],
+                TranscriptSeg::User {
+                    is_priming: true,
+                    ..
+                }
+            ),
+            "first segment should be priming user: {segs:?}"
+        );
+        assert!(
+            matches!(
+                &segs[2],
+                TranscriptSeg::User {
+                    is_priming: false,
+                    ..
+                }
+            ),
+            "real user message is not priming: {segs:?}"
+        );
+
+        // WHEN collapse state is synced for that transcript.
+        let mut states = Vec::new();
+        sync_collapse_states(&mut states, &segs);
+
+        // THEN the priming Setup block is collapsed and the real user is not.
+        assert!(
+            states[0].collapsed,
+            "priming Setup should start collapsed"
+        );
+        assert!(!states[0].user_set);
+        assert!(
+            !states[2].collapsed,
+            "real user message must stay expanded"
+        );
+
+        let blocks = blocks_from_segments(&segs);
+        assert!(blocks[0].is_priming);
+        assert_eq!(blocks[0].label, "Setup");
+        assert!(!blocks[2].is_priming);
+        assert_eq!(
+            priming_collapsed_label(&blocks[0].lines),
+            "Setup · 3 lines"
+        );
+    }
+
+    #[test]
+    fn expanded_priming_stays_open_until_recollapse() {
+        let mut session = ChatSession::new("test".into());
+        session.messages.push(crate::chat_store::ChatMessage {
+            role: Role::User,
+            content: vec![ContentBlock::Text("priming body".into())],
+            timestamp: String::new(),
+            is_priming: true,
+        });
+        let segs = build_transcript_segments(&session);
+        let mut states = Vec::new();
+        sync_collapse_states(&mut states, &segs);
+        assert!(states[0].collapsed);
+
+        // User expands Setup.
+        toggle_collapse(&mut states, 0);
+        assert!(!states[0].collapsed);
+        assert!(states[0].user_set);
+
+        // Sync must not force it shut (timer owns re-hide).
+        sync_collapse_states(&mut states, &segs);
+        assert!(
+            !states[0].collapsed,
+            "user-expanded priming must not be force-collapsed by sync"
+        );
+
+        // Timer fires.
+        recollapse_priming(&mut states, 0);
+        assert!(states[0].collapsed);
     }
 }
