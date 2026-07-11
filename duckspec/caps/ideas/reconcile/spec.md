@@ -98,7 +98,7 @@ one.
 - **THEN** the selection references the idea at its new location
 
 > test: code
-> - crates/duckboard/src/area/ideas.rs:1129
+> - crates/duckboard/src/area/ideas.rs:1127
 
 ### Scenario: The open idea editor tracks the idea after relocation
 

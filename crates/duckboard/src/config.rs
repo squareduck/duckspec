@@ -18,7 +18,7 @@ pub struct Config {
     /// the built-in default. Legacy bare-string values load as the
     /// `claude-code` harness via `ModelRef`'s deserialize shim.
     pub model_defaults: HashMap<String, ModelRef>,
-    /// Chat affordances: under-input agent hints and auto-message chips.
+    /// Chat affordances: under-input agent hints.
     pub chat: ChatConfig,
 }
 
@@ -28,8 +28,6 @@ pub struct Config {
 pub struct ChatConfig {
     /// Under-input agent (oneshot) suggestions after a turn. Default off.
     pub agent_input_hints: bool,
-    /// Obvious lifecycle / affirm / decline chip chrome + ⌘ bindings. Default on.
-    pub auto_messages: bool,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -71,7 +69,6 @@ impl Default for ChatConfig {
     fn default() -> Self {
         Self {
             agent_input_hints: false,
-            auto_messages: true,
         }
     }
 }
@@ -253,20 +250,24 @@ mod tests {
         assert!(!ChatConfig::default().agent_input_hints);
     }
 
-    // @spec chat/obvious-bubble Chrome visibility: Default auto messages setting is enabled
-    #[test]
-    fn default_auto_messages_setting_is_enabled() {
-        // GIVEN application config defaults
-        // WHEN the auto messages setting is read
-        // THEN it is enabled
-        assert!(Config::default().chat.auto_messages);
-        assert!(ChatConfig::default().auto_messages);
-    }
-
     #[test]
     fn missing_chat_table_deserializes_to_defaults() {
         let cfg: Config = toml::from_str("").expect("empty toml");
         assert!(!cfg.chat.agent_input_hints);
-        assert!(cfg.chat.auto_messages);
+    }
+
+    #[test]
+    fn unknown_auto_messages_key_is_ignored() {
+        // GIVEN legacy config that still lists auto_messages
+        let cfg: Config = toml::from_str(
+            r#"
+[chat]
+agent_input_hints = true
+auto_messages = true
+"#,
+        )
+        .expect("legacy chat table");
+        // THEN load succeeds and agent_input_hints is honored
+        assert!(cfg.chat.agent_input_hints);
     }
 }

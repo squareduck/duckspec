@@ -5,122 +5,74 @@ suggestions (lifecycle heuristic passed only as a soft request hint), show and a
 only after a non-empty parse settles, and drive empty Enter plus Tab cycling from that
 list alone. The effective list is never seeded or filled from the lifecycle heuristic.
 
-Under-input **input hints** for the empty composer: when auto messages is on, the list is
-always empty (obvious chrome owns lifecycle assistance). When auto messages is off, an
-empty session seeds a single entry from the first lifecycle option when one exists; a
-non-empty session uses settled agent oneshot `REPLY:` suggestions only when the global
-agent input hints setting is enabled (default off). Empty Enter and Tab cycle that
-effective list alone.
+Empty-composer next actions from lifecycle bootstrap (empty session) or a trailing `next`
+meta card (after the first turn), shown as ghost text with empty Enter and Tab cycle;
+optional settings-gated oneshot reply suggestion as a single under-input line sent only
+with empty Cmd-Enter.
 
-## Pipeline
+## Surfaces
 
-Input hints under the empty composer are fully off when auto messages is on. Otherwise
-they come from one of two sources — never both at once.
-
-**Auto messages on:** effective list empty; no oneshot is started.
-
-**Auto messages off + empty session** (`messages` empty): the effective list is the first
-lifecycle option in empty-send form when the session has one (for example `/ds-explore` or
-`/ds-propose`). That seed is ready immediately — no model call. If there is no first
-lifecycle option (caps, codex, and similar), the list is empty.
-
-**Auto messages off + non-empty session with agent input hints enabled:** after a
-non-priming agent turn completes, the session harness runs a short oneshot on its cheapest
-available model. The request carries the last assistant message, the preceding user
-message when present, discovered slash command names, and the lifecycle heuristic when the
-session has one — all as priming context. Message bodies are capped for speed: the
-assistant tail is at most 40 lines and the user tail at most 12 lines (with a marker when
-truncated). The model returns 0–3 `REPLY:` lines. The effective list is only that non-empty
-parse. Fail, timeout, or empty parse leaves the list empty; the lifecycle heuristic is
-request context only and never fills the list.
-
-**Auto messages off + non-empty session with agent input hints disabled:** no oneshot is
-started; the effective list stays empty.
+Two empty-composer surfaces stay separate:
 
 ```
-auto messages ON
+| Surface        | Source                                      | Empty-input chrome                    | Send key   |
+|----------------|---------------------------------------------|-------------------------------|------------|
+| Next actions   | Empty session: lifecycle[0]; else trailing `next` | Ghost + optional tab marker before ghost | Enter      |
+| Oneshot hint   | Cheap-model `REPLY:` when agent input hints on  | Single under-input row + ⌘↩ marker | Cmd-Enter  |
+```
+
+Next actions never list under the input. Oneshot never fills the next-action list or
+ghost. Missing trailing `next` after the first turn means no next-action ghost — not a
+disk-phase fallback.
+
+## Next-action list
+
+```
+session empty + lifecycle[0]
     │
     ▼
-effective list empty  (chrome owns assistance)
+next-actions = [lifecycle[0]]   (ready immediately)
 
-auto messages OFF + empty session + lifecycle[0]
+session empty, no lifecycle[0]
     │
     ▼
-effective list = [lifecycle[0]]  ──▶  ready (no pending)
+next-actions = []
 
-auto messages OFF + non-empty + agent hints OFF
+session non-empty
     │
     ▼
-no oneshot  ──▶  effective list empty
+trailing next actions from last assistant   (0–3 send tokens)
+    │
+    └── no trailing next ──▶ next-actions = []
+```
 
-auto messages OFF + non-empty + agent hints ON
+Empty Enter sends the active send token. Tab / Shift-Tab cycle when there are two or more
+actions; a small tab-available marker appears **before** the ghost only then. Ghost text
+is the active send token via the empty-input placeholder (hidden while streaming).
+
+## Oneshot pipeline
+
+When agent input hints is enabled (default off), after a non-priming turn the harness may
+run a short oneshot. The request embeds the **full** last assistant message and preceding
+user message (no line truncation, no lifecycle heuristic, no slash-command priming list).
+The instruction asks for a natural freeform user reply — not stage-command autocomplete —
+as at most one `REPLY:` line.
+
+```
+TurnComplete + agent hints ON
     │
     ▼
-TurnComplete ──▶ cheap-model oneshot
+cheap-model oneshot
     │
-    ├── REPLY: lines (1–3)  ──▶  effective list (parse only)
-    └── fail / timeout / empty  ──▶  effective list empty
-    │
-    ▼
-pending → ready  ──▶  empty composer: list when non-empty
+    ├── REPLY: line (0–1)  ──▶ under-input suggestion
+    └── fail / timeout / empty  ──▶ no suggestion
 ```
 
-While a oneshot is outstanding, empty-input chrome shows a loading indicator instead of a
-list. Starting a new turn invalidates any in-flight oneshot so a late result cannot arm
-stale defaults. If the chat agent ends while a oneshot is still outstanding, suggestions
-become ready (not left pending on the loading indicator). Empty-session disk seed never
-uses the loading indicator.
+While oneshot is pending, under-input shows loading (not the suggestion). Pending oneshot
+does **not** block empty Enter for next actions. Empty Cmd-Enter sends the armed
+suggestion only when ready; empty Enter and empty Shift-Enter never send it.
 
-## Reply format and order
+## Oneshot presentation
 
-The oneshot must answer only with lines of the form `REPLY: <text>`. Parsing keeps those
-lines in order, trims the text, drops empties, and hard-caps at three. Other lines are
-ignored. Slash forms the model invents are kept as written. The shared instruction
-soft-asks that each REPLY text be at most 100 characters; the parser does not enforce that
-budget — longer replies stay in the list in full.
-
-When multiple lines are emitted, the instruction asks for this order:
-
-```
-| Position | Role                                      |
-|----------|-------------------------------------------|
-| first    | Most obvious continue for the flow        |
-| middle   | Alternatives                              |
-| last     | Negative / decline when that fits         |
-```
-
-On the oneshot request, the lifecycle heuristic is a soft hint only — the model may omit
-it, place it in any slot, or invent different replies. For non-empty sessions the
-heuristic never populates the effective list. For empty sessions the first lifecycle
-option is the list itself (not a soft hint to a model).
-
-## Readiness
-
-```
-| State                              | Empty-input chrome     | Empty Enter              |
-|------------------------------------|------------------------|--------------------------|
-| Main turn streaming                | No list, no loading    | Stream path (queue /     |
-|                                    |                        | interrupt) — not send    |
-|                                    |                        | active default           |
-| Empty session + lifecycle seed     | List (single entry)    | Sends that entry         |
-| Pending (oneshot in flight)        | Loading indicator      | No-op (no default sent)  |
-| Ready, non-empty list              | Full effective list    | Sends active entry       |
-| Ready, empty list                  | No list                | No-op                    |
-| Agent hints off, non-empty session | No list                | No-op                    |
-| No oneshot outstanding             | Ready (list empty or   | As above                 |
-|                                    | populated)             |                          |
-| Oneshot fail / timeout settle      | Ready, list empty      | No-op                    |
-| Agent handle ended, no settle      | Ready (not pending)    | As ready                 |
-```
-
-Superseded oneshot results (generation mismatch) are ignored and do not change the ready
-list. While a main turn is streaming, defaults chrome stays hidden even if a settled list
-would otherwise be ready.
-
-## Defaults list presentation
-
-When the ready effective list is shown under an empty composer, each suggestion soft-wraps
-within the composer width and its row grows with the wrapped lines so the next suggestion
-starts below the previous block without overlap. Full suggestion text stays visible (no
-ellipsis or hard clip of the displayed value). Empty Enter still sends the full active
-string.
+The under-input row shows a legible Cmd-Enter marker before the suggestion text. Long
+suggestions soft-wrap; full text stays visible without ellipsis.

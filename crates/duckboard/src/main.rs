@@ -15,6 +15,7 @@ mod chat_store;
 pub mod config;
 mod data;
 mod default_prompts;
+mod meta_card;
 mod obvious_bubble;
 pub mod highlight;
 mod idea_format;
@@ -924,7 +925,6 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                         &state.project,
                         &state.highlighter,
                         state.config.chat.agent_input_hints,
-                        state.config.chat.auto_messages,
                         );
                     return restore_chat_scroll(state);
                 }
@@ -938,7 +938,6 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                         &state.project,
                         &state.highlighter,
                         state.config.chat.agent_input_hints,
-                        state.config.chat.auto_messages,
                         );
                     return Task::batch([restore_chat_scroll(state), focus_chat_input()]);
                 }
@@ -958,7 +957,6 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                         &state.project,
                         &state.highlighter,
                         state.config.chat.agent_input_hints,
-                        state.config.chat.auto_messages,
                         );
                     return restore_chat_scroll(state);
                 }
@@ -1010,7 +1008,6 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                             &state.project,
                             &state.highlighter,
                             state.config.chat.agent_input_hints,
-                            state.config.chat.auto_messages,
                             );
                         return restore_chat_scroll(state);
                     }
@@ -1041,7 +1038,6 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                         &state.project,
                         &state.highlighter,
                         state.config.chat.agent_input_hints,
-                        state.config.chat.auto_messages,
                         );
                     if needs_focus {
                         return focus_chat_input();
@@ -1071,7 +1067,6 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                 &state.project,
                 &state.highlighter,
                 state.config.chat.agent_input_hints,
-                state.config.chat.auto_messages,
                 );
             if needs_focus {
                 return focus_chat_input();
@@ -1088,7 +1083,6 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                 &state.project,
                 &state.highlighter,
                 state.config.chat.agent_input_hints,
-                state.config.chat.auto_messages,
                 );
             if needs_focus {
                 return focus_chat_input();
@@ -1158,7 +1152,6 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                     &state.project,
                     &state.highlighter,
                     state.config.chat.agent_input_hints,
-                    state.config.chat.auto_messages,
                     );
                 // SelectIdea spawns the exploration session with
                 // empty chrome; refresh so the chat input renders lifecycle
@@ -1204,7 +1197,6 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                     &state.project,
                     &state.highlighter,
                     state.config.chat.agent_input_hints,
-                    state.config.chat.auto_messages,
                     );
                 return restore_chat_scroll(state);
             }
@@ -1233,7 +1225,6 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                 &state.project,
                 &state.highlighter,
                 state.config.chat.agent_input_hints,
-                state.config.chat.auto_messages,
                 );
             if focus_tag_input {
                 return iced::widget::operation::focus(area::ideas::TAG_INPUT_ID);
@@ -1389,12 +1380,10 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                 Option<String>,
             );
             let mut title_task_input: Option<TitleTaskInput> = None;
-            // `(handle, assistant, user, available_commands, heuristic, gen)`.
+            // `(handle, assistant, user, gen)` — freeform oneshot, no heuristic/cmds.
             type ReplyTaskInput = (
                 duckchat::AgentHandle,
                 String,
-                Option<String>,
-                Vec<String>,
                 Option<String>,
                 u64,
             );
@@ -1408,7 +1397,6 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
             let mut recover_lost_session = false;
             // Copy before mutably borrowing the session (config lives on `state`).
             let agent_input_hints = state.config.chat.agent_input_hints;
-            let auto_messages = state.config.chat.auto_messages;
             // Structural / kind-switch events force an immediate chat UI
             // materialize; pure content deltas only set `chat_ui_dirty` and
             // wait for StreamTick (see chat/stream-ui).
@@ -1503,6 +1491,9 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                         ax.session.is_streaming = false;
                         ax.chat_ui_dirty = true;
                         force_materialize = true;
+                        // Rebuild next actions from the new trailing assistant text.
+                        // Turn boundary: ghost starts at first ranked action.
+                        ax.refresh_next_actions(true);
                         // Detect the AGENTS.md priming turn and stage the
                         // user's actual first message for dispatch in the
                         // post-match block (where we can borrow `highlighter`
@@ -1553,34 +1544,16 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                             let has_assistant = !assistant.trim().is_empty();
                             if default_prompts::should_begin_reply_oneshot(
                                 agent_input_hints,
-                                auto_messages,
                                 was_priming,
                                 has_assistant,
                             ) && let Some(handle) = ax.agent_handle.clone()
                             {
                                 ax.begin_default_prompts_oneshot();
                                 let prompts_gen = ax.default_prompts_gen;
-                                let cmds: Vec<String> =
-                                    ax.chat_commands.iter().map(|c| c.name.clone()).collect();
-                                // Soft hint: first lifecycle option (bare name),
-                                // matching orientation next_command — never the
-                                // oneshot composer list seed.
-                                let heuristic = ax
-                                    .obvious_chrome
-                                    .lifecycle
-                                    .first()
-                                    .map(|s| s.trim_start_matches('/').to_string())
-                                    .or_else(|| {
-                                        ax.scope_facts
-                                            .as_ref()
-                                            .and_then(|f| f.next_command.clone())
-                                    });
                                 reply_task_input = Some((
                                     handle,
                                     assistant,
                                     user,
-                                    cmds,
-                                    heuristic,
                                     prompts_gen,
                                 ));
                             }
@@ -1778,21 +1751,11 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                 }));
             }
 
-            if let Some((
-                handle,
-                assistant,
-                user,
-                available_commands,
-                lifecycle_heuristic,
-                prompts_gen,
-            )) = reply_task_input
-            {
+            if let Some((handle, assistant, user, prompts_gen)) = reply_task_input {
                 let route_key = key.clone();
                 let work = async move {
                     let mut req = duckchat::ReplySuggestionRequest::new(assistant);
                     req.user_message = user;
-                    req.available_commands = available_commands;
-                    req.lifecycle_heuristic = lifecycle_heuristic;
                     handle
                         .reply_suggestions(req)
                         .await
@@ -1845,13 +1808,10 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                 // Superseded generation — leave list and readiness unchanged.
                 return Task::none();
             };
-            // Effective list (oneshot parse only; empty on fail) is ready.
+            // Oneshot list (parse only; empty on fail) is ready. Next actions
+            // are independent and not updated here.
             ax.agent_default_prompts = list;
             ax.default_prompts_pending = false;
-            ax.default_prompt_idx = default_prompts::clamp_active_index(
-                ax.agent_default_prompts.len(),
-                ax.default_prompt_idx,
-            );
         }
         Message::ThemeChanged(mode) => {
             theme::set_mode(mode);
@@ -2397,14 +2357,12 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
             {
                 // Agent chat keyboard shortcuts (completion, esc-cancel, enter-send).
                 let agent_input_hints = state.config.chat.agent_input_hints;
-                let auto_messages = state.config.chat.auto_messages;
                 if agent_chat_active && let Some(ix) = state.interaction_mut(routing_key) {
                     match interaction::handle_agent_chat_key(
                         ix,
                         &key,
                         mods,
                         agent_input_hints,
-                        auto_messages,
                     ) {
                         interaction::AgentChatKeyResult::Handled => return Task::none(),
                         interaction::AgentChatKeyResult::Dispatch(msg) => {
@@ -2412,7 +2370,7 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                             // chat input so Enter still works without a re-click.
                             let refocus = matches!(
                                 &msg,
-                                widget::agent_chat::Msg::CycleDefaultPrompt(_)
+                                widget::agent_chat::Msg::CycleNextAction(_)
                             );
                             let dispatch = dispatch_interaction_msg(
                                 state,
@@ -2779,10 +2737,7 @@ fn is_chrome_layout_message(msg: &Message) -> bool {
 /// When obvious chrome is visible on the active chat, schedule a bounds
 /// measure so the in-scroll bottom-pin pad can update. No-op otherwise.
 fn maybe_measure_chrome_pad(state: &State) -> Task<Message> {
-    if !state.config.chat.auto_messages {
-        return Task::none();
-    }
-    let Some(scope) = state.active_scope() else {
+        let Some(scope) = state.active_scope() else {
         return Task::none();
     };
     let Some(ix) = state.interactions.get(&scope) else {
@@ -2792,12 +2747,7 @@ fn maybe_measure_chrome_pad(state: &State) -> Task<Message> {
         return Task::none();
     };
     let input_empty = ax.chat_input.text().trim().is_empty();
-    if !crate::obvious_bubble::chrome_visible(
-        ax.session.is_streaming,
-        input_empty,
-        &ax.obvious_chrome,
-        true,
-    ) {
+    if !crate::obvious_bubble::chrome_visible(ax.session.is_streaming, input_empty, &ax.obvious_chrome) {
         return Task::none();
     }
     let area = state.active_area;
@@ -3120,9 +3070,20 @@ fn tag_input_loses_focus_on(message: &Message) -> bool {
 /// True when an interaction message changes the active session in a way that
 /// should re-focus the chat input (new session created, current cleared).
 fn is_chat_focus_msg(msg: Option<&interaction::Msg>) -> bool {
+    use widget::agent_chat::Msg as ChatMsg;
     matches!(
         msg,
-        Some(interaction::Msg::NewSession | interaction::Msg::ClearSession)
+        Some(
+            interaction::Msg::NewSession
+                | interaction::Msg::ClearSession
+                // Empty Enter / send remounts input state; restore caret like Tab cycle.
+                | interaction::Msg::AgentChat(
+                    ChatMsg::SendPressed
+                        | ChatMsg::SendOneshotSuggestion
+                        | ChatMsg::SendObviousAction(_)
+                        | ChatMsg::CycleNextAction(_)
+                )
+        )
     )
 }
 
@@ -4050,8 +4011,9 @@ fn update_focused_column(state: &mut State, message: &Message) {
                     | ChatMsg::QueueAction(_)
                     | ChatMsg::SendPressed
                     | ChatMsg::SendObviousAction(_)
+                    | ChatMsg::SendOneshotSuggestion
                     | ChatMsg::ChatScrolled(_)
-                    | ChatMsg::CycleDefaultPrompt(_)
+                    | ChatMsg::CycleNextAction(_)
             );
             // Click on a chat block or chat input → focus chat. Avoid
             // pulling focus on irrelevant variants (e.g. completion popup
@@ -4526,7 +4488,6 @@ fn route_interaction(state: &mut State, msg: interaction::Msg) -> Task<Message> 
                 &state.project,
                 &state.highlighter,
                 state.config.chat.agent_input_hints,
-                state.config.chat.auto_messages,
                 );
         }
         Area::Caps => {
@@ -4539,7 +4500,6 @@ fn route_interaction(state: &mut State, msg: interaction::Msg) -> Task<Message> 
                 &state.project,
                 &state.highlighter,
                 state.config.chat.agent_input_hints,
-                state.config.chat.auto_messages,
                 );
         }
         Area::Codex => {
@@ -4552,7 +4512,6 @@ fn route_interaction(state: &mut State, msg: interaction::Msg) -> Task<Message> 
                 &state.project,
                 &state.highlighter,
                 state.config.chat.agent_input_hints,
-                state.config.chat.auto_messages,
                 );
         }
         Area::Ideas => {
@@ -4564,7 +4523,6 @@ fn route_interaction(state: &mut State, msg: interaction::Msg) -> Task<Message> 
                 &state.project,
                 &state.highlighter,
                 state.config.chat.agent_input_hints,
-                state.config.chat.auto_messages,
                 );
         }
         Area::Dashboard | Area::Settings => {}
@@ -5096,7 +5054,6 @@ fn view_area_three_column(state: &State) -> Element<'_, Message> {
             block_hl,
             find_toolbar,
             state.config.chat.agent_input_hints,
-            state.config.chat.auto_messages,
         );
         let col = container(interaction_col)
             .height(Length::Fill)

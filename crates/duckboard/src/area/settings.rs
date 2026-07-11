@@ -30,7 +30,6 @@ pub enum Message {
     /// Project-level default model picked (`id == None` → no default).
     ModelDefaultSelected(ModelChoice),
     AgentInputHintsToggled(bool),
-    AutoMessagesToggled(bool),
     ResetDefaults,
 }
 
@@ -75,10 +74,6 @@ pub fn update(
         }
         Message::AgentInputHintsToggled(on) => {
             config.chat.agent_input_hints = on;
-            let _ = config::save(config);
-        }
-        Message::AutoMessagesToggled(on) => {
-            config.chat.auto_messages = on;
             let _ = config::save(config);
         }
         Message::ResetDefaults => {
@@ -164,7 +159,7 @@ fn chat_section<'a>(config: &Config) -> Element<'a, Message> {
         .size(theme::font_md())
         .color(theme::text_primary());
     let desc = text(
-        "Input hints under the empty composer and auto-message action chips. \
+        "Under-input agent reply suggestions (Cmd-Enter when armed). \
          Applies to all projects.",
     )
     .size(theme::font_sm())
@@ -173,16 +168,11 @@ fn chat_section<'a>(config: &Config) -> Element<'a, Message> {
     let agent_row = toggler(config.chat.agent_input_hints)
         .label("Agent input hints")
         .on_toggle(Message::AgentInputHintsToggled);
-    let agent_help = text("Suggest replies under the empty composer after a turn.")
-        .size(theme::font_sm())
-        .color(theme::text_muted());
-
-    let auto_row = toggler(config.chat.auto_messages)
-        .label("Auto messages")
-        .on_toggle(Message::AutoMessagesToggled);
-    let auto_help = text("Show lifecycle action chips when the composer is empty.")
-        .size(theme::font_sm())
-        .color(theme::text_muted());
+    let agent_help = text(
+        "After a turn, suggest one freeform reply under the empty composer (Cmd-Enter).",
+    )
+    .size(theme::font_sm())
+    .color(theme::text_muted());
 
     column![
         label,
@@ -190,9 +180,6 @@ fn chat_section<'a>(config: &Config) -> Element<'a, Message> {
         Space::new().height(theme::SPACING_SM),
         agent_row,
         agent_help,
-        Space::new().height(theme::SPACING_SM),
-        auto_row,
-        auto_help,
     ]
     .spacing(theme::SPACING_XS)
     .into()

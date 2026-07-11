@@ -56,7 +56,6 @@ pub fn update(
     project: &ProjectData,
     highlighter: &crate::highlight::SyntaxHighlighter,
     agent_input_hints: bool,
-    auto_messages: bool,
 ) {
     match message {
         Message::ToggleSection => {
@@ -94,7 +93,6 @@ pub fn update(
                     project.project_root.as_deref(),
                     highlighter,
                     agent_input_hints,
-                    auto_messages,
                 );
             }
         },

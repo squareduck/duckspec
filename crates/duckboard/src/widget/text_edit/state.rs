@@ -67,6 +67,8 @@ pub enum LineBgKind {
     Added,
     Removed,
     Match,
+    /// Quiet band for chat `write` / `next` meta-card quote runs on Answers.
+    MetaCard,
 }
 
 /// One match range to render as a highlight overlay. `byte_start`/`byte_end`
@@ -85,6 +87,7 @@ pub(crate) fn line_bg_color(kind: LineBgKind) -> Color {
         LineBgKind::Added => theme::diff_added_bg(),
         LineBgKind::Removed => theme::diff_removed_bg(),
         LineBgKind::Match => theme::search_match_bg(),
+        LineBgKind::MetaCard => theme::meta_card_bg(),
     }
 }
 

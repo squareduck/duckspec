@@ -358,16 +358,19 @@ pub struct AgentSession {
     /// refreshed from disk + session emptiness + VCS dirty; not persisted.
     /// Soft hint for oneshot uses lifecycle[0] only (composer list does not).
     pub obvious_chrome: crate::obvious_bubble::ObviousChrome,
-    /// Armed empty-input default prompts: settled non-empty oneshot parse only.
-    /// Ephemeral — not persisted. Never seeded from the lifecycle heuristic.
+    /// Settled oneshot parse for under-input chrome only.
+    /// Ephemeral — not persisted. Never seeded into `next_actions`.
     pub agent_default_prompts: Vec<String>,
     /// Monotonic generation; oneshot results apply only when gen matches.
     pub default_prompts_gen: u64,
     /// True while a reply-suggestion oneshot is outstanding for
-    /// `default_prompts_gen`. Empty Enter / Tab cycle stay disarmed.
+    /// `default_prompts_gen`. Does not disarm next-action empty Enter / Tab.
     pub default_prompts_pending: bool,
-    /// Index into the effective default-prompt list for Tab cycle / Enter.
-    pub default_prompt_idx: usize,
+    /// Empty-composer next actions (lifecycle bootstrap or trailing `next`).
+    /// Ephemeral — not persisted. Refreshed from last assistant / scope facts.
+    pub next_actions: Vec<crate::meta_card::NextAction>,
+    /// Active index into `next_actions` for ghost / empty Enter / Tab cycle.
+    pub next_action_idx: usize,
     /// Lifecycle facts for this session's change scope (phase, step progress,
     /// next stage). Refreshed alongside `obvious_chrome`; `None` for
     /// non-change scopes. Feeds the first-turn scope orientation blurb.
@@ -472,7 +475,8 @@ impl AgentSession {
             agent_default_prompts: Vec::new(),
             default_prompts_gen: 0,
             default_prompts_pending: false,
-            default_prompt_idx: 0,
+            next_actions: Vec::new(),
+            next_action_idx: 0,
             scope_facts: None,
             queue_editor: None,
             idea_description: None,
@@ -494,11 +498,10 @@ impl AgentSession {
     /// Invalidate in-flight reply-suggestion oneshots and drop agent defaults.
     /// No oneshot is outstanding for the new gen, so readiness is ready with an
     /// empty list until the next TurnComplete spawns one. Called when a turn
-    /// starts streaming.
+    /// starts streaming. Does not clear `next_actions`.
     pub fn clear_agent_default_prompts(&mut self) {
         self.default_prompts_gen = self.default_prompts_gen.wrapping_add(1);
         self.agent_default_prompts.clear();
-        self.default_prompt_idx = 0;
         self.default_prompts_pending = false;
     }
 
@@ -506,23 +509,51 @@ impl AgentSession {
     pub fn begin_default_prompts_oneshot(&mut self) {
         self.default_prompts_gen = self.default_prompts_gen.wrapping_add(1);
         self.agent_default_prompts.clear();
-        self.default_prompt_idx = 0;
         self.default_prompts_pending = true;
     }
 
-    /// Under-input input hints for the empty composer (disk seed or agent list).
-    /// Empty when auto messages are on (chrome owns lifecycle assistance).
-    pub fn session_input_hints(
-        &self,
-        agent_input_hints: bool,
-        auto_messages: bool,
-    ) -> Vec<String> {
-        crate::default_prompts::effective_prompts(
-            self.session.messages.is_empty(),
-            self.obvious_chrome.lifecycle.first().map(String::as_str),
+    /// Rebuild `next_actions` from empty-session lifecycle bootstrap or the
+    /// trailing `next` card on the last non-priming assistant message.
+    ///
+    /// `after_turn`: pass true from TurnComplete so the ghost starts at the
+    /// first ranked action. Chrome/scope rebuilds pass false so Tab cycle is
+    /// preserved while the list is unchanged.
+    pub fn refresh_next_actions(&mut self, after_turn: bool) {
+        let session_empty = self.session.messages.is_empty();
+        let bootstrap = self
+            .scope_facts
+            .as_ref()
+            .and_then(|f| f.next_command.as_deref());
+        let last_assistant = if session_empty {
+            None
+        } else {
+            crate::default_prompts::last_assistant_and_user(&self.session)
+                .map(|(a, _)| a)
+        };
+        let prev_sends: Vec<String> =
+            self.next_actions.iter().map(|a| a.send.clone()).collect();
+        let prev_idx = self.next_action_idx;
+        self.next_actions = crate::default_prompts::next_action_list(
+            session_empty,
+            bootstrap,
+            last_assistant.as_deref(),
+        );
+        let prev_refs: Vec<&str> = prev_sends.iter().map(String::as_str).collect();
+        let new_refs: Vec<&str> = self.next_actions.iter().map(|a| a.send.as_str()).collect();
+        self.next_action_idx = crate::default_prompts::next_action_idx_after_refresh(
+            after_turn,
+            &prev_refs,
+            &new_refs,
+            prev_idx,
+        );
+    }
+
+    /// Under-input oneshot suggestions when agent input hints is enabled.
+    /// Never includes next-card actions or lifecycle bootstrap.
+    pub fn session_oneshot_prompts(&self, agent_input_hints: bool) -> Vec<String> {
+        crate::default_prompts::oneshot_display_prompts(
             &self.agent_default_prompts,
             agent_input_hints,
-            auto_messages,
         )
     }
 
@@ -1425,13 +1456,12 @@ pub enum Msg {
 /// Handle an interaction message. Returns `true` if the panel was just toggled open.
 /// NewSession / SelectSession / ClearSession are ignored here — areas handle them.
 ///
-/// `agent_input_hints` / `auto_messages` come from global chat config.
+/// `agent_input_hints` comes from global chat config.
 pub fn update(
     state: &mut InteractionState,
     msg: Msg,
     highlighter: &SyntaxHighlighter,
     agent_input_hints: bool,
-    auto_messages: bool,
 ) -> bool {
     let mut just_opened = false;
     match msg {
@@ -1483,7 +1513,6 @@ pub fn update(
                 chat_msg,
                 highlighter,
                 agent_input_hints,
-                auto_messages,
             );
         }
         Msg::TerminalScroll => {
@@ -1514,7 +1543,6 @@ fn handle_agent_chat(
     msg: agent_chat::Msg,
     highlighter: &SyntaxHighlighter,
     agent_input_hints: bool,
-    auto_messages: bool,
 ) {
     let Some(ax) = state.active_mut() else { return };
     match msg {
@@ -1636,7 +1664,6 @@ fn handle_agent_chat(
                 ax.session.is_streaming,
                 input_empty,
                 &ax.obvious_chrome,
-                auto_messages,
             ) {
                 send_prompt_text(ax, text, highlighter);
             }
@@ -1666,12 +1693,11 @@ fn handle_agent_chat(
                 // Streaming + empty input + no queue → no-op.
             } else {
                 let typed_opt = if typed.is_empty() {
-                    let prompts = ax.session_input_hints(agent_input_hints, auto_messages);
-                    crate::default_prompts::empty_submit_text(
-                        ax.default_prompts_pending,
+                    // Next actions own empty Enter; oneshot pending does not block.
+                    crate::default_prompts::next_empty_submit_text(
                         ax.session.is_streaming,
-                        &prompts,
-                        ax.default_prompt_idx,
+                        &ax.next_actions,
+                        ax.next_action_idx,
                     )
                 } else {
                     Some(typed)
@@ -1688,26 +1714,41 @@ fn handle_agent_chat(
                 }
             }
         }
-        agent_chat::Msg::CycleDefaultPrompt(delta) => {
+        agent_chat::Msg::CycleNextAction(delta) => {
             if !ax.chat_input.text().trim().is_empty() {
                 return;
             }
-            let prompts = ax.session_input_hints(agent_input_hints, auto_messages);
-            if !crate::default_prompts::can_cycle_defaults(
-                ax.default_prompts_pending,
+            if !crate::default_prompts::can_cycle_next_actions(
                 ax.session.is_streaming,
-                prompts.len(),
+                ax.next_actions.len(),
             ) {
                 return;
             }
-            ax.default_prompt_idx = crate::default_prompts::cycle_active_index(
-                prompts.len(),
-                ax.default_prompt_idx,
+            ax.next_action_idx = crate::default_prompts::cycle_active_index(
+                ax.next_actions.len(),
+                ax.next_action_idx,
                 delta,
             );
             // Heuristic: Tab was handled for the chat input — keep Cmd-R etc.
             // working and signal focus for the follow-up focus task.
             ax.chat_input_focused = true;
+        }
+        agent_chat::Msg::SendOneshotSuggestion => {
+            // Empty Cmd-Enter: send armed oneshot when ready; else no-op.
+            // Never used for next actions (those own plain Enter).
+            if !ax.chat_input.text().trim().is_empty() {
+                return;
+            }
+            let prompts = ax.session_oneshot_prompts(agent_input_hints);
+            let Some(text) = crate::default_prompts::oneshot_cmd_submit_text(
+                ax.default_prompts_pending,
+                ax.session.is_streaming,
+                agent_input_hints,
+                &prompts,
+            ) else {
+                return;
+            };
+            send_prompt_text(ax, text, highlighter);
         }
         agent_chat::Msg::CancelPressed => {
             if let Some(handle) = &ax.agent_handle {
@@ -1776,7 +1817,6 @@ fn handle_agent_chat(
                 ax,
                 bounds.height,
                 content.height,
-                auto_messages,
             );
 
             // Re-engaging stick while pure-content dirtiness was deferred
@@ -1795,7 +1835,7 @@ fn handle_agent_chat(
         } => {
             // Operation-based measure — works even when content fits the
             // viewport and iced suppresses on_scroll.
-            recompute_chrome_top_pad(ax, viewport_h, content_h, auto_messages);
+            recompute_chrome_top_pad(ax, viewport_h, content_h);
         }
     }
 
@@ -1806,7 +1846,6 @@ fn handle_agent_chat(
         ax.session.is_streaming,
         input_empty,
         &ax.obvious_chrome,
-        auto_messages,
     ) {
         ax.chrome_top_pad = 0.0;
     }
@@ -1818,14 +1857,12 @@ fn recompute_chrome_top_pad(
     ax: &mut AgentSession,
     viewport_h: f32,
     content_h: f32,
-    auto_messages: bool,
 ) {
     let input_empty = ax.chat_input.text().trim().is_empty();
     if crate::obvious_bubble::chrome_visible(
         ax.session.is_streaming,
         input_empty,
         &ax.obvious_chrome,
-        auto_messages,
     ) {
         ax.chrome_top_pad = crate::obvious_bubble::chrome_bottom_pad(
             viewport_h,
@@ -2354,6 +2391,31 @@ fn make_highlighted_editor(lines: &[String], highlighter: &SyntaxHighlighter) ->
     editor
 }
 
+/// Tint Answer lines that fall in `write` / `next` meta-card ranges.
+fn apply_meta_card_line_backgrounds(editor: &mut EditorState) {
+    use crate::widget::text_edit::LineBgKind;
+    let n = editor.lines.len();
+    if editor.line_backgrounds.len() != n {
+        editor.line_backgrounds = vec![None; n];
+    } else {
+        for slot in &mut editor.line_backgrounds {
+            if *slot == Some(LineBgKind::MetaCard) {
+                *slot = None;
+            }
+        }
+    }
+    let source = editor.lines.join("\n");
+    let flags = crate::meta_card::meta_card_line_flags(&source);
+    for (i, is_meta) in flags.into_iter().enumerate() {
+        if is_meta && let Some(slot) = editor.line_backgrounds.get_mut(i) {
+            // Prefer Match if already set (search overlay); otherwise MetaCard.
+            if slot.is_none() {
+                *slot = Some(LineBgKind::MetaCard);
+            }
+        }
+    }
+}
+
 /// Update an existing editor's line buffer to `new_lines` and re-highlight.
 /// Keeps editor identity (`highlight_version` bumps; not a fresh `EditorState::new`).
 fn refresh_editor_in_place(
@@ -2422,6 +2484,12 @@ pub fn rebuild_chat_editor(ax: &mut AgentSession, highlighter: &SyntaxHighlighte
             }
         } else {
             new_editors.push(make_highlighted_editor(&block.lines, highlighter));
+        }
+        // Answer blocks: tint meta-card lines after lines are finalized.
+        if block.kind == crate::widget::text_edit::BlockKind::Assistant {
+            if let Some(ed) = new_editors.last_mut() {
+                apply_meta_card_line_backgrounds(ed);
+            }
         }
     }
 
@@ -2566,8 +2634,7 @@ pub fn handle_agent_chat_key(
     ix: &mut InteractionState,
     key: &iced::keyboard::Key,
     mods: iced::keyboard::Modifiers,
-    agent_input_hints: bool,
-    auto_messages: bool,
+    _agent_input_hints: bool,
 ) -> AgentChatKeyResult {
     use iced::keyboard;
     use iced::keyboard::key::Named;
@@ -2594,16 +2661,14 @@ pub fn handle_agent_chat_key(
         }
     }
 
-    // Empty-input default-prompt cycle (only when completion is not consuming Tab).
+    // Empty-input next-action cycle (only when completion is not consuming Tab).
     if *key == keyboard::Key::Named(Named::Tab) && ax.chat_input.text().trim().is_empty() {
-        let prompts = ax.session_input_hints(agent_input_hints, auto_messages);
-        if crate::default_prompts::can_cycle_defaults(
-            ax.default_prompts_pending,
+        if crate::default_prompts::can_cycle_next_actions(
             ax.session.is_streaming,
-            prompts.len(),
+            ax.next_actions.len(),
         ) {
             let delta: i8 = if mods.shift() { -1 } else { 1 };
-            return AgentChatKeyResult::Dispatch(agent_chat::Msg::CycleDefaultPrompt(delta));
+            return AgentChatKeyResult::Dispatch(agent_chat::Msg::CycleNextAction(delta));
         }
     }
 
@@ -2611,24 +2676,13 @@ pub fn handle_agent_chat_key(
     // Plain Enter stays on empty-submit (list only) via TextEdit `on_submit`.
     if mods.command() && !mods.shift() && !mods.alt() {
         let input_empty = ax.chat_input.text().trim().is_empty();
-        // ⌘↩ → affirm or lifecycle[0]
-        if *key == keyboard::Key::Named(Named::Enter)
-            && let Some(text) = crate::obvious_bubble::resolve_cmd_enter_when_visible(
-                ax.session.is_streaming,
-                input_empty,
-                &ax.obvious_chrome,
-                auto_messages,
-            )
-        {
-            return AgentChatKeyResult::Dispatch(agent_chat::Msg::SendObviousAction(text));
-        }
-        // ⌘⌫ → Reject when decline set
+        // ⌘↩ no longer resolves chrome actions (next-card / oneshot own enter paths).
+        // ⌘⌫ → cancel when set
         if *key == keyboard::Key::Named(Named::Backspace)
             && let Some(text) = crate::obvious_bubble::resolve_cmd_backspace_when_visible(
                 ax.session.is_streaming,
                 input_empty,
                 &ax.obvious_chrome,
-                auto_messages,
             )
         {
             return AgentChatKeyResult::Dispatch(agent_chat::Msg::SendObviousAction(text));
@@ -2644,7 +2698,6 @@ pub fn handle_agent_chat_key(
                     ax.session.is_streaming,
                     input_empty,
                     &ax.obvious_chrome,
-                    auto_messages,
                     digit,
                 ) {
                     return AgentChatKeyResult::Dispatch(agent_chat::Msg::SendObviousAction(
@@ -2737,14 +2790,12 @@ pub fn update_with_side_effects(
     project_root: Option<&std::path::Path>,
     highlighter: &SyntaxHighlighter,
     agent_input_hints: bool,
-    auto_messages: bool,
 ) {
     update(
         state,
         msg,
         highlighter,
         agent_input_hints,
-        auto_messages,
     );
 
     // Persist a just-changed per-chat model selection. Done here (not in
@@ -3019,7 +3070,6 @@ pub fn view_column<'a, M: 'a + Clone>(
     )>,
     find_toolbar: Option<Element<'a, M>>,
     agent_input_hints: bool,
-    auto_messages: bool,
 ) -> Element<'a, M> {
     use iced::widget::column;
 
@@ -3067,10 +3117,10 @@ pub fn view_column<'a, M: 'a + Clone>(
                     context_max: agent_chat::model_context_window(&effective_model),
                 };
                 let w = wrap.clone();
-                let default_prompts = ax.session_input_hints(agent_input_hints, auto_messages);
-                let default_prompt_idx = crate::default_prompts::clamp_active_index(
-                    default_prompts.len(),
-                    ax.default_prompt_idx,
+                let oneshot_prompts = ax.session_oneshot_prompts(agent_input_hints);
+                let next_action_idx = crate::default_prompts::clamp_active_index(
+                    ax.next_actions.len(),
+                    ax.next_action_idx,
                 );
                 let chat_view = agent_chat::view(
                     &ax.session,
@@ -3082,11 +3132,11 @@ pub fn view_column<'a, M: 'a + Clone>(
                     &ax.chat_commands,
                     &ax.chat_completion,
                     status,
-                    default_prompts,
-                    default_prompt_idx,
+                    &ax.next_actions,
+                    next_action_idx,
+                    oneshot_prompts,
                     ax.default_prompts_pending,
                     &ax.obvious_chrome,
-                    auto_messages,
                     ax.chrome_top_pad,
                     &ax.selection_pinned,
                     ax.selection_tentative.as_ref(),

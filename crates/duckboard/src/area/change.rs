@@ -472,7 +472,6 @@ pub fn update(
     project: &ProjectData,
     highlighter: &crate::highlight::SyntaxHighlighter,
     agent_input_hints: bool,
-    auto_messages: bool,
 ) {
     match message {
         Message::SelectChange(name) => {
@@ -605,7 +604,6 @@ pub fn update(
                         project.project_root.as_deref(),
                         highlighter,
                         agent_input_hints,
-                        auto_messages,
                     );
                 }
             }
@@ -903,82 +901,15 @@ pub fn change_scope_facts(name: &str, project: &ProjectData) -> Option<ChangeSco
     ))
 }
 
-/// Compose multi-option obvious chrome from scope, project disk state, session
-/// emptiness, and VCS dirty flag. Pure — does not touch session storage.
+/// Product path leaves obvious chrome empty (options filled later for questions).
+/// Scope / phase / VCS no longer compose chips.
 pub fn build_obvious_chrome(
-    scope: &Scope,
-    project: &ProjectData,
-    session_empty: bool,
-    vcs_dirty: bool,
+    _scope: &Scope,
+    _project: &ProjectData,
+    _session_empty: bool,
+    _vcs_dirty: bool,
 ) -> crate::obvious_bubble::ObviousChrome {
-    use crate::obvious_bubble::{Affirm, ObviousChrome, format_lifecycle_command};
-
-    match scope {
-        Scope::Caps | Scope::Codex => ObviousChrome::default(),
-        Scope::Exploration(_) => {
-            if session_empty {
-                ObviousChrome {
-                    lifecycle: format_lifecycle_command("ds-explore")
-                        .into_iter()
-                        .collect(),
-                    affirm: None,
-                    decline: false,
-                }
-            } else {
-                // Nonempty exploration: Commit-style Create change affirm only.
-                ObviousChrome {
-                    lifecycle: Vec::new(),
-                    affirm: Some(Affirm::CreateChange),
-                    decline: false,
-                }
-            }
-        }
-        Scope::Change(name) => {
-            let is_archived = project.archived_changes.iter().any(|c| c.name == *name);
-            if is_archived {
-                if !session_empty && vcs_dirty {
-                    return ObviousChrome {
-                        lifecycle: Vec::new(),
-                        affirm: Some(Affirm::Commit),
-                        decline: false,
-                    };
-                }
-                return ObviousChrome::default();
-            }
-
-            let Some(facts) = change_scope_facts(name, project) else {
-                return ObviousChrome::default();
-            };
-
-            let lifecycle: Vec<String> = facts
-                .lifecycle_commands
-                .iter()
-                .filter_map(|c| format_lifecycle_command(c))
-                .collect();
-
-            // Confirm+Reject when nonempty and any of: a review is on file
-            // (write-approval during rework /ds-step|/ds-spec), the change is
-            // still pre-step (no steps on disk), or lifecycle includes
-            // /ds-archive (archive dry-run write approval without chat parse).
-            // Open steps without a review and without archive stay lifecycle-only.
-            let has_steps = facts.step_count > 0;
-            let has_review = facts.current_review.is_some();
-            let archive_in_lifecycle = lifecycle.iter().any(|c| c == "/ds-archive");
-            let (affirm, decline) = if session_empty {
-                (None, false)
-            } else if has_review || !has_steps || archive_in_lifecycle {
-                (Some(Affirm::Confirm), true)
-            } else {
-                (None, false)
-            };
-
-            ObviousChrome {
-                lifecycle,
-                affirm,
-                decline,
-            }
-        }
-    }
+    crate::obvious_bubble::ObviousChrome::default()
 }
 
 /// Suggested next `/ds-*` command for a change, derived from its lifecycle
@@ -991,14 +922,9 @@ fn obvious_command_from_artifacts(name: &str, project: &ProjectData) -> Option<S
     change_scope_facts(name, project).and_then(|f| f.next_command)
 }
 
-/// Refresh `obvious_chrome` and `scope_facts` on every session of every change /
-/// exploration interaction. Iterating all scopes (rather than only
-/// `state.selected_change`) ensures freshly-promoted sessions show the right
-/// chrome even when the user is in another area at the time of promotion.
-///
-/// Per-session emptiness drives the Confirm/Reject gate; `vcs_dirty` drives
-/// post-archive Commit. Does not seed `agent_default_prompts` — the composer
-/// list is oneshot-parse only. Soft hint uses lifecycle[0] / `next_command`.
+/// Refresh `obvious_chrome` (empty shell) and `scope_facts` on every session of
+/// every change / exploration interaction. `scope_facts` still drives orientation
+/// and empty-session next-action bootstrap; chrome options stay empty.
 pub fn refresh_obvious_chrome(
     interactions: &mut HashMap<Scope, InteractionState>,
     project: &ProjectData,
@@ -1018,6 +944,9 @@ pub fn refresh_obvious_chrome(
             ax.obvious_chrome =
                 build_obvious_chrome(scope, project, session_empty, vcs_dirty);
             ax.scope_facts = facts.clone();
+            // Next-action list uses scope_facts bootstrap and last assistant.
+            // Not a turn boundary — keep Tab index if the list is unchanged.
+            ax.refresh_next_actions(false);
         }
     }
 }
@@ -2187,208 +2116,30 @@ mod breadcrumb_tests {
         );
     }
 
-    // @spec chat/obvious-bubble Chrome composition: Caps without steps yield step then archive
+    // @spec chat/obvious-bubble Chrome population: Session chrome options are empty after refresh
     #[test]
-    fn chrome_caps_without_steps_yield_step_then_archive() {
-        let mut project = make_project(&["foo"], &[]);
-        set_change(&mut project, "foo", |c| {
-            c.has_proposal = true;
-            c.cap_tree = vec![tree_node("caps/auth")];
-        });
-        let chrome = build_obvious_chrome(&Scope::Change("foo".into()), &project, true, false);
-        assert_eq!(chrome.lifecycle, vec!["/ds-step", "/ds-archive"]);
-    }
-
-    // @spec chat/obvious-bubble Chrome composition: Design without caps yields spec then step
-    #[test]
-    fn chrome_design_without_caps_yields_spec_then_step() {
-        let mut project = make_project(&["foo"], &[]);
-        set_change(&mut project, "foo", |c| {
-            c.has_proposal = true;
-            c.has_design = true;
-        });
-        let chrome = build_obvious_chrome(&Scope::Change("foo".into()), &project, true, false);
-        assert_eq!(chrome.lifecycle, vec!["/ds-spec", "/ds-step"]);
-    }
-
-    // @spec chat/obvious-bubble Chrome composition: Nonempty exploration yields Create change only
-    #[test]
-    fn chrome_nonempty_exploration_yields_create_change_only() {
-        let project = make_project(&[], &[]);
-        let chrome = build_obvious_chrome(
-            &Scope::Exploration("exploration-1".into()),
-            &project,
-            false,
-            false,
-        );
-        assert_eq!(
-            chrome.affirm,
-            Some(crate::obvious_bubble::Affirm::CreateChange)
-        );
-        assert!(chrome.lifecycle.is_empty());
-        assert!(!chrome.decline);
-    }
-
-    // @spec chat/obvious-bubble Chrome composition: All steps complete yield archive then review
-    #[test]
-    fn chrome_all_steps_complete_yield_archive_then_review() {
+    fn session_chrome_options_are_empty_after_refresh() {
+        // GIVEN scopes that previously produced lifecycle chips
         let mut project = make_project(&["foo"], &[]);
         set_change(&mut project, "foo", |c| {
             c.has_proposal = true;
             c.has_design = true;
             c.cap_tree = vec![tree_node("caps/auth")];
-            c.steps = vec![step(true), step(true)];
+            c.steps = vec![step(false)];
         });
-        let chrome = build_obvious_chrome(&Scope::Change("foo".into()), &project, true, false);
-        assert_eq!(
-            chrome.lifecycle,
-            vec!["/ds-archive", "/ds-review", "/ds-followup"]
-        );
-    }
-
-    // @spec chat/obvious-bubble Chrome composition: All steps complete nonempty session includes Confirm and Reject
-    #[test]
-    fn chrome_all_steps_complete_nonempty_session_includes_confirm_and_reject() {
-        // GIVEN all steps complete, no reviews, nonempty session
-        let mut project = make_project(&["foo"], &[]);
-        set_change(&mut project, "foo", |c| {
-            c.has_proposal = true;
-            c.has_design = true;
-            c.cap_tree = vec![tree_node("caps/auth")];
-            c.steps = vec![step(true), step(true)];
-        });
-        let chrome = build_obvious_chrome(&Scope::Change("foo".into()), &project, false, false);
-        assert_eq!(
-            chrome.lifecycle,
-            vec!["/ds-archive", "/ds-review", "/ds-followup"]
-        );
-        assert_eq!(
-            chrome.affirm,
-            Some(crate::obvious_bubble::Affirm::Confirm)
-        );
-        assert!(chrome.decline);
-    }
-
-    // @spec chat/obvious-bubble Chrome composition: Nonempty change session includes Confirm and Reject
-    #[test]
-    fn chrome_nonempty_change_session_includes_confirm_and_reject() {
-        // GIVEN pre-step, no reviews, nonempty session
-        let mut project = make_project(&["foo"], &[]);
-        set_change(&mut project, "foo", |c| c.has_proposal = true);
-        let chrome = build_obvious_chrome(&Scope::Change("foo".into()), &project, false, false);
-        assert_eq!(
-            chrome.affirm,
-            Some(crate::obvious_bubble::Affirm::Confirm)
-        );
-        assert!(chrome.decline);
-    }
-
-    // @spec chat/obvious-bubble Chrome composition: Open steps yield apply then review without gate
-    #[test]
-    fn chrome_open_steps_yield_apply_then_review_without_gate() {
-        let mut project = make_project(&["foo"], &[]);
-        set_change(&mut project, "foo", |c| {
-            c.has_proposal = true;
-            c.has_design = true;
-            c.cap_tree = vec![tree_node("caps/auth")];
-            c.steps = vec![step(false), step(true)];
-        });
-        let chrome = build_obvious_chrome(&Scope::Change("foo".into()), &project, false, false);
-        assert_eq!(
-            chrome.lifecycle,
-            vec!["/ds-apply", "/ds-review", "/ds-followup"]
-        );
-        assert!(chrome.affirm.is_none());
-        assert!(!chrome.decline);
-    }
-
-    // @spec chat/obvious-bubble Chrome composition: Open steps with review yield apply only with gate
-    #[test]
-    fn chrome_open_steps_with_review_yield_apply_only_with_gate() {
-        // GIVEN open steps + review + nonempty session → critique peers + Confirm/Reject
-        let mut project = make_project(&["foo"], &[]);
-        set_change(&mut project, "foo", |c| {
-            c.has_proposal = true;
-            c.has_design = true;
-            c.cap_tree = vec![tree_node("caps/auth")];
-            c.steps = vec![step(false), step(true)];
-            c.reviews = vec!["01-look.md".into()];
-        });
-        let chrome = build_obvious_chrome(&Scope::Change("foo".into()), &project, false, false);
-        assert_eq!(
-            chrome.lifecycle,
-            vec!["/ds-apply", "/ds-review", "/ds-followup"]
-        );
-        assert_eq!(
-            chrome.affirm,
-            Some(crate::obvious_bubble::Affirm::Confirm)
-        );
-        assert!(chrome.decline);
-    }
-
-    // @spec chat/obvious-bubble Chrome composition: No open steps with review yield step then spec then archive with gate
-    #[test]
-    fn chrome_no_open_steps_with_review_yield_step_then_spec_then_archive_with_gate() {
-        let mut project = make_project(&["foo"], &[]);
-        set_change(&mut project, "foo", |c| {
-            c.has_proposal = true;
-            c.has_design = true;
-            c.cap_tree = vec![tree_node("caps/auth")];
-            c.steps = vec![step(true), step(true)];
-            c.reviews = vec!["01-look.md".into()];
-        });
-        let chrome = build_obvious_chrome(&Scope::Change("foo".into()), &project, false, false);
-        assert_eq!(
-            chrome.lifecycle,
-            vec![
-                "/ds-step",
-                "/ds-spec",
-                "/ds-review",
-                "/ds-followup",
-                "/ds-archive"
-            ]
-        );
-        assert_eq!(
-            chrome.affirm,
-            Some(crate::obvious_bubble::Affirm::Confirm)
-        );
-        assert!(chrome.decline);
-    }
-
-    // @spec chat/obvious-bubble Chrome composition: Empty change session omits gate row
-    #[test]
-    fn chrome_empty_change_session_omits_gate_row() {
-        let mut project = make_project(&["foo"], &[]);
-        set_change(&mut project, "foo", |c| c.has_proposal = true);
-        let chrome = build_obvious_chrome(&Scope::Change("foo".into()), &project, true, false);
-        assert!(chrome.affirm.is_none());
-        assert!(!chrome.decline);
-    }
-
-    // @spec chat/obvious-bubble Chrome composition: Archived dirty nonempty session yields Commit only
-    #[test]
-    fn chrome_archived_dirty_nonempty_session_yields_commit_only() {
-        let project = make_project(&[], &["2026-04-20-01-foo"]);
-        let chrome = build_obvious_chrome(
-            &Scope::Change("2026-04-20-01-foo".into()),
-            &project,
-            false,
-            true,
-        );
-        assert_eq!(chrome.affirm, Some(crate::obvious_bubble::Affirm::Commit));
-        assert!(chrome.lifecycle.is_empty());
-        assert!(!chrome.decline);
-    }
-
-    // @spec chat/obvious-bubble Chrome composition: Empty exploration yields explore only
-    #[test]
-    fn chrome_empty_exploration_yields_explore_only() {
-        let project = make_project(&[], &[]);
-        let chrome =
-            build_obvious_chrome(&Scope::Exploration("exploration-1".into()), &project, true, false);
-        assert_eq!(chrome.lifecycle, vec!["/ds-explore"]);
-        assert!(chrome.affirm.is_none());
-        assert!(!chrome.decline);
+        for (scope, empty) in [
+            (Scope::Change("foo".into()), true),
+            (Scope::Change("foo".into()), false),
+            (Scope::Exploration("exploration-1".into()), true),
+            (Scope::Exploration("exploration-1".into()), false),
+        ] {
+            let chrome = build_obvious_chrome(&scope, &project, empty, true);
+            assert!(
+                chrome.options.is_empty(),
+                "options empty for {scope:?} empty={empty}"
+            );
+            assert!(chrome.cancel.is_none(), "cancel unset for {scope:?}");
+        }
     }
 
     /// @spec session/scope Lifecycle reflection: A change with unfinished steps reports remaining work and the apply next-stage

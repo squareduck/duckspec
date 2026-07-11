@@ -86,6 +86,9 @@ mod macchiato {
     pub const DIFF_REMOVED_BG: Color = hex(0x30, 0x1e, 0x22);
     pub const DIFF_HUNK_BG: Color = hex(0x1e, 0x24, 0x30);
     pub const SEARCH_MATCH_BG: Color = hex(0x44, 0x3b, 0x1e);
+    /// Quiet neutral band for chat meta cards (near base/surface; not mauve).
+    /// Distinct from yellow search Match and green/red/blue diffs.
+    pub const META_CARD_BG: Color = hex(0x2a, 0x2d, 0x3f);
 }
 
 // ── Catppuccin Latte (light) ───────────────────────────────────────────────
@@ -115,6 +118,9 @@ mod latte {
     pub const DIFF_REMOVED_BG: Color = hex(0xf0, 0xd9, 0xdb);
     pub const DIFF_HUNK_BG: Color = hex(0xd9, 0xe2, 0xf0);
     pub const SEARCH_MATCH_BG: Color = hex(0xf7, 0xec, 0xb8);
+    /// Quiet neutral band for chat meta cards (near mantle/base; not lavender).
+    /// Distinct from yellow search Match and green/red/blue diffs.
+    pub const META_CARD_BG: Color = hex(0xe8, 0xea, 0xf0);
 }
 
 // ── Public colour accessors ────────────────────────────────────────────────
@@ -262,6 +268,11 @@ pub fn diff_hunk_bg() -> Color {
 }
 pub fn search_match_bg() -> Color {
     pick(macchiato::SEARCH_MATCH_BG, latte::SEARCH_MATCH_BG)
+}
+
+/// Quiet background for transcript meta-card (`write` / `next`) lines.
+pub fn meta_card_bg() -> Color {
+    pick(macchiato::META_CARD_BG, latte::META_CARD_BG)
 }
 
 pub fn success() -> Color {

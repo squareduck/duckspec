@@ -25,7 +25,7 @@ separate committed messages until flushed.
 - **AND** the reasoning body is not part of the Answer segment
 
 > test: code
-> - crates/duckboard/src/widget/agent_chat.rs:2289
+> - crates/duckboard/src/widget/agent_chat.rs:2290
 
 ### Scenario: Contiguous tools yield one Activity with multiple rows
 
@@ -39,7 +39,7 @@ separate committed messages until flushed.
 - **AND** the segment has one row per tool call
 
 > test: code
-> - crates/duckboard/src/widget/agent_chat.rs:2322
+> - crates/duckboard/src/widget/agent_chat.rs:2323
 
 ### Scenario: Thought, tools, thought, answer yields four segments in order
 
@@ -51,7 +51,7 @@ separate committed messages until flushed.
 - **THEN** the segments are Thinking, Activity, Thinking, Answer in that order
 
 > test: code
-> - crates/duckboard/src/widget/agent_chat.rs:2349
+> - crates/duckboard/src/widget/agent_chat.rs:2350
 
 ### Scenario: Live pending reasoning appears on an open Thinking segment
 
@@ -63,7 +63,7 @@ separate committed messages until flushed.
 - **THEN** a live Thinking segment includes that pending reasoning text
 
 > test: code
-> - crates/duckboard/src/widget/agent_chat.rs:2373
+> - crates/duckboard/src/widget/agent_chat.rs:2374
 
 ## Requirement: Activity pairing
 
@@ -82,7 +82,7 @@ generic "done" placeholder alone.
 - **AND** the row carries the tool summary and the result body
 
 > test: code
-> - crates/duckboard/src/widget/agent_chat.rs:2396
+> - crates/duckboard/src/widget/agent_chat.rs:2397
 
 ### Scenario: Non-adjacent use and result still pair by id
 
@@ -98,7 +98,7 @@ generic "done" placeholder alone.
 - **AND** no row is labeled only as a generic done placeholder
 
 > test: code
-> - crates/duckboard/src/widget/agent_chat.rs:2419
+> - crates/duckboard/src/widget/agent_chat.rs:2420
 
 ### Scenario: Orphan result is a named done row
 
@@ -108,7 +108,7 @@ generic "done" placeholder alone.
 - **AND** the row is not labeled only as a generic done placeholder
 
 > test: code
-> - crates/duckboard/src/widget/agent_chat.rs:2451
+> - crates/duckboard/src/widget/agent_chat.rs:2452
 
 ## Requirement: Collapse defaults
 
@@ -127,7 +127,7 @@ a finished turn, Thinking and Activity SHALL start collapsed.
 - **THEN** the Thinking segment is collapsed
 
 > test: code
-> - crates/duckboard/src/widget/agent_chat.rs:2611
+> - crates/duckboard/src/widget/agent_chat.rs:2612
 
 ### Scenario: User-expanded Thinking is not auto-collapsed
 
@@ -136,7 +136,7 @@ a finished turn, Thinking and Activity SHALL start collapsed.
 - **THEN** the Thinking segment remains expanded
 
 > test: code
-> - crates/duckboard/src/widget/agent_chat.rs:2668
+> - crates/duckboard/src/widget/agent_chat.rs:2669
 
 ### Scenario: Settled Activity starts collapsed
 
@@ -145,7 +145,7 @@ a finished turn, Thinking and Activity SHALL start collapsed.
 - **THEN** the Activity segment is collapsed
 
 > test: code
-> - crates/duckboard/src/widget/agent_chat.rs:2708
+> - crates/duckboard/src/widget/agent_chat.rs:2709
 
 ## Requirement: Segment presentation
 
@@ -164,7 +164,7 @@ expand only, with no nested per-tool expand state.
 - **AND** the label does not include a duration
 
 > test: code
-> - crates/duckboard/src/widget/agent_chat.rs:2473
+> - crates/duckboard/src/widget/agent_chat.rs:2474
 
 ### Scenario: Activity collapsed label includes count and sample names
 
@@ -174,7 +174,7 @@ expand only, with no nested per-tool expand state.
 - **AND** the label includes sample tool names from the rows
 
 > test: code
-> - crates/duckboard/src/widget/agent_chat.rs:2506
+> - crates/duckboard/src/widget/agent_chat.rs:2507
 
 ### Scenario: Expanded activity exposes status, summary, and truncated output
 
@@ -190,4 +190,39 @@ expand only, with no nested per-tool expand state.
 - **AND** no separate per-tool expand state is required to show that truncated output
 
 > test: code
-> - crates/duckboard/src/widget/agent_chat.rs:2538
+> - crates/duckboard/src/widget/agent_chat.rs:2539
+
+## Requirement: Meta-card line background
+
+When an Answer segment's text is prepared for display, every line whose index falls in a
+meta-card inclusive line range for that answer text SHALL receive a meta-card line
+background. Lines outside those ranges SHALL NOT receive a meta-card line background.
+Meta-card ranges are those produced by chat meta-card recognition for `write` and `next`
+cards in the answer source. The background SHALL be visually distinct from ordinary Answer
+text and from search-match and diff line backgrounds.
+
+> test: code
+
+### Scenario: Meta-card lines on an Answer get meta-card background
+
+- **GIVEN** an Answer whose source text contains a recognized `next` meta card covering a
+  known inclusive line range
+
+- **WHEN** that Answer's display lines are prepared
+
+- **THEN** every line index in that range has a meta-card line background
+
+> test: code
+> - crates/duckboard/src/meta_card.rs:370
+
+### Scenario: Non-meta lines on the same Answer do not get meta-card background
+
+- **GIVEN** an Answer whose source text has ordinary prose lines before a recognized meta
+  card
+
+- **WHEN** that Answer's display lines are prepared
+
+- **THEN** the ordinary prose lines do not have a meta-card line background
+
+> test: code
+> - crates/duckboard/src/meta_card.rs:394

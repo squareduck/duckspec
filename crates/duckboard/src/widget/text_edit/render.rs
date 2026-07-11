@@ -551,6 +551,9 @@ pub struct TextEdit<'a, M> {
     md_tables: bool,
     placeholder: Option<String>,
     on_submit: Option<M>,
+    /// When set, Cmd/Ctrl+Enter on an empty buffer fires this instead of a
+    /// newline (chat oneshot path). Non-empty Cmd+Enter is left uncaptured.
+    on_empty_cmd_submit: Option<M>,
     transparent_bg: bool,
     id: Option<Id>,
     /// When true the editor shows a fixed window into its content: no
@@ -579,6 +582,7 @@ impl<'a, M> TextEdit<'a, M> {
             md_tables: false,
             placeholder: None,
             on_submit: None,
+            on_empty_cmd_submit: None,
             transparent_bg: false,
             id: None,
             static_viewport: false,
@@ -650,9 +654,17 @@ impl<'a, M> TextEdit<'a, M> {
     }
 
     /// When set, plain Enter (without Shift) fires this message instead of
-    /// inserting a newline. Shift+Enter always inserts a newline.
+    /// inserting a newline.
     pub fn on_submit(mut self, msg: M) -> Self {
         self.on_submit = Some(msg);
+        self
+    }
+
+    /// When set, Cmd/Ctrl+Enter on an empty buffer fires this instead of
+    /// inserting a newline. Non-empty Shift+Enter still inserts a newline.
+    /// Non-empty Cmd+Enter is left uncaptured for app-level handlers.
+    pub fn on_empty_cmd_submit(mut self, msg: M) -> Self {
+        self.on_empty_cmd_submit = Some(msg);
         self
     }
 
@@ -1243,14 +1255,22 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for TextEdit<'a, M> {
                         shell.publish((self.on_action)(EditorAction::Delete));
                     }
                     keyboard::Key::Named(Named::Enter) if !self.read_only => {
-                        // Plain Enter → on_submit (or newline). ⌘/Ctrl+Enter is
-                        // left uncaptured so app-level handlers can activate the
-                        // obvious bubble without also firing empty-submit.
-                        if cmd {
+                        // Plain Enter → on_submit (or newline). Empty Cmd+Enter
+                        // → on_empty_cmd_submit when set (oneshot path).
+                        // Non-empty Cmd+Enter left uncaptured for app handlers.
+                        // Shift+Enter always inserts a newline (never oneshot).
+                        let buffer_empty = self.state.lines.len() <= 1
+                            && self.state.lines.first().is_none_or(|l| l.is_empty());
+                        if cmd && buffer_empty && let Some(msg) = self.on_empty_cmd_submit.as_ref()
+                        {
+                            shell.publish(msg.clone());
+                        } else if cmd {
                             handled = false;
                         } else if !shift && let Some(msg) = self.on_submit.as_ref() {
                             shell.publish(msg.clone());
                         } else {
+                            // Shift+Enter (empty or not) and plain Enter without
+                            // on_submit → newline.
                             shell.publish((self.on_action)(EditorAction::Enter));
                         }
                     }

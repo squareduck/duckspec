@@ -191,7 +191,6 @@ pub fn update(
     project: &ProjectData,
     highlighter: &SyntaxHighlighter,
     agent_input_hints: bool,
-    auto_messages: bool,
 ) {
     match message {
         Message::AddIdea => {
@@ -289,7 +288,6 @@ pub fn update(
                 project,
                 highlighter,
                 agent_input_hints,
-                auto_messages,
             );
         }
         Message::ScrollList(offset) => {
@@ -439,7 +437,6 @@ fn handle_interaction(
     project: &ProjectData,
     highlighter: &SyntaxHighlighter,
     agent_input_hints: bool,
-    auto_messages: bool,
 ) {
     let Some(path) = state.selected.clone() else {
         return;
@@ -507,7 +504,6 @@ fn handle_interaction(
                 project.project_root.as_deref(),
                 highlighter,
                 agent_input_hints,
-                auto_messages,
             );
         }
     }

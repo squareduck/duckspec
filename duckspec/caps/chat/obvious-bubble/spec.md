@@ -3,9 +3,9 @@
 Lifecycle next-command as a greyed faux user bubble and ⌘↩ send path — independent of
 oneshot composer suggestions.
 
-Auto messages: ranked lifecycle `/ds-*` action chips plus optional affirm and decline,
-with key-first labels and dual-purpose ⌘↩ — independent of under-input input hints, and
-shown only when the global auto messages setting is enabled (default on).
+Generic empty-composer option chrome: ordered option chips with ⌘-number send, optional
+cancel on ⌘⌫, ephemeral view layout, and empty-send formatting for bare skill names — not
+populated by disk lifecycle or auto-messages in this capability's product path.
 
 ## Requirement: Ephemeral chrome
 
@@ -23,510 +23,157 @@ committed user messages in the session.
 - **THEN** it does not contain a user message whose sole purpose is the chrome chip
 
 > test: code
-> - crates/duckboard/src/obvious_bubble.rs:490
+> - crates/duckboard/src/obvious_bubble.rs:248
 
-## Requirement: Lifecycle option formatting
+## Requirement: Empty-send option formatting
 
-When a lifecycle option is derived from a bare skill name, its send text SHALL be that
-name in empty-send form with a single leading `/` (e.g. `ds-explore` becomes
-`/ds-explore`). A lifecycle option that already begins with `/` SHALL be kept as stored.
-Empty or blank skill names SHALL not produce a lifecycle send string.
+When an option is derived from a bare skill name, its send text SHALL be that name in
+empty-send form with a single leading `/` (e.g. `ds-explore` becomes `/ds-explore`). An
+option that already begins with `/` SHALL be kept as stored. Empty or blank skill names
+SHALL not produce a send string.
 
 > test: code
 
 ### Scenario: Bare skill name formats with leading slash
 
-- **GIVEN** a lifecycle skill name stored without a leading slash
-- **WHEN** the lifecycle send text is derived
+- **GIVEN** a skill name stored without a leading slash
+- **WHEN** the empty-send text is derived
 - **THEN** the send text is that name with a single leading `/`
 
 > test: code
-> - crates/duckboard/src/obvious_bubble.rs:214
+> - crates/duckboard/src/obvious_bubble.rs:117
 
 ### Scenario: Already-slashed command is preserved
 
-- **GIVEN** a lifecycle skill name that already begins with `/`
-- **WHEN** the lifecycle send text is derived
+- **GIVEN** a skill name that already begins with `/`
+- **WHEN** the empty-send text is derived
 - **THEN** the send text equals the stored name
 
 > test: code
-> - crates/duckboard/src/obvious_bubble.rs:230
-
-## Requirement: Chrome composition
-
-Obvious chrome SHALL be composed only from disk lifecycle phase (including whether any
-steps exist and whether any are incomplete), whether the change has at least one review,
-whether the session transcript is empty, whether the change is archived, and whether the
-repository working tree is dirty — never from oneshot default-prompt text.
-
-Lifecycle options SHALL be ordered empty-send `/ds-*` strings by the first matching arm:
-
-- empty exploration session: `/ds-explore` only
-
-- nonempty exploration session: no lifecycle options
-
-- open steps (with or without reviews): `/ds-apply`, then `/ds-review`, then
-  `/ds-followup`
-
-- no open steps and at least one review: `/ds-step`, then `/ds-spec`, then `/ds-review`,
-  then `/ds-followup`, then `/ds-archive`
-
-- all steps complete and no reviews: `/ds-archive`, then `/ds-review`, then `/ds-followup`
-
-- caps present, no steps, no reviews: `/ds-step`, then `/ds-archive`
-
-- design present, no caps, no reviews: `/ds-spec`, then `/ds-step`
-
-- proposal present, no design, no caps, no reviews: `/ds-design`, then `/ds-spec`
-
-- empty change (no proposal), no reviews: `/ds-propose` only
-
-When the scope is an active change and the session is non-empty, the chrome SHALL include
-affirm `Confirm` and decline `Reject` when any of the following hold: the change has at
-least one review; the change has no steps on disk; or the composed lifecycle options
-include `/ds-archive` — except on the Commit-only path below. When the session is empty,
-the gate row SHALL be omitted. When the session is non-empty, the change has steps on
-disk, the change has no reviews, and the lifecycle options do not include `/ds-archive`,
-the gate row SHALL be omitted (lifecycle chips only).
-
-When the scope is an exploration and the session is non-empty, the chrome SHALL be affirm
-`Create change` only — no lifecycle options and no `Reject`. The affirm send text SHALL be
-the literal string `Create change`.
-
-When the scope is an archived change, the session is non-empty, and the repository is
-dirty, the chrome SHALL be affirm `Commit` only — no lifecycle options and no `Reject`.
-Other archived cases SHALL yield empty chrome.
-
-Caps and codex scopes SHALL yield empty chrome.
-
-> test: code
-
-### Scenario: All steps complete yield archive then review
-
-- **GIVEN** an active change whose steps are all complete
-
-- **AND** the change has no reviews
-
-- **WHEN** obvious chrome is composed
-
-- **THEN** the lifecycle options are `/ds-archive`, `/ds-review`, and `/ds-followup` in
-  that order
-
-> test: code
-> - crates/duckboard/src/area/change.rs:2231
-
-### Scenario: Nonempty change session includes Confirm and Reject
-
-- **GIVEN** an active change with a non-empty session transcript
-- **AND** the change has no steps on disk
-- **AND** the change has no reviews
-- **AND** the change is not on the archived Commit-only path
-- **WHEN** obvious chrome is composed
-- **THEN** affirm is Confirm
-- **AND** decline is present
-
-> test: code
-> - crates/duckboard/src/area/change.rs:2271
-
-### Scenario: Empty change session omits gate row
-
-- **GIVEN** an active change with an empty session transcript
-- **WHEN** obvious chrome is composed
-- **THEN** affirm is absent
-- **AND** decline is absent
-
-> test: code
-> - crates/duckboard/src/area/change.rs:2357
-
-### Scenario: Archived dirty nonempty session yields Commit only
-
-- **GIVEN** a session scoped to an archived change
-- **AND** a non-empty session transcript
-- **AND** a dirty repository working tree
-- **WHEN** obvious chrome is composed
-- **THEN** affirm is Commit
-- **AND** there are no lifecycle options
-- **AND** decline is absent
-
-> test: code
-> - crates/duckboard/src/area/change.rs:2367
-
-### Scenario: Empty exploration yields explore only
-
-- **GIVEN** an exploration scope with an empty session transcript
-- **WHEN** obvious chrome is composed
-- **THEN** the only lifecycle option is `/ds-explore`
-- **AND** affirm is absent
-- **AND** decline is absent
-
-> test: code
-> - crates/duckboard/src/area/change.rs:2382
-
-### Scenario: Nonempty exploration yields Create change only
-
-- **GIVEN** an exploration scope with a non-empty session transcript
-- **WHEN** obvious chrome is composed
-- **THEN** affirm is Create change
-- **AND** there are no lifecycle options
-- **AND** decline is absent
-
-> test: code
-> - crates/duckboard/src/area/change.rs:2213
-
-### Scenario: Design without caps yields spec then step
-
-- **GIVEN** an active change with a design, no capabilities, and no reviews
-- **WHEN** obvious chrome is composed
-- **THEN** the lifecycle options are `/ds-spec` and `/ds-step` in that order
-
-> test: code
-> - crates/duckboard/src/area/change.rs:2201
-
-### Scenario: Caps without steps yield step then archive
-
-- **GIVEN** an active change with at least one capability, no steps, and no reviews
-- **WHEN** obvious chrome is composed
-- **THEN** the lifecycle options are `/ds-step` and `/ds-archive` in that order
-
-> test: code
-> - crates/duckboard/src/area/change.rs:2189
-
-### Scenario: Open steps yield apply then review without gate
-
-- **GIVEN** an active change with at least one incomplete step and no reviews
-
-- **AND** a non-empty session transcript
-
-- **WHEN** obvious chrome is composed
-
-- **THEN** the lifecycle options are `/ds-apply`, `/ds-review`, and `/ds-followup` in that
-  order
-
-- **AND** affirm is absent
-
-- **AND** decline is absent
-
-> test: code
-> - crates/duckboard/src/area/change.rs:2285
-
-### Scenario: Open steps with review yield apply only with gate
-
-- **GIVEN** an active change with at least one incomplete step and at least one review
-
-- **AND** a non-empty session transcript
-
-- **WHEN** obvious chrome is composed
-
-- **THEN** the lifecycle options are `/ds-apply`, `/ds-review`, and `/ds-followup` in that
-  order
-
-- **AND** affirm is Confirm
-
-- **AND** decline is present
-
-> test: code
-> - crates/duckboard/src/area/change.rs:2304
-
-### Scenario: No open steps with review yield step then spec then archive with gate
-
-- **GIVEN** an active change with no incomplete steps and at least one review
-
-- **AND** a non-empty session transcript
-
-- **WHEN** obvious chrome is composed
-
-- **THEN** the lifecycle options are `/ds-step`, `/ds-spec`, `/ds-review`, `/ds-followup`,
-  and `/ds-archive` in that order
-
-- **AND** affirm is Confirm
-
-- **AND** decline is present
-
-> test: code
-> - crates/duckboard/src/area/change.rs:2328
-
-### Scenario: All steps complete nonempty session includes Confirm and Reject
-
-- **GIVEN** an active change whose steps are all complete
-
-- **AND** the change has no reviews
-
-- **AND** a non-empty session transcript
-
-- **WHEN** obvious chrome is composed
-
-- **THEN** the lifecycle options are `/ds-archive`, `/ds-review`, and `/ds-followup` in
-  that order
-
-- **AND** affirm is Confirm
-
-- **AND** decline is present
-
-> test: code
-> - crates/duckboard/src/area/change.rs:2248
+> - crates/duckboard/src/obvious_bubble.rs:133
 
 ## Requirement: Chrome visibility
 
-Obvious chrome SHALL be shown only when all of the following hold: the global auto
-messages setting is enabled, the main agent turn is not in progress, the composer input is
-empty, and the chrome is non-empty (at least one lifecycle option, affirm, or decline).
-The auto messages setting SHALL default to enabled. When auto messages is disabled, the
-chrome SHALL NOT be shown even if the other gates would allow it. A pending or settled
-oneshot for under-input input hints SHALL NOT hide the chrome when those gates hold. The
-chrome SHALL NOT be shown when any gate fails.
+Obvious chrome SHALL be shown only when all of the following hold: the main agent turn is
+not in progress, the composer input is empty, and the chrome is non-empty (at least one
+option or a cancel action). There is no auto-messages setting that gates chrome
+visibility. A pending or settled oneshot for under-input reply suggestions SHALL NOT hide
+the chrome when those gates hold. The chrome SHALL NOT be shown when any gate fails.
 
 > test: code
 
-### Scenario: Idle empty composer with chrome shows chrome
+### Scenario: Idle empty composer with non-empty options shows chrome
 
-- **GIVEN** auto messages enabled
-- **AND** non-empty obvious chrome for the session
+- **GIVEN** non-empty obvious chrome options for the session
 - **AND** an empty composer input
 - **AND** no main agent turn in progress
 - **WHEN** chrome visibility is evaluated
 - **THEN** the chrome is shown
 
 > test: code
-> - crates/duckboard/src/obvious_bubble.rs:242
+> - crates/duckboard/src/obvious_bubble.rs:145
 
 ### Scenario: Streaming hides chrome
 
-- **GIVEN** auto messages enabled
-- **AND** non-empty obvious chrome for the session
+- **GIVEN** non-empty obvious chrome options for the session
 - **AND** an empty composer input
 - **AND** a main agent turn in progress
 - **WHEN** chrome visibility is evaluated
 - **THEN** the chrome is not shown
 
 > test: code
-> - crates/duckboard/src/obvious_bubble.rs:250
+> - crates/duckboard/src/obvious_bubble.rs:153
 
 ### Scenario: Non-empty composer hides chrome
 
-- **GIVEN** auto messages enabled
-- **AND** non-empty obvious chrome for the session
+- **GIVEN** non-empty obvious chrome options for the session
 - **AND** a non-empty composer input
 - **AND** no main agent turn in progress
 - **WHEN** chrome visibility is evaluated
 - **THEN** the chrome is not shown
 
 > test: code
-> - crates/duckboard/src/obvious_bubble.rs:257
+> - crates/duckboard/src/obvious_bubble.rs:160
 
-### Scenario: Empty chrome is hidden
+### Scenario: Empty options hide chrome
 
-- **GIVEN** auto messages enabled
-- **AND** empty obvious chrome for the session
+- **GIVEN** empty obvious chrome options and no cancel action
 - **AND** an empty composer input
 - **AND** no main agent turn in progress
 - **WHEN** chrome visibility is evaluated
 - **THEN** the chrome is not shown
 
 > test: code
-> - crates/duckboard/src/obvious_bubble.rs:264
-
-### Scenario: Oneshot pending does not hide chrome when otherwise visible
-
-- **GIVEN** auto messages enabled
-- **AND** non-empty obvious chrome for the session
-- **AND** an empty composer input
-- **AND** no main agent turn in progress
-- **AND** a pending reply-suggestion oneshot
-- **WHEN** chrome visibility is evaluated
-- **THEN** the chrome is shown
-
-> test: code
-> - crates/duckboard/src/obvious_bubble.rs:272
-
-### Scenario: Auto messages disabled hides chrome
-
-- **GIVEN** auto messages disabled
-- **AND** non-empty obvious chrome for the session
-- **AND** an empty composer input
-- **AND** no main agent turn in progress
-- **WHEN** chrome visibility is evaluated
-- **THEN** the chrome is not shown
-
-> test: code
-> - crates/duckboard/src/obvious_bubble.rs:280
-
-### Scenario: Default auto messages setting is enabled
-
-- **GIVEN** application config defaults
-- **WHEN** the auto messages setting is read
-- **THEN** it is enabled
-
-> test: code
-> - crates/duckboard/src/config.rs:256
+> - crates/duckboard/src/obvious_bubble.rs:167
 
 ## Requirement: Key resolution
 
-When the chrome is visible, key activation SHALL resolve to a send string as follows: ⌘↩
-yields the affirm send text when affirm is present, otherwise the first lifecycle option
-when any exist, otherwise no send; ⌘⌫ yields `Reject` when decline is present, otherwise
-no send; ⌘*n* for digit *n* from 1 through 9 yields the *n*th lifecycle option when that
-index exists, otherwise no send. When the chrome is not visible, every such activation
-SHALL be a no-op (no send).
-
-The resolved send text SHALL be the action string only (lifecycle empty-send form,
-`Confirm`, `Commit`, `Create change`, or `Reject`). It SHALL NOT be taken from the oneshot
-default-prompt list, even when that list is non-empty and differs.
+When the chrome is visible, key activation SHALL resolve to a send string as follows: ⌘*n*
+for digit *n* from 1 through 9 yields the *n*th option when that index exists, otherwise
+no send; ⌘⌫ yields the cancel send text when cancel is set, otherwise no send. When the
+chrome is not visible, every such activation SHALL be a no-op (no send). The resolved send
+text SHALL be the option or cancel string only — not a hotkey prefix and not the
+under-input oneshot suggestion.
 
 > test: code
 
-### Scenario: Cmd-Enter sends affirm when present
+### Scenario: Cmd-digit sends matching option
 
-- **GIVEN** visible chrome with affirm Confirm, Commit, or Create change
-- **AND** one or more lifecycle options
-- **WHEN** ⌘↩ activation is resolved
-- **THEN** the send text is the affirm action string
-- **AND** the send text is not a lifecycle option
-
-> test: code
-> - crates/duckboard/src/obvious_bubble.rs:292
-
-### Scenario: Cmd-Enter sends first lifecycle when affirm absent
-
-- **GIVEN** visible chrome with no affirm
-- **AND** at least one lifecycle option
-- **WHEN** ⌘↩ activation is resolved
-- **THEN** the send text equals the first lifecycle option
-
-> test: code
-> - crates/duckboard/src/obvious_bubble.rs:302
-
-### Scenario: Cmd-Backspace sends Reject when decline set
-
-- **GIVEN** visible chrome with decline present
-- **WHEN** ⌘⌫ activation is resolved
-- **THEN** the send text is `Reject`
-
-> test: code
-> - crates/duckboard/src/obvious_bubble.rs:310
-
-### Scenario: Cmd-digit sends matching lifecycle option
-
-- **GIVEN** visible chrome with at least two lifecycle options
+- **GIVEN** visible chrome with at least two options
 - **WHEN** ⌘2 activation is resolved
-- **THEN** the send text equals the second lifecycle option
+- **THEN** the send text equals the second option
 
 > test: code
-> - crates/duckboard/src/obvious_bubble.rs:319
+> - crates/duckboard/src/obvious_bubble.rs:175
+
+### Scenario: Cmd-Backspace sends cancel when set
+
+- **GIVEN** visible chrome with cancel set to a non-empty send string
+- **WHEN** ⌘⌫ activation is resolved
+- **THEN** the send text equals that cancel string
+
+> test: code
+> - crates/duckboard/src/obvious_bubble.rs:183
 
 ### Scenario: Resolution is a no-op when chrome not visible
 
 - **GIVEN** chrome that is not visible
-- **WHEN** ⌘↩, ⌘⌫, or ⌘1 activation is resolved
+- **WHEN** ⌘⌫ or ⌘1 activation is resolved
 - **THEN** there is no send text
 
 > test: code
-> - crates/duckboard/src/obvious_bubble.rs:328
-
-### Scenario: Resolved text ignores oneshot list when both differ
-
-- **GIVEN** visible chrome whose ⌘↩ resolution is action string A
-- **AND** a non-empty oneshot default-prompt list whose active entry is B
-- **AND** A and B differ
-- **WHEN** ⌘↩ activation is resolved
-- **THEN** the send text is A
-- **AND** the send text is not B
-
-> test: code
-> - crates/duckboard/src/obvious_bubble.rs:355
+> - crates/duckboard/src/obvious_bubble.rs:191
 
 ## Requirement: Chip display
 
-Each visible chrome action SHALL present a chip label that places the hotkey glyph and
-binding before the action text. Multi-option lifecycle chips use `⌘` plus 1-based index
-then the empty-send `/ds-…` string. Affirm uses `⌘↩` then Confirm, Commit, or Create
-change. Decline uses `⌘⌫` then Reject. The text sent on activation SHALL be the action
-string only — not the hotkey prefix.
-
-When the chrome has more than one lifecycle option and no affirm, the first lifecycle
-option SHALL be dual-presented: once as its numbered lifecycle chip (hotkey plus
-empty-send `/ds-…` text) among the ordered lifecycle chips, and once as a separate enter
-chip after all lifecycle chips whose label uses the `⌘↩` hotkey followed by a friendly
-name derived from that option. The enter dual chip's send text SHALL be the original first
-lifecycle option string, not the friendly name. Friendly names SHALL strip a leading
-`/ds-` or `ds-` prefix when present and title-case the remainder (e.g. `/ds-apply` yields
-`Apply`).
-
-When the chrome has exactly one lifecycle option and no affirm, that option SHALL be
-presented as a single enter-tone chip whose label uses the `⌘↩` hotkey followed by the
-same friendly-name derivation (e.g. `/ds-explore` → `⌘↩  Explore`); it SHALL NOT use a
-numbered lifecycle label and SHALL NOT be dual-presented. When affirm is present, the
-first lifecycle option SHALL NOT be dual-presented as a separate enter chip.
+Each visible option SHALL present a chip label that places the hotkey glyph and binding
+before the action text: `⌘` plus 1-based index then the option send text. When cancel is
+set, a cancel chip SHALL place `⌘⌫` before the cancel send text. The text sent on
+activation SHALL be the action string only — not the hotkey prefix.
 
 > test: code
 
-### Scenario: Lifecycle chip label is hotkey then action
+### Scenario: Option chip label is hotkey then action
 
-- **GIVEN** a lifecycle option at 1-based index 1 with send text `/ds-step`
+- **GIVEN** an option at 1-based index 1 with send text `/ds-step`
 - **WHEN** the chip label is derived
 - **THEN** the label starts with the ⌘1 hotkey
 - **AND** the label includes `/ds-step` after the hotkey
 - **AND** the send text is exactly `/ds-step`
 
 > test: code
-> - crates/duckboard/src/obvious_bubble.rs:370
+> - crates/duckboard/src/obvious_bubble.rs:214
 
-### Scenario: Affirm chip label is hotkey then Confirm, Commit, or Create change
+### Scenario: Cancel chip label is hotkey then cancel text
 
-- **GIVEN** affirm Create change
-- **WHEN** the chip label is derived
-- **THEN** the label starts with the ⌘↩ hotkey
-- **AND** the label includes `Create change`
-- **AND** the send text is exactly `Create change`
-
-> test: code
-> - crates/duckboard/src/obvious_bubble.rs:382
-
-### Scenario: Multi lifecycle without affirm dual-presents first option
-
-- **GIVEN** chrome with two or more lifecycle options
-- **AND** no affirm
-- **WHEN** dual-enter presentation is derived
-- **THEN** dual-enter is active for the first lifecycle option
-- **AND** that option retains its numbered lifecycle chip label
+- **GIVEN** cancel send text `cancel`
+- **WHEN** the cancel chip label is derived
+- **THEN** the label starts with the ⌘⌫ hotkey
+- **AND** the label includes `cancel`
+- **AND** the send text is exactly `cancel`
 
 > test: code
-> - crates/duckboard/src/obvious_bubble.rs:412
-
-### Scenario: Single lifecycle does not dual-present
-
-- **GIVEN** chrome with exactly one lifecycle option
-- **AND** no affirm
-- **WHEN** dual-enter presentation is derived
-- **THEN** dual-enter is not active
-- **AND** the single enter chip label starts with the ⌘↩ hotkey
-- **AND** the label includes the friendly name (e.g. `Explore` for `/ds-explore`)
-- **AND** the send text is the original lifecycle option string
-
-> test: code
-> - crates/duckboard/src/obvious_bubble.rs:429
-
-### Scenario: Affirm present does not dual-present lifecycle
-
-- **GIVEN** chrome with one or more lifecycle options
-- **AND** affirm is present
-- **WHEN** dual-enter presentation is derived
-- **THEN** dual-enter is not active
-
-> test: code
-> - crates/duckboard/src/obvious_bubble.rs:450
-
-### Scenario: Enter dual label is hotkey then friendly name with original send text
-
-- **GIVEN** a first lifecycle option `/ds-apply`
-- **AND** dual-enter is active
-- **WHEN** the enter dual chip label and send text are derived
-- **THEN** the label starts with the ⌘↩ hotkey
-- **AND** the label includes `Apply` after the hotkey
-- **AND** the label does not include `/ds-apply` as the action text
-- **AND** the send text is exactly `/ds-apply`
-
-> test: code
-> - crates/duckboard/src/obvious_bubble.rs:462
+> - crates/duckboard/src/obvious_bubble.rs:225
 
 ## Requirement: Chrome bottom pad
 
@@ -552,7 +199,7 @@ not sufficient).
 - **THEN** the pad height is 300
 
 > test: code
-> - crates/duckboard/src/obvious_bubble.rs:502
+> - crates/duckboard/src/obvious_bubble.rs:236
 
 ### Scenario: Content at or above viewport yields zero pad
 
@@ -562,5 +209,27 @@ not sufficient).
 - **THEN** the pad height is 0
 
 > test: code
-> - crates/duckboard/src/obvious_bubble.rs:511
+> - crates/duckboard/src/obvious_bubble.rs:242
 
+## Requirement: Chrome population
+
+For ordinary change, exploration, caps, and codex chat sessions, obvious chrome options
+and cancel SHALL be empty after chrome refresh — the product path does not compose
+lifecycle phase chips, affirm rows, or decline rows into chrome. A later path MAY fill
+options and cancel; until then, chrome remains empty and therefore not shown.
+
+> test: code
+
+### Scenario: Session chrome options are empty after refresh
+
+- **GIVEN** a change or exploration session that would previously have produced lifecycle
+  chips
+
+- **WHEN** obvious chrome is refreshed for that session
+
+- **THEN** the chrome options list is empty
+
+- **AND** cancel is not set
+
+> test: code
+> - crates/duckboard/src/area/change.rs:2119

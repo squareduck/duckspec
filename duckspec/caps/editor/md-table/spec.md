@@ -23,7 +23,7 @@ produce no region.
 - **THEN** the result contains exactly one table region covering those lines
 
 > test: code
-> - crates/duckboard/src/widget/md_table.rs:618
+> - crates/duckboard/src/widget/md_table.rs:616
 
 ### Scenario: Missing separator or body yields no region
 
@@ -35,7 +35,7 @@ produce no region.
 - **THEN** the result contains no table region
 
 > test: code
-> - crates/duckboard/src/widget/md_table.rs:643
+> - crates/duckboard/src/widget/md_table.rs:641
 
 ### Scenario: Body column count mismatch yields no region
 
@@ -47,7 +47,7 @@ produce no region.
 - **THEN** the result contains no table region
 
 > test: code
-> - crates/duckboard/src/widget/md_table.rs:659
+> - crates/duckboard/src/widget/md_table.rs:657
 
 ## Requirement: Column fit and cell wrap
 
@@ -67,7 +67,7 @@ the pane width.
 - **THEN** the region’s total width is less than or equal to the pane width
 
 > test: code
-> - crates/duckboard/src/widget/md_table.rs:759
+> - crates/duckboard/src/widget/md_table.rs:757
 
 ### Scenario: A long cell soft-wraps within the pane
 
@@ -79,7 +79,7 @@ the pane width.
 - **AND** the region’s total width is less than or equal to the pane width
 
 > test: code
-> - crates/duckboard/src/widget/md_table.rs:776
+> - crates/duckboard/src/widget/md_table.rs:774
 
 ### Scenario: Many minimum-width columns may exceed the pane
 
@@ -91,7 +91,7 @@ the pane width.
 - **THEN** the region’s total width is greater than the pane width
 
 > test: code
-> - crates/duckboard/src/widget/md_table.rs:813
+> - crates/duckboard/src/widget/md_table.rs:811
 
 ## Requirement: Separator, aligns, and display text
 
@@ -108,7 +108,7 @@ row. Display fragments SHALL cover cell text only — not `|` delimiters.
 - **AND** the region’s column alignments match the separator markers
 
 > test: code
-> - crates/duckboard/src/widget/md_table.rs:670
+> - crates/duckboard/src/widget/md_table.rs:668
 
 ### Scenario: Fragments omit pipe delimiters
 
@@ -118,7 +118,7 @@ row. Display fragments SHALL cover cell text only — not `|` delimiters.
 - **AND** each fragment’s text is a contiguous slice of some cell’s source text
 
 > test: code
-> - crates/duckboard/src/widget/md_table.rs:693
+> - crates/duckboard/src/widget/md_table.rs:691
 
 ## Requirement: Source mapping
 
@@ -136,7 +136,7 @@ fragment of that cell.
 - **AND** the source position lies within that cell’s source text range
 
 > test: code
-> - crates/duckboard/src/widget/md_table.rs:835
+> - crates/duckboard/src/widget/md_table.rs:833
 
 ### Scenario: Source position in a cell maps to a fragment of that cell
 
@@ -145,4 +145,4 @@ fragment of that cell.
 - **THEN** the result identifies a display fragment of that same cell
 
 > test: code
-> - crates/duckboard/src/widget/md_table.rs:872
+> - crates/duckboard/src/widget/md_table.rs:870

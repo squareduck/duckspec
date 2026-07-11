@@ -56,8 +56,10 @@ pub enum Msg {
     ChatScrolled(scrollable::Viewport),
     /// User picked a model from the meta-row selector.
     ModelSelected(ModelChoice),
-    /// Cycle empty-input default prompts (`+1` Tab, `-1` Shift-Tab).
-    CycleDefaultPrompt(i8),
+    /// Cycle empty-input next actions (`+1` Tab, `-1` Shift-Tab).
+    CycleNextAction(i8),
+    /// Empty Cmd-Enter: send the armed oneshot suggestion when ready.
+    SendOneshotSuggestion,
     /// Layout measure of the chat scrollable (viewport + content heights).
     /// Used to recompute the bottom-pin pad even when content fits the
     /// viewport and iced suppresses `on_scroll` notifications.
@@ -1055,14 +1057,14 @@ pub fn view<'a>(
     commands: &'a [SlashCommand],
     completion: &CompletionState,
     status: StatusInfo,
-    default_prompts: Vec<String>,
-    default_prompt_idx: usize,
+    next_actions: &'a [crate::meta_card::NextAction],
+    next_action_idx: usize,
+    // Under-input oneshot suggestions (never next-card actions).
+    oneshot_prompts: Vec<String>,
     // True while the reply-suggestion oneshot is outstanding.
     default_prompts_pending: bool,
     // Multi-option obvious chrome (send form derived in view).
     obvious_chrome: &'a crate::obvious_bubble::ObviousChrome,
-    // Global auto messages setting — when false, chips are not shown.
-    auto_messages: bool,
     // Spacer above chrome when history is shorter than the viewport.
     chrome_top_pad: f32,
     pinned_selections: &'a [SelectionContext],
@@ -1120,7 +1122,6 @@ pub fn view<'a>(
         status.is_streaming,
         input_empty,
         obvious_chrome,
-        auto_messages,
     ) {
         if chrome_top_pad > 0.0 {
             chat_col = chat_col.push(
@@ -1186,35 +1187,58 @@ pub fn view<'a>(
 
     // Input area — promoted to the custom TextEdit widget so prompts get
     // markdown syntax highlighting and the full editor toolkit (undo,
-    // word-nav, selection). Plain Enter sends via `on_submit`; Shift+Enter
-    // falls through to the default newline action. Grows via `fit_content`
-    // (sibling column layout — never stacked under the defaults list).
-    let input = text_edit::TextEdit::new(input_value, Msg::InputAction)
+    // word-nav, selection). Plain Enter sends via `on_submit`; empty Cmd+Enter
+    // sends oneshot; Shift+Enter inserts a newline. Grows via `fit_content`.
+    // Display-only key prefixes on ghost / oneshot text; send paths never
+    // include the markers (next_actions.send / oneshot_cmd_submit_text).
+    let show_tab_marker = crate::default_prompts::next_tab_marker_visible(
+        input_empty,
+        status.is_streaming,
+        next_actions.len(),
+    );
+    let ghost_body = crate::default_prompts::next_ghost_text(
+        status.is_streaming,
+        next_actions,
+        next_action_idx,
+    )
+    .unwrap_or("");
+    let ghost = if ghost_body.is_empty() {
+        String::new()
+    } else if show_tab_marker {
+        format!("⇥  {ghost_body}")
+    } else {
+        ghost_body.to_string()
+    };
+
+    let mut input = text_edit::TextEdit::new(input_value, Msg::InputAction)
         .id(CHAT_INPUT_ID)
         .show_gutter(false)
         .word_wrap(true)
         .fit_content(true)
         .max_rows(CHAT_INPUT_MAX_ROWS)
         .transparent_bg(true)
-        .on_submit(Msg::SendPressed);
+        .on_submit(Msg::SendPressed)
+        .on_empty_cmd_submit(Msg::SendOneshotSuggestion);
+    if !ghost.is_empty() {
+        input = input.placeholder(ghost);
+    }
 
-    // Defaults chrome under the input only when empty and not mid-turn:
-    // loading while pending, list when ready. Hidden while streaming or typing.
+    // Oneshot chrome under the input only when empty and not mid-turn:
+    // loading while pending, list when ready. Never lists next-card actions.
     let defaults_chrome = crate::default_prompts::defaults_chrome(
         input_empty,
         default_prompts_pending,
         status.is_streaming,
-        default_prompts.len(),
+        oneshot_prompts.len(),
     );
     let defaults_chrome_el: Option<Element<'a, Msg>> = match defaults_chrome {
         crate::default_prompts::DefaultsChrome::Hidden => None,
         crate::default_prompts::DefaultsChrome::Loading => {
             Some(view_default_prompts_loading())
         }
-        crate::default_prompts::DefaultsChrome::List => Some(view_default_prompt_list(
-            &default_prompts,
-            default_prompt_idx,
-        )),
+        crate::default_prompts::DefaultsChrome::List => oneshot_prompts
+            .first()
+            .map(|s| view_oneshot_suggestion(s)),
     };
 
     let input_divider = rule::horizontal(1).style(|_theme: &iced::Theme| rule::Style {
@@ -1694,87 +1718,35 @@ fn format_number(n: usize) -> String {
 /// Tint for an obvious-chrome chip background.
 #[derive(Clone, Copy)]
 enum ObviousChipTone {
-    /// Multi-option numbered lifecycle (⌘1…⌘n) — quiet light blue.
+    /// Numbered options (⌘1…⌘n) — quiet light blue.
     Numbered,
-    /// Affirm, dual enter lifecycle, or single-option lifecycle/affirm.
-    Enter,
-    /// Reject.
+    /// Cancel (⌘⌫).
     Reject,
 }
 
-/// Multi-option obvious chrome: lifecycle chips (⌘1…) then optional dual enter
-/// and/or gate row. View chrome only until activation sends.
+/// Option chrome: numbered chips then optional cancel. View chrome only until
+/// activation sends.
 fn view_obvious_chrome<'a>(
     chrome: &'a crate::obvious_bubble::ObviousChrome,
 ) -> Element<'a, Msg> {
-    use crate::obvious_bubble::{
-        affirm_chip_label, decline_chip_label, dual_enter_lifecycle, lifecycle_chip_label,
-        lifecycle_enter_chip_label,
-    };
+    use crate::obvious_bubble::{cancel_chip_label, option_chip_label};
 
     let mut col = column![].spacing(theme::SPACING_XS);
-    let dual = dual_enter_lifecycle(chrome);
-    // Single lifecycle, no affirm → green ⌘↩ + friendly name (not dual, not blue).
-    let single_lifecycle_enter = chrome.affirm.is_none() && chrome.lifecycle.len() == 1;
 
-    for (i, action) in chrome.lifecycle.iter().enumerate() {
-        let (label, tone) = if single_lifecycle_enter && i == 0 {
-            (
-                lifecycle_enter_chip_label(action),
-                ObviousChipTone::Enter,
-            )
-        } else {
-            // Multi-option list (with or without affirm) uses numbered blue.
-            (
-                lifecycle_chip_label(i + 1, action),
-                ObviousChipTone::Numbered,
-            )
-        };
-        col = col.push(view_obvious_chip(label, action.clone(), tone));
-    }
-
-    if dual
-        && let Some(action) = chrome.lifecycle.first()
-    {
+    for (i, action) in chrome.options.iter().enumerate() {
         col = col.push(view_obvious_chip(
-            lifecycle_enter_chip_label(action),
+            option_chip_label(i + 1, action),
             action.clone(),
-            ObviousChipTone::Enter,
+            ObviousChipTone::Numbered,
         ));
     }
 
-    match (chrome.affirm, chrome.decline) {
-        (Some(affirm), true) => {
-            let gate = row![
-                view_obvious_chip(
-                    affirm_chip_label(affirm),
-                    affirm.send_text().to_string(),
-                    ObviousChipTone::Enter,
-                ),
-                view_obvious_chip(
-                    decline_chip_label(),
-                    "Reject".into(),
-                    ObviousChipTone::Reject,
-                ),
-            ]
-            .spacing(theme::SPACING_SM);
-            col = col.push(gate);
-        }
-        (Some(affirm), false) => {
-            col = col.push(view_obvious_chip(
-                affirm_chip_label(affirm),
-                affirm.send_text().to_string(),
-                ObviousChipTone::Enter,
-            ));
-        }
-        (None, true) => {
-            col = col.push(view_obvious_chip(
-                decline_chip_label(),
-                "Reject".into(),
-                ObviousChipTone::Reject,
-            ));
-        }
-        (None, false) => {}
+    if let Some(cancel) = chrome.cancel.as_deref() {
+        col = col.push(view_obvious_chip(
+            cancel_chip_label(cancel),
+            cancel.to_string(),
+            ObviousChipTone::Reject,
+        ));
     }
 
     container(col)
@@ -1801,7 +1773,6 @@ fn view_obvious_chip<'a>(
         .width(Length::Fill)
         .style(move |t| match tone {
             ObviousChipTone::Numbered => theme::chat_obvious_chip_numbered(t),
-            ObviousChipTone::Enter => theme::chat_obvious_chip_enter(t),
             ObviousChipTone::Reject => theme::chat_obvious_chip_reject(t),
         });
 
@@ -1842,62 +1813,32 @@ fn view_default_prompts_loading<'a>() -> Element<'a, Msg> {
     .into()
 }
 
-/// Default-prompt list in source order with `↳` on the active row. Active uses
-/// normal muted text; other rows are fainter so the current default stays clear.
-/// Long prompts soft-wrap; row height follows content so rows never paint
-/// through each other.
-fn view_default_prompt_list<'a>(prompts: &[String], active_idx: usize) -> Element<'a, Msg> {
+/// Under-input oneshot: display-only `⌘↩` prefix before the suggestion text.
+/// Soft-wraps; full text stays visible. Send uses the bare suggestion string.
+fn view_oneshot_suggestion<'a>(suggestion: &str) -> Element<'a, Msg> {
     const CONTENT_PAD: f32 = 8.0;
-    const MARKER_W: f32 = 16.0;
-
-    let active = if prompts.is_empty() {
-        0
-    } else {
-        active_idx % prompts.len()
-    };
-
-    let mut col = column![].spacing(theme::SPACING_XS);
-    for (i, prompt) in prompts.iter().enumerate() {
-        let is_active = i == active;
-        let color = if is_active {
-            theme::text_muted()
-        } else {
-            // Fainter than the active row (overlay0 @ ~45% opacity).
-            let mut c = theme::text_muted();
-            c.a *= 0.45;
-            c
-        };
-        let marker = if is_active { "↳" } else { "" };
-        let line = row![
-            container(
-                text(marker)
-                    .size(theme::content_size())
-                    .color(color)
-                    .font(theme::content_font()),
-            )
-            .width(Length::Fixed(MARKER_W)),
-            text(prompt.clone())
-                .size(theme::content_size())
-                .color(color)
-                .font(theme::content_font())
-                .width(Length::Fill)
-                .wrapping(Wrapping::Word),
-        ]
-        .spacing(0.0)
-        .align_y(iced::Alignment::Start)
-        .width(Length::Fill);
-        col = col.push(line);
-    }
-
-    container(col)
-        .padding(iced::Padding {
-            top: text_edit::CONTENT_PAD_Y,
-            right: 0.0,
-            bottom: text_edit::CONTENT_PAD_Y,
-            left: CONTENT_PAD,
-        })
-        .width(Length::Fill)
-        .into()
+    let color = theme::text_muted();
+    let label = format!(
+        "{}  {suggestion}",
+        crate::default_prompts::ONESHOT_CMD_ENTER_MARKER
+    );
+    container(
+        text(label)
+            .size(theme::content_size())
+            .color(color)
+            // UI font so ⌘ renders; content monospace often lacks the glyph.
+            .font(theme::ui_font())
+            .width(Length::Fill)
+            .wrapping(Wrapping::Word),
+    )
+    .padding(iced::Padding {
+        top: text_edit::CONTENT_PAD_Y,
+        right: 0.0,
+        bottom: text_edit::CONTENT_PAD_Y,
+        left: CONTENT_PAD,
+    })
+    .width(Length::Fill)
+    .into()
 }
 
 
