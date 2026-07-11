@@ -705,7 +705,7 @@ pub fn update(
     }
 
     let vcs_dirty = !state.changed_files.is_empty();
-    refresh_obvious_chrome(interactions, project, vcs_dirty);
+    refresh_fast_response(interactions, project, vcs_dirty);
     // Cheap: one `read_dir` per exploration. Keeps `Exploration.session_count`
     // in sync so the close-button arming logic doesn't `read_dir` per frame.
     crate::chat_store::recount_explorations(
@@ -731,7 +731,7 @@ fn compute_obvious_command(state: &State, project: &ProjectData) -> Option<Strin
 }
 
 /// A change's lifecycle position, derived from its artifact and step state.
-/// Drives both the obvious chrome lifecycle list and the per-session scope
+/// Drives both the fast response lifecycle list and the per-session scope
 /// orientation blurb, so the two never disagree about where a change stands.
 #[derive(Debug, Clone)]
 pub struct ChangeScopeFacts {
@@ -897,15 +897,15 @@ pub fn change_scope_facts(name: &str, project: &ProjectData) -> Option<ChangeSco
     ))
 }
 
-/// Product path leaves obvious chrome empty (options filled later for questions).
+/// Product path leaves fast response empty (options filled later for questions).
 /// Scope / phase / VCS no longer compose chips.
-pub fn build_obvious_chrome(
+pub fn build_fast_response(
     _scope: &Scope,
     _project: &ProjectData,
     _session_empty: bool,
     _vcs_dirty: bool,
-) -> crate::obvious_bubble::ObviousChrome {
-    crate::obvious_bubble::ObviousChrome::default()
+) -> crate::fast_response::FastResponse {
+    crate::fast_response::FastResponse::default()
 }
 
 /// Suggested next `/ds-*` command for a change, derived from its lifecycle
@@ -918,10 +918,11 @@ fn obvious_command_from_artifacts(name: &str, project: &ProjectData) -> Option<S
     change_scope_facts(name, project).and_then(|f| f.next_command)
 }
 
-/// Refresh `obvious_chrome` (empty shell) and `scope_facts` on every session of
+/// Refresh `fast_response` (empty shell) and `scope_facts` on every session of
 /// every change / exploration interaction. `scope_facts` still drives orientation
-/// and empty-session next-action bootstrap; chrome options stay empty.
-pub fn refresh_obvious_chrome(
+/// and empty-session next-action bootstrap; shell options stay empty. Skips the
+/// shell when a session is awaiting a user choice so a live fill is not cleared.
+pub fn refresh_fast_response(
     interactions: &mut HashMap<Scope, InteractionState>,
     project: &ProjectData,
     vcs_dirty: bool,
@@ -937,8 +938,10 @@ pub fn refresh_obvious_chrome(
         };
         for ax in ix.sessions.iter_mut() {
             let session_empty = ax.session.messages.is_empty();
-            ax.obvious_chrome =
-                build_obvious_chrome(scope, project, session_empty, vcs_dirty);
+            if !ax.is_awaiting_user {
+                ax.fast_response =
+                    build_fast_response(scope, project, session_empty, vcs_dirty);
+            }
             ax.scope_facts = facts.clone();
             // Next-action list uses scope_facts bootstrap and last assistant.
             // Not a turn boundary — keep Tab index if the list is unchanged.
@@ -2112,10 +2115,10 @@ mod breadcrumb_tests {
         );
     }
 
-    // @spec chat/obvious-bubble Chrome population: Session chrome options are empty after refresh
+    // @spec chat/fast-response Population: Ordinary refresh leaves options empty when not awaiting a choice
     #[test]
-    fn session_chrome_options_are_empty_after_refresh() {
-        // GIVEN scopes that previously produced lifecycle chips
+    fn ordinary_refresh_leaves_options_empty_when_not_awaiting_a_choice() {
+        // GIVEN scopes that previously could produce phase chips (now empty)
         let mut project = make_project(&["foo"], &[]);
         set_change(&mut project, "foo", |c| {
             c.has_proposal = true;
@@ -2129,13 +2132,51 @@ mod breadcrumb_tests {
             (Scope::Exploration("exploration-1".into()), true),
             (Scope::Exploration("exploration-1".into()), false),
         ] {
-            let chrome = build_obvious_chrome(&scope, &project, empty, true);
+            let fr = build_fast_response(&scope, &project, empty, true);
             assert!(
-                chrome.options.is_empty(),
+                fr.options.is_empty(),
                 "options empty for {scope:?} empty={empty}"
             );
-            assert!(chrome.cancel.is_none(), "cancel unset for {scope:?}");
         }
+    }
+
+    // @spec chat/fast-response Population: Refresh does not clear options while awaiting a user choice
+    #[test]
+    fn refresh_does_not_clear_options_while_awaiting_a_user_choice() {
+        use crate::area::interaction::{AgentSession, InteractionState};
+        use crate::fast_response::{self, FastResponseSource};
+        use crate::scope::{Scope, ScopeKind};
+        use std::collections::HashMap;
+
+        let mut project = make_project(&["foo"], &[]);
+        set_change(&mut project, "foo", |c| {
+            c.has_proposal = true;
+            c.has_design = true;
+            c.cap_tree = vec![tree_node("caps/auth")];
+            c.steps = vec![step(false)];
+        });
+        let mut interactions = HashMap::new();
+        let scope = Scope::Change("foo".into());
+        let mut ix = InteractionState::default();
+        let mut ax = AgentSession::new("foo".into(), ScopeKind::Change);
+        ax.is_awaiting_user = true;
+        ax.fast_response =
+            fast_response::from_user_choice(99, [("a".into(), "Alpha".into())]);
+        ix.sessions.push(ax);
+        interactions.insert(scope, ix);
+
+        refresh_fast_response(&mut interactions, &project, false);
+
+        let ax = interactions
+            .get(&Scope::Change("foo".into()))
+            .and_then(|i| i.sessions.first())
+            .expect("session");
+        assert!(ax.is_awaiting_user);
+        assert_eq!(ax.fast_response.options.len(), 1);
+        assert!(matches!(
+            ax.fast_response.source,
+            FastResponseSource::UserChoice { correlation_id: 99 }
+        ));
     }
 
     /// @spec session/scope Lifecycle reflection: A change with unfinished steps reports remaining work and the apply next-stage

@@ -22,7 +22,7 @@ handles SHALL NOT share oneshot work with each other.
 - **AND** the result is a plain-text title string
 
 > test: code
-> - crates/duckchat/src/worker.rs:630
+> - crates/duckchat/src/worker.rs:665
 
 ### Scenario: Reply suggestions are requested through the chat handle
 
@@ -32,7 +32,7 @@ handles SHALL NOT share oneshot work with each other.
 - **AND** the result is a list of reply strings
 
 > test: code
-> - crates/duckchat/src/worker.rs:651
+> - crates/duckchat/src/worker.rs:686
 
 ## Requirement: Lazy activation
 
@@ -50,7 +50,7 @@ step.
 - **THEN** the turn completes without requiring a separate pre-warm call
 
 > test: code
-> - crates/duckchat/src/worker.rs:672
+> - crates/duckchat/src/worker.rs:707
 
 ### Scenario: Oneshot after first send needs no separate pre-warm API
 
@@ -59,7 +59,7 @@ step.
 - **THEN** the request completes without a separate pre-warm call from the caller
 
 > test: code
-> - crates/duckchat/src/worker.rs:694
+> - crates/duckchat/src/worker.rs:729
 
 ## Requirement: Oneshot serialization and isolation
 
@@ -80,7 +80,7 @@ history.
 - **AND** the oneshot path did not run the two prompts concurrently
 
 > test: code
-> - crates/duckchat/src/worker.rs:713
+> - crates/duckchat/src/worker.rs:748
 
 ### Scenario: A second oneshot call does not resume the prior oneshot session
 
@@ -89,7 +89,7 @@ history.
 - **THEN** the second call does not resume the prior oneshot conversation
 
 > test: code
-> - crates/duckchat/src/worker.rs:745
+> - crates/duckchat/src/worker.rs:780
 
 ## Requirement: Cancel and re-warm
 
@@ -106,7 +106,7 @@ SHALL NOT be required to tear down the oneshot path.
 - **THEN** the later turn can complete
 
 > test: code
-> - crates/duckchat/src/worker.rs:777
+> - crates/duckchat/src/worker.rs:812
 
 ## Requirement: Cold-capable harnesses
 
@@ -124,7 +124,7 @@ process.
 - **THEN** the request completes with a plain-text title string
 
 > test: code
-> - crates/duckchat/src/worker.rs:818
+> - crates/duckchat/src/worker.rs:853
 
 ## Requirement: Oneshot call budget and recovery
 
@@ -149,7 +149,7 @@ run one at a time on the shared oneshot path.
 - **AND** the call does not remain in flight indefinitely past the budget
 
 > test: code
-> - crates/duckchat/src/worker.rs:841
+> - crates/duckchat/src/worker.rs:876
 
 ### Scenario: Later oneshot succeeds after prior oneshot failure
 
@@ -159,4 +159,4 @@ run one at a time on the shared oneshot path.
 - **THEN** that subsequent call can complete with a result
 
 > test: code
-> - crates/duckchat/src/worker.rs:874
+> - crates/duckchat/src/worker.rs:909

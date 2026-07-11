@@ -99,6 +99,13 @@ pub enum AgentEvent {
     },
     /// Stored resume id is dead; UI should clear it and re-dispatch with history.
     SessionNotFound,
+    /// Mid-turn structured choice — fill fast-response chips; answer via handle.
+    UserChoiceRequest {
+        correlation_id: u64,
+        prompt: Option<String>,
+        options: Vec<(String, String)>, // (id, label)
+        allow_cancel: bool,
+    },
     TurnComplete,
     Error(String),
     ProcessExited,
@@ -203,6 +210,16 @@ async fn drive_provider<P: duckchat::Provider + 'static>(
             duckchat::AgentEvent::SessionNotFound => AgentEvent::SessionNotFound,
             duckchat::AgentEvent::TurnComplete => AgentEvent::TurnComplete,
             duckchat::AgentEvent::Error(msg) => AgentEvent::Error(msg),
+            duckchat::AgentEvent::UserChoiceRequest(req) => AgentEvent::UserChoiceRequest {
+                correlation_id: req.correlation_id,
+                prompt: req.prompt,
+                options: req
+                    .options
+                    .into_iter()
+                    .map(|o| (o.id, o.label))
+                    .collect(),
+                allow_cancel: req.allow_cancel,
+            },
         };
         if sender.send(mapped).await.is_err() {
             break;

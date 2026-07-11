@@ -15,7 +15,7 @@ use tokio::sync::mpsc;
 
 use crate::cancel::CancelToken;
 use crate::error::Error;
-use crate::event::AgentEvent;
+use crate::event::{AgentEvent, PendingUserChoices};
 use crate::request::{TurnOutcome, TurnRequest};
 use crate::runtime::{MainRuntime, OneshotKind, OneshotRuntime};
 
@@ -102,6 +102,7 @@ impl MainRuntime for AcpMainRuntime {
         req: TurnRequest,
         events: mpsc::Sender<AgentEvent>,
         cancel: CancelToken,
+        pending_choices: Arc<PendingUserChoices>,
     ) -> Result<TurnOutcome, Error> {
         self.ensure_hot().await?;
 
@@ -156,9 +157,13 @@ impl MainRuntime for AcpMainRuntime {
                 context_window,
                 &events,
                 &cancel,
+                &pending_choices,
             )
             .await
         };
+
+        // Drop any still-parked choices (turn ended or failed).
+        pending_choices.cancel_all();
 
         match result {
             Ok(result) => match result.stop_reason.as_deref() {
@@ -696,7 +701,7 @@ mod tests {
         let (tx, mut rx) = mpsc::channel(32);
 
         let out = rt
-            .run_turn(turn_req(None), tx, CancelToken::new())
+            .run_turn(turn_req(None), tx, CancelToken::new(), crate::event::PendingUserChoices::shared())
             .await
             .expect("turn with rebind");
         assert_eq!(
@@ -737,7 +742,7 @@ mod tests {
 
         rt.ensure_hot().await.unwrap();
         let out1 = rt
-            .run_turn(turn_req(None), tx.clone(), CancelToken::new())
+            .run_turn(turn_req(None), tx.clone(), CancelToken::new(), crate::event::PendingUserChoices::shared())
             .await
             .unwrap();
         assert!(!out1.session_id.is_empty());
@@ -747,6 +752,7 @@ mod tests {
                 turn_req(Some(&out1.session_id)),
                 tx.clone(),
                 CancelToken::new(),
+                crate::event::PendingUserChoices::shared(),
             )
             .await
             .unwrap();
@@ -791,7 +797,12 @@ mod tests {
         let turn = tokio::spawn(async move {
             let mut rt = rt_holder.take().unwrap();
             let result = rt
-                .run_turn(turn_req(Some("prior-sess-id")), tx, cancel2)
+                .run_turn(
+                    turn_req(Some("prior-sess-id")),
+                    tx,
+                    cancel2,
+                    crate::event::PendingUserChoices::shared(),
+                )
                 .await;
             (rt, result)
         });
@@ -810,6 +821,7 @@ mod tests {
                 turn_req(Some("prior-sess-id")),
                 tx2,
                 CancelToken::new(),
+                crate::event::PendingUserChoices::shared(),
             )
             .await
             .expect("turn after cancel should complete");

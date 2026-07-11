@@ -30,12 +30,10 @@ project state never makes the agent ask which change to act on.
 
 For a change scope, the orientation SHALL report the change's step progress and a
 suggested next stage that matches the change's artifact state, step completion, and
-whether the change has any reviews — the same first lifecycle option used for obvious
-chrome (including arms that also list `/ds-review` and `/ds-followup`). When steps remain
+whether the change has any reviews — the first option of the review-aware lifecycle ladder
+(including arms that also list `/ds-review` and `/ds-followup`). When steps remain
 unfinished it SHALL report the incomplete progress; when every step is complete it SHALL
 report completion.
-
-> test: code
 
 ### Scenario: A change with unfinished steps reports remaining work and the apply next-stage
 
@@ -45,7 +43,7 @@ report completion.
 - **AND** it suggests the apply stage as the next step
 
 > test: code
-> - crates/duckboard/src/area/change.rs:2141
+> - crates/duckboard/src/area/change.rs:2182
 
 ### Scenario: A change with only a proposal reports the design next-stage
 
@@ -54,7 +52,7 @@ report completion.
 - **THEN** it suggests the design stage as the next step
 
 > test: code
-> - crates/duckboard/src/area/change.rs:2191
+> - crates/duckboard/src/area/change.rs:2232
 
 ### Scenario: A change with all steps complete reports completion and the archive next-stage
 
@@ -65,7 +63,7 @@ report completion.
 - **AND** it suggests the archive stage as the next step
 
 > test: code
-> - crates/duckboard/src/area/change.rs:2159
+> - crates/duckboard/src/area/change.rs:2200
 
 ### Scenario: All steps complete with a review suggests the step next-stage
 
@@ -75,7 +73,7 @@ report completion.
 - **THEN** it suggests the step stage as the next step
 
 > test: code
-> - crates/duckboard/src/area/change.rs:2176
+> - crates/duckboard/src/area/change.rs:2217
 
 ## Requirement: Non-change scope orientation
 
@@ -131,7 +129,7 @@ the same session.
 - **THEN** the orientation is part of the message body sent on that turn
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:782
+> - crates/duckboard/src/area/interaction.rs:785
 
 ### Scenario: Orientation is present when the project has no AGENTS.md
 
@@ -140,7 +138,7 @@ the same session.
 - **THEN** the orientation is part of the message body sent on that turn
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:799
+> - crates/duckboard/src/area/interaction.rs:802
 
 ### Scenario: A resumed session does not repeat the orientation
 
@@ -149,7 +147,7 @@ the same session.
 - **THEN** the orientation is not included again
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:819
+> - crates/duckboard/src/area/interaction.rs:822
 
 ## Requirement: Current review in orientation
 
@@ -159,11 +157,9 @@ review or followup, or a legacy unprefixed name) — as the project-root path
 `duckspec/changes/{name}/reviews/{filename}` when the change has at least one review, and
 SHALL omit any current-review report when the change has none. The presence of reviews
 SHALL NOT change reported step progress (done and total counts). The suggested next stage
-SHALL follow the review-aware lifecycle (same first option as obvious chrome), so a review
+SHALL follow the review-aware lifecycle (same first option of that ladder), so a review
 may change the suggested next stage relative to an otherwise identical change without
 reviews.
-
-> test: code
 
 ### Scenario: Orientation reports the highest-numbered review as the current review
 
@@ -175,7 +171,7 @@ reviews.
   `duckspec/changes/{name}/reviews/{filename}`
 
 > test: code
-> - crates/duckboard/src/area/change.rs:2215
+> - crates/duckboard/src/area/change.rs:2256
 
 ### Scenario: A change with no reviews reports no current review
 
@@ -184,7 +180,7 @@ reviews.
 - **THEN** it does not report a current review
 
 > test: code
-> - crates/duckboard/src/area/change.rs:2237
+> - crates/duckboard/src/area/change.rs:2278
 
 ### Scenario: Adding a review does not change reported step progress
 
@@ -194,4 +190,4 @@ reviews.
 - **THEN** both report the same step progress (done and total)
 
 > test: code
-> - crates/duckboard/src/area/change.rs:2252
+> - crates/duckboard/src/area/change.rs:2293

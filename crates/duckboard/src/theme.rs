@@ -548,6 +548,27 @@ pub fn chat_input(_theme: &Theme) -> container::Style {
     }
 }
 
+/// Quiet accent fill (~8% accent into `bg_base`) — same treatment as numbered
+/// fast-response chips. Used for awaiting-user composer chrome.
+pub fn quiet_accent_surface() -> Color {
+    let base = bg_base();
+    let tint = accent();
+    Color {
+        r: base.r * 0.92 + tint.r * 0.08,
+        g: base.g * 0.92 + tint.g * 0.08,
+        b: base.b * 0.92 + tint.b * 0.08,
+        a: base.a,
+    }
+}
+
+/// Composer section while awaiting a user choice (custom-answer surface).
+pub fn chat_composer_awaiting(_theme: &Theme) -> container::Style {
+    container::Style {
+        background: Some(quiet_accent_surface().into()),
+        ..Default::default()
+    }
+}
+
 /// Outer frame for tool-use / tool-result cards: 1px border + full radius,
 /// no background. Inner header/body containers paint the surface colors.
 pub fn chat_tool_card_frame(_theme: &Theme) -> container::Style {
@@ -628,9 +649,8 @@ pub fn chat_user_card(_theme: &Theme) -> container::Style {
     }
 }
 
-/// Untinted obvious-chrome chip base (muted paper). Tint helpers mix ~8% color
-/// into this surface for numbered / reject roles.
-pub fn chat_obvious_chip_neutral(_theme: &Theme) -> container::Style {
+/// Untinted fast-response chip base (muted paper). Numbered chips mix ~8% accent.
+pub fn chat_fast_response_chip_neutral(_theme: &Theme) -> container::Style {
     let mut border = border_color();
     border.a *= 0.55;
     let mut bg = bg_base();
@@ -646,20 +666,14 @@ pub fn chat_obvious_chip_neutral(_theme: &Theme) -> container::Style {
     }
 }
 
-/// Quiet light-blue chip — multi-option numbered lifecycle (⌘1…⌘n).
-/// Same ~8% tint strength as reject.
-pub fn chat_obvious_chip_numbered(_theme: &Theme) -> container::Style {
-    tint_obvious_chip(_theme, accent())
-}
-
-/// Very subtle red chip — Reject.
-pub fn chat_obvious_chip_reject(_theme: &Theme) -> container::Style {
-    tint_obvious_chip(_theme, error())
+/// Quiet light-blue chip — multi-option numbered choices (⌘1…⌘n).
+pub fn chat_fast_response_chip_numbered(_theme: &Theme) -> container::Style {
+    tint_fast_response_chip(_theme, accent())
 }
 
 /// Mix ~8% of `tint` into the muted chrome base (fill + faint border lean).
-fn tint_obvious_chip(_theme: &Theme, tint: Color) -> container::Style {
-    let mut style = chat_obvious_chip_neutral(_theme);
+fn tint_fast_response_chip(_theme: &Theme, tint: Color) -> container::Style {
+    let mut style = chat_fast_response_chip_neutral(_theme);
     if let Some(iced::Background::Color(c)) = style.background.as_mut() {
         // ~8% tint into the muted base — hint, not a painted button.
         *c = Color {
@@ -965,6 +979,42 @@ pub fn pick_list_ghost_style(_theme: &Theme, status: pick_list::Status) -> pick_
             a: 0.0,
             ..Color::BLACK
         },
+    };
+    pick_list::Style {
+        text_color: text_secondary(),
+        placeholder_color: text_muted(),
+        handle_color: text_muted(),
+        background: Background::Color(background),
+        border: Border {
+            color: Color {
+                a: 0.0,
+                ..Color::BLACK
+            },
+            width: 0.0,
+            radius: BORDER_RADIUS.into(),
+        },
+    }
+}
+
+/// Model selector while awaiting a user choice: same quiet accent fill as the
+/// composer section so the control does not stand out as an untinted island.
+pub fn pick_list_ghost_awaiting_style(
+    _theme: &Theme,
+    status: pick_list::Status,
+) -> pick_list::Style {
+    let fill = quiet_accent_surface();
+    let background = match status {
+        pick_list::Status::Hovered | pick_list::Status::Opened { .. } => {
+            // Slightly stronger hover still on the accent family.
+            let h = bg_hover();
+            Color {
+                r: fill.r * 0.7 + h.r * 0.3,
+                g: fill.g * 0.7 + h.g * 0.3,
+                b: fill.b * 0.7 + h.b * 0.3,
+                a: fill.a,
+            }
+        }
+        pick_list::Status::Active => fill,
     };
     pick_list::Style {
         text_color: text_secondary(),

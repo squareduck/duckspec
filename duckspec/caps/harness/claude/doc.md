@@ -8,10 +8,10 @@ stream-json protocol itself and never depends on npm or Node for the Claude path
 
 ```
 duckboard / duckchat worker
-   │  ACP (shared client)
+   │  ACP (shared client) — mid-turn user choice when Claude asks
    ▼
 duckchat-claude-acp          (owned agent)
-   │  stream-json duplex
+   │  stream-json duplex + control / canUseTool
    ▼
 claude                       (official CLI)
 ```
@@ -20,7 +20,8 @@ Selecting the Claude harness only changes the provider launch (the agent binary)
 lifecycle, event mapping, and main heat for the **agent** process are the shared ACP
 client. This capability owns Claude-specific behavior: agent binary discovery, when the
 inner `claude` process starts, Claude-native session ids after the first prompt, duplex
-heat of that process, and translating Claude's stream into the client's dialect profile.
+heat of that process, translating Claude's stream into the client's dialect profile, and
+bridging AskUserQuestion to the parent's user-choice loop.
 
 ## Session ids
 
@@ -71,3 +72,16 @@ missing Grok binary.
 The agent translates protocols only. Tool execution, auth, skills, and Claude Code
 behavior stay inside the official `claude` CLI. The harness does not reimplement Claude
 over the Messages API and does not use community npm ACP adapters.
+
+## Structured questions
+
+Claude may call `AskUserQuestion` during a turn. The owned agent is not configured to
+disallow that tool. When Claude asks, the agent maps the control / canUseTool request to a
+parent ACP choice so the host can show options. A host selection completes as allow with
+`updatedInput` carrying the original `questions` and an `answers` map (question text →
+selected option label). A host custom freeform answer completes the same way with free
+text as the answer value (not deny). Host cancel finishes without accepting the
+questionnaire.
+
+Ordinary tools stay on permission bypass: they do not open the host choice UI. Only
+structured clarifying questions use the mid-prompt parent choice path.

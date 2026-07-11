@@ -21,7 +21,7 @@ allowed to spawn again and, when a prior session id is supplied, resume that id.
 - **THEN** the spawned agent process is that launch-supplied command
 
 > test: code
-> - crates/duckchat/src/acp/turn.rs:573
+> - crates/duckchat/src/acp/turn.rs:935
 
 ### Scenario: A second turn on a hot main path reuses the agent process
 
@@ -35,7 +35,7 @@ allowed to spawn again and, when a prior session id is supplied, resume that id.
   session id
 
 > test: code
-> - crates/duckchat/src/acp/runtime.rs:731
+> - crates/duckchat/src/acp/runtime.rs:736
 
 ### Scenario: After cancel, a later turn may spawn again and resume a prior session id
 
@@ -46,7 +46,7 @@ allowed to spawn again and, when a prior session id is supplied, resume that id.
 - **AND** it opens the session by resuming that id
 
 > test: code
-> - crates/duckchat/src/acp/runtime.rs:766
+> - crates/duckchat/src/acp/runtime.rs:772
 
 ## Requirement: Session open and resume
 
@@ -68,7 +68,7 @@ session-not-found outcome so the caller can drop the id and retry.
 - **AND** it surfaces the session id the agent assigned
 
 > test: code
-> - crates/duckchat/src/acp/turn.rs:485
+> - crates/duckchat/src/acp/turn.rs:847
 
 ### Scenario: A turn with a prior session id resumes that id
 
@@ -77,7 +77,7 @@ session-not-found outcome so the caller can drop the id and retry.
 - **THEN** it opens the session by resuming that same id
 
 > test: code
-> - crates/duckchat/src/acp/turn.rs:525
+> - crates/duckchat/src/acp/turn.rs:887
 
 ### Scenario: When the agent rebinds the session id during a turn, the client surfaces the rebound id
 
@@ -87,7 +87,7 @@ session-not-found outcome so the caller can drop the id and retry.
 - **THEN** it surfaces the rebound session id for the caller to persist
 
 > test: code
-> - crates/duckchat/src/acp/runtime.rs:691
+> - crates/duckchat/src/acp/runtime.rs:696
 
 ### Scenario: A failed load of a missing session surfaces session-not-found
 
@@ -96,7 +96,7 @@ session-not-found outcome so the caller can drop the id and retry.
 - **THEN** the outcome is session-not-found rather than a successful resume
 
 > test: code
-> - crates/duckchat/src/acp/turn.rs:544
+> - crates/duckchat/src/acp/turn.rs:906
 
 ## Requirement: Profile event translation
 
@@ -141,3 +141,108 @@ with the active model's context window when known.
 
 > test: code
 > - crates/duckchat/src/acp/event.rs:196
+
+## Requirement: Mid-turn tool permission auto-allow
+
+When an agent issues a mid-turn `session/request_permission` whose options are only
+permission kinds (allow/reject once or always), the main-path client SHALL complete that
+request by selecting an allow option without waiting on host UI. The turn SHALL continue
+after the auto-allow.
+
+> test: code
+
+### Scenario: Permission request with only allow/reject kinds is auto-allowed
+
+- **GIVEN** an in-flight main-path turn
+- **AND** an agent `session/request_permission` whose options are only allow/reject kinds
+- **WHEN** the client handles that request
+- **THEN** the request is completed with an allow selection
+- **AND** the client does not emit a host user-choice event for that request
+
+> test: code
+> - crates/duckchat/src/acp/turn.rs:1107
+
+## Requirement: Mid-turn user choice
+
+When an agent issues a mid-turn structured question request (including Grok's
+`x.ai/ask_user_question`, or a permission-shaped request that presents product choice
+options rather than only allow/reject kinds), the main-path client SHALL surface a neutral
+user-choice event to the host with the request's options and SHALL park until the host
+answers or the turn is cancelled. Completing with a selected option SHALL write the
+protocol-correct success result for that request. Completing with a custom freeform answer
+SHALL write the protocol-correct success result that carries that freeform text as the
+answer payload for the question. Completing as cancelled SHALL write the protocol-correct
+cancelled outcome for that request.
+
+> test: code
+
+### Scenario: Structured question request surfaces a user-choice event
+
+- **GIVEN** an in-flight main-path turn
+- **AND** an agent structured question request with at least one option
+- **WHEN** the client handles that request
+- **THEN** a user-choice event is emitted carrying those options
+- **AND** the agent request remains open until answered or cancelled
+
+> test: code
+> - crates/duckchat/src/acp/turn.rs:1171
+
+### Scenario: Host selected answer completes the pending request
+
+- **GIVEN** a pending user-choice event on the main path
+- **WHEN** the host answers with a selected option id
+- **THEN** the agent request is completed successfully for that selection
+- **AND** the turn may continue after the completion
+
+> test: code
+> - crates/duckchat/src/acp/turn.rs:1257
+
+### Scenario: Host custom freeform answer completes the pending request
+
+- **GIVEN** a pending user-choice event on the main path
+
+- **WHEN** the host answers with custom freeform text
+
+- **THEN** the agent request is completed successfully with that freeform text as the
+  answer payload
+
+- **AND** the request is not completed as cancelled
+
+> test: code
+> - crates/duckchat/src/acp/turn.rs:1558
+
+### Scenario: Host cancel completes the pending request as cancelled
+
+- **GIVEN** a pending user-choice event on the main path
+- **WHEN** the host answers as cancelled
+- **THEN** the agent request is completed as cancelled
+
+> test: code
+> - crates/duckchat/src/acp/turn.rs:1323
+
+### Scenario: Turn cancel completes a pending choice as cancelled
+
+- **GIVEN** a pending user-choice event on the main path
+- **WHEN** the in-flight turn is cancelled
+- **THEN** the agent request is completed as cancelled
+
+> test: code
+> - crates/duckchat/src/acp/turn.rs:1382
+
+## Requirement: Headless and oneshot safety
+
+On the oneshot path, the client SHALL NOT block a call waiting for a host UI choice. Agent
+requests that would require a structured host choice on the main path SHALL be completed
+without parking on oneshot so headless oneshot work cannot deadlock.
+
+> test: code
+
+### Scenario: Oneshot path does not block waiting on a host UI choice
+
+- **GIVEN** an oneshot-path call
+- **AND** an agent request that would surface as a user choice on the main path
+- **WHEN** the client handles that request on oneshot
+- **THEN** the call completes without waiting for a host UI answer
+
+> test: code
+> - crates/duckchat/src/acp/turn.rs:1454

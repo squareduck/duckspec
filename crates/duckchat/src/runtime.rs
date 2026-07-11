@@ -5,12 +5,14 @@
 //! Harnesses that cannot keep a process warm implement no-op heat (spawn per
 //! call).
 
+use std::sync::Arc;
+
 use async_trait::async_trait;
 use tokio::sync::mpsc;
 
 use crate::cancel::CancelToken;
 use crate::error::Error;
-use crate::event::AgentEvent;
+use crate::event::{AgentEvent, PendingUserChoices};
 use crate::request::{TurnOutcome, TurnRequest};
 
 /// Which cheap-model framing the oneshot path is serving.
@@ -28,11 +30,13 @@ pub trait MainRuntime: Send {
 
     /// Run one turn. Caller supplies resume id via `req.session_id`.
     /// Streams into `events`. On cancel, kill the process and leave cold.
+    /// `pending_choices` parks mid-turn structured questions for the host.
     async fn run_turn(
         &mut self,
         req: TurnRequest,
         events: mpsc::Sender<AgentEvent>,
         cancel: CancelToken,
+        pending_choices: Arc<PendingUserChoices>,
     ) -> Result<TurnOutcome, Error>;
 
     /// Drop any held child. Safe if already cold.

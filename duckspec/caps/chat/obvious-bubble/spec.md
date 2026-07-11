@@ -13,7 +13,7 @@ Obvious chrome chips SHALL NOT be stored in the session transcript until activat
 produces a real user message. While only shown as view chrome, they SHALL NOT appear as
 committed user messages in the session.
 
-> test: code
+> skip: superseded by chat/fast-response
 
 ### Scenario: Visible chrome is not a stored user message
 
@@ -22,8 +22,7 @@ committed user messages in the session.
 - **WHEN** the session transcript is inspected
 - **THEN** it does not contain a user message whose sole purpose is the chrome chip
 
-> test: code
-> - crates/duckboard/src/obvious_bubble.rs:248
+> skip: superseded by chat/fast-response
 
 ## Requirement: Empty-send option formatting
 
@@ -32,7 +31,7 @@ empty-send form with a single leading `/` (e.g. `ds-explore` becomes `/ds-explor
 option that already begins with `/` SHALL be kept as stored. Empty or blank skill names
 SHALL not produce a send string.
 
-> test: code
+> skip: superseded by chat/fast-response
 
 ### Scenario: Bare skill name formats with leading slash
 
@@ -40,8 +39,7 @@ SHALL not produce a send string.
 - **WHEN** the empty-send text is derived
 - **THEN** the send text is that name with a single leading `/`
 
-> test: code
-> - crates/duckboard/src/obvious_bubble.rs:117
+> skip: superseded by chat/fast-response
 
 ### Scenario: Already-slashed command is preserved
 
@@ -49,8 +47,7 @@ SHALL not produce a send string.
 - **WHEN** the empty-send text is derived
 - **THEN** the send text equals the stored name
 
-> test: code
-> - crates/duckboard/src/obvious_bubble.rs:133
+> skip: superseded by chat/fast-response
 
 ## Requirement: Chrome visibility
 
@@ -60,7 +57,7 @@ option or a cancel action). There is no auto-messages setting that gates chrome
 visibility. A pending or settled oneshot for under-input reply suggestions SHALL NOT hide
 the chrome when those gates hold. The chrome SHALL NOT be shown when any gate fails.
 
-> test: code
+> skip: superseded by chat/fast-response
 
 ### Scenario: Idle empty composer with non-empty options shows chrome
 
@@ -70,8 +67,7 @@ the chrome when those gates hold. The chrome SHALL NOT be shown when any gate fa
 - **WHEN** chrome visibility is evaluated
 - **THEN** the chrome is shown
 
-> test: code
-> - crates/duckboard/src/obvious_bubble.rs:145
+> skip: superseded by chat/fast-response
 
 ### Scenario: Streaming hides chrome
 
@@ -81,8 +77,7 @@ the chrome when those gates hold. The chrome SHALL NOT be shown when any gate fa
 - **WHEN** chrome visibility is evaluated
 - **THEN** the chrome is not shown
 
-> test: code
-> - crates/duckboard/src/obvious_bubble.rs:153
+> skip: superseded by chat/fast-response
 
 ### Scenario: Non-empty composer hides chrome
 
@@ -92,8 +87,7 @@ the chrome when those gates hold. The chrome SHALL NOT be shown when any gate fa
 - **WHEN** chrome visibility is evaluated
 - **THEN** the chrome is not shown
 
-> test: code
-> - crates/duckboard/src/obvious_bubble.rs:160
+> skip: superseded by chat/fast-response
 
 ### Scenario: Empty options hide chrome
 
@@ -103,8 +97,7 @@ the chrome when those gates hold. The chrome SHALL NOT be shown when any gate fa
 - **WHEN** chrome visibility is evaluated
 - **THEN** the chrome is not shown
 
-> test: code
-> - crates/duckboard/src/obvious_bubble.rs:167
+> skip: superseded by chat/fast-response
 
 ## Requirement: Key resolution
 
@@ -115,7 +108,7 @@ chrome is not visible, every such activation SHALL be a no-op (no send). The res
 text SHALL be the option or cancel string only — not a hotkey prefix and not the
 under-input oneshot suggestion.
 
-> test: code
+> skip: superseded by chat/fast-response
 
 ### Scenario: Cmd-digit sends matching option
 
@@ -123,8 +116,7 @@ under-input oneshot suggestion.
 - **WHEN** ⌘2 activation is resolved
 - **THEN** the send text equals the second option
 
-> test: code
-> - crates/duckboard/src/obvious_bubble.rs:175
+> skip: superseded by chat/fast-response
 
 ### Scenario: Cmd-Backspace sends cancel when set
 
@@ -132,8 +124,7 @@ under-input oneshot suggestion.
 - **WHEN** ⌘⌫ activation is resolved
 - **THEN** the send text equals that cancel string
 
-> test: code
-> - crates/duckboard/src/obvious_bubble.rs:183
+> skip: superseded by chat/fast-response
 
 ### Scenario: Resolution is a no-op when chrome not visible
 
@@ -141,8 +132,7 @@ under-input oneshot suggestion.
 - **WHEN** ⌘⌫ or ⌘1 activation is resolved
 - **THEN** there is no send text
 
-> test: code
-> - crates/duckboard/src/obvious_bubble.rs:191
+> skip: superseded by chat/fast-response
 
 ## Requirement: Chip display
 
@@ -151,7 +141,7 @@ before the action text: `⌘` plus 1-based index then the option send text. When
 set, a cancel chip SHALL place `⌘⌫` before the cancel send text. The text sent on
 activation SHALL be the action string only — not the hotkey prefix.
 
-> test: code
+> skip: superseded by chat/fast-response
 
 ### Scenario: Option chip label is hotkey then action
 
@@ -161,8 +151,7 @@ activation SHALL be the action string only — not the hotkey prefix.
 - **AND** the label includes `/ds-step` after the hotkey
 - **AND** the send text is exactly `/ds-step`
 
-> test: code
-> - crates/duckboard/src/obvious_bubble.rs:214
+> skip: superseded by chat/fast-response
 
 ### Scenario: Cancel chip label is hotkey then cancel text
 
@@ -172,8 +161,7 @@ activation SHALL be the action string only — not the hotkey prefix.
 - **AND** the label includes `cancel`
 - **AND** the send text is exactly `cancel`
 
-> test: code
-> - crates/duckboard/src/obvious_bubble.rs:225
+> skip: superseded by chat/fast-response
 
 ## Requirement: Chrome bottom pad
 
@@ -189,7 +177,7 @@ order. The pad is view layout only and SHALL NOT be stored in the session transc
 measurement SHALL work even when content fits the viewport (scroll notifications alone are
 not sufficient).
 
-> test: code
+> skip: superseded by chat/fast-response
 
 ### Scenario: Short content yields positive pad
 
@@ -198,8 +186,7 @@ not sufficient).
 - **WHEN** the chrome bottom pad is derived
 - **THEN** the pad height is 300
 
-> test: code
-> - crates/duckboard/src/obvious_bubble.rs:236
+> skip: superseded by chat/fast-response
 
 ### Scenario: Content at or above viewport yields zero pad
 
@@ -208,8 +195,7 @@ not sufficient).
 - **WHEN** the chrome bottom pad is derived
 - **THEN** the pad height is 0
 
-> test: code
-> - crates/duckboard/src/obvious_bubble.rs:242
+> skip: superseded by chat/fast-response
 
 ## Requirement: Chrome population
 
@@ -218,7 +204,7 @@ and cancel SHALL be empty after chrome refresh — the product path does not com
 lifecycle phase chips, affirm rows, or decline rows into chrome. A later path MAY fill
 options and cancel; until then, chrome remains empty and therefore not shown.
 
-> test: code
+> skip: superseded by chat/fast-response
 
 ### Scenario: Session chrome options are empty after refresh
 
@@ -231,5 +217,4 @@ options and cancel; until then, chrome remains empty and therefore not shown.
 
 - **AND** cancel is not set
 
-> test: code
-> - crates/duckboard/src/area/change.rs:2115
+> skip: superseded by chat/fast-response

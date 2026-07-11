@@ -3,11 +3,14 @@
 //! Providers supply an [`AgentLaunch`]; this module owns spawn, session
 //! open/resume, profile event mapping, and main/oneshot process heat.
 
+pub mod ask_user;
 mod event;
 mod launch;
 mod runtime;
 mod turn;
 
+/// Grok ask-user encode/decode (re-export under the name used by harness tests).
+pub use ask_user as turn_ask_user;
 pub use event::map_update;
 pub use launch::AgentLaunch;
 pub use runtime::{AcpMainRuntime, AcpOneshotRuntime};

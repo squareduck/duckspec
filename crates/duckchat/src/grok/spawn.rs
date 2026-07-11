@@ -7,9 +7,9 @@
 //! grok's args pass through positionally and `exec` hands the process image to
 //! `grok` (stdin/stdout/stderr, signals, exit codes propagate directly).
 //!
-//! Agent-mode flags (`--no-ask-user agent --always-approve stdio`) are chained
-//! by [`super::grok_agent_launch`] onto this base command so the shared ACP
-//! client receives a final argv.
+//! Agent-mode flags (`agent --always-approve stdio`) are chained by
+//! [`super::grok_agent_launch`] onto this base command so the shared ACP client
+//! receives a final argv.
 
 use tokio::process::Command;
 

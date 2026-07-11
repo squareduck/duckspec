@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use duckchat::acp::{AcpTurn, AgentLaunch};
 use duckchat::cancel::CancelToken;
-use duckchat::event::AgentEvent;
+use duckchat::event::{AgentEvent, PendingUserChoices};
 use serde_json::json;
 use tempfile::TempDir;
 use tokio::process::Command;
@@ -139,6 +139,7 @@ async fn shared_client_completes_turn_against_agent() {
 
     let (tx, mut rx) = mpsc::channel::<AgentEvent>(32);
     let content = [json!({ "type": "text", "text": "ping" })];
+    let pending = PendingUserChoices::shared();
     let result = turn
         .prompt_events(
             &session_id,
@@ -148,6 +149,7 @@ async fn shared_client_completes_turn_against_agent() {
             None,
             &tx,
             &CancelToken::new(),
+            &pending,
         )
         .await
         .expect("session/prompt");
@@ -195,6 +197,7 @@ async fn missing_session_resume_fails_on_first_prompt() {
 
     let (tx, _rx) = mpsc::channel::<AgentEvent>(8);
     let content = [json!({ "type": "text", "text": "hi" })];
+    let pending = PendingUserChoices::shared();
     let err = turn
         .prompt_events(
             "missing-session-id",
@@ -204,6 +207,7 @@ async fn missing_session_resume_fails_on_first_prompt() {
             None,
             &tx,
             &CancelToken::new(),
+            &pending,
         )
         .await
         .expect_err("resume of missing session on first prompt");

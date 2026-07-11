@@ -52,7 +52,13 @@ pub trait Provider: Send + Sync {
         cancel: CancelToken,
     ) -> Result<TurnOutcome, Error> {
         let mut rt = self.open_main_runtime(&req.working_dir);
-        rt.run_turn(req, events, cancel).await
+        rt.run_turn(
+            req,
+            events,
+            cancel,
+            crate::event::PendingUserChoices::shared(),
+        )
+        .await
     }
 
     /// Transitional: open a cold oneshot runtime and summarise a title.

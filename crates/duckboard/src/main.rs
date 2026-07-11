@@ -16,7 +16,7 @@ pub mod config;
 mod data;
 mod default_prompts;
 mod meta_card;
-mod obvious_bubble;
+mod fast_response;
 pub mod highlight;
 mod idea_format;
 mod idea_store;
@@ -1169,7 +1169,7 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                 // empty chrome; refresh so the chat input renders lifecycle
                 // chrome (mirrors ideas.rs).
                 let dirty = !state.change.changed_files.is_empty();
-                area::change::refresh_obvious_chrome(
+                area::change::refresh_fast_response(
                     &mut state.interactions,
                     &state.project,
                     dirty,
@@ -1511,10 +1511,28 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                         ax.chat_ui_dirty = true;
                         force_materialize = true;
                     }
+                    AgentEvent::UserChoiceRequest {
+                        correlation_id,
+                        prompt,
+                        options,
+                        allow_cancel,
+                    } => {
+                        interaction::apply_user_choice_request(
+                            ax,
+                            correlation_id,
+                            prompt,
+                            options,
+                            allow_cancel,
+                        );
+                        // Chips appear while the turn stays open.
+                        force_materialize = true;
+                    }
                     AgentEvent::TurnComplete => {
                         interaction::flush_all_pending(&mut ax.session);
                         interaction::reset_answer_thrash(&mut ax.session);
                         ax.session.is_streaming = false;
+                        // Drop any leftover chips if the turn ended without answer.
+                        interaction::clear_user_choice_shell(ax);
                         ax.chat_ui_dirty = true;
                         force_materialize = true;
                         // Rebuild next actions from the new trailing assistant text.
@@ -1598,6 +1616,7 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                             tracing::error!(key, "agent error: {msg}");
                             ax.session.is_streaming = false;
                             interaction::reset_answer_thrash(&mut ax.session);
+                            interaction::clear_user_choice_shell(ax);
                             // Drop priming state so a failed AGENTS.md priming
                             // doesn't fire its follow-up against a half-broken
                             // session. The user will retype if they want to retry.
@@ -1650,6 +1669,7 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                         ax.agent_handle = None;
                         ax.session.is_streaming = false;
                         interaction::reset_answer_thrash(&mut ax.session);
+                        interaction::clear_user_choice_shell(ax);
                         // Drop any priming state — without a handle the
                         // follow-up can't dispatch, and stale flags would
                         // confuse the next reconnect.
@@ -2762,7 +2782,7 @@ fn is_chrome_layout_message(msg: &Message) -> bool {
     }
 }
 
-/// When obvious chrome is visible on the active chat, schedule a bounds
+/// When fast-response chips are visible on the active chat, schedule a bounds
 /// measure so the in-scroll bottom-pin pad can update. No-op otherwise.
 fn maybe_measure_chrome_pad(state: &State) -> Task<Message> {
         let Some(scope) = state.active_scope() else {
@@ -2775,7 +2795,12 @@ fn maybe_measure_chrome_pad(state: &State) -> Task<Message> {
         return Task::none();
     };
     let input_empty = ax.chat_input.text().trim().is_empty();
-    if !crate::obvious_bubble::chrome_visible(ax.session.is_streaming, input_empty, &ax.obvious_chrome) {
+    if !crate::fast_response::visible(
+        ax.session.is_streaming,
+        ax.is_awaiting_user,
+        input_empty,
+        &ax.fast_response,
+    ) {
         return Task::none();
     }
     let area = state.active_area;
@@ -3108,7 +3133,7 @@ fn is_chat_focus_msg(msg: Option<&interaction::Msg>) -> bool {
                 | interaction::Msg::AgentChat(
                     ChatMsg::SendPressed
                         | ChatMsg::SendOneshotSuggestion
-                        | ChatMsg::SendObviousAction(_)
+                        | ChatMsg::ActivateFastResponse(_)
                         | ChatMsg::CycleNextAction(_)
                 )
         )
@@ -3429,7 +3454,7 @@ fn reload_and_reconcile(state: &mut State) -> ReconcileOutcome {
     }
 
     let dirty = !state.change.changed_files.is_empty();
-    area::change::refresh_obvious_chrome(&mut state.interactions, &state.project, dirty);
+    area::change::refresh_fast_response(&mut state.interactions, &state.project, dirty);
     ReconcileOutcome {
         archived: archived_any,
         promoted,
@@ -3855,7 +3880,7 @@ fn refresh_changed_files(state: &mut State) {
     }
     // Commit chrome depends on dirty; recompose when the file list updates.
     let dirty = !state.change.changed_files.is_empty();
-    area::change::refresh_obvious_chrome(&mut state.interactions, &state.project, dirty);
+    area::change::refresh_fast_response(&mut state.interactions, &state.project, dirty);
 }
 
 /// Re-read any open `file:`-prefixed tabs whose underlying path matches
@@ -4054,7 +4079,7 @@ fn update_focused_column(state: &mut State, message: &Message) {
                     | ChatMsg::ChatAction(_, _)
                     | ChatMsg::QueueAction(_)
                     | ChatMsg::SendPressed
-                    | ChatMsg::SendObviousAction(_)
+                    | ChatMsg::ActivateFastResponse(_)
                     | ChatMsg::SendOneshotSuggestion
                     | ChatMsg::ChatScrolled(_)
                     | ChatMsg::CycleNextAction(_)

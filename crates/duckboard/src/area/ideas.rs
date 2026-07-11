@@ -507,14 +507,14 @@ fn handle_interaction(
             );
         }
     }
-    // Mirror `area::change::update` — refresh obvious chrome after any
+    // Mirror `area::change::update` — refresh fast response after any
     // session-touching interaction so a freshly-created chat on an
     // idea-promoted Change picks up the right lifecycle options. Without
     // this, cmd+N on a promoted change lands on a session with empty chrome
     // (this update path doesn't go through change::update).
     // Dirty unknown here; main's refresh_changed_files / change update
     // re-applies with the real flag. Gate row still tracks session emptiness.
-    super::change::refresh_obvious_chrome(interactions, project, false);
+    super::change::refresh_fast_response(interactions, project, false);
     let _ = fm;
 }
 

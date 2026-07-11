@@ -73,9 +73,10 @@ async fn run() -> anyhow::Result<()> {
                 Err(err) => write_error(id, &err)?,
             },
             "session/prompt" => {
-                // Stream profile updates live while Claude runs; only the
-                // prompt result waits until the turn ends. All ACP lines share
-                // one stdout path (`write_acp`).
+                // Stream profile updates live while Claude runs; mid-prompt
+                // AskUserQuestion issues session/request_permission and reads
+                // the parent answer from the same stdin. All ACP lines share
+                // one stdout path (`write_acp_value`).
                 let mut emit_err: Option<anyhow::Error> = None;
                 let mut on_update = |update: Value| {
                     if emit_err.is_some() {
@@ -85,7 +86,15 @@ async fn run() -> anyhow::Result<()> {
                         emit_err = Some(e);
                     }
                 };
-                match agent.run_prompt(&params, &mut on_update).await {
+                let mut write_parent = |msg: Value| -> Result<(), AgentError> {
+                    write_acp_value(&msg).map_err(|e| {
+                        AgentError::Process(format!("write parent acp: {e}"))
+                    })
+                };
+                match agent
+                    .run_prompt(&params, &mut on_update, &mut reader, &mut write_parent)
+                    .await
+                {
                     Ok(result) => {
                         if let Some(e) = emit_err {
                             return Err(e);
@@ -139,10 +148,14 @@ fn write_notification(method: &str, params: Value) -> anyhow::Result<()> {
     }))
 }
 
-/// Single stdout write path for every ACP JSON-RPC line (results, errors, and
-/// mid-turn `session/update` notifications). Locked flush so live updates
-/// leave the process before the prompt result is written.
+/// Single stdout write path for every ACP JSON-RPC line (results, errors,
+/// mid-turn `session/update` notifications, and agent→parent requests).
+/// Locked flush so live lines leave the process before the next write.
 fn write_acp(msg: &Value) -> anyhow::Result<()> {
+    write_acp_value(msg)
+}
+
+fn write_acp_value(msg: &Value) -> anyhow::Result<()> {
     let mut line = serde_json::to_string(msg)?;
     line.push('\n');
     let mut out = std::io::stdout().lock();

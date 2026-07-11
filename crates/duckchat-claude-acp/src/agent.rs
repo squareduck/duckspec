@@ -9,11 +9,25 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use serde_json::{Value, json};
+use tokio::io::AsyncBufReadExt;
+use tokio::sync::{mpsc, oneshot};
 
+use crate::claude::ask_user::{
+    self, ASK_USER_QUESTION, ChoiceOption, PermissionDecision, decision_from_cancelled,
+    decision_from_selected, decode_ask_user_input, permission_request_params,
+};
 use crate::claude::duplex::DuplexError;
 use crate::claude::{
     ClaudeDuplex, ClaudeSpawnFactory, acp_prompt_to_claude_content, default_spawn_factory,
 };
+
+/// Queued AskUserQuestion that needs a parent ACP permission response.
+struct ChoiceNeed {
+    request_id: String,
+    tool_name: String,
+    tool_input: Value,
+    reply: oneshot::Sender<PermissionDecision>,
+}
 
 /// Errors returned from session operations (mapped to JSON-RPC by the loop).
 #[derive(Debug)]
@@ -198,11 +212,21 @@ impl Agent {
     /// init+stream), or reuse duplex heat. Profile updates are delivered live
     /// via `on_update`. Returns a prompt result that includes `sessionId` when
     /// the id rebinds to Claude's native id.
-    pub(crate) async fn run_prompt(
+    ///
+    /// `parent_reader` is the ACP parent's stdin — read mid-prompt for answers
+    /// to agent→parent `session/request_permission`. `write_acp` emits all
+    /// parent-facing JSON-RPC lines (updates + requests + results elsewhere).
+    pub(crate) async fn run_prompt<R, W>(
         &mut self,
         params: &Value,
         on_update: &mut (dyn FnMut(Value) + Send),
-    ) -> Result<Value, AgentError> {
+        parent_reader: &mut R,
+        write_acp: &mut W,
+    ) -> Result<Value, AgentError>
+    where
+        R: tokio::io::AsyncBufRead + Unpin + Send,
+        W: FnMut(Value) -> Result<(), AgentError> + Send,
+    {
         let request_id = params
             .get("sessionId")
             .and_then(Value::as_str)
@@ -211,7 +235,7 @@ impl Agent {
         let content = acp_prompt_to_claude_content(params);
 
         let open_id = request_id.clone();
-        self.ensure_hot_and_prompt(&request_id, params, content, on_update)
+        self.ensure_hot_and_prompt(&request_id, params, content, on_update, parent_reader, write_acp)
             .await?;
 
         let live_id = self
@@ -229,24 +253,41 @@ impl Agent {
         Ok(result)
     }
 
-    async fn ensure_hot_and_prompt(
+    async fn ensure_hot_and_prompt<R, W>(
         &mut self,
         request_id: &str,
         params: &Value,
         content: Vec<Value>,
         on_update: &mut (dyn FnMut(Value) + Send),
-    ) -> Result<(), AgentError> {
+        parent_reader: &mut R,
+        write_acp: &mut W,
+    ) -> Result<(), AgentError>
+    where
+        R: tokio::io::AsyncBufRead + Unpin + Send,
+        W: FnMut(Value) -> Result<(), AgentError> + Send,
+    {
         let resolved = self.resolve_id(request_id);
 
-        // Reuse hot duplex when it already holds this conversation.
-        if let Some(hot) = self.hot.as_mut() {
-            if hot.session_id == resolved && hot.alive() {
-                hot.prompt(content, on_update).await?;
-                return Ok(());
-            }
-            if let Some(old) = self.hot.take() {
-                old.kill().await;
-            }
+        // Drop heat if it is for a different conversation or dead.
+        let drop_hot = match self.hot.as_mut() {
+            Some(hot) => hot.session_id != resolved || !hot.alive(),
+            None => false,
+        };
+        if drop_hot && let Some(old) = self.hot.take() {
+            old.kill().await;
+        }
+
+        if self.hot.is_some() {
+            // Reuse process-hot duplex.
+            self.prompt_with_parent_bridge(
+                content,
+                on_update,
+                parent_reader,
+                write_acp,
+                &resolved,
+            )
+            .await?;
+            return Ok(());
         }
 
         // First prompt for this handle: spawn with first user content.
@@ -270,18 +311,46 @@ impl Agent {
             }
         };
         let model = model_from_params(params).or(pending.model);
-        let resume = pending.resume.as_deref();
+        let resume = pending.resume.clone();
+        let factory = self.factory.clone();
+        let bypass = self.bypass_permissions;
+        let session_for_choice = resume.clone().unwrap_or_else(|| resolved.clone());
 
-        let duplex = ClaudeDuplex::open_with_first_prompt(
-            &self.factory,
+        let (need_tx, mut need_rx) = mpsc::unbounded_channel::<ChoiceNeed>();
+        let mut resolve = make_channel_resolver(need_tx);
+        let mut next_req_id = 10_000u64;
+
+        let open_fut = ClaudeDuplex::open_with_first_prompt_resolved(
+            &factory,
             &cwd,
-            resume,
+            resume.as_deref(),
             model.as_deref(),
-            self.bypass_permissions,
+            bypass,
             content,
             on_update,
-        )
-        .await?;
+            &mut resolve,
+        );
+        tokio::pin!(open_fut);
+        let duplex = loop {
+            tokio::select! {
+                biased;
+                Some(need) = need_rx.recv() => {
+                    let decision = service_parent_choice(
+                        &need.request_id,
+                        &need.tool_name,
+                        &need.tool_input,
+                        parent_reader,
+                        write_acp,
+                        &session_for_choice,
+                        &mut next_req_id,
+                    ).await?;
+                    let _ = need.reply.send(decision);
+                }
+                result = &mut open_fut => {
+                    break result?;
+                }
+            }
+        };
 
         let native = duplex.session_id.clone();
         if native != request_id {
@@ -291,6 +360,59 @@ impl Agent {
         self.sessions.insert(native.clone());
         self.hot = Some(duplex);
         Ok(())
+    }
+
+    /// Prompt the process-hot duplex with parent choice bridging.
+    async fn prompt_with_parent_bridge<R, W>(
+        &mut self,
+        content: Vec<Value>,
+        on_update: &mut (dyn FnMut(Value) + Send),
+        parent_reader: &mut R,
+        write_acp: &mut W,
+        session_id: &str,
+    ) -> Result<(), AgentError>
+    where
+        R: tokio::io::AsyncBufRead + Unpin + Send,
+        W: FnMut(Value) -> Result<(), AgentError> + Send,
+    {
+        let mut hot = self
+            .hot
+            .take()
+            .ok_or_else(|| AgentError::Process("no hot claude".into()))?;
+
+        let (need_tx, mut need_rx) = mpsc::unbounded_channel::<ChoiceNeed>();
+        let mut resolve = make_channel_resolver(need_tx);
+        let mut next_req_id = 10_000u64;
+        let session_id = session_id.to_string();
+
+        let result = {
+            let prompt_fut = hot.prompt_with_resolver(content, on_update, &mut resolve);
+            tokio::pin!(prompt_fut);
+
+            loop {
+                tokio::select! {
+                    biased;
+                    Some(need) = need_rx.recv() => {
+                        let decision = service_parent_choice(
+                            &need.request_id,
+                            &need.tool_name,
+                            &need.tool_input,
+                            parent_reader,
+                            write_acp,
+                            &session_id,
+                            &mut next_req_id,
+                        ).await?;
+                        let _ = need.reply.send(decision);
+                    }
+                    result = &mut prompt_fut => {
+                        break result;
+                    }
+                }
+            }
+        };
+
+        self.hot = Some(hot);
+        result.map_err(AgentError::from)
     }
 
     /// Resolve provisional open ids to the native id they rebound to.
@@ -327,7 +449,7 @@ fn cwd_from_params(params: &Value) -> PathBuf {
         .get("cwd")
         .and_then(Value::as_str)
         .map(PathBuf::from)
-        .unwrap_or_else(|| std::env::temp_dir())
+        .unwrap_or_else(std::env::temp_dir)
 }
 
 fn model_from_params(params: &Value) -> Option<String> {
@@ -337,6 +459,126 @@ fn model_from_params(params: &Value) -> Option<String> {
         .or_else(|| params.get("model"))
         .and_then(Value::as_str)
         .map(str::to_string)
+}
+
+type ChoiceResolveFuture = std::pin::Pin<
+    Box<dyn std::future::Future<Output = Result<PermissionDecision, DuplexError>> + Send>,
+>;
+
+/// Resolver that posts AskUserQuestion needs onto a channel (no stack borrows).
+fn make_channel_resolver(
+    tx: mpsc::UnboundedSender<ChoiceNeed>,
+) -> impl FnMut(String, String, Value) -> ChoiceResolveFuture {
+    move |request_id: String, tool_name: String, tool_input: Value| {
+        let tx = tx.clone();
+        Box::pin(async move {
+            if tool_name != ASK_USER_QUESTION {
+                return Ok(ask_user::auto_allow_ordinary_tool());
+            }
+            let (reply_tx, reply_rx) = oneshot::channel();
+            tx.send(ChoiceNeed {
+                request_id,
+                tool_name,
+                tool_input,
+                reply: reply_tx,
+            })
+            .map_err(|_| DuplexError::Process("parent choice channel closed".into()))?;
+            reply_rx
+                .await
+                .map_err(|_| DuplexError::Process("parent choice dropped".into()))
+        })
+    }
+}
+
+/// Issue `session/request_permission` to the parent and wait for its JSON-RPC result.
+async fn service_parent_choice<R, W>(
+    control_request_id: &str,
+    tool_name: &str,
+    tool_input: &Value,
+    parent_reader: &mut R,
+    write_acp: &mut W,
+    session_id: &str,
+    next_req_id: &mut u64,
+) -> Result<PermissionDecision, AgentError>
+where
+    R: tokio::io::AsyncBufRead + Unpin + Send,
+    W: FnMut(Value) -> Result<(), AgentError> + Send,
+{
+    if tool_name != ASK_USER_QUESTION {
+        return Ok(ask_user::auto_allow_ordinary_tool());
+    }
+    let (question, options) = decode_ask_user_input(tool_input);
+    if options.is_empty() {
+        return Ok(decision_from_cancelled());
+    }
+    let rpc_id = {
+        let id = *next_req_id;
+        *next_req_id += 1;
+        id
+    };
+    let tool_call_id = format!("ask-user-{control_request_id}");
+    let params =
+        permission_request_params(session_id, &tool_call_id, question.as_deref(), &options);
+    write_acp(json!({
+        "jsonrpc": "2.0",
+        "id": rpc_id,
+        "method": "session/request_permission",
+        "params": params,
+    }))?;
+
+    let mut line = String::new();
+    loop {
+        line.clear();
+        let n = parent_reader
+            .read_line(&mut line)
+            .await
+            .map_err(|e| AgentError::Process(format!("read parent: {e}")))?;
+        if n == 0 {
+            return Err(AgentError::Process(
+                "parent closed stdin while awaiting user choice".into(),
+            ));
+        }
+        let msg: Value = match serde_json::from_str(line.trim_end()) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        if msg.get("method").is_some() {
+            continue;
+        }
+        if msg.get("id") != Some(&json!(rpc_id)) {
+            continue;
+        }
+        return Ok(map_parent_permission_result(
+            &msg,
+            tool_input,
+            question.as_deref().unwrap_or(""),
+            &options,
+        ));
+    }
+}
+
+/// Map a parent `session/request_permission` JSON-RPC result to a Claude decision.
+fn map_parent_permission_result(
+    msg: &Value,
+    tool_input: &Value,
+    question_text: &str,
+    options: &[ChoiceOption],
+) -> PermissionDecision {
+    let outcome = msg.pointer("/result/outcome");
+    let kind = outcome
+        .and_then(|o| o.get("outcome"))
+        .and_then(Value::as_str)
+        .unwrap_or("cancelled");
+    match kind {
+        "selected" => {
+            let option_id = outcome
+                .and_then(|o| o.get("optionId"))
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            decision_from_selected(tool_input, question_text, option_id, options)
+        }
+        _ => decision_from_cancelled(),
+    }
 }
 
 #[cfg(test)]
@@ -465,7 +707,11 @@ for line in sys.stdin:
     ) -> Result<(Vec<Value>, Value), AgentError> {
         let mut updates = Vec::new();
         let mut sink = |u: Value| updates.push(u);
-        let result = agent.run_prompt(&params, &mut sink).await?;
+        let mut parent = tokio::io::BufReader::new(tokio::io::empty());
+        let mut write = |_m: Value| -> Result<(), AgentError> { Ok(()) };
+        let result = agent
+            .run_prompt(&params, &mut sink, &mut parent, &mut write)
+            .await?;
         Ok((updates, result))
     }
 
@@ -672,6 +918,8 @@ for line in sys.stdin:
             .await
             .unwrap();
         let mut sink = |_u: Value| {};
+        let mut parent = tokio::io::BufReader::new(tokio::io::empty());
+        let mut write = |_m: Value| -> Result<(), AgentError> { Ok(()) };
         let err = agent
             .run_prompt(
                 &json!({
@@ -679,6 +927,8 @@ for line in sys.stdin:
                     "prompt": [{ "type": "text", "text": "hi" }],
                 }),
                 &mut sink,
+                &mut parent,
+                &mut write,
             )
             .await
             .unwrap_err();
@@ -712,6 +962,8 @@ for line in sys.stdin:
             }
         };
 
+        let mut parent = tokio::io::BufReader::new(tokio::io::empty());
+        let mut write = |_m: Value| -> Result<(), AgentError> { Ok(()) };
         let result = agent
             .run_prompt(
                 &json!({
@@ -719,6 +971,8 @@ for line in sys.stdin:
                     "prompt": [{ "type": "text", "text": "stream-me" }],
                 }),
                 &mut sink,
+                &mut parent,
+                &mut write,
             )
             .await
             .unwrap();

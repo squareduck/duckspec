@@ -265,7 +265,7 @@ setting.
 - **THEN** the list is exactly that single lifecycle option in empty-send form
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:742
+> - crates/duckboard/src/area/interaction.rs:745
 
 ## Requirement: Next-action list
 
@@ -350,7 +350,7 @@ bootstrap.
 - **THEN** the list is exactly the explore stage command in empty-send form
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:708
+> - crates/duckboard/src/area/interaction.rs:711
 
 ### Scenario: Empty change session with unfinished steps seeds apply
 
@@ -360,7 +360,7 @@ bootstrap.
 - **THEN** the list is exactly the apply stage command in empty-send form
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:721
+> - crates/duckboard/src/area/interaction.rs:724
 
 ## Requirement: Next-action empty-input send and cycle
 

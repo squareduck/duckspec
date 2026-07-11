@@ -27,7 +27,7 @@ pub fn next_action_list(
     last_assistant: Option<&str>,
 ) -> Vec<NextAction> {
     if session_empty {
-        return match crate::obvious_bubble::bubble_send_text(bootstrap) {
+        return match crate::fast_response::bubble_send_text(bootstrap) {
             Some(send) => vec![NextAction {
                 send,
                 reason: None,

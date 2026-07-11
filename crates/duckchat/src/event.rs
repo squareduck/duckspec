@@ -1,4 +1,9 @@
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
+
 use serde::{Deserialize, Serialize};
+use tokio::sync::oneshot;
 
 /// Events streamed from a provider back to the caller during a prompt turn.
 ///
@@ -36,10 +41,109 @@ pub enum AgentEvent {
     /// its persisted copy and re-dispatch the turn as a fresh session with a
     /// history preamble.
     SessionNotFound,
+    /// Mid-turn structured choice. Host must
+    /// [`crate::worker::AgentHandle::answer_user_choice`] or turn cancel ends it.
+    UserChoiceRequest(UserChoiceRequest),
     /// The agent finished its turn successfully.
     TurnComplete,
     /// An error occurred during the turn.
     Error(String),
+}
+
+/// One option in a mid-turn structured choice.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UserChoiceOption {
+    /// Wire option id / answer key.
+    pub id: String,
+    /// Chip label shown to the host.
+    pub label: String,
+}
+
+/// Host-facing mid-turn structured choice request.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UserChoiceRequest {
+    /// Host-local correlation id; maps to a pending JSON-RPC request inside the worker.
+    pub correlation_id: u64,
+    /// Question text when known.
+    pub prompt: Option<String>,
+    /// Options to present (typically 1..=9).
+    pub options: Vec<UserChoiceOption>,
+    /// When true, the host may cancel (⌘⌫).
+    pub allow_cancel: bool,
+}
+
+/// Host answer to a pending [`UserChoiceRequest`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum UserChoiceAnswer {
+    /// Chip / structured option pick.
+    Selected { option_id: String },
+    /// Composer freeform while awaiting — custom answer text (not cancel).
+    Custom { text: String },
+    /// Esc / pure dismiss — harness skip or deny.
+    Cancelled,
+}
+
+/// Shared map of parked mid-turn choices. The worker and ACP main path share one
+/// instance so the host can answer while `run_turn` is blocked.
+#[derive(Debug, Default)]
+pub struct PendingUserChoices {
+    next_id: AtomicU64,
+    waiters: Mutex<HashMap<u64, oneshot::Sender<UserChoiceAnswer>>>,
+}
+
+impl PendingUserChoices {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn shared() -> Arc<Self> {
+        Arc::new(Self::new())
+    }
+
+    /// Register a waiter and return `(correlation_id, receiver)`.
+    pub fn park(&self) -> (u64, oneshot::Receiver<UserChoiceAnswer>) {
+        let id = self.next_id.fetch_add(1, Ordering::Relaxed) + 1;
+        let (tx, rx) = oneshot::channel();
+        self.waiters
+            .lock()
+            .expect("pending choices lock")
+            .insert(id, tx);
+        (id, rx)
+    }
+
+    /// Deliver a host answer. No-op if the id is unknown or already completed.
+    pub fn answer(&self, correlation_id: u64, answer: UserChoiceAnswer) {
+        if let Some(tx) = self
+            .waiters
+            .lock()
+            .expect("pending choices lock")
+            .remove(&correlation_id)
+        {
+            let _ = tx.send(answer);
+        }
+    }
+
+    /// Complete every waiter as cancelled (turn cancel / shutdown).
+    pub fn cancel_all(&self) {
+        let waiters: Vec<_> = self
+            .waiters
+            .lock()
+            .expect("pending choices lock")
+            .drain()
+            .map(|(_, tx)| tx)
+            .collect();
+        for tx in waiters {
+            let _ = tx.send(UserChoiceAnswer::Cancelled);
+        }
+    }
+
+    /// Drop a waiter without answering (e.g. after local cancel already wrote).
+    pub fn forget(&self, correlation_id: u64) {
+        self.waiters
+            .lock()
+            .expect("pending choices lock")
+            .remove(&correlation_id);
+    }
 }
 
 /// Token-usage / context-window snapshot. All fields are optional — a single

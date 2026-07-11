@@ -129,7 +129,7 @@ SHALL NOT resume a prior oneshot conversation session.
 - **AND** it does not resume the prior oneshot session id
 
 > test: code
-> - crates/duckchat/src/acp/runtime.rs:827
+> - crates/duckchat/src/acp/runtime.rs:839
 
 ### Scenario: An oneshot call on a hot path reuses the process
 
@@ -138,7 +138,7 @@ SHALL NOT resume a prior oneshot conversation session.
 - **THEN** the harness does not spawn a new agent process for that call
 
 > test: code
-> - crates/duckchat/src/acp/runtime.rs:859
+> - crates/duckchat/src/acp/runtime.rs:871
 
 ## Requirement: Native Grok agent launch
 
@@ -157,3 +157,89 @@ intermediate owned proxy whose only role is to forward ACP to grok.
 
 > test: code
 > - crates/duckchat/src/grok.rs:372
+
+## Requirement: Structured questions enabled
+
+The main-path Grok agent launch SHALL NOT pass `--no-ask-user`, so the agent may issue
+structured user questions. The same launch SHALL still auto-approve tool execution for the
+turn (always-approve style), so ordinary tool permission prompts do not require host UI.
+
+> test: code
+
+### Scenario: Main launch does not pass no-ask-user
+
+- **GIVEN** the Grok main-path agent launch
+- **WHEN** the launch arguments are inspected
+- **THEN** they do not include `--no-ask-user`
+
+> test: code
+> - crates/duckchat/src/grok.rs:419
+
+### Scenario: Main launch still auto-approves tool execution
+
+- **GIVEN** the Grok main-path agent launch
+- **WHEN** the launch arguments are inspected
+- **THEN** they include the always-approve flag that auto-approves tool execution
+
+> test: code
+> - crates/duckchat/src/grok.rs:429
+
+## Requirement: Question wire mapping
+
+When the Grok agent issues a mid-turn `x.ai/ask_user_question` request, the harness path
+SHALL expose that request to the host as a neutral user choice (via the shared ACP client
+main path). A host selection SHALL complete the request with an accepted questionnaire
+response carrying the chosen answers. A host custom freeform answer SHALL complete the
+request with an accepted questionnaire response carrying that freeform text as the answer
+value for the question (not skip-interview). A host cancel SHALL complete the request with
+a skip-interview response.
+
+> test: code
+
+### Scenario: An ask-user extension request is exposed as a host user choice
+
+- **GIVEN** an in-flight Grok main-path turn
+- **AND** an agent `x.ai/ask_user_question` request with at least one option
+- **WHEN** the request is handled on the main path
+- **THEN** a host user-choice event is emitted for that request
+
+> test: code
+> - crates/duckchat/src/grok.rs:439
+
+### Scenario: A host selection completes with an accepted questionnaire response
+
+- **GIVEN** a pending Grok ask-user request exposed as a host user choice
+- **WHEN** the host answers with a selected option
+- **THEN** the agent request is completed with an accepted questionnaire response
+- **AND** that response carries the chosen answer for the question
+
+> test: code
+> - crates/duckchat/src/grok.rs:473
+
+### Scenario: Host custom freeform answer completes with an accepted free-text answer
+
+- **GIVEN** a pending Grok ask-user request exposed as a host user choice
+
+- **AND** a question text from that request
+
+- **WHEN** the host answers with custom freeform text
+
+- **THEN** the agent request is completed with an accepted questionnaire response
+
+- **AND** that response carries an answers entry mapping that question text to that
+  freeform text
+
+- **AND** the response is not a skip-interview outcome
+
+> test: code
+> - crates/duckchat/src/acp/ask_user.rs:104
+> - crates/duckchat/src/grok.rs:494
+
+### Scenario: A host cancel completes with a skip-interview response
+
+- **GIVEN** a pending Grok ask-user request exposed as a host user choice
+- **WHEN** the host answers as cancelled
+- **THEN** the agent request is completed with a skip-interview response
+
+> test: code
+> - crates/duckchat/src/grok.rs:483

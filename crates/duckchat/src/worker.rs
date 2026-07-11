@@ -12,7 +12,7 @@ use tokio::time::timeout;
 
 use crate::cancel::CancelToken;
 use crate::error::Error;
-use crate::event::AgentEvent;
+use crate::event::{AgentEvent, PendingUserChoices, UserChoiceAnswer};
 use crate::provider::Provider;
 use crate::reply_suggest::{
     REPLY_SUGGEST_INSTRUCTION, build_reply_suggest_prompt, parse_replies, should_skip_model,
@@ -30,6 +30,13 @@ pub enum AgentCommand {
     /// Run a prompt turn. Convenience helpers on [`AgentHandle`] construct
     /// this.
     RunTurn(TurnRequest),
+    /// Answer a parked mid-turn user choice. Prefer
+    /// [`AgentHandle::answer_user_choice`] (side channel) while a turn is
+    /// in flight — the main command loop is blocked on `run_turn`.
+    AnswerUserChoice {
+        correlation_id: u64,
+        answer: UserChoiceAnswer,
+    },
     /// Seed the session id used by the next turn. Useful when resuming a
     /// previously-persisted conversation — the caller knows the id before the
     /// worker has seen a turn.
@@ -63,6 +70,8 @@ pub struct AgentHandle {
     tx: mpsc::UnboundedSender<AgentCommand>,
     oneshot_tx: mpsc::UnboundedSender<OneshotCommand>,
     working_dir: PathBuf,
+    /// Side channel for mid-turn choices (works while `run_turn` is blocked).
+    pending_choices: std::sync::Arc<PendingUserChoices>,
 }
 
 impl AgentHandle {
@@ -87,11 +96,20 @@ impl AgentHandle {
     }
 
     /// Cancel the in-flight main turn. Does not tear down the oneshot path.
+    /// Also completes any parked user choice as cancelled.
     pub fn cancel(&self) {
+        self.pending_choices.cancel_all();
         self.cancel.cancel();
     }
 
+    /// Answer a parked mid-turn [`AgentEvent::UserChoiceRequest`].
+    /// Uses a side channel so it works while the main turn is in flight.
+    pub fn answer_user_choice(&self, correlation_id: u64, answer: UserChoiceAnswer) {
+        self.pending_choices.answer(correlation_id, answer);
+    }
+
     pub fn shutdown(&self) {
+        self.pending_choices.cancel_all();
         self.cancel.cancel();
         let _ = self.tx.send(AgentCommand::Shutdown);
     }
@@ -172,11 +190,13 @@ fn spawn_worker_with_oneshot_budget<P: Provider + 'static>(
     let (cmd_tx, mut cmd_rx) = mpsc::unbounded_channel::<AgentCommand>();
     let (oneshot_tx, mut oneshot_rx) = mpsc::unbounded_channel::<OneshotCommand>();
     let cancel = CancelToken::new();
+    let pending_choices = PendingUserChoices::shared();
     let handle = AgentHandle {
         cancel: cancel.clone(),
         tx: cmd_tx,
         oneshot_tx: oneshot_tx.clone(),
         working_dir: working_dir.clone(),
+        pending_choices: pending_choices.clone(),
     };
 
     let mut main = provider.open_main_runtime(&working_dir);
@@ -251,7 +271,14 @@ fn spawn_worker_with_oneshot_budget<P: Provider + 'static>(
                         continue;
                     }
 
-                    let outcome = main.run_turn(req, events.clone(), cancel.clone()).await;
+                    let outcome = main
+                        .run_turn(
+                            req,
+                            events.clone(),
+                            cancel.clone(),
+                            pending_choices.clone(),
+                        )
+                        .await;
                     let send_result = match outcome {
                         Ok(out) => {
                             let changed = session_id.as_deref() != Some(out.session_id.as_str());
@@ -297,6 +324,12 @@ fn spawn_worker_with_oneshot_budget<P: Provider + 'static>(
                         break;
                     }
                 }
+                AgentCommand::AnswerUserChoice {
+                    correlation_id,
+                    answer,
+                } => {
+                    pending_choices.answer(correlation_id, answer);
+                }
                 AgentCommand::SetSessionId(sid) => {
                     session_id = Some(sid);
                 }
@@ -304,6 +337,7 @@ fn spawn_worker_with_oneshot_budget<P: Provider + 'static>(
                     session_id = None;
                 }
                 AgentCommand::Shutdown => {
+                    pending_choices.cancel_all();
                     main.shutdown().await;
                     let _ = oneshot_tx.send(OneshotCommand::Shutdown);
                     return;
@@ -453,6 +487,7 @@ mod tests {
             req: TurnRequest,
             _events: mpsc::Sender<AgentEvent>,
             cancel: CancelToken,
+            _pending_choices: std::sync::Arc<PendingUserChoices>,
         ) -> Result<TurnOutcome, Error> {
             self.turn_count += 1;
             // First turn may hang until cancelled (for cancel/re-warm tests).

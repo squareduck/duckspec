@@ -244,51 +244,54 @@ for line in sys.stdin:
     /// @spec harness/claude Owned ACP agent over official Claude CLI: A Claude turn is driven through the owned ACP agent process
     #[tokio::test]
     async fn claude_turn_driven_through_owned_acp_agent() {
-        let _guard = ENV_LOCK.lock().unwrap();
         let tmp = TempDir::new().unwrap();
-        let agent = install_fake_acp_agent(&tmp);
+        let provider = {
+            let _guard = ENV_LOCK.lock().unwrap();
+            let agent = install_fake_acp_agent(&tmp);
 
-        // Launch is the owned agent binary — not `claude -p` stream-json.
-        let launch = AgentLaunch::new({
-            let agent = agent.clone();
-            move || Command::new(&agent)
-        });
-        let provider = ClaudeCodeProvider::with_launch(launch);
+            // Launch is the owned agent binary — not `claude -p` stream-json.
+            let launch = AgentLaunch::new({
+                let agent = agent.clone();
+                move || Command::new(&agent)
+            });
+            let provider = ClaudeCodeProvider::with_launch(launch);
 
-        let cmd = claude_acp_launch().command();
-        let program = cmd.as_std().get_program().to_string_lossy().into_owned();
-        let args: Vec<String> = cmd
-            .as_std()
-            .get_args()
-            .map(|a| a.to_string_lossy().into_owned())
-            .collect();
-        // Default launch targets the owned agent name (resolved or PATH fallthrough).
-        assert!(
-            program.contains(CLAUDE_ACP_BIN)
-                || args.iter().any(|a| a.contains(CLAUDE_ACP_BIN)),
-            "default Claude launch must target {CLAUDE_ACP_BIN}, got program={program} args={args:?}"
-        );
-        assert!(
-            !args.iter().any(|a| a == "-p" || a == "stream-json"),
-            "host must not drive claude via in-host stream-json flags: {args:?}"
-        );
+            let cmd = claude_acp_launch().command();
+            let program = cmd.as_std().get_program().to_string_lossy().into_owned();
+            let args: Vec<String> = cmd
+                .as_std()
+                .get_args()
+                .map(|a| a.to_string_lossy().into_owned())
+                .collect();
+            // Default launch targets the owned agent name (resolved or PATH fallthrough).
+            assert!(
+                program.contains(CLAUDE_ACP_BIN)
+                    || args.iter().any(|a| a.contains(CLAUDE_ACP_BIN)),
+                "default Claude launch must target {CLAUDE_ACP_BIN}, got program={program} args={args:?}"
+            );
+            assert!(
+                !args.iter().any(|a| a == "-p" || a == "stream-json"),
+                "host must not drive claude via in-host stream-json flags: {args:?}"
+            );
+            provider
+        };
 
         // A turn completes through the shared ACP main runtime against the agent.
         let mut rt = provider.open_main_runtime(tmp.path());
         let (tx, mut rx) = mpsc::channel(16);
         let req = TurnRequest::new("hello", tmp.path().to_path_buf());
         let outcome = rt
-            .run_turn(req, tx, CancelToken::new())
+            .run_turn(req, tx, CancelToken::new(), crate::event::PendingUserChoices::shared())
             .await
             .expect("turn through owned ACP agent");
         assert_eq!(outcome.session_id, "claude-native-sess-1");
 
         let mut saw_content = false;
         while let Ok(ev) = rx.try_recv() {
-            if let AgentEvent::ContentDelta { text } = ev {
-                if text.contains("from-owned-agent") {
-                    saw_content = true;
-                }
+            if let AgentEvent::ContentDelta { text } = ev
+                && text.contains("from-owned-agent")
+            {
+                saw_content = true;
             }
         }
         assert!(

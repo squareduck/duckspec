@@ -34,9 +34,9 @@ pub enum Msg {
     /// Action from the chat input editor.
     InputAction(text_edit::EditorAction),
     SendPressed,
-    /// Activate an obvious-chrome action (key or chip click). Payload is the
-    /// action send text only (not the hotkey label).
-    SendObviousAction(String),
+    /// Activate a fast-response chip (key or click). Payload is the pick id
+    /// only (not the hotkey label).
+    ActivateFastResponse(crate::fast_response::FastResponsePick),
     CancelPressed,
     CompletionAccept,
     CompletionNext,
@@ -258,6 +258,8 @@ pub fn format_usage_readout(tokens: usize, window: usize) -> String {
 /// Data for the status bar below the chat input.
 pub struct StatusInfo {
     pub is_streaming: bool,
+    /// Mid-turn structured choice pending — chips stay visible while streaming.
+    pub is_awaiting_user: bool,
     /// 0 = no esc pressed, 1 = one esc pressed (waiting for second).
     pub esc_count: u8,
     /// Picker options — one per provider model, grouped by harness.
@@ -1063,10 +1065,10 @@ pub fn view<'a>(
     oneshot_prompts: Vec<String>,
     // True while the reply-suggestion oneshot is outstanding.
     default_prompts_pending: bool,
-    // Multi-option obvious chrome (send form derived in view).
-    obvious_chrome: &'a crate::obvious_bubble::ObviousChrome,
-    // Spacer above chrome when history is shorter than the viewport.
-    chrome_top_pad: f32,
+    // Multi-option fast-response shell (send form derived in view).
+    fast_response: &'a crate::fast_response::FastResponse,
+    // Spacer above chips when history is shorter than the viewport.
+    fast_response_top_pad: f32,
     pinned_selections: &'a [SelectionContext],
     tentative_selection: Option<&'a SelectionContext>,
     block_highlights: Vec<(
@@ -1111,26 +1113,27 @@ pub fn view<'a>(
         );
     }
 
-    // Obvious chrome after transcript content, inside the scroll column.
+    // Fast response after transcript content, inside the scroll column.
     // Optional top pad pins chips to the bottom of the viewport when history
     // is short; when history already fills the viewport, pad is 0 and chips
     // sit naturally after the last message. Keeping chrome inside the scroll
     // (not between scroll and composer) preserves a stable outer widget tree
     // so the input keeps focus when chrome shows/hides.
     let input_empty = input_value.text().trim().is_empty();
-    if crate::obvious_bubble::chrome_visible(
+    if crate::fast_response::visible(
         status.is_streaming,
+        status.is_awaiting_user,
         input_empty,
-        obvious_chrome,
+        fast_response,
     ) {
-        if chrome_top_pad > 0.0 {
+        if fast_response_top_pad > 0.0 {
             chat_col = chat_col.push(
                 Space::new()
                     .width(Length::Fill)
-                    .height(chrome_top_pad),
+                    .height(fast_response_top_pad),
             );
         }
-        chat_col = chat_col.push(view_obvious_chrome(obvious_chrome));
+        chat_col = chat_col.push(view_fast_response(fast_response));
     }
 
     let chat_scroll = scrollable(chat_col)
@@ -1286,6 +1289,13 @@ pub fn view<'a>(
     // harness-prefixed `label` via Display. Equality is on (harness, id).
     let mut selected_closed = status.selected_model.clone();
     selected_closed.label = selected_closed.closed_label.clone();
+    let model_pick_style = if crate::fast_response::awaiting_composer_chrome(
+        status.is_awaiting_user,
+    ) {
+        theme::pick_list_ghost_awaiting_style
+    } else {
+        theme::pick_list_ghost_style
+    };
     meta_inner = meta_inner.push(
         pick_list(
             status.model_choices,
@@ -1294,7 +1304,7 @@ pub fn view<'a>(
         )
         .text_size(theme::font_sm())
         .padding([0.0, theme::SPACING_XS])
-        .style(theme::pick_list_ghost_style)
+        .style(model_pick_style)
         .menu_style(theme::pick_list_menu),
     );
     let ctx_label = match status.context_max {
@@ -1398,10 +1408,18 @@ pub fn view<'a>(
 
     // Horizontal padding here sums with TextEdit's internal CONTENT_PAD (8px)
     // to land the input's text at the same 12px the chat headers use.
+    // Awaiting a user choice: quiet accent tint on the whole composer section.
+    let composer_style = if crate::fast_response::awaiting_composer_chrome(
+        status.is_awaiting_user,
+    ) {
+        theme::chat_composer_awaiting
+    } else {
+        theme::chat_input
+    };
     let input_row = container(composer_col)
         .padding([theme::SPACING_SM, theme::SPACING_XS])
         .width(Length::Fill)
-        .style(theme::chat_input);
+        .style(composer_style);
 
     // Stable outer column (scroll → completion → divider → input) so showing
     // or hiding in-scroll chrome never remounts the input and steals focus.
@@ -1716,37 +1734,20 @@ fn format_number(n: usize) -> String {
     result
 }
 
-/// Tint for an obvious-chrome chip background.
-#[derive(Clone, Copy)]
-enum ObviousChipTone {
-    /// Numbered options (⌘1…⌘n) — quiet light blue.
-    Numbered,
-    /// Cancel (⌘⌫).
-    Reject,
-}
-
-/// Option chrome: numbered chips then optional cancel. View chrome only until
-/// activation sends.
-fn view_obvious_chrome<'a>(
-    chrome: &'a crate::obvious_bubble::ObviousChrome,
+/// Option chrome: numbered chips only. View chrome only until activation sends.
+fn view_fast_response<'a>(
+    fr: &'a crate::fast_response::FastResponse,
 ) -> Element<'a, Msg> {
-    use crate::obvious_bubble::{cancel_chip_label, option_chip_label};
+    use crate::fast_response::{FastResponsePick, option_chip_label};
 
     let mut col = column![].spacing(theme::SPACING_XS);
 
-    for (i, action) in chrome.options.iter().enumerate() {
-        col = col.push(view_obvious_chip(
-            option_chip_label(i + 1, action),
-            action.clone(),
-            ObviousChipTone::Numbered,
-        ));
-    }
-
-    if let Some(cancel) = chrome.cancel.as_deref() {
-        col = col.push(view_obvious_chip(
-            cancel_chip_label(cancel),
-            cancel.to_string(),
-            ObviousChipTone::Reject,
+    for (i, opt) in fr.options.iter().enumerate() {
+        col = col.push(view_fast_response_chip(
+            option_chip_label(i + 1, &opt.label),
+            FastResponsePick::Option {
+                id: opt.id.clone(),
+            },
         ));
     }
 
@@ -1756,13 +1757,12 @@ fn view_obvious_chrome<'a>(
         .into()
 }
 
-/// One action chip: hotkey-first label; click sends `action` only.
+/// One action chip: hotkey-first label; click activates the pick only.
 /// Label ink uses secondary text (full alpha) for readable contrast on quiet
-/// tinted fills in both light and dark themes — shared for all tones.
-fn view_obvious_chip<'a>(
+/// tinted fills in both light and dark themes.
+fn view_fast_response_chip<'a>(
     label: String,
-    action: String,
-    tone: ObviousChipTone,
+    pick: crate::fast_response::FastResponsePick,
 ) -> Element<'a, Msg> {
     let body = text(label)
         .size(theme::content_size())
@@ -1772,13 +1772,10 @@ fn view_obvious_chip<'a>(
     let card = container(body)
         .padding([theme::SPACING_SM, theme::SPACING_MD])
         .width(Length::Fill)
-        .style(move |t| match tone {
-            ObviousChipTone::Numbered => theme::chat_obvious_chip_numbered(t),
-            ObviousChipTone::Reject => theme::chat_obvious_chip_reject(t),
-        });
+        .style(theme::chat_fast_response_chip_numbered);
 
     button(card)
-        .on_press(Msg::SendObviousAction(action))
+        .on_press(Msg::ActivateFastResponse(pick))
         .padding(0.0)
         .width(Length::Fill)
         .style(|_theme, status| {

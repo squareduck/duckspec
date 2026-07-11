@@ -12,7 +12,10 @@ use tokio::process::Command;
 
 /// Built-in CLI tools that cannot function in headless `-p` (interactive UI or
 /// harness features duckboard does not provide).
-pub(crate) const DISALLOWED_TOOLS: &str = "AskUserQuestion,EnterPlanMode,ExitPlanMode,\
+///
+/// `AskUserQuestion` is intentionally **not** listed: structured questions are
+/// bridged to the ACP parent via the control / permission-prompt path.
+pub(crate) const DISALLOWED_TOOLS: &str = "EnterPlanMode,ExitPlanMode,\
     CronCreate,CronDelete,CronList,ScheduleWakeup,RemoteTrigger,\
     PushNotification,EnterWorktree,ExitWorktree";
 
@@ -62,6 +65,10 @@ pub(crate) fn build_claude_command(
         .arg("--include-partial-messages")
         .arg("--disallowedTools")
         .arg(DISALLOWED_TOOLS)
+        // Route permission / canUseTool prompts through stream-json control
+        // (stdio), not an interactive TTY — required for AskUserQuestion.
+        .arg("--permission-prompt-tool")
+        .arg("stdio")
         .arg("--settings")
         .arg(r#"{"autoMemoryEnabled":false}"#)
         .current_dir(cwd)
@@ -131,6 +138,42 @@ mod tests {
             "agent (not host) owns the stream-json dialect: {args:?}"
         );
 
+        if let Some(p) = prev {
+            unsafe { std::env::set_var("DUCKCHAT_CLAUDE_BIN", p) };
+        }
+    }
+
+    // @spec harness/claude AskUserQuestion available: AskUserQuestion is not among disallowed tools
+    #[test]
+    fn ask_user_question_is_not_among_disallowed_tools() {
+        assert!(
+            !DISALLOWED_TOOLS.split(',').any(|t| t.trim() == "AskUserQuestion"),
+            "AskUserQuestion must be allowed so Claude can issue structured questions: {DISALLOWED_TOOLS}"
+        );
+        // Sanity: other interactive tools stay blocked.
+        assert!(DISALLOWED_TOOLS.contains("EnterPlanMode"));
+    }
+
+    #[test]
+    fn spawn_enables_stdio_permission_prompt_tool() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let prev = std::env::var_os("DUCKCHAT_CLAUDE_BIN");
+        unsafe { std::env::set_var("DUCKCHAT_CLAUDE_BIN", "/tmp/fake-claude") };
+        let cmd = build_claude_command(Path::new("/tmp"), None, None, true);
+        let args: Vec<String> = cmd
+            .as_std()
+            .get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        let ppt = args.iter().position(|a| a == "--permission-prompt-tool");
+        assert!(ppt.is_some(), "expected --permission-prompt-tool: {args:?}");
+        assert_eq!(args[ppt.unwrap() + 1], "stdio");
+        assert!(
+            args.windows(2)
+                .any(|w| w[0] == "--permission-mode" && w[1] == "bypassPermissions"),
+            "ordinary tools stay on bypassPermissions: {args:?}"
+        );
+        unsafe { std::env::remove_var("DUCKCHAT_CLAUDE_BIN") };
         if let Some(p) = prev {
             unsafe { std::env::set_var("DUCKCHAT_CLAUDE_BIN", p) };
         }

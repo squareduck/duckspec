@@ -19,7 +19,7 @@ as the Claude harness.
 - **THEN** the loaded choice names the same harness and model
 
 > test: code
-> - crates/duckchat/src/provider.rs:183
+> - crates/duckchat/src/provider.rs:189
 
 ### Scenario: A legacy bare model id loads as the Claude harness
 
@@ -28,7 +28,7 @@ as the Claude harness.
 - **THEN** the loaded choice names the Claude harness and that model
 
 > test: code
-> - crates/duckchat/src/provider.rs:194
+> - crates/duckchat/src/provider.rs:200
 
 ## Requirement: Default model resolution
 
@@ -45,7 +45,7 @@ SHALL yield grok-4.5.
 - **THEN** the resolved model is grok-4.5 on the grok harness
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:759
+> - crates/duckboard/src/area/interaction.rs:762
 
 ### Scenario: A per-chat pin overrides a project default
 
@@ -54,7 +54,7 @@ SHALL yield grok-4.5.
 - **THEN** the resolved model is the per-chat pin
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:770
+> - crates/duckboard/src/area/interaction.rs:773
 
 ## Requirement: Harness dispatch
 
@@ -70,7 +70,7 @@ of models offered for selection SHALL include the models of every registered har
 - **THEN** the provider that runs the turn is the one identified by that harness
 
 > test: code
-> - crates/duckboard/src/agent.rs:220
+> - crates/duckboard/src/agent.rs:237
 
 ### Scenario: The offered models span every registered harness
 
@@ -79,4 +79,4 @@ of models offered for selection SHALL include the models of every registered har
 - **THEN** the list includes models from every registered harness
 
 > test: code
-> - crates/duckboard/src/agent.rs:237
+> - crates/duckboard/src/agent.rs:254

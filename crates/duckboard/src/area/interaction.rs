@@ -354,10 +354,12 @@ pub struct AgentSession {
     pub model_dirty: bool,
     pub agent_input_tokens: usize,
     pub agent_output_tokens: usize,
-    /// Multi-option obvious chrome (lifecycle / affirm / decline). Ephemeral —
-    /// refreshed from disk + session emptiness + VCS dirty; not persisted.
-    /// Soft hint for oneshot uses lifecycle[0] only (composer list does not).
-    pub obvious_chrome: crate::obvious_bubble::ObviousChrome,
+    /// Multi-option fast-response shell (empty until a live user choice fills
+    /// it). Ephemeral — not persisted.
+    pub fast_response: crate::fast_response::FastResponse,
+    /// True while a mid-turn structured choice is pending. Chips stay visible
+    /// even though `is_streaming` remains true for the open turn.
+    pub is_awaiting_user: bool,
     /// Settled oneshot parse for under-input chrome only.
     /// Ephemeral — not persisted. Never seeded into `next_actions`.
     pub agent_default_prompts: Vec<String>,
@@ -372,7 +374,7 @@ pub struct AgentSession {
     /// Active index into `next_actions` for ghost / empty Enter / Tab cycle.
     pub next_action_idx: usize,
     /// Lifecycle facts for this session's change scope (phase, step progress,
-    /// next stage). Refreshed alongside `obvious_chrome`; `None` for
+    /// next stage). Refreshed alongside `fast_response`; `None` for
     /// non-change scopes. Feeds the first-turn scope orientation blurb.
     pub scope_facts: Option<crate::area::change::ChangeScopeFacts>,
     /// Pending message staged while the agent is streaming. Sent automatically
@@ -396,10 +398,10 @@ pub struct AgentSession {
     /// (offset unchanged but content bounds grew). Without this distinction
     /// the latter would race the auto-snap task and unstick us.
     pub last_chat_offset_y: Option<f32>,
-    /// Spacer above obvious chrome so short history pins chips above the
+    /// Spacer above fast response so short history pins chips above the
     /// composer inside the scroll column. Recomputed from scroll/measure
-    /// bounds via [`crate::obvious_bubble::chrome_bottom_pad`]. Ephemeral.
-    pub chrome_top_pad: f32,
+    /// bounds via [`crate::fast_response::bottom_pad`]. Ephemeral.
+    pub fast_response_top_pad: f32,
     /// Set by `send_prompt_text` when the user submits while sticking to the
     /// bottom: the user's message lands in the transcript immediately but the
     /// agent's first event may take a moment, so the auto-snap path keyed on
@@ -471,7 +473,8 @@ impl AgentSession {
             model_dirty: false,
             agent_input_tokens: 0,
             agent_output_tokens: 0,
-            obvious_chrome: crate::obvious_bubble::ObviousChrome::default(),
+            fast_response: crate::fast_response::FastResponse::default(),
+            is_awaiting_user: false,
             agent_default_prompts: Vec::new(),
             default_prompts_gen: 0,
             default_prompts_pending: false,
@@ -482,7 +485,7 @@ impl AgentSession {
             idea_description: None,
             stick_to_bottom: true,
             last_chat_offset_y: None,
-            chrome_top_pad: 0.0,
+            fast_response_top_pad: 0.0,
             pending_snap_to_bottom: false,
             pending_chat_autoscroll: None,
             selection_pinned: Vec::new(),
@@ -1673,6 +1676,88 @@ mod tests {
                 .collect::<Vec<_>>()
         );
     }
+
+    // @spec chat/fast-response Freeform while awaiting: Freeform submit completes the pending choice as a custom answer
+    #[test]
+    fn freeform_submit_completes_the_pending_choice_as_a_custom_answer() {
+        use crate::fast_response::FastResponseSource;
+        use duckchat::UserChoiceAnswer;
+
+        // GIVEN awaiting a user choice with freeform text
+        let source = FastResponseSource::UserChoice {
+            correlation_id: 42,
+        };
+        // WHEN submit is planned
+        let plan = plan_freeform_while_awaiting(true, &source, "ship later")
+            .expect("freeform while awaiting plans a custom answer");
+        assert_eq!(plan.correlation_id, Some(42));
+        assert_eq!(plan.text, "ship later");
+        // THEN custom answer (not cancelled) carries freeform text
+        let answer = UserChoiceAnswer::Custom {
+            text: plan.text.clone(),
+        };
+        assert!(matches!(
+            &answer,
+            UserChoiceAnswer::Custom { text } if text == "ship later"
+        ));
+        assert!(!matches!(answer, UserChoiceAnswer::Cancelled));
+        // No separate user transcript message for custom answer activation.
+        let session = crate::chat_store::ChatSession::new("change".into());
+        assert!(
+            !session
+                .messages
+                .iter()
+                .any(|m| matches!(m.role, crate::chat_store::Role::User)),
+            "custom answer must not invent a user message"
+        );
+
+        // Not awaiting → ordinary streaming path (no freeform plan).
+        assert!(plan_freeform_while_awaiting(false, &source, "hi").is_none());
+        // Empty freeform → no plan.
+        assert!(plan_freeform_while_awaiting(true, &source, "  ").is_none());
+    }
+
+    /// Option activation discards typed freeform so it is not left for a later send.
+    #[test]
+    fn option_activation_clears_typed_composer_text() {
+        use crate::fast_response::{self, FastResponsePick, FastResponseSource};
+        use crate::scope::ScopeKind;
+
+        let hl = SyntaxHighlighter::new();
+        let mut ax = AgentSession::new("foo".into(), ScopeKind::Change);
+        ax.is_awaiting_user = true;
+        ax.fast_response = fast_response::from_user_choice(
+            7,
+            [("opt-a".into(), "Alpha".into())],
+        );
+        ax.chat_input = EditorState::new("partial freeform");
+        assert!(!ax.chat_input.text().trim().is_empty());
+
+        activate_fast_response(
+            &mut ax,
+            FastResponsePick::Option {
+                id: "opt-a".into(),
+            },
+            &hl,
+        );
+
+        assert!(
+            ax.chat_input.text().trim().is_empty(),
+            "typed freeform must be cleared on chip pick"
+        );
+        assert!(!ax.is_awaiting_user);
+        assert!(matches!(
+            ax.fast_response.source,
+            FastResponseSource::None
+        ));
+        assert!(
+            !ax.session
+                .messages
+                .iter()
+                .any(|m| matches!(m.role, crate::chat_store::Role::User)),
+            "option activation must not invent a user message"
+        );
+    }
 }
 
 // ── Shared messages ─────────────────────────────────────────────────────────
@@ -1910,23 +1995,45 @@ fn handle_agent_chat(
         agent_chat::Msg::ToggleCollapse(idx) => {
             agent_chat::toggle_collapse(&mut ax.chat_collapse, idx);
         }
-        agent_chat::Msg::SendObviousAction(text) => {
-            // Obvious chrome only — never the oneshot default-prompt list.
-            // Chips pass the resolved action string; re-check visibility so a
-            // stale click while typing/streaming is a no-op.
+        agent_chat::Msg::ActivateFastResponse(pick) => {
+            // Fast response only — never the oneshot default-prompt list.
+            // Re-check visibility so a stale click while typing is a no-op.
             let input_empty = ax.chat_input.text().trim().is_empty();
-            if crate::obvious_bubble::chrome_visible(
+            if !crate::fast_response::visible(
                 ax.session.is_streaming,
+                ax.is_awaiting_user,
                 input_empty,
-                &ax.obvious_chrome,
+                &ax.fast_response,
             ) {
-                send_prompt_text(ax, text, highlighter);
+                // no-op
+            } else {
+                activate_fast_response(ax, pick, highlighter);
             }
         }
         agent_chat::Msg::SendPressed => {
             let typed = ax.chat_input.text().trim().to_string();
 
-            if ax.session.is_streaming {
+            // Awaiting a structured choice: freeform submit is a custom answer
+            // on the parked question (in-band), not cancel + next user turn.
+            if let Some(plan) = plan_freeform_while_awaiting(
+                ax.is_awaiting_user,
+                &ax.fast_response.source,
+                &typed,
+            ) {
+                if let Some(correlation_id) = plan.correlation_id
+                    && let Some(handle) = ax.agent_handle.as_ref() {
+                        handle.answer_user_choice(
+                            correlation_id,
+                            duckchat::UserChoiceAnswer::Custom {
+                                text: plan.text,
+                            },
+                        );
+                    }
+                clear_user_choice_shell(ax);
+                ax.chat_input = EditorState::new("");
+                rehighlight_input(&mut ax.chat_input, highlighter);
+                ax.chat_completion.visible = false;
+            } else if ax.session.is_streaming {
                 if !typed.is_empty() {
                     // Streaming + text in input → stage/append to queue,
                     // clear input. Never interrupts.
@@ -2009,6 +2116,8 @@ fn handle_agent_chat(
             if let Some(handle) = &ax.agent_handle {
                 handle.cancel();
             }
+            // Cancel also completes a parked choice as cancelled (handle side).
+            clear_user_choice_shell(ax);
             // Drop staged follow-up so post-`TurnComplete` cannot dispatch
             // the original message after the user backed out of priming.
             clear_priming_followup(ax);
@@ -2064,9 +2173,9 @@ fn handle_agent_chat(
                 ax.stick_to_bottom = false;
             }
 
-            // Bottom-pin pad for obvious chrome (when content > viewport so
+            // Bottom-pin pad for fast response (when content > viewport so
             // on_scroll fires). Short content is measured via ChromeLayout.
-            recompute_chrome_top_pad(
+            recompute_fast_response_top_pad(
                 ax,
                 bounds.height,
                 content.height,
@@ -2088,42 +2197,44 @@ fn handle_agent_chat(
         } => {
             // Operation-based measure — works even when content fits the
             // viewport and iced suppresses on_scroll.
-            recompute_chrome_top_pad(ax, viewport_h, content_h);
+            recompute_fast_response_top_pad(ax, viewport_h, content_h);
         }
     }
 
     // When chrome is hidden (typing, streaming, empty chrome), drop the pad
     // so the next show measures from a clean baseline.
     let input_empty = ax.chat_input.text().trim().is_empty();
-    if !crate::obvious_bubble::chrome_visible(
+    if !crate::fast_response::visible(
         ax.session.is_streaming,
+        ax.is_awaiting_user,
         input_empty,
-        &ax.obvious_chrome,
+        &ax.fast_response,
     ) {
-        ax.chrome_top_pad = 0.0;
+        ax.fast_response_top_pad = 0.0;
     }
 }
 
-/// Recompute `chrome_top_pad` from scroll/measure bounds. Zero when chrome
-/// is not visible so the next show starts clean.
-fn recompute_chrome_top_pad(
+/// Recompute `fast_response_top_pad` from scroll/measure bounds. Zero when chips
+/// are not visible so the next show starts clean.
+fn recompute_fast_response_top_pad(
     ax: &mut AgentSession,
     viewport_h: f32,
     content_h: f32,
 ) {
     let input_empty = ax.chat_input.text().trim().is_empty();
-    if crate::obvious_bubble::chrome_visible(
+    if crate::fast_response::visible(
         ax.session.is_streaming,
+        ax.is_awaiting_user,
         input_empty,
-        &ax.obvious_chrome,
+        &ax.fast_response,
     ) {
-        ax.chrome_top_pad = crate::obvious_bubble::chrome_bottom_pad(
+        ax.fast_response_top_pad = crate::fast_response::bottom_pad(
             viewport_h,
             content_h,
-            ax.chrome_top_pad,
+            ax.fast_response_top_pad,
         );
     } else {
-        ax.chrome_top_pad = 0.0;
+        ax.fast_response_top_pad = 0.0;
     }
 }
 
@@ -2315,6 +2426,92 @@ pub fn recover_from_lost_session(ax: &mut AgentSession, highlighter: &SyntaxHigh
 /// Send `text` as a new user turn on the active agent handle. Pushes the user
 /// message into the session, marks streaming, clears the input, and rebuilds
 /// the chat editor blocks. No-op if no agent handle is attached.
+/// Activate a fast-response pick. For a live user choice, answers in-band via
+/// the agent handle and does not invent a user transcript message. Clears any
+/// typed composer text so a partial custom answer is not left for a later send.
+pub fn activate_fast_response(
+    ax: &mut AgentSession,
+    pick: crate::fast_response::FastResponsePick,
+    highlighter: &SyntaxHighlighter,
+) {
+    use crate::fast_response::{FastResponsePick, FastResponseSource};
+    use duckchat::UserChoiceAnswer;
+
+    let source = ax.fast_response.source.clone();
+    match source {
+        FastResponseSource::UserChoice { correlation_id } => {
+            let answer = match pick {
+                FastResponsePick::Option { id } => UserChoiceAnswer::Selected { option_id: id },
+            };
+            // Custom freeform is handled by freeform submit path, not chip pick.
+            if let Some(handle) = ax.agent_handle.as_ref() {
+                handle.answer_user_choice(correlation_id, answer);
+            }
+            clear_user_choice_shell(ax);
+            // Discard partial freeform typed while chips were still visible.
+            ax.chat_input = EditorState::new("");
+            rehighlight_input(&mut ax.chat_input, highlighter);
+            ax.chat_completion.visible = false;
+        }
+        FastResponseSource::None => {
+            // No live source — nothing to activate (shell should be empty).
+        }
+    }
+}
+
+/// Drop fast-response fill and awaiting flag after answer or turn end.
+pub fn clear_user_choice_shell(ax: &mut AgentSession) {
+    ax.fast_response = crate::fast_response::clear();
+    ax.is_awaiting_user = false;
+    ax.fast_response_top_pad = 0.0;
+}
+
+/// Planned freeform submit while a mid-turn choice is pending (custom answer).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FreeformWhileAwaitingPlan {
+    /// Correlation id for the parked choice, when a live choice is parked.
+    pub correlation_id: Option<u64>,
+    /// Freeform text used as the custom answer payload.
+    pub text: String,
+}
+
+/// When awaiting a user choice with non-empty freeform text, plan a custom
+/// answer (in-band). Not cancel/skip and not interrupt-queue-only.
+pub fn plan_freeform_while_awaiting(
+    is_awaiting_user: bool,
+    source: &crate::fast_response::FastResponseSource,
+    typed: &str,
+) -> Option<FreeformWhileAwaitingPlan> {
+    let typed = typed.trim();
+    if !is_awaiting_user || typed.is_empty() {
+        return None;
+    }
+    let correlation_id = match source {
+        crate::fast_response::FastResponseSource::UserChoice { correlation_id } => {
+            Some(*correlation_id)
+        }
+        crate::fast_response::FastResponseSource::None => None,
+    };
+    Some(FreeformWhileAwaitingPlan {
+        correlation_id,
+        text: typed.to_string(),
+    })
+}
+
+/// Fill shell from a mid-turn user-choice event (options only; no cancel chip).
+pub fn apply_user_choice_request(
+    ax: &mut AgentSession,
+    correlation_id: u64,
+    prompt: Option<String>,
+    options: Vec<(String, String)>,
+    _allow_cancel: bool,
+) {
+    let _ = prompt; // reserved for future chrome (question title)
+    // UI ignores allow_cancel — shell has no cancel chip; esc/freeform cancel on wire.
+    ax.fast_response = crate::fast_response::from_user_choice(correlation_id, options);
+    ax.is_awaiting_user = true;
+}
+
 pub fn send_prompt_text(ax: &mut AgentSession, text: String, highlighter: &SyntaxHighlighter) {
     use duckchat::{ContextHook, TurnRequest};
 
@@ -2887,7 +3084,8 @@ pub fn should_materialize_chat_ui(
         | AgentEvent::TurnComplete
         | AgentEvent::Error(_)
         | AgentEvent::ProcessExited
-        | AgentEvent::SessionNotFound => true,
+        | AgentEvent::SessionNotFound
+        | AgentEvent::UserChoiceRequest { .. } => true,
         AgentEvent::ContentDelta { .. } | AgentEvent::ReasoningDelta { .. } => !is_streaming,
         AgentEvent::Ready(_)
         | AgentEvent::CommandsAvailable(_)
@@ -2987,36 +3185,27 @@ pub fn handle_agent_chat_key(
         return AgentChatKeyResult::Dispatch(agent_chat::Msg::CycleNextAction(delta));
     }
 
-    // Obvious chrome hotkeys — only when chrome is visible (idle + empty input).
+    // Fast response hotkeys — only when chrome is visible (idle + empty input).
     // Plain Enter stays on empty-submit (list only) via TextEdit `on_submit`.
+    // No ⌘⌫ cancel chip; esc / freeform-while-awaiting cancel on the wire.
     if mods.command() && !mods.shift() && !mods.alt() {
         let input_empty = ax.chat_input.text().trim().is_empty();
-        // ⌘↩ no longer resolves chrome actions (next-card / oneshot own enter paths).
-        // ⌘⌫ → cancel when set
-        if *key == keyboard::Key::Named(Named::Backspace)
-            && let Some(text) = crate::obvious_bubble::resolve_cmd_backspace_when_visible(
-                ax.session.is_streaming,
-                input_empty,
-                &ax.obvious_chrome,
-            )
-        {
-            return AgentChatKeyResult::Dispatch(agent_chat::Msg::SendObviousAction(text));
-        }
-        // ⌘1…⌘9 → lifecycle[n]
+        // ⌘1…⌘9 → option[n]
         if let keyboard::Key::Character(c) = key
             && c.len() == 1
         {
             let ch = c.chars().next().unwrap_or('\0');
             if ch.is_ascii_digit() && ch != '0' {
                 let digit = ch.to_digit(10).unwrap_or(0) as u8;
-                if let Some(text) = crate::obvious_bubble::resolve_cmd_digit_when_visible(
+                if let Some(pick) = crate::fast_response::resolve_cmd_digit_when_visible(
                     ax.session.is_streaming,
+                    ax.is_awaiting_user,
                     input_empty,
-                    &ax.obvious_chrome,
+                    &ax.fast_response,
                     digit,
                 ) {
-                    return AgentChatKeyResult::Dispatch(agent_chat::Msg::SendObviousAction(
-                        text,
+                    return AgentChatKeyResult::Dispatch(agent_chat::Msg::ActivateFastResponse(
+                        pick,
                     ));
                 }
             }
@@ -3422,6 +3611,7 @@ pub fn view_column<'a, M: 'a + Clone>(
                     agent_chat::selected_model_choice(&model_choices, Some(&effective_model));
                 let status = agent_chat::StatusInfo {
                     is_streaming: ax.session.is_streaming,
+                    is_awaiting_user: ax.is_awaiting_user,
                     esc_count: ax.esc_count,
                     model_choices,
                     selected_model,
@@ -3451,8 +3641,8 @@ pub fn view_column<'a, M: 'a + Clone>(
                     next_action_idx,
                     oneshot_prompts,
                     ax.default_prompts_pending,
-                    &ax.obvious_chrome,
-                    ax.chrome_top_pad,
+                    &ax.fast_response,
+                    ax.fast_response_top_pad,
                     &ax.selection_pinned,
                     ax.selection_tentative.as_ref(),
                     block_highlights,
