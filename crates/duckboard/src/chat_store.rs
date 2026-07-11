@@ -729,11 +729,15 @@ mod tests {
     fn is_bare_slash_command_basics() {
         assert!(is_bare_slash_command("/ds-apply"));
         assert!(is_bare_slash_command("  /ds-apply  "));
+        assert!(is_bare_slash_command("/help"));
         assert!(!is_bare_slash_command("/ds-apply now"));
         assert!(!is_bare_slash_command("hello"));
         assert!(!is_bare_slash_command(""));
         assert!(!is_bare_slash_command("/"));
         assert!(!is_bare_slash_command("/ next"));
+        // Double-slash escape is not a bare single-slash command.
+        assert!(!is_bare_slash_command("//help"));
+        assert!(!is_bare_slash_command("  //help  "));
     }
 
     #[test]

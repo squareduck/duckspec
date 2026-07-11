@@ -873,6 +873,19 @@ mod tests {
         assert!(ax.agent_handle.is_none());
     }
 
+    #[test]
+    fn fresh_session_seeds_system_help_in_catalog() {
+        // GIVEN a brand-new session (no CommandsAvailable yet)
+        let ax = AgentSession::new("exploration-1".into(), ScopeKind::Exploration);
+        // THEN System `help` is already in the completion catalog
+        let help = ax
+            .chat_commands
+            .iter()
+            .find(|c| c.name == "help")
+            .expect("help seeded");
+        assert_eq!(help.kind, duckchat::SlashCommandKind::System);
+    }
+
     /// @spec chat/slash-commands Local system submit: Local /help leaves selection attachments intact
     #[test]
     fn local_help_leaves_selection_attachments_intact() {
@@ -2421,11 +2434,24 @@ pub fn recover_from_lost_session(ax: &mut AgentSession, highlighter: &SyntaxHigh
         return;
     };
 
+    // Re-parse so `//help` recovers as agent prompt `/help`, not the display form.
+    // Local system messages never needed an agent turn — do not re-dispatch.
+    let Some(agent_text) = crate::slash_commands::agent_prompt_for_recovery(&text) else {
+        ax.session.is_streaming = false;
+        if let Some(handle) = ax.agent_handle.as_ref()
+            && let Err(e) = crate::chat_store::save_session(&ax.session, Some(handle.working_dir()))
+        {
+            tracing::error!("failed to persist cleared session id: {e}");
+        }
+        materialize_chat_ui(ax, highlighter);
+        return;
+    };
+
     let history = &ax.session.messages[..last_idx];
     let prompt = if history.is_empty() {
-        text.clone()
+        agent_text.clone()
     } else {
-        build_history_preamble(history) + &text
+        build_history_preamble(history) + &agent_text
     };
 
     let mut system_additions = Vec::new();

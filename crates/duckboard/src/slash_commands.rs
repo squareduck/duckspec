@@ -308,6 +308,20 @@ mod tests {
         }
     }
 
+    #[test]
+    fn recovery_prompt_for_double_slash_help_is_single_slash() {
+        // Lost-session recovery must re-parse display `//help` → agent `/help`.
+        assert_eq!(
+            agent_prompt_for_recovery("//help").as_deref(),
+            Some("/help")
+        );
+        assert_eq!(agent_prompt_for_recovery("/help"), None);
+        assert_eq!(
+            agent_prompt_for_recovery("hello").as_deref(),
+            Some("hello")
+        );
+    }
+
     /// @spec chat/slash-commands Double-slash agent escape: Escape keeps typed //help as the user message text
     #[test]
     fn escape_keeps_typed_double_slash_as_display() {

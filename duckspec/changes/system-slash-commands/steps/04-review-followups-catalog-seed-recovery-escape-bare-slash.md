@@ -20,22 +20,22 @@ display text as the agent prompt, losing `//help` → `/help`; (3)
 
 ## Tasks
 
-- [ ] 1. Seed `AgentSession::from_session` `chat_commands` with
+- [x] 1. Seed `AgentSession::from_session` `chat_commands` with
          `slash_commands::system_registry()` so System commands exist before discovery
          merge
 
-- [ ] 2. Unit test: a fresh session's `chat_commands` includes System `help` without
+- [x] 2. Unit test: a fresh session's `chat_commands` includes System `help` without
          waiting for `CommandsAvailable`
 
-- [ ] 3. In `recover_from_lost_session`, run the last user text through
+- [x] 3. In `recover_from_lost_session`, run the last user text through
          `parse_submit_slash`; when the route is Agent, use `prompt` (not raw display) for
          the recovery `TurnRequest` (skip recovery agent re-send for LocalHelp if that
          path can appear)
 
-- [ ] 4. Unit test or pure helper covering recovery prompt selection: input `//help` →
+- [x] 4. Unit test or pure helper covering recovery prompt selection: input `//help` →
          agent prompt `/help`
 
-- [ ] 5. Fix `is_bare_slash_command` so a second leading `/` is not bare (`//help` →
+- [x] 5. Fix `is_bare_slash_command` so a second leading `/` is not bare (`//help` →
          false; `/help` still true)
 
-- [ ] 6. Extend `is_bare_slash_command` tests for `//help` and `/help`
+- [x] 6. Extend `is_bare_slash_command` tests for `//help` and `/help`
