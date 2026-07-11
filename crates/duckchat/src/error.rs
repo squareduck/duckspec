@@ -45,12 +45,16 @@ impl Error {
 /// or Display string. Used both when mapping raw JSON-RPC errors and as a
 /// defensive parse of already-stringified protocol errors.
 pub fn protocol_indicates_session_not_found(msg: &str) -> bool {
-    let has_load = msg.contains("session/load") || msg.contains("load failed");
+    let session_op = msg.contains("session/load")
+        || msg.contains("session/prompt")
+        || msg.contains("load failed")
+        || msg.contains("prompt failed");
     let missing = msg.contains("FS_NOT_FOUND")
         || msg.contains("Path not found")
         || msg.contains("No such file or directory")
+        || msg.contains("No conversation found")
         || msg.contains("os error 2");
-    has_load && missing
+    session_op && missing
 }
 
 /// True when a JSON-RPC `error` object from `session/load` means the session
@@ -68,7 +72,7 @@ pub fn rpc_error_is_session_not_found(err: &serde_json::Value) -> bool {
         .pointer("/data/detail")
         .and_then(|v| v.as_str())
         .unwrap_or("");
-    protocol_indicates_session_not_found(&format!("session/load failed: {message} {detail}"))
+    protocol_indicates_session_not_found(&format!("session failed: {message} {detail}"))
 }
 
 #[cfg(test)]

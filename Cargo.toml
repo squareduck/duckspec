@@ -5,6 +5,7 @@ members = [
     "crates/duckspec",
     "crates/duckboard",
     "crates/duckchat",
+    "crates/duckchat-claude-acp",
 ]
 
 [workspace.package]

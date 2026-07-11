@@ -1,4 +1,4 @@
-//! An ACP (Agent Client Protocol) client over a long-lived grok child's stdio.
+//! An ACP (Agent Client Protocol) client over a long-lived agent child's stdio.
 //!
 //! ACP is JSON-RPC 2.0, one message per line. A process-hot runtime holds one
 //! [`AcpTurn`] across turns: `initialize` once, then each turn runs
@@ -6,10 +6,7 @@
 //! Requests carry an `id` and are answered by an `id`-matched response;
 //! `session/update` messages are notifications (the event stream); any
 //! agent→client request (e.g. a permission prompt) is auto-answered so the
-//! turn never deadlocks. The child is spawned `--no-ask-user --always-approve`,
-//! so structured question prompts and permission round-trips should not occur —
-//! the auto-answer is a safety net, and a real interactive permission bridge is
-//! deferred (see the design's risks).
+//! turn never deadlocks.
 
 use std::path::Path;
 use std::pin::Pin;
@@ -17,7 +14,7 @@ use std::time::Duration;
 
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncWrite, AsyncWriteExt, BufReader};
-use tokio::process::{Child, Command};
+use tokio::process::Child;
 use tokio::sync::mpsc;
 
 use crate::cancel::CancelToken;
@@ -27,6 +24,7 @@ use crate::event::AgentEvent;
 use crate::request::ReasoningMode;
 
 use super::event::map_update;
+use super::launch::AgentLaunch;
 
 /// The ACP JSON-RPC protocol version this client speaks.
 const PROTOCOL_VERSION: u64 = 1;
@@ -37,11 +35,11 @@ const PROTOCOL_VERSION: u64 = 1;
 type Reader = Pin<Box<dyn AsyncBufRead + Send + Unpin>>;
 type Writer = Pin<Box<dyn AsyncWrite + Send + Unpin>>;
 
-/// One grok agent process (or scripted peer): a line-delimited JSON-RPC
-/// transport over its stdio. Held across turns when process-hot.
+/// One agent process (or scripted peer): a line-delimited JSON-RPC transport
+/// over its stdio. Held across turns when process-hot.
 pub struct AcpTurn {
-    /// The spawned `grok agent stdio` child. `None` in tests, which drive a
-    /// scripted in-memory peer instead of a live process.
+    /// The spawned agent child. `None` in tests, which drive a scripted
+    /// in-memory peer instead of a live process.
     child: Option<Child>,
     writer: Writer,
     reader: Reader,
@@ -56,7 +54,7 @@ pub struct InitResult {
     pub models: Vec<AcpModel>,
 }
 
-/// A model grok advertises in its `modelState.availableModels`.
+/// A model an agent advertises in its `modelState.availableModels`.
 #[derive(Debug, Clone)]
 pub struct AcpModel {
     pub id: String,
@@ -70,6 +68,9 @@ pub struct PromptResult {
     /// Why the turn stopped, e.g. `"end_turn"`. Anything else is surfaced as an
     /// error by higher layers.
     pub stop_reason: Option<String>,
+    /// When the agent rebinds the session id during the turn (e.g. provisional
+    /// open → durable native id), the rebound id. `None` when open's id stands.
+    pub session_id: Option<String>,
 }
 
 impl AcpTurn {
@@ -93,29 +94,17 @@ impl AcpTurn {
         }
     }
 
-    /// Spawn `grok --no-ask-user agent --always-approve stdio` in `cwd` and wrap
-    /// its stdio as a JSON-RPC transport. Does not yet run the handshake — call
+    /// Spawn the launch-supplied agent command in `cwd` and wrap its stdio as a
+    /// JSON-RPC transport. Does not yet run the handshake — call
     /// [`AcpTurn::initialize`] next.
-    pub async fn spawn(cwd: &Path) -> Result<Self, Error> {
-        Self::spawn_with(super::spawn::grok_command(), cwd).await
-    }
-
-    /// Like [`AcpTurn::spawn`] but over a caller-supplied base command, which
-    /// this appends the `--no-ask-user agent --always-approve stdio` args and
-    /// stdio wiring to before spawning. `--no-ask-user` is a global flag (must
-    /// precede `agent`); duckboard has no structured-questions UI, so the tool
-    /// is disabled rather than rendered. The real path passes
-    /// `spawn::grok_command()`; tests pass a command pointing at a missing
-    /// binary to exercise graceful spawn failure without touching the
-    /// environment.
-    pub async fn spawn_with(mut cmd: Command, cwd: &Path) -> Result<Self, Error> {
+    ///
+    /// The launch's argv is used **as-is**: no harness-specific flags are
+    /// appended. Only `current_dir`, stdio pipes, and `kill_on_drop` are set.
+    pub async fn spawn_with(launch: &AgentLaunch, cwd: &Path) -> Result<Self, Error> {
         use std::process::Stdio;
 
-        cmd.arg("--no-ask-user")
-            .arg("agent")
-            .arg("--always-approve")
-            .arg("stdio")
-            .current_dir(cwd)
+        let mut cmd = launch.command();
+        cmd.current_dir(cwd)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
@@ -123,16 +112,16 @@ impl AcpTurn {
 
         let mut child = cmd
             .spawn()
-            .map_err(|e| Error::Spawn(format!("failed to spawn grok: {e}")))?;
+            .map_err(|e| Error::Spawn(format!("failed to spawn agent: {e}")))?;
 
         let stdin = child
             .stdin
             .take()
-            .ok_or_else(|| Error::Process("no stdin on grok subprocess".into()))?;
+            .ok_or_else(|| Error::Process("no stdin on agent subprocess".into()))?;
         let stdout = child
             .stdout
             .take()
-            .ok_or_else(|| Error::Process("no stdout on grok subprocess".into()))?;
+            .ok_or_else(|| Error::Process("no stdout on agent subprocess".into()))?;
 
         Ok(Self {
             child: Some(child),
@@ -157,7 +146,8 @@ impl AcpTurn {
 
     /// Open the session for this turn: `session/new` when `session_id` is
     /// `None`, else `session/load` to resume the given id. Returns the resolved
-    /// session id — the one grok assigns for a new session, or the resumed id.
+    /// session id — the one the agent assigns for a new session, or the resumed
+    /// id.
     ///
     /// `cwd` is normalized before it is sent so create and resume share one
     /// on-disk key (trailing-slash variants otherwise fork the session store).
@@ -194,8 +184,10 @@ impl AcpTurn {
     /// reason. Translating updates into agent events is the caller's job.
     ///
     /// `content` is the multi-block ACP prompt array (text and/or image
-    /// blocks). `cancel` is checked cooperatively between protocol lines: a
-    /// flipped flag kills the child and returns [`Error::Cancelled`].
+    /// blocks). Optional `reasoning` sets `reasoningEffort` when present
+    /// (Grok-style knobs; harnesses that do not support it simply omit it).
+    /// `cancel` is checked cooperatively between protocol lines: a flipped flag
+    /// kills the child and returns [`Error::Cancelled`].
     pub async fn prompt(
         &mut self,
         session_id: &str,
@@ -221,6 +213,10 @@ impl AcpTurn {
         Ok(PromptResult {
             stop_reason: result
                 .get("stopReason")
+                .and_then(|v| v.as_str())
+                .map(str::to_string),
+            session_id: result
+                .get("sessionId")
                 .and_then(|v| v.as_str())
                 .map(str::to_string),
         })
@@ -257,7 +253,7 @@ impl AcpTurn {
             .await
     }
 
-    /// Best-effort cancel: ask grok to stop, then drop/kill the child.
+    /// Best-effort cancel: kill the agent child.
     pub async fn cancel(&mut self) {
         if let Some(child) = self.child.as_mut() {
             let _ = child.start_kill();
@@ -295,12 +291,14 @@ impl AcpTurn {
                 (false, Some(resp_id)) => {
                     if resp_id == &json!(id) {
                         if let Some(err) = msg.get("error") {
-                            if method == "session/load" && error::rpc_error_is_session_not_found(err)
+                            // Load or first-prompt resume may report a dead session.
+                            if (method == "session/load" || method == "session/prompt")
+                                && error::rpc_error_is_session_not_found(err)
                             {
                                 return Err(Error::SessionNotFound);
                             }
                             return Err(Error::Protocol(format!(
-                                "grok {method} failed: {err}"
+                                "agent {method} failed: {err}"
                             )));
                         }
                         return Ok(msg.get("result").cloned().unwrap_or(Value::Null));
@@ -339,9 +337,8 @@ impl AcpTurn {
         }
     }
 
-    /// Auto-answer an agent→client request with a null result. Since the child
-    /// runs `--no-ask-user --always-approve`, question and permission requests
-    /// should not arrive; this keeps the loop from deadlocking if one does.
+    /// Auto-answer an agent→client request with a null result so a headless
+    /// host never deadlocks waiting on UI for permission/question prompts.
     async fn answer_request(&mut self, id: Value) -> Result<(), Error> {
         self.write_message(&json!({
             "jsonrpc": "2.0",
@@ -364,7 +361,7 @@ impl AcpTurn {
         let mut line = String::new();
         let n = self.reader.read_line(&mut line).await?;
         if n == 0 {
-            return Err(Error::Protocol("grok closed the connection".into()));
+            return Err(Error::Protocol("agent closed the connection".into()));
         }
         serde_json::from_str(line.trim_end())
             .map_err(|e| Error::Protocol(format!("malformed json-rpc line: {e}")))
@@ -375,8 +372,8 @@ impl AcpTurn {
 /// (`initialize`, `session/new`, `session/load`).
 fn noop_update(_: &Value) {}
 
-/// Map duckchat's neutral reasoning mode onto grok's reasoning-effort string.
-/// `Off` yields `None` (omit the knob entirely).
+/// Map duckchat's neutral reasoning mode onto an optional ACP `reasoningEffort`
+/// string. `Off` yields `None` (omit the knob entirely).
 fn reasoning_effort(mode: ReasoningMode) -> Option<&'static str> {
     match mode {
         ReasoningMode::Off => None,
@@ -392,9 +389,9 @@ impl InitResult {
             .pointer("/agentCapabilities/loadSession")
             .and_then(Value::as_bool)
             .unwrap_or(false);
-        // grok nests `modelState` inside the handshake result's `_meta`; accept
-        // the un-nested form too so a protocol tweak that promotes it still
-        // resolves.
+        // Agents may nest `modelState` inside the handshake result's `_meta`;
+        // accept the un-nested form too so a protocol tweak that promotes it
+        // still resolves.
         let models = v
             .pointer("/_meta/modelState/availableModels")
             .or_else(|| v.pointer("/modelState/availableModels"))
@@ -442,6 +439,7 @@ mod tests {
     use std::io::Cursor;
     use std::sync::{Arc, Mutex};
     use std::task::{Context, Poll};
+    use tokio::process::Command;
 
     /// A `Writer` that captures everything the client sends, so a test can read
     /// back the request method and params.
@@ -465,8 +463,8 @@ mod tests {
     }
 
     /// Build an [`AcpTurn`] over a scripted in-memory peer: `responses` are the
-    /// JSON-RPC lines grok would send back; the returned buffer captures what
-    /// the client writes. No live process is involved.
+    /// JSON-RPC lines the agent would send back; the returned buffer captures
+    /// what the client writes. No live process is involved.
     fn scripted(responses: &str) -> (AcpTurn, Arc<Mutex<Vec<u8>>>) {
         let written = Arc::new(Mutex::new(Vec::new()));
         let turn = AcpTurn {
@@ -484,7 +482,7 @@ mod tests {
         serde_json::from_str(line.trim()).unwrap()
     }
 
-    /// @spec harness/grok Session lifecycle and resume: A turn without a prior session opens a new session
+    /// @spec harness/acp-client Session open and resume: A turn without a prior session id opens a new session and surfaces the id
     #[tokio::test]
     async fn open_without_prior_session_starts_new() {
         let (mut turn, written) =
@@ -492,7 +490,7 @@ mod tests {
 
         let sid = turn.open(None, Path::new("/proj")).await.unwrap();
 
-        // Reports the id grok assigned to the fresh session.
+        // Reports the id the agent assigned to the fresh session.
         assert_eq!(sid, "sess-new");
         // Opened it by requesting session/new, not a resume.
         let req = last_request(&written);
@@ -502,8 +500,8 @@ mod tests {
 
     #[tokio::test]
     async fn initialize_parses_models_from_meta_nested_handshake() {
-        // grok's real handshake nests `modelState` under the result's `_meta`,
-        // and each model's window under its own `_meta.totalContextTokens`.
+        // Real handshake nests `modelState` under the result's `_meta`, and
+        // each model's window under its own `_meta.totalContextTokens`.
         // Parsing must resolve models and windows through that nesting.
         let response = "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\
             \"protocolVersion\":1,\
@@ -524,7 +522,7 @@ mod tests {
         assert_eq!(init.models[1].context_window, Some(200_000));
     }
 
-    /// @spec harness/grok Session lifecycle and resume: A turn with a prior session id resumes that session
+    /// @spec harness/acp-client Session open and resume: A turn with a prior session id resumes that id
     #[tokio::test]
     async fn open_with_prior_session_resumes_it() {
         let (mut turn, written) =
@@ -543,6 +541,7 @@ mod tests {
         assert_eq!(req["params"]["sessionId"], "sess-123");
     }
 
+    /// @spec harness/acp-client Session open and resume: A failed load of a missing session surfaces session-not-found
     #[tokio::test]
     async fn open_load_missing_session_is_session_not_found() {
         // Real cinnabar failure shape: cwd-key mismatch or pruned session file.
@@ -569,5 +568,72 @@ mod tests {
         assert_eq!(req["method"], "session/new");
         // Missing path still strips trailing separators so create/resume keys match.
         assert_eq!(req["params"]["cwd"], "/no/such/proj/path");
+    }
+
+    /// @spec harness/acp-client Launch-parameterized agent process: The client spawns the launch-supplied agent command
+    #[tokio::test]
+    async fn client_spawns_launch_supplied_agent_command() {
+        // Script records its argv then exits. The client must spawn this
+        // command as-is (no extra harness flags appended after our marker).
+        let dir = std::env::temp_dir().join(format!(
+            "duckchat-acp-launch-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let argv_path = dir.join("argv.txt");
+        let script_path = dir.join("fake-agent.sh");
+        let script = format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$0\" \"$@\" > '{}'\n",
+            argv_path.display()
+        );
+        std::fs::write(&script_path, script).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = std::fs::metadata(&script_path).unwrap().permissions();
+            perms.set_mode(0o755);
+            std::fs::set_permissions(&script_path, perms).unwrap();
+        }
+
+        let script_owned = script_path.clone();
+        let launch = AgentLaunch::new(move || {
+            let mut cmd = Command::new(&script_owned);
+            cmd.arg("--agent-flag").arg("stdio");
+            cmd
+        });
+
+        // Spawn succeeds (stdio wired); child exits immediately so initialize
+        // will fail with a closed connection — that is fine. We only care that
+        // the recorded argv is exactly the launch-supplied program + args.
+        let spawn_result = AcpTurn::spawn_with(&launch, &dir).await;
+        assert!(
+            spawn_result.is_ok(),
+            "spawn should succeed: {}",
+            spawn_result.as_ref().err().map(|e| e.to_string()).unwrap_or_default()
+        );
+        // Give the shell a moment to write the argv file.
+        for _ in 0..50 {
+            if argv_path.exists() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        let recorded = std::fs::read_to_string(&argv_path).expect("argv file written");
+        let lines: Vec<&str> = recorded.lines().collect();
+        assert_eq!(
+            lines,
+            [
+                script_path.to_str().unwrap(),
+                "--agent-flag",
+                "stdio",
+            ],
+            "client must not append harness flags to the launch argv"
+        );
+        drop(spawn_result);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

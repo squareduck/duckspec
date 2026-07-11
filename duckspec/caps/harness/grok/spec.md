@@ -4,105 +4,10 @@ The grok harness drives the grok CLI over ACP, starting or resuming a session pe
 translating grok's `session/update` stream into duckchat's neutral agent events, including
 accurate context usage.
 
-## Requirement: Session lifecycle and resume
-
-Running a turn without a prior session id SHALL open a new grok session and report the id
-grok assigns. Running a turn with a prior session id SHALL open by resuming that id. In
-both cases the reported session id SHALL be surfaced for the caller to persist. When the
-main path is already process-hot, a subsequent turn SHALL reuse that process rather than
-spawning a new `grok agent stdio` child. Cancelling an in-flight turn SHALL kill the main
-child; a later turn SHALL be allowed to spawn again and, when a prior session id is
-supplied, resume that id.
-
-> test: code
-
-### Scenario: A turn without a prior session opens a new session
-
-- **GIVEN** a turn request carrying no session id
-- **WHEN** the harness runs the turn
-- **THEN** it opens a fresh grok session
-- **AND** it surfaces the session id grok assigned
-
-> test: code
-> - crates/duckchat/src/grok/acp.rs:487
-
-### Scenario: A turn with a prior session id resumes that session
-
-- **GIVEN** a turn request carrying a previously-assigned session id
-- **WHEN** the harness runs the turn
-- **THEN** it opens the session by resuming that same id
-
-> test: code
-> - crates/duckchat/src/grok/acp.rs:527
-
-### Scenario: A second turn on a hot path reuses the process
-
-- **GIVEN** a completed turn that left the main path process-hot
-
-- **WHEN** a second turn is run on the same main path
-
-- **THEN** the harness does not spawn a new `grok agent stdio` process for that turn
-
-- **AND** the turn still opens or resumes the conversation session as required by the
-  session id
-
-> test: code
-> - crates/duckchat/src/grok/runtime.rs:536
-
-### Scenario: After cancel, the next turn can spawn and resume
-
-- **GIVEN** a main path whose in-flight turn was cancelled (main child killed)
-- **AND** a prior conversation session id
-- **WHEN** a later turn is run with that session id
-- **THEN** the harness may spawn a new process
-- **AND** it opens the session by resuming that id
-
-> test: code
-> - crates/duckchat/src/grok/runtime.rs:571
-
-## Requirement: Event translation
-
-The harness SHALL translate grok's session updates into neutral agent events: assistant
-text and reasoning SHALL surface on separate channels; a tool invocation SHALL surface as
-a tool-use event followed by a result event sharing the same call id; and token telemetry
-SHALL surface as a usage update carrying the used-token count together with the active
-model's context window.
-
-> test: code
-
-### Scenario: Assistant text and reasoning surface on distinct channels
-
-- **GIVEN** a session update stream containing both an assistant message chunk and a
-  reasoning chunk
-
-- **WHEN** the harness translates the stream
-
-- **THEN** the assistant text is emitted as a content event
-
-- **AND** the reasoning text is emitted as a separate reasoning event
-
-> test: code
-> - crates/duckchat/src/grok/event.rs:123
-
-### Scenario: A tool call surfaces as a use then a matching result
-
-- **GIVEN** a session update stream containing a tool call and its completion
-- **WHEN** the harness translates the stream
-- **THEN** a tool-use event is emitted with the call's id, name, and input
-- **AND** a tool-result event is emitted carrying the same call id and the tool output
-
-> test: code
-> - crates/duckchat/src/grok/event.rs:153
-
-### Scenario: A usage update carries used tokens and the model's context window
-
-- **GIVEN** a session update reporting a running total-token count
-- **AND** an active model whose context window is known
-- **WHEN** the harness translates the update
-- **THEN** a usage event is emitted with that used-token count and that context window
-
-> test: code
-> - crates/duckchat/src/grok/event.rs:196
+The grok harness drives the official grok CLI as a native ACP agent under the shared ACP
+client: launch, model discovery, attachments, and oneshot isolation stay Grok-specific;
+session open/resume, process heat of the agent child, and profile event mapping are owned
+by the shared client.
 
 ## Requirement: Model discovery
 
@@ -121,7 +26,7 @@ absent.
 - **AND** each returned model carries a context window
 
 > test: code
-> - crates/duckchat/src/grok.rs:326
+> - crates/duckchat/src/grok.rs:322
 
 ### Scenario: Title model falls back when the preferred fast model is absent
 
@@ -130,7 +35,7 @@ absent.
 - **THEN** it selects another available model rather than failing
 
 > test: code
-> - crates/duckchat/src/grok.rs:344
+> - crates/duckchat/src/grok.rs:340
 
 ## Requirement: Graceful unavailability
 
@@ -147,7 +52,7 @@ empty list and running a turn SHALL fail with a typed error rather than panickin
 - **AND** the turn fails with a typed error rather than panicking
 
 > test: code
-> - crates/duckchat/src/grok.rs:359
+> - crates/duckchat/src/grok.rs:355
 
 ## Requirement: Prompt attachments
 
@@ -170,7 +75,7 @@ unresolved `attach:` link SHALL be left as its original literal markdown text.
 - **AND** that block carries the attachment's media type and payload
 
 > test: code
-> - crates/duckchat/src/grok.rs:259
+> - crates/duckchat/src/grok.rs:255
 
 ### Scenario: Surrounding text is preserved as text blocks
 
@@ -184,7 +89,7 @@ unresolved `attach:` link SHALL be left as its original literal markdown text.
 - **AND** the text after the marker appears as a text content block after the image block
 
 > test: code
-> - crates/duckchat/src/grok.rs:279
+> - crates/duckchat/src/grok.rs:275
 
 ### Scenario: A non-image attachment is represented as text
 
@@ -195,7 +100,7 @@ unresolved `attach:` link SHALL be left as its original literal markdown text.
 - **AND** the content does not include an image content block for that attachment
 
 > test: code
-> - crates/duckchat/src/grok.rs:295
+> - crates/duckchat/src/grok.rs:291
 
 ### Scenario: An unresolved attach marker is left literal
 
@@ -205,14 +110,14 @@ unresolved `attach:` link SHALL be left as its original literal markdown text.
 - **THEN** the original markdown link remains as text content
 
 > test: code
-> - crates/duckchat/src/grok.rs:317
+> - crates/duckchat/src/grok.rs:313
 
 ## Requirement: Warm oneshot path
 
 Title summary and reply-suggestion calls on the grok oneshot path SHALL reuse a warm
-oneshot process when the path is already process-hot, rather than spawning a new
-`grok agent stdio` child for each call. Each oneshot call SHALL use a fresh grok ACP
-session (N=1) and SHALL NOT resume a prior oneshot conversation session.
+oneshot process when the path is already process-hot, rather than spawning a new agent
+process for each call. Each oneshot call SHALL use a fresh grok ACP session (N=1) and
+SHALL NOT resume a prior oneshot conversation session.
 
 > test: code
 
@@ -224,13 +129,31 @@ session (N=1) and SHALL NOT resume a prior oneshot conversation session.
 - **AND** it does not resume the prior oneshot session id
 
 > test: code
-> - crates/duckchat/src/grok/runtime.rs:632
+> - crates/duckchat/src/acp/runtime.rs:827
 
 ### Scenario: An oneshot call on a hot path reuses the process
 
 - **GIVEN** a grok oneshot path that is already process-hot
 - **WHEN** an oneshot call is made on that path
-- **THEN** the harness does not spawn a new `grok agent stdio` process for that call
+- **THEN** the harness does not spawn a new agent process for that call
 
 > test: code
-> - crates/duckchat/src/grok/runtime.rs:664
+> - crates/duckchat/src/acp/runtime.rs:859
+
+## Requirement: Native Grok agent launch
+
+A Grok turn SHALL be driven by the shared ACP client against the native grok ACP agent
+(the official `grok` CLI in agent stdio mode). The harness SHALL NOT insert an
+intermediate owned proxy whose only role is to forward ACP to grok.
+
+> test: code
+
+### Scenario: A Grok turn spawns the native grok ACP agent
+
+- **GIVEN** a turn whose model names the grok harness
+- **WHEN** the turn runs
+- **THEN** the shared ACP client spawns the native grok ACP agent
+- **AND** it does not route the turn through an intermediate Grok-only ACP proxy
+
+> test: code
+> - crates/duckchat/src/grok.rs:372

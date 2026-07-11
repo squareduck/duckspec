@@ -4,57 +4,41 @@ The grok harness lets duckboard drive the grok CLI as an agent backend. It imple
 same provider contract as the Claude harness, so a chat turn, model list, and title
 summary all flow through one shared interface regardless of which backend runs them.
 
+The grok harness lets duckboard drive the official grok CLI as a native ACP agent backend.
+It supplies the Grok launch and Grok-specific provider behavior (models, attachments,
+title model pick); the shared ACP client owns session open/resume, profile event mapping,
+and agent-process heat.
+
 ## Turn lifecycle
 
-The main path keeps a `grok agent stdio` process warm across turns when possible and
-speaks ACP (the Agent Client Protocol, JSON-RPC 2.0 over stdio). The first turn (or the
-first turn after a cancel) spawns the child and runs `initialize`. Each turn then opens a
-logical session and prompts:
+The main path uses the shared ACP client with a Grok launch (`grok` agent stdio, including
+always-approve / no-ask-user flags as required for headless host use). The client keeps
+that agent process warm across turns when possible, opens or resumes a grok session, and
+prompts:
 
 ```
-[if cold] spawn + initialize
+[if cold] spawn grok launch + initialize
    │
-session/new        (no prior session id)   ─┐
-session/load       (prior session id)      ─┴─▶ obtain the session id
+session/new | session/load     (shared client)
    │
-session/prompt                 send the user's message, stream the reply
+session/prompt                 stream profile updates → agent events
    │
 process stays up               (until cancel or handle shutdown)
 ```
 
-A turn started without a session id opens a new session; a turn started with one resumes
-it, so earlier conversation context is available to the model. The session id grok reports
-is surfaced back to the caller to persist and reuse on the next turn. Because the id
-identifies a grok-side conversation, it is only meaningful to the grok harness — it cannot
-be resumed by another backend.
+The session id grok assigns is harness-bound: it cannot be resumed by another backend.
+Cancel kills the main agent child; the next turn may spawn again and still resume that id
+when supplied.
 
-Cancel kills the main child. The next turn may spawn again and still resume the
-conversation session id when one is supplied.
-
-Tool execution is auto-approved for the turn; the harness answers any permission request
-the agent raises so a turn never stalls waiting on input.
+Tool execution is auto-approved for the turn; permission requests from the agent are
+auto-answered so a turn never stalls waiting on host UI.
 
 ## Event translation
 
-grok streams `session/update` notifications during a turn. The harness maps each to a
-neutral agent event so the rest of duckboard renders grok and Claude turns identically:
-
-```
-grok session/update            duckboard agent event
-─────────────────────────────  ─────────────────────────────
-agent_message_chunk        →   content (assistant text)
-agent_thought_chunk        →   reasoning (separate channel)
-tool_call                  →   tool use  (id, name, input)
-tool_call_update (done)    →   tool result (same id, output)
-total-token telemetry      →   usage update (used + window)
-assigned session id        →   session id update
-prompt completed           →   turn complete
-error / abnormal stop      →   error
-```
-
-Assistant text and reasoning travel on distinct channels, so thinking can be shown apart
-from the answer. A tool invocation always surfaces as a use event followed by a result
-event that shares the same call id, letting a caller pair them.
+grok emits profile `session/update` notifications. The shared ACP client maps them to
+neutral agent events (content, reasoning, tool use/result, usage). This harness does not
+own a separate client-side mapper; it relies on grok speaking the same dialect profile the
+client accepts from every agent.
 
 ## Context usage
 
@@ -114,3 +98,16 @@ Each oneshot call uses a fresh ACP session (N=1) so prior oneshot prompts do not
 accumulate as context; after a call returns, the path opens a new session for the next
 oneshot. Oneshot calls use the cheapest available model (with the same fallback as title
 selection under Models).
+
+## Shared client boundary
+
+Session lifecycle, main-path process reuse, cancel-and-rewarm of the agent child, and
+profile event mapping are documented under the ACP client capability. Grok-specific
+concerns that remain here:
+
+- native `grok` launch (no intermediate proxy)
+- model discovery and context windows from the grok handshake
+- title-model fallback
+- graceful unavailability when grok cannot launch
+- prompt attachment encoding for `session/prompt`
+- grok oneshot N=1 isolation on the warm oneshot path

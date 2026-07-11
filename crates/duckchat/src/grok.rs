@@ -1,34 +1,26 @@
 //! Grok agent harness.
 //!
-//! Drives the `grok` CLI over ACP (Agent Client Protocol — JSON-RPC 2.0 over
-//! the child's stdio). Process-hot main and oneshot runtimes reuse a
-//! `grok --no-ask-user agent --always-approve stdio` child across calls;
-//! cancel kills main heat; oneshot rotates to a fresh ACP session (N=1).
+//! Thin provider over the shared [`crate::acp`] client. Builds a native
+//! `grok --no-ask-user agent --always-approve stdio` [`AgentLaunch`] (login-shell
+//! wrap) and opens shared main/oneshot runtimes. Model discovery, attach
+//! encoding helpers, and title/reply prompts stay harness-local.
 
-pub mod acp;
-mod event;
-mod runtime;
 mod spawn;
 
 use std::path::Path;
-use std::sync::{Arc, OnceLock};
+use std::sync::OnceLock;
 
 use async_trait::async_trait;
-use base64::Engine as _;
-use serde_json::{Value, json};
 
-use crate::attach::{self, Segment};
+use crate::acp::{AcpMainRuntime, AcpOneshotRuntime, AcpTurn, AgentLaunch};
 use crate::error::Error;
 use crate::provider::{Capabilities, ModelInfo, Provider, SlashCommand};
 use crate::reply_suggest::{
     REPLY_SUGGEST_INSTRUCTION, build_reply_suggest_prompt, parse_replies, should_skip_model,
 };
-use crate::request::{ReplySuggestionRequest, TitleRequest, TurnRequest};
+use crate::request::{ReplySuggestionRequest, TitleRequest};
 use crate::runtime::{MainRuntime, OneshotKind, OneshotRuntime};
 use crate::title::{build_title_prompt, clean_title};
-
-use acp::{AcpModel, AcpTurn};
-use runtime::{GrokMainRuntime, GrokOneshotRuntime, Spawner};
 
 /// Stable harness id shared by every model this provider owns.
 const HARNESS: &str = "grok";
@@ -43,24 +35,24 @@ const TITLE_MODEL: &str = "grok-composer-2.5-fast";
 /// lifetime.
 #[derive(Clone)]
 pub struct GrokProvider {
-    spawn: Spawner,
+    launch: AgentLaunch,
     models: OnceLock<Vec<ModelInfo>>,
 }
 
 impl GrokProvider {
     pub fn new() -> Self {
         Self {
-            spawn: Arc::new(spawn::grok_command),
+            launch: grok_agent_launch(),
             models: OnceLock::new(),
         }
     }
 
-    /// Construct with a custom base-command builder. Test-only seam for driving
-    /// the provider against a missing binary.
+    /// Construct with a custom launch. Test-only seam for driving the provider
+    /// against a missing binary.
     #[cfg(test)]
-    fn with_spawn(spawn: Spawner) -> Self {
+    fn with_launch(launch: AgentLaunch) -> Self {
         Self {
-            spawn,
+            launch,
             models: OnceLock::new(),
         }
     }
@@ -71,7 +63,7 @@ impl GrokProvider {
     /// caller's runtime. Any failure (missing binary, absent auth, malformed
     /// handshake) degrades to an empty list rather than panicking.
     fn discover_models(&self) -> Vec<ModelInfo> {
-        let spawn = self.spawn.clone();
+        let launch = self.launch.clone();
         std::thread::spawn(move || {
             let rt = match tokio::runtime::Builder::new_current_thread()
                 .enable_all()
@@ -82,7 +74,7 @@ impl GrokProvider {
             };
             rt.block_on(async move {
                 let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-                let mut turn = match AcpTurn::spawn_with(spawn(), &cwd).await {
+                let mut turn = match AcpTurn::spawn_with(&launch, &cwd).await {
                     Ok(turn) => turn,
                     Err(_) => return Vec::new(),
                 };
@@ -132,11 +124,15 @@ impl Provider for GrokProvider {
     }
 
     fn open_main_runtime(&self, working_dir: &Path) -> Box<dyn MainRuntime> {
-        Box::new(GrokMainRuntime::new(self.spawn.clone(), working_dir))
+        Box::new(AcpMainRuntime::new(self.launch.clone(), working_dir))
     }
 
     fn open_oneshot_runtime(&self, working_dir: &Path) -> Box<dyn OneshotRuntime> {
-        Box::new(GrokOneshotRuntime::new(self.spawn.clone(), working_dir))
+        Box::new(AcpOneshotRuntime::with_preferred_model(
+            self.launch.clone(),
+            working_dir,
+            Some(TITLE_MODEL.to_string()),
+        ))
     }
 
     async fn title_summary(&self, req: TitleRequest, working_dir: &Path) -> Result<String, Error> {
@@ -164,9 +160,24 @@ impl Provider for GrokProvider {
     }
 }
 
+/// Build the native Grok ACP agent launch: login-shell wrap of
+/// `grok --no-ask-user agent --always-approve stdio`.
+///
+/// Flags live on the launch (final argv). The shared client does not append them.
+pub fn grok_agent_launch() -> AgentLaunch {
+    AgentLaunch::new(|| {
+        let mut cmd = spawn::grok_command();
+        cmd.arg("--no-ask-user")
+            .arg("agent")
+            .arg("--always-approve")
+            .arg("stdio");
+        cmd
+    })
+}
+
 /// Map a handshake-advertised model onto a neutral [`ModelInfo`], tagging it
 /// with the grok harness and carrying its context window.
-fn to_model_info(m: AcpModel) -> ModelInfo {
+fn to_model_info(m: crate::acp::AcpModel) -> ModelInfo {
     ModelInfo {
         harness: HARNESS.to_string(),
         id: m.id,
@@ -175,64 +186,15 @@ fn to_model_info(m: AcpModel) -> ModelInfo {
     }
 }
 
-/// Select the model for a title summary: prefer the cheap/fast [`TITLE_MODEL`],
-/// falling back to the first advertised model when it is absent. `None` only
-/// when no models are advertised at all.
-fn pick_title_model(models: &[AcpModel]) -> Option<String> {
-    if models.iter().any(|m| m.id == TITLE_MODEL) {
-        return Some(TITLE_MODEL.to_string());
-    }
-    models.first().map(|m| m.id.clone())
-}
-
-/// Fold system additions and the user prompt, walk attach markers, and encode
-/// ACP content blocks for `session/prompt`.
-fn assemble_content(req: &TurnRequest) -> Vec<Value> {
-    let text = fold_system_and_prompt(req);
-    encode_acp(&attach::walk(&text, &req.attachments))
-}
-
-/// Fold caller-supplied `system_additions` ahead of the prompt (blank-line
-/// separated). Blank additions are dropped.
-fn fold_system_and_prompt(req: &TurnRequest) -> String {
-    let mut parts: Vec<&str> = req
-        .system_additions
-        .iter()
-        .map(String::as_str)
-        .filter(|s| !s.is_empty())
-        .collect();
-    parts.push(req.prompt.as_str());
-    parts.join("\n\n")
-}
-
-/// Encode neutral attach segments as ACP content blocks.
-fn encode_acp(segments: &[Segment]) -> Vec<Value> {
-    segments
-        .iter()
-        .map(|segment| match segment {
-            Segment::Text(text) => json!({ "type": "text", "text": text }),
-            Segment::Image { media_type, bytes } => {
-                let data = base64::engine::general_purpose::STANDARD.encode(bytes);
-                json!({
-                    "type": "image",
-                    "mimeType": media_type,
-                    "data": data,
-                })
-            }
-        })
-        .collect()
-}
-
-/// Wrap a plain string as a single-block ACP text prompt (titles, etc.).
-fn text_prompt_content(text: &str) -> Vec<Value> {
-    vec![json!({ "type": "text", "text": text })]
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::acp::AcpModel;
+    use crate::attach::{self, Segment};
     use crate::cancel::CancelToken;
-    use crate::request::Attachment;
+    use crate::request::{Attachment, TurnRequest};
+    use base64::Engine as _;
+    use serde_json::{Value, json};
     use tokio::process::Command;
     use tokio::sync::mpsc;
 
@@ -254,6 +216,40 @@ mod tests {
 
     fn text_block(blocks: &[Value], i: usize) -> &str {
         blocks[i]["text"].as_str().unwrap_or("")
+    }
+
+    fn pick_title_model(models: &[AcpModel]) -> Option<String> {
+        if models.iter().any(|m| m.id == TITLE_MODEL) {
+            return Some(TITLE_MODEL.to_string());
+        }
+        models.first().map(|m| m.id.clone())
+    }
+
+    fn assemble_content(req: &TurnRequest) -> Vec<Value> {
+        let text = {
+            let mut parts: Vec<&str> = req
+                .system_additions
+                .iter()
+                .map(String::as_str)
+                .filter(|s| !s.is_empty())
+                .collect();
+            parts.push(req.prompt.as_str());
+            parts.join("\n\n")
+        };
+        attach::walk(&text, &req.attachments)
+            .into_iter()
+            .map(|segment| match segment {
+                Segment::Text(t) => json!({ "type": "text", "text": t }),
+                Segment::Image { media_type, bytes } => {
+                    let data = base64::engine::general_purpose::STANDARD.encode(bytes);
+                    json!({
+                        "type": "image",
+                        "mimeType": media_type,
+                        "data": data,
+                    })
+                }
+            })
+            .collect()
     }
 
     /// @spec harness/grok Prompt attachments: A resolved image attachment is sent as an ACP image block
@@ -359,7 +355,7 @@ mod tests {
     /// @spec harness/grok Graceful unavailability: A missing grok binary yields no models and a turn error
     #[tokio::test]
     async fn missing_binary_yields_no_models_and_turn_error() {
-        let provider = GrokProvider::with_spawn(Arc::new(|| {
+        let provider = GrokProvider::with_launch(AgentLaunch::new(|| {
             Command::new("/nonexistent/grok-does-not-exist")
         }));
 
@@ -371,5 +367,41 @@ mod tests {
         let req = TurnRequest::new("hello", std::env::temp_dir());
         let outcome = provider.run_turn(req, tx, CancelToken::new()).await;
         assert!(matches!(outcome, Err(Error::Spawn(_))));
+    }
+
+    /// @spec harness/grok Native Grok agent launch: A Grok turn spawns the native grok ACP agent
+    #[test]
+    fn grok_turn_spawns_native_grok_acp_agent() {
+        // Final argv is the native grok CLI in agent stdio mode — no intermediate
+        // owned proxy binary in the chain.
+        let cmd = grok_agent_launch().command();
+        let program = cmd.as_std().get_program().to_string_lossy().into_owned();
+        let args: Vec<String> = cmd
+            .as_std()
+            .get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+
+        // Login-shell wrap around `grok` (not a duckchat-owned proxy).
+        assert!(
+            program.contains("sh") || program.ends_with("zsh") || program.ends_with("bash"),
+            "expected login shell, got {program}"
+        );
+        assert!(
+            args.iter().any(|a| a == "grok"),
+            "launch must invoke the native grok binary: {args:?}"
+        );
+        assert!(
+            !args.iter().any(|a| a.contains("duckchat-claude") || a.contains("grok-proxy")),
+            "must not route through an intermediate Grok-only ACP proxy: {args:?}"
+        );
+        // Agent stdio mode flags on the final argv (client does not add them).
+        let grok_pos = args.iter().position(|a| a == "grok").expect("grok in argv");
+        let after: Vec<&str> = args[grok_pos + 1..].iter().map(String::as_str).collect();
+        assert_eq!(
+            after,
+            ["--no-ask-user", "agent", "--always-approve", "stdio"],
+            "native grok ACP agent argv after binary"
+        );
     }
 }

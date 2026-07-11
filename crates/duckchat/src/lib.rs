@@ -19,6 +19,7 @@ pub mod runtime;
 pub mod title;
 pub mod worker;
 
+pub mod acp;
 pub mod claude_code;
 pub mod grok;
 

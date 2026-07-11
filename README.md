@@ -55,13 +55,23 @@ duckboard is a companion to `ds`, not a replacement — install `ds` first. duck
 
 Download `Duckboard-<version>.dmg` from the [latest release](https://github.com/squareduck/duckspec/releases/latest), open it, and drag `Duckboard.app` to `Applications`.
 
+The app bundle includes the Claude harness agent (`duckchat-claude-acp`) next to the
+`duckboard` binary. Finder-launched Duckboard does **not** need that agent on your
+`PATH` for Claude turns.
+
 The bundle is ad-hoc signed but not notarized. On first launch macOS blocks it with an "unidentified developer" warning; open *System Settings → Privacy & Security*, scroll to the bottom, and click *Open Anyway* next to Duckboard. Later launches are normal.
 
-Or build from source:
+Or build from source (install both the GUI and the Claude agent — cargo install does not
+bundle them together the way the DMG does):
 
 ```sh
 cargo install --locked --git https://github.com/squareduck/duckspec.git duckboard
+cargo install --locked --git https://github.com/squareduck/duckspec.git duckchat-claude-acp
 ```
+
+That puts both on `~/.cargo/bin` (must be on your `PATH` when you launch duckboard from a
+terminal). From a clone you can also use `just install` to install `ds`, `duckboard`, and
+`duckchat-claude-acp` together.
 
 ## Quick start
 
@@ -273,12 +283,31 @@ This repo is a Cargo workspace:
 - `crates/duckspec/` — CLI crate (binary: `ds`)
 - `crates/duckboard/` — GUI crate (binary: `duckboard`)
 - `crates/duckchat/` — agent-harness abstraction used by duckboard
+- `crates/duckchat-claude-acp/` — owned ACP agent that wraps the official `claude` CLI
+
+Claude turns in duckboard resolve the agent binary as
+`DUCKCHAT_CLAUDE_ACP` → sibling of the running executable → `PATH`.
+
+- **DMG / `just bundle`:** the agent is copied next to `duckboard` inside the app
+  (primary GUI path; no separate install).
+- **Local dev / `cargo run`:** build both into the same `target/` tree so sibling
+  resolution works:
+
+```sh
+cargo build -p duckchat-claude-acp -p duckboard
+# or a full workspace build
+cargo build
+```
+
+That places `target/debug/duckboard` and `target/debug/duckchat-claude-acp`
+next to each other (same under `target/release/`). Override with
+`DUCKCHAT_CLAUDE_ACP=/path/to/duckchat-claude-acp` when needed.
 
 Common tasks via [just](https://github.com/casey/just):
 
 ```sh
-just install       # build and install both binaries to ~/.cargo/bin
-just bundle        # build dist/Duckboard.app
+just install       # install ds + duckboard + duckchat-claude-acp to ~/.cargo/bin
+just bundle        # build dist/Duckboard.app (includes sibling agent)
 just bundle-dmg    # build dist/Duckboard-<version>.dmg
 just release 0.2.0 # bump workspace version, commit, tag, push → triggers CI release
 ```

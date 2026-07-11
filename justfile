@@ -1,10 +1,13 @@
-# Install ds and duckboard to ~/.cargo/bin.
+# Install ds, duckboard, and the Claude ACP agent to ~/.cargo/bin.
 install:
     cargo install --path crates/duckspec
     cargo install --path crates/duckboard
+    cargo install --path crates/duckchat-claude-acp
 
-# Run duckboard from source (release build).
+# Run duckboard from source (release build). Builds the Claude ACP agent into
+# the same target/ tree so sibling binary discovery works.
 run:
+    cargo build --release -p duckchat-claude-acp -p duckboard
     cargo run --release -p duckboard
 
 # Push main bookmark to origin (jj).
@@ -113,13 +116,16 @@ bundle:
     APP="${OUT_DIR}/${APP_NAME}.app"
     CONTENTS="${APP}/Contents"
 
-    echo "==> Building release binary (duckboard ${VERSION})"
-    cargo build --release -p duckboard
+    echo "==> Building release binaries (duckboard ${VERSION} + duckchat-claude-acp)"
+    # Agent ships as a sibling of duckboard so Finder-launched apps (skeletal
+    # PATH) still resolve Claude turns via sibling-of-exe discovery.
+    cargo build --release -p duckchat-claude-acp -p duckboard
 
     echo "==> Assembling ${APP}"
     rm -rf "${APP}"
     mkdir -p "${CONTENTS}/MacOS" "${CONTENTS}/Resources"
     cp target/release/duckboard "${CONTENTS}/MacOS/duckboard"
+    cp target/release/duckchat-claude-acp "${CONTENTS}/MacOS/duckchat-claude-acp"
 
     echo "==> Building .icns from ${SRC_ICON}"
     ICONSET=$(mktemp -d)/${APP_NAME}.iconset

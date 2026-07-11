@@ -1,17 +1,17 @@
-//! Provider implementation that drives the `claude` CLI.
+//! Claude Code harness.
 //!
-//! Spawns `claude -p --output-format stream-json` per turn, parses its ndjson
-//! protocol, and forwards provider-neutral events. Multi-turn continuity is
-//! achieved via `--resume <session_id>`. Cold runtimes (no process reuse) sit
-//! behind the harness-agnostic main/oneshot traits.
+//! Thin provider over the shared [`crate::acp`] client. Builds a
+//! [`duckchat-claude-acp`](crate::claude_code::claude_acp_launch) [`AgentLaunch`]
+//! and opens shared main/oneshot runtimes. Model aliases, command discovery,
+//! and title/reply prompt helpers stay harness-local. Stream-json to the
+//! official `claude` CLI lives only inside the owned agent process.
 
+mod agent_bin;
 mod discover;
-mod protocol;
-mod reply_suggest;
-mod run;
-mod runtime;
-mod spawn;
-mod title;
+
+pub use agent_bin::{
+    CLAUDE_ACP_BIN, CLAUDE_ACP_ENV, claude_acp_launch, resolve_claude_acp_binary,
+};
 
 /// Project/plugin slash-command discovery. Re-exported for the grok harness,
 /// which loads the same `.claude` skills and commands.
@@ -21,30 +21,54 @@ use std::path::Path;
 
 use async_trait::async_trait;
 
+use crate::acp::{AcpMainRuntime, AcpOneshotRuntime, AgentLaunch};
 use crate::error::Error;
 use crate::provider::{Capabilities, ModelInfo, Provider, SlashCommand};
+use crate::reply_suggest::{
+    REPLY_SUGGEST_INSTRUCTION, build_reply_suggest_prompt, parse_replies, should_skip_model,
+};
 use crate::request::{ReplySuggestionRequest, TitleRequest};
-use crate::runtime::{MainRuntime, OneshotRuntime};
+use crate::runtime::{MainRuntime, OneshotKind, OneshotRuntime};
+use crate::title::{build_title_prompt, clean_title};
 
-use runtime::{ClaudeMainRuntime, ClaudeOneshotRuntime};
+/// Stable harness id shared by every model this provider owns.
+const HARNESS: &str = "claude-code";
 
-/// Model used for the one-shot `title_summary` call. Cheap, fast, plenty good
-/// for summarising a single exchange into a handful of words.
-pub const TITLE_MODEL: &str = "claude-haiku-4-5";
+/// Preferred model for one-shot title / reply-suggest calls. Matches the
+/// curated `haiku` alias the agent advertises on initialize.
+const TITLE_MODEL: &str = "haiku";
 
-#[derive(Debug, Clone, Default)]
-pub struct ClaudeCodeProvider;
+/// [`Provider`] over the owned Claude ACP agent (`duckchat-claude-acp`).
+#[derive(Clone)]
+pub struct ClaudeCodeProvider {
+    launch: AgentLaunch,
+}
 
 impl ClaudeCodeProvider {
     pub fn new() -> Self {
-        Self
+        Self {
+            launch: claude_acp_launch(),
+        }
+    }
+
+    /// Construct with a custom launch. Test-only seam for driving the provider
+    /// against a scripted or missing agent binary.
+    #[cfg(test)]
+    fn with_launch(launch: AgentLaunch) -> Self {
+        Self { launch }
+    }
+}
+
+impl Default for ClaudeCodeProvider {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
 #[async_trait]
 impl Provider for ClaudeCodeProvider {
     fn id(&self) -> &str {
-        "claude-code"
+        HARNESS
     }
 
     fn capabilities(&self) -> Capabilities {
@@ -62,8 +86,8 @@ impl Provider for ClaudeCodeProvider {
         // accepts an alias for the latest model (`opus`, `sonnet`, ...) or a
         // full id. We curate the alias list here so the provider owns it and
         // duckboard stays provider-agnostic. The `id` is exactly what gets
-        // passed to `--model`; aliases track "latest" so they don't need
-        // bumping on every point release.
+        // passed through ACP / the agent; aliases track "latest" so they don't
+        // need bumping on every point release.
         vec![
             ModelInfo {
                 harness: self.id().to_string(),
@@ -97,19 +121,23 @@ impl Provider for ClaudeCodeProvider {
     }
 
     fn open_main_runtime(&self, working_dir: &Path) -> Box<dyn MainRuntime> {
-        Box::new(ClaudeMainRuntime::new(working_dir))
+        Box::new(AcpMainRuntime::new(self.launch.clone(), working_dir))
     }
 
     fn open_oneshot_runtime(&self, working_dir: &Path) -> Box<dyn OneshotRuntime> {
-        Box::new(ClaudeOneshotRuntime::new(working_dir))
+        Box::new(AcpOneshotRuntime::with_preferred_model(
+            self.launch.clone(),
+            working_dir,
+            Some(TITLE_MODEL.to_string()),
+        ))
     }
 
-    async fn title_summary(
-        &self,
-        req: TitleRequest,
-        working_dir: &Path,
-    ) -> Result<String, Error> {
-        title::title_summary(req, working_dir).await
+    async fn title_summary(&self, req: TitleRequest, working_dir: &Path) -> Result<String, Error> {
+        let mut rt = self.open_oneshot_runtime(working_dir);
+        let raw = rt
+            .prompt(OneshotKind::Title, build_title_prompt(&req))
+            .await?;
+        Ok(clean_title(&raw))
     }
 
     async fn reply_suggestions(
@@ -117,6 +145,166 @@ impl Provider for ClaudeCodeProvider {
         req: ReplySuggestionRequest,
         working_dir: &Path,
     ) -> Result<Vec<String>, Error> {
-        reply_suggest::reply_suggestions(req, working_dir).await
+        if should_skip_model(&req) {
+            return Ok(Vec::new());
+        }
+
+        let mut rt = self.open_oneshot_runtime(working_dir);
+        let body = build_reply_suggest_prompt(&req);
+        let text = format!("{REPLY_SUGGEST_INSTRUCTION}\n\n{body}");
+        let raw = rt.prompt(OneshotKind::ReplySuggest, text).await?;
+        Ok(parse_replies(&raw))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::acp::AgentLaunch;
+    use crate::cancel::CancelToken;
+    use crate::event::AgentEvent;
+    use crate::request::TurnRequest;
+    use std::io::Write;
+    use std::os::unix::fs::PermissionsExt;
+    use std::path::PathBuf;
+    use std::sync::Mutex;
+    use tempfile::TempDir;
+    use tokio::process::Command;
+    use tokio::sync::mpsc;
+
+    /// Serialize env-touching / PATH-sensitive tests.
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    fn write_executable(path: &std::path::Path, body: &str) {
+        let mut f = std::fs::File::create(path).unwrap();
+        f.write_all(body.as_bytes()).unwrap();
+        f.flush().unwrap();
+        let mut perms = std::fs::metadata(path).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(path, perms).unwrap();
+    }
+
+    /// Minimal ACP agent peer that answers initialize / session/new / prompt.
+    fn install_fake_acp_agent(dir: &TempDir) -> PathBuf {
+        let path = dir.path().join("fake-claude-acp");
+        write_executable(
+            &path,
+            r#"#!/usr/bin/env python3
+import json, sys
+
+def send(msg):
+    sys.stdout.write(json.dumps(msg) + "\n")
+    sys.stdout.flush()
+
+def respond(req_id, result):
+    send({"jsonrpc": "2.0", "id": req_id, "result": result})
+
+for line in sys.stdin:
+    line = line.strip()
+    if not line:
+        continue
+    msg = json.loads(line)
+    method = msg.get("method")
+    req_id = msg.get("id")
+    if method == "initialize":
+        respond(req_id, {
+            "protocolVersion": 1,
+            "agentCapabilities": {"loadSession": True},
+            "_meta": {"modelState": {"availableModels": [
+                {"modelId": "haiku", "name": "Haiku 4.5"},
+            ]}},
+        })
+    elif method == "session/new":
+        respond(req_id, {"sessionId": "claude-native-sess-1"})
+    elif method == "session/load":
+        respond(req_id, {"sessionId": msg.get("params", {}).get("sessionId", "loaded")})
+    elif method == "session/prompt":
+        # Profile content chunk then stop.
+        send({
+            "jsonrpc": "2.0",
+            "method": "session/update",
+            "params": {
+                "sessionId": "claude-native-sess-1",
+                "update": {
+                    "sessionUpdate": "agent_message_chunk",
+                    "content": {"type": "text", "text": "from-owned-agent"},
+                },
+            },
+        })
+        respond(req_id, {"stopReason": "end_turn"})
+    elif method == "session/cancel":
+        pass
+    elif req_id is not None:
+        respond(req_id, {})
+"#,
+        );
+        path
+    }
+
+    /// @spec harness/claude Owned ACP agent over official Claude CLI: A Claude turn is driven through the owned ACP agent process
+    #[tokio::test]
+    async fn claude_turn_driven_through_owned_acp_agent() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let tmp = TempDir::new().unwrap();
+        let agent = install_fake_acp_agent(&tmp);
+
+        // Launch is the owned agent binary — not `claude -p` stream-json.
+        let launch = AgentLaunch::new({
+            let agent = agent.clone();
+            move || Command::new(&agent)
+        });
+        let provider = ClaudeCodeProvider::with_launch(launch);
+
+        let cmd = claude_acp_launch().command();
+        let program = cmd.as_std().get_program().to_string_lossy().into_owned();
+        let args: Vec<String> = cmd
+            .as_std()
+            .get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        // Default launch targets the owned agent name (resolved or PATH fallthrough).
+        assert!(
+            program.contains(CLAUDE_ACP_BIN)
+                || args.iter().any(|a| a.contains(CLAUDE_ACP_BIN)),
+            "default Claude launch must target {CLAUDE_ACP_BIN}, got program={program} args={args:?}"
+        );
+        assert!(
+            !args.iter().any(|a| a == "-p" || a == "stream-json"),
+            "host must not drive claude via in-host stream-json flags: {args:?}"
+        );
+
+        // A turn completes through the shared ACP main runtime against the agent.
+        let mut rt = provider.open_main_runtime(tmp.path());
+        let (tx, mut rx) = mpsc::channel(16);
+        let req = TurnRequest::new("hello", tmp.path().to_path_buf());
+        let outcome = rt
+            .run_turn(req, tx, CancelToken::new())
+            .await
+            .expect("turn through owned ACP agent");
+        assert_eq!(outcome.session_id, "claude-native-sess-1");
+
+        let mut saw_content = false;
+        while let Ok(ev) = rx.try_recv() {
+            if let AgentEvent::ContentDelta { text } = ev {
+                if text.contains("from-owned-agent") {
+                    saw_content = true;
+                }
+            }
+        }
+        assert!(
+            saw_content,
+            "host ACP client must receive profile content from the owned agent"
+        );
+    }
+
+    /// Sanity: title/reply stay on the shared oneshot path (N=1 preferred haiku).
+    #[test]
+    fn oneshot_runtime_uses_shared_acp_path() {
+        let provider = ClaudeCodeProvider::new();
+        // Construction must not panic; preferred model is the curated haiku alias.
+        let _rt = provider.open_oneshot_runtime(std::path::Path::new("/tmp"));
+        assert_eq!(TITLE_MODEL, "haiku");
+        assert_eq!(provider.id(), "claude-code");
+        assert!(!provider.capabilities().reasoning);
     }
 }

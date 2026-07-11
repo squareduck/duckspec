@@ -1,0 +1,187 @@
+# Claude harness
+
+The Claude harness drives Claude Code through an owned ACP agent child over the official
+`claude` CLI: the official process starts on the first user prompt (not at open), sessions
+bind Claude's native ids for resume, the main path keeps a duplex-hot Claude process when
+possible after that bind, and the agent streams profile-compatible `session/update`
+notifications (text, tools, and thinking) for the shared ACP client.
+
+## Requirement: Owned ACP agent over official Claude CLI
+
+A Claude turn SHALL be driven by the shared ACP client against the owned Claude ACP agent
+process, not by an in-host stream-json client. That agent SHALL use the official `claude`
+CLI as its backend. The harness SHALL NOT require npm, Node, or another foreign runtime to
+run Claude turns.
+
+> test: code
+
+### Scenario: A Claude turn is driven through the owned ACP agent process
+
+- **GIVEN** a turn whose model names the Claude harness
+- **WHEN** the turn runs
+- **THEN** the host ACP client speaks to the owned Claude ACP agent process
+- **AND** the host does not drive Claude via an in-host stream-json client
+
+> test: code
+
+### Scenario: The agent uses the official claude CLI as its backend
+
+- **GIVEN** the owned Claude ACP agent handling a turn
+- **WHEN** it executes the turn against Claude Code
+- **THEN** the backend process is the official `claude` CLI
+
+> test: code
+
+## Requirement: Session lifecycle and native session ids
+
+Opening a new Claude conversation without a prior session id SHALL NOT start the official
+`claude` process before the first user prompt is submitted. Completing a turn that opened
+without a prior session id SHALL surface Claude Code's native session id for the host to
+persist. Running a turn with a prior session id SHALL resume that same id. After the first
+prompt binds a native id, the ACP session id the host persists for resume SHALL be that
+Claude Code native session id.
+
+> test: code
+
+### Scenario: Opening a new session does not start the official claude process before the first user prompt
+
+- **GIVEN** a Claude conversation with no prior session id
+- **WHEN** the harness opens a new session without submitting user content
+- **THEN** the open completes without starting the official `claude` process
+
+> test: code
+
+### Scenario: A turn without a prior session opens a new session and surfaces Claude's native session id
+
+- **GIVEN** a Claude turn request carrying no session id
+- **WHEN** the harness runs the turn
+- **THEN** it opens a fresh Claude session
+- **AND** it surfaces Claude Code's native session id
+
+> test: code
+
+### Scenario: A turn with a prior Claude session id resumes that id
+
+- **GIVEN** a Claude turn request carrying a previously assigned Claude session id
+- **WHEN** the harness runs the turn
+- **THEN** it opens the session by resuming that same id
+
+> test: code
+
+## Requirement: Duplex main heat
+
+When the Claude main path is duplex-hot, a subsequent main turn SHALL reuse the inner
+`claude` process rather than spawning a new one for that turn. Cancelling an in-flight
+Claude turn SHALL end that heat; a later turn SHALL be allowed to start Claude again and,
+when a prior session id is supplied, resume that id.
+
+> test: code
+
+### Scenario: A second main turn reuses the inner Claude process when duplex-hot
+
+- **GIVEN** a completed Claude main turn that left the inner Claude process duplex-hot
+
+- **WHEN** a second main turn is run on the same path
+
+- **THEN** the agent does not spawn a new `claude` process for that turn
+
+- **AND** the turn still opens or resumes the conversation session as required by the
+  session id
+
+> test: code
+
+### Scenario: After cancel, a later turn may start Claude again and resume a prior session id
+
+- **GIVEN** a Claude main path whose in-flight turn was cancelled
+- **AND** a prior Claude conversation session id
+- **WHEN** a later turn is run with that session id
+- **THEN** the agent may start a new `claude` process
+- **AND** it opens the session by resuming that id
+
+> test: code
+
+## Requirement: Profile-compatible event emission
+
+The Claude ACP agent SHALL emit profile `session/update` notifications so the shared ACP
+client can map them to neutral agent events: assistant text as content updates, Claude
+thinking as thought updates, and a tool invocation as a tool-use update followed by a
+completed result update sharing the same call id. While a turn is in progress, the agent
+SHALL deliver those profile updates to the host as they become available from Claude,
+rather than only after the turn has completed.
+
+> test: code
+
+### Scenario: Assistant text from Claude surfaces as profile content updates
+
+- **GIVEN** Claude streaming assistant text during a turn
+- **WHEN** the agent translates the stream for the ACP client
+- **THEN** it emits profile assistant message chunks for that text
+
+> test: code
+
+### Scenario: Claude thinking surfaces as profile thought chunks
+
+- **GIVEN** Claude streaming thinking content during a turn
+- **WHEN** the agent translates the stream for the ACP client
+- **THEN** it emits profile thought chunks for that thinking
+
+> test: code
+
+### Scenario: Profile updates are delivered to the host before the turn completes
+
+- **GIVEN** Claude producing a profile-mapped update during a turn (for example assistant
+  text)
+
+- **WHEN** the agent is still running that turn
+
+- **THEN** the host receives the corresponding profile `session/update` before the turn's
+  prompt result
+
+> test: code
+
+### Scenario: A Claude tool call surfaces as profile tool use then result
+
+- **GIVEN** Claude performing a tool call and completing it during a turn
+
+- **WHEN** the agent translates the stream for the ACP client
+
+- **THEN** it emits a profile tool-call update with the call's id, name, and input
+
+- **AND** it emits a completed profile tool-call update carrying the same call id and the
+  tool output
+
+> test: code
+
+## Requirement: Agent binary discovery
+
+Resolving the Claude ACP agent binary SHALL prefer an explicit environment override, then
+a binary sibling of the running executable when present, then the process `PATH`. When no
+agent binary can be launched, running a Claude turn SHALL fail with a typed error rather
+than panicking.
+
+> test: code
+
+### Scenario: An explicit env override selects the agent binary
+
+- **GIVEN** an environment override naming a Claude ACP agent binary
+- **WHEN** the Claude harness resolves the agent to spawn
+- **THEN** it selects that override path
+
+> test: code
+
+### Scenario: When env is unset, a sibling of the running executable is used if present
+
+- **GIVEN** no environment override for the Claude ACP agent
+- **AND** a Claude ACP agent binary next to the running executable
+- **WHEN** the Claude harness resolves the agent to spawn
+- **THEN** it selects that sibling binary
+
+> test: code
+
+### Scenario: A missing agent binary fails the turn with a typed error
+
+- **GIVEN** no resolvable Claude ACP agent binary
+- **WHEN** a Claude turn is run
+- **THEN** the turn fails with a typed error rather than panicking
+
+> test: code

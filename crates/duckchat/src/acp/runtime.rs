@@ -1,4 +1,4 @@
-//! Grok process-hot main and oneshot runtimes.
+//! Shared process-hot main and oneshot ACP runtimes.
 //!
 //! Each runtime holds an optional long-lived [`AcpTurn`] child. `ensure_hot`
 //! spawns + `initialize` once; subsequent work reuses the process. Cancel kills
@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use futures::future::BoxFuture;
-use tokio::process::Command;
+use serde_json::{Value, json};
 use tokio::sync::mpsc;
 
 use crate::cancel::CancelToken;
@@ -19,41 +19,36 @@ use crate::event::AgentEvent;
 use crate::request::{TurnOutcome, TurnRequest};
 use crate::runtime::{MainRuntime, OneshotKind, OneshotRuntime};
 
-use super::acp::{AcpModel, AcpTurn};
-use super::assemble_content;
 use super::event::map_update;
-use super::pick_title_model;
-use super::text_prompt_content;
-
-/// Builds the base `Command` a turn spawns from.
-pub(super) type Spawner = Arc<dyn Fn() -> Command + Send + Sync>;
+use super::launch::AgentLaunch;
+use super::turn::{AcpModel, AcpTurn};
 
 /// Opens a fresh ACP transport (spawn + stdio). Production uses the real
-/// spawner; tests inject a scripted peer factory so process reuse is observable
-/// without a live `grok` binary.
+/// launch; tests inject a scripted peer factory so process reuse is observable
+/// without a live agent binary.
 type OpenChild = Arc<dyn Fn() -> BoxFuture<'static, Result<AcpTurn, Error>> + Send + Sync>;
 
-fn open_from_spawner(spawn: Spawner, working_dir: PathBuf) -> OpenChild {
+fn open_from_launch(launch: AgentLaunch, working_dir: PathBuf) -> OpenChild {
     Arc::new(move || {
-        let cmd = spawn();
+        let launch = launch.clone();
         let cwd = working_dir.clone();
-        Box::pin(async move { AcpTurn::spawn_with(cmd, &cwd).await })
+        Box::pin(async move { AcpTurn::spawn_with(&launch, &cwd).await })
     })
 }
 
-/// Main path: one warm `grok agent stdio` process across turns.
-pub struct GrokMainRuntime {
+/// Main path: one warm agent process across turns.
+pub struct AcpMainRuntime {
     open: OpenChild,
     working_dir: PathBuf,
     turn: Option<AcpTurn>,
     models: Vec<AcpModel>,
 }
 
-impl GrokMainRuntime {
-    pub(super) fn new(spawn: Spawner, working_dir: &Path) -> Self {
+impl AcpMainRuntime {
+    pub fn new(launch: AgentLaunch, working_dir: &Path) -> Self {
         let working_dir = working_dir.to_path_buf();
         Self {
-            open: open_from_spawner(spawn, working_dir.clone()),
+            open: open_from_launch(launch, working_dir.clone()),
             working_dir,
             turn: None,
             models: Vec::new(),
@@ -89,7 +84,7 @@ impl GrokMainRuntime {
 }
 
 #[async_trait]
-impl MainRuntime for GrokMainRuntime {
+impl MainRuntime for AcpMainRuntime {
     async fn ensure_hot(&mut self) -> Result<(), Error> {
         self.clear_if_dead();
         if self.turn.is_some() {
@@ -147,7 +142,7 @@ impl MainRuntime for GrokMainRuntime {
             .find(|m| m.id == model)
             .and_then(|m| m.context_window);
 
-        let content = assemble_content(&req);
+        let content = assemble_content_from_request(&req);
         let result = {
             let turn = self
                 .turn
@@ -169,10 +164,28 @@ impl MainRuntime for GrokMainRuntime {
             Ok(result) => match result.stop_reason.as_deref() {
                 // `end_turn` (or an absent reason) is a clean completion; the
                 // process stays hot for the next turn.
-                Some("end_turn") | None => Ok(TurnOutcome { session_id }),
+                Some("end_turn") | None => {
+                    // Prefer an agent-rebound id (e.g. provisional → native) for
+                    // persistence and resume.
+                    let outcome_id = match result.session_id {
+                        Some(rebound) if rebound != session_id => {
+                            let _ = events
+                                .send(AgentEvent::SessionIdUpdated {
+                                    session_id: rebound.clone(),
+                                })
+                                .await;
+                            rebound
+                        }
+                        Some(same) => same,
+                        None => session_id,
+                    };
+                    Ok(TurnOutcome {
+                        session_id: outcome_id,
+                    })
+                }
                 Some(other) => {
                     self.drop_child().await;
-                    Err(Error::Process(format!("grok stopped early: {other}")))
+                    Err(Error::Process(format!("agent stopped early: {other}")))
                 }
             },
             Err(Error::Cancelled) => {
@@ -194,23 +207,36 @@ impl MainRuntime for GrokMainRuntime {
 }
 
 /// Oneshot path: warm process, fresh logical session every call (N=1).
-pub struct GrokOneshotRuntime {
+pub struct AcpOneshotRuntime {
     open: OpenChild,
     working_dir: PathBuf,
     turn: Option<AcpTurn>,
     session_id: Option<String>,
     models: Vec<AcpModel>,
+    /// Preferred model id for oneshot prompts (e.g. a cheap/fast title model).
+    /// Falls back to the first advertised model when absent.
+    preferred_model: Option<String>,
 }
 
-impl GrokOneshotRuntime {
-    pub(super) fn new(spawn: Spawner, working_dir: &Path) -> Self {
+impl AcpOneshotRuntime {
+    pub fn new(launch: AgentLaunch, working_dir: &Path) -> Self {
+        Self::with_preferred_model(launch, working_dir, None)
+    }
+
+    /// Construct with an optional preferred oneshot model id.
+    pub fn with_preferred_model(
+        launch: AgentLaunch,
+        working_dir: &Path,
+        preferred_model: Option<String>,
+    ) -> Self {
         let working_dir = working_dir.to_path_buf();
         Self {
-            open: open_from_spawner(spawn, working_dir.clone()),
+            open: open_from_launch(launch, working_dir.clone()),
             working_dir,
             turn: None,
             session_id: None,
             models: Vec::new(),
+            preferred_model,
         }
     }
 
@@ -222,6 +248,7 @@ impl GrokOneshotRuntime {
             turn: None,
             session_id: None,
             models: Vec::new(),
+            preferred_model: None,
         }
     }
 
@@ -255,10 +282,19 @@ impl GrokOneshotRuntime {
         self.session_id = Some(sid.clone());
         Ok(sid)
     }
+
+    fn pick_model(&self) -> Option<String> {
+        if let Some(pref) = &self.preferred_model
+            && self.models.iter().any(|m| m.id == *pref)
+        {
+            return Some(pref.clone());
+        }
+        self.models.first().map(|m| m.id.clone())
+    }
 }
 
 #[async_trait]
-impl OneshotRuntime for GrokOneshotRuntime {
+impl OneshotRuntime for AcpOneshotRuntime {
     async fn ensure_hot(&mut self) -> Result<(), Error> {
         self.clear_if_dead();
         if self.turn.is_none() {
@@ -276,8 +312,9 @@ impl OneshotRuntime for GrokOneshotRuntime {
     async fn prompt(&mut self, _model_hint: OneshotKind, text: String) -> Result<String, Error> {
         self.ensure_hot().await?;
         let session_id = self.ensure_session().await?;
-        let model = pick_title_model(&self.models)
-            .ok_or_else(|| Error::Other("grok advertised no models for oneshot".into()))?;
+        let model = self
+            .pick_model()
+            .ok_or_else(|| Error::Other("agent advertised no models for oneshot".into()))?;
         let content = text_prompt_content(&text);
 
         // Cancel token is cooperative while prompt is polling; if the future is
@@ -334,6 +371,44 @@ impl OneshotRuntime for GrokOneshotRuntime {
     async fn shutdown(&mut self) {
         self.drop_child().await;
     }
+}
+
+/// Wrap a plain string as a single-block ACP text prompt (titles, etc.).
+fn text_prompt_content(text: &str) -> Vec<Value> {
+    vec![json!({ "type": "text", "text": text })]
+}
+
+/// Fold system additions + prompt, walk attach markers, and encode ACP content
+/// blocks (text and image). Harness-neutral: every ACP-backed provider uses this
+/// shape for `session/prompt`.
+fn assemble_content_from_request(req: &TurnRequest) -> Vec<Value> {
+    use crate::attach::{self, Segment};
+    use base64::Engine as _;
+
+    let text = {
+        let mut parts: Vec<&str> = req
+            .system_additions
+            .iter()
+            .map(String::as_str)
+            .filter(|s| !s.is_empty())
+            .collect();
+        parts.push(req.prompt.as_str());
+        parts.join("\n\n")
+    };
+    attach::walk(&text, &req.attachments)
+        .into_iter()
+        .map(|segment| match segment {
+            Segment::Text(t) => json!({ "type": "text", "text": t }),
+            Segment::Image { media_type, bytes } => {
+                let data = base64::engine::general_purpose::STANDARD.encode(bytes);
+                json!({
+                    "type": "image",
+                    "mimeType": media_type,
+                    "data": data,
+                })
+            }
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -533,11 +608,131 @@ mod tests {
         req
     }
 
-    // @spec harness/grok Session lifecycle and resume: A second turn on a hot path reuses the process
+    /// Fake peer that rebinds session id on first prompt (provisional → durable).
+    async fn fake_acp_peer_rebind() -> AcpTurn {
+        let (client, server) = duplex(16 * 1024);
+        let (server_read, mut server_write) = tokio::io::split(server);
+        let (client_read, client_write) = tokio::io::split(client);
+
+        tokio::spawn(async move {
+            let mut reader = BufReader::new(server_read);
+            let mut line = String::new();
+            loop {
+                line.clear();
+                match reader.read_line(&mut line).await {
+                    Ok(0) | Err(_) => break,
+                    Ok(_) => {}
+                }
+                let msg: Value = match serde_json::from_str(line.trim()) {
+                    Ok(v) => v,
+                    Err(_) => continue,
+                };
+                let id = msg.get("id").cloned().unwrap_or(Value::Null);
+                let method = msg.get("method").and_then(|m| m.as_str()).unwrap_or("");
+                let reply = match method {
+                    "initialize" => json!({
+                        "jsonrpc": "2.0",
+                        "id": id,
+                        "result": {
+                            "protocolVersion": 1,
+                            "agentCapabilities": { "loadSession": true },
+                            "_meta": {
+                                "modelState": {
+                                    "availableModels": [{
+                                        "modelId": "haiku",
+                                        "name": "Haiku",
+                                    }]
+                                }
+                            }
+                        }
+                    }),
+                    "session/new" => json!({
+                        "jsonrpc": "2.0",
+                        "id": id,
+                        "result": { "sessionId": "pending-open-1" }
+                    }),
+                    "session/load" => json!({
+                        "jsonrpc": "2.0",
+                        "id": id,
+                        "result": {}
+                    }),
+                    "session/prompt" => {
+                        let update = json!({
+                            "jsonrpc": "2.0",
+                            "method": "session/update",
+                            "params": {
+                                "update": {
+                                    "sessionUpdate": "agent_message_chunk",
+                                    "content": { "type": "text", "text": "ok" }
+                                }
+                            }
+                        });
+                        let _ = write_line(&mut server_write, &update).await;
+                        json!({
+                            "jsonrpc": "2.0",
+                            "id": id,
+                            "result": {
+                                "stopReason": "end_turn",
+                                "sessionId": "claude-native-sess-1"
+                            }
+                        })
+                    }
+                    _ => json!({ "jsonrpc": "2.0", "id": id, "result": {} }),
+                };
+                if write_line(&mut server_write, &reply).await.is_err() {
+                    break;
+                }
+            }
+        });
+
+        AcpTurn::from_transport(Box::pin(client_write), Box::pin(BufReader::new(client_read)))
+    }
+
+    /// @spec harness/acp-client Session open and resume: When the agent rebinds the session id during a turn, the client surfaces the rebound id
+    #[tokio::test]
+    async fn agent_rebind_session_id_is_surfaced() {
+        let open: OpenChild = Arc::new(|| Box::pin(async { Ok(fake_acp_peer_rebind().await) }));
+        let mut rt = AcpMainRuntime::with_open(open, std::env::temp_dir());
+        let (tx, mut rx) = mpsc::channel(32);
+
+        let out = rt
+            .run_turn(turn_req(None), tx, CancelToken::new())
+            .await
+            .expect("turn with rebind");
+        assert_eq!(
+            out.session_id, "claude-native-sess-1",
+            "TurnOutcome must carry the rebound native id"
+        );
+
+        let mut saw_provisional = false;
+        let mut saw_native = false;
+        while let Ok(ev) = rx.try_recv() {
+            if let AgentEvent::SessionIdUpdated { session_id } = ev {
+                if session_id == "pending-open-1" {
+                    saw_provisional = true;
+                }
+                if session_id == "claude-native-sess-1" {
+                    saw_native = true;
+                }
+            }
+        }
+        assert!(
+            saw_provisional,
+            "open id is surfaced before prompt for interrupt-safe persist"
+        );
+        assert!(
+            saw_native,
+            "rebound id must be surfaced as SessionIdUpdated for the host to persist"
+        );
+
+        rt.shutdown().await;
+    }
+
+    // @spec harness/acp-client Launch-parameterized agent process: A second turn on a hot main path reuses the agent process
     #[tokio::test]
     async fn a_second_turn_on_a_hot_path_reuses_the_process() {
         let spawns = Arc::new(AtomicUsize::new(0));
-        let mut rt = GrokMainRuntime::with_open(counting_open(spawns.clone()), std::env::temp_dir());
+        let mut rt = AcpMainRuntime::with_open(counting_open(spawns.clone()), std::env::temp_dir());
         let (tx, mut rx) = mpsc::channel(32);
 
         rt.ensure_hot().await.unwrap();
@@ -568,7 +763,7 @@ mod tests {
         rt.shutdown().await;
     }
 
-    // @spec harness/grok Session lifecycle and resume: After cancel, the next turn can spawn and resume
+    // @spec harness/acp-client Launch-parameterized agent process: After cancel, a later turn may spawn again and resume a prior session id
     #[tokio::test]
     async fn after_cancel_the_next_turn_can_spawn_and_resume() {
         let spawns = Arc::new(AtomicUsize::new(0));
@@ -587,7 +782,7 @@ mod tests {
                 })
             })
         };
-        let rt = GrokMainRuntime::with_open(hang_open, std::env::temp_dir());
+        let rt = AcpMainRuntime::with_open(hang_open, std::env::temp_dir());
         let (tx, mut rx) = mpsc::channel(32);
 
         let cancel = CancelToken::new();
@@ -634,7 +829,7 @@ mod tests {
     async fn a_second_oneshot_call_does_not_resume_the_prior_oneshot_session() {
         let spawns = Arc::new(AtomicUsize::new(0));
         let mut rt =
-            GrokOneshotRuntime::with_open(counting_open(spawns.clone()), std::env::temp_dir());
+            AcpOneshotRuntime::with_open(counting_open(spawns.clone()), std::env::temp_dir());
 
         rt.ensure_hot().await.unwrap();
         let sid1 = rt.session_id.clone().expect("session after ensure_hot");
@@ -666,7 +861,7 @@ mod tests {
     async fn an_oneshot_call_on_a_hot_path_reuses_the_process() {
         let spawns = Arc::new(AtomicUsize::new(0));
         let mut rt =
-            GrokOneshotRuntime::with_open(counting_open(spawns.clone()), std::env::temp_dir());
+            AcpOneshotRuntime::with_open(counting_open(spawns.clone()), std::env::temp_dir());
 
         rt.ensure_hot().await.unwrap();
         assert_eq!(spawns.load(Ordering::SeqCst), 1);
@@ -708,7 +903,7 @@ mod tests {
                 })
             })
         };
-        let mut rt = GrokOneshotRuntime::with_open(hang_then_ok, std::env::temp_dir());
+        let mut rt = AcpOneshotRuntime::with_open(hang_then_ok, std::env::temp_dir());
 
         rt.ensure_hot().await.unwrap();
         // Hang on session/prompt until the budget aborts this future (worker does

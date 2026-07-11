@@ -1,17 +1,17 @@
-//! Pure translation of grok's ACP `session/update` notifications into
+//! Pure translation of ACP profile `session/update` notifications into
 //! duckchat's neutral [`AgentEvent`] stream.
 //!
 //! [`map_update`] is deliberately a pure function of the raw `session/update`
 //! `params` plus the active model's context window, so it can be unit-tested
-//! against recorded JSON without a live grok process. The `run_turn` layer
-//! wires it into the read loop (see [`super::acp::AcpTurn::prompt_events`]) and
-//! maps the terminal `stop_reason` onto `TurnComplete`/`Error` itself.
+//! against recorded JSON without a live agent process. The turn layer wires it
+//! into the read loop (see [`super::turn::AcpTurn::prompt_events`]) and maps
+//! the terminal `stop_reason` onto `TurnComplete`/`Error` itself.
 
 use serde_json::Value;
 
 use crate::event::{AgentEvent, Usage};
 
-/// Translate one grok `session/update` `params` payload into a neutral
+/// Translate one ACP profile `session/update` `params` payload into a neutral
 /// [`AgentEvent`], or `None` when the update carries nothing we surface.
 ///
 /// `context_window` is the active model's window discovered during the
@@ -120,7 +120,7 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    /// @spec harness/grok Event translation: Assistant text and reasoning surface on distinct channels
+    /// @spec harness/acp-client Profile event translation: Assistant text and reasoning surface on distinct channels
     #[test]
     fn message_and_thought_map_to_distinct_channels() {
         let message = json!({
@@ -150,7 +150,7 @@ mod tests {
         }
     }
 
-    /// @spec harness/grok Event translation: A tool call surfaces as a use then a matching result
+    /// @spec harness/acp-client Profile event translation: A tool call surfaces as a use then a matching result
     #[test]
     fn tool_call_maps_to_use_then_matching_result() {
         let call = json!({
@@ -193,7 +193,7 @@ mod tests {
         assert_eq!(output, "fn main() {}");
     }
 
-    /// @spec harness/grok Event translation: A usage update carries used tokens and the model's context window
+    /// @spec harness/acp-client Profile event translation: A usage update carries used tokens and the model's context window
     #[test]
     fn usage_update_carries_tokens_and_window() {
         let update = json!({

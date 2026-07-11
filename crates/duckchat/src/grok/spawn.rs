@@ -6,6 +6,10 @@
 //! launchd-skeletal GUI env. The shell runs `-ilc 'exec "$@"' <argv…>` so
 //! grok's args pass through positionally and `exec` hands the process image to
 //! `grok` (stdin/stdout/stderr, signals, exit codes propagate directly).
+//!
+//! Agent-mode flags (`--no-ask-user agent --always-approve stdio`) are chained
+//! by [`super::grok_agent_launch`] onto this base command so the shared ACP
+//! client receives a final argv.
 
 use tokio::process::Command;
 
@@ -13,7 +17,7 @@ use tokio::process::Command;
 /// Callers chain extra `grok` args via `.arg()` — they become positional
 /// parameters to the wrapping `exec "$@"`. Set `current_dir` on the result so
 /// the shell sources rcfiles with the project as its `pwd`.
-pub fn grok_command() -> Command {
+pub(super) fn grok_command() -> Command {
     let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".into());
     let mut cmd = Command::new(shell);
     cmd.arg("-ilc")
