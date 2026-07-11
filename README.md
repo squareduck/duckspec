@@ -2,7 +2,7 @@
 
 Spec-driven development framework for AI coding agents — with a CLI (`ds`) that handles the bookkeeping and a desktop companion (`duckboard`) that puts it all in a window.
 
-Duckspec gives your coding agent a structured workflow for planning, specifying, implementing, and verifying changes. Capabilities are described by paired spec and doc files; source tests link back to the scenarios they verify; and completed work flows through a clear pipeline — so the agent spends tokens on thinking, not chasing broken context.
+Duckspec gives your coding agent a structured workflow for exploring, proposing, designing, specifying, implementing, reviewing, and archiving changes. Capabilities are described by paired spec and doc files; source tests link back to the scenarios they verify; and completed work flows through a clear pipeline — so the agent spends tokens on thinking, not chasing broken context.
 
 - **`ds`** — the CLI and the engine. Scaffolds a project, audits integrity, validates artifacts, and emits the slash-command templates agents consume.
 - **`duckboard`** — a native macOS app for browsing and driving a duckspec project: dashboard, ideas, per-change AI chat, capability/codex trees, file finder, project search, diff view, and a terminal.
@@ -87,13 +87,17 @@ Then point your agent at a change and run `/ds-explore`. Run `ds audit` at any t
 
 ## How it works
 
-Every piece of work flows through a **change** — an isolated sandbox with its own proposal, design, capability deltas, and execution steps. The agent works through slash commands:
+Every piece of work flows through a **change** — an isolated sandbox with its own proposal, design, capability deltas, execution steps, and critique history. The agent works through slash commands. The usual spine:
 
 ```
-/ds-explore → /ds-propose → /ds-design → /ds-spec → /ds-step → /ds-apply → /ds-archive
+/ds-explore → /ds-propose → /ds-design → /ds-spec → /ds-step → /ds-apply
+    → /ds-review  (and/or /ds-followup)
+    → /ds-archive
 ```
 
-When all steps are complete, `/ds-archive` merges the change's capability deltas into the top-level tree and moves the change into `archive/`.
+When all steps are complete (and any rework is done), `/ds-archive` merges the change's capability deltas into the top-level tree and moves the change into `archive/`. Review and followup can also run while steps are still open.
+
+Side stages sit outside that spine: `/ds-verify` (validate without writing), `/ds-codex` (project knowledge), and `/ds-backfill` (capture existing code).
 
 ### Capabilities, specs, docs
 
@@ -107,6 +111,21 @@ Docs and specs walk in pairs 🦆 — if one exists, both should.
 ### Specs linked to tests
 
 Source code points back to the scenarios it verifies via `@spec` backlinks in comments. `ds audit` cross-checks that every `test: code` scenario has at least one backlink and every backlink resolves to a real scenario, so spec drift becomes a build-time error. The same integrity is enforced across the lifecycle: archiving a change won't silently orphan a live backlink (override with `--allow-orphans` when you mean to).
+
+### Review and followup
+
+`ds check` and `ds audit` prove a change is well-*formed*. Critique records whether it is well-*conceived* and well-*made*. Both kinds append to the same log under `duckspec/changes/<name>/reviews/`:
+
+| Skill | Who drives it | File shape |
+| --- | --- | --- |
+| `/ds-review` | Agent-led scan of the change chain | `NN-review-<slug>.md` |
+| `/ds-followup` | User-led course correction in conversation | `NN-followup-<slug>.md` |
+
+Each pass is a new file (append-only), not an edit of the previous one. Records stay advisory: they recommend next stages (`/ds-spec`, `/ds-step`, `/ds-apply`, …) but do not implement plan or product code unless you ask after the document exists.
+
+### Verify
+
+`/ds-verify` is a diagnostic side path — run `ds check`, `ds audit`, and a dry `ds sync`, report what is clean and what is not, then stop. It does not create or edit artifacts. Use it anytime you want a health check without entering a lifecycle stage.
 
 ### Codex
 
@@ -123,7 +142,9 @@ Not every change needs every phase. Pick the shape that fits:
 **Full feature** — new capabilities and code:
 
 ```
-/ds-explore → /ds-propose → /ds-design → /ds-spec → /ds-step → /ds-apply → /ds-archive
+/ds-explore → /ds-propose → /ds-design → /ds-spec → /ds-step → /ds-apply
+    → /ds-review  (and/or /ds-followup)
+    → /ds-archive
 ```
 
 **Doc-only** — updating a capability's doc without changing behavior:
@@ -144,10 +165,23 @@ Not every change needs every phase. Pick the shape that fits:
 /ds-explore → /ds-spec → /ds-archive
 ```
 
+**Critique / rework** — judgment or course correction mid-change or before archive:
+
+```
+/ds-review     → /ds-spec or /ds-step or /ds-apply → …
+/ds-followup   → /ds-spec or /ds-step or /ds-apply → …
+```
+
 **Knowledge harvest** — capturing learnings into the codex (no change wrapping):
 
 ```
 /ds-explore → /ds-codex
+```
+
+**Health check** — validate without writing:
+
+```
+/ds-verify
 ```
 
 **Backfill** — capturing existing code into capabilities, one slice at a time:
@@ -172,7 +206,7 @@ Commands you'll use directly:
 | `ds index` | Print the artifact tree with summaries (filter with `--caps`, `--codex`, `--project`) |
 | `ds sync` | Resolve `@spec` backlinks and update test markers |
 
-Commands the agent calls through slash-command templates: `archive`, `create`, `template`, `schema`.
+Commands the agent calls through slash-command templates: `archive`, `create`, `template`, `schema`. Agent stages installed by `ds init` include `explore`, `propose`, `design`, `spec`, `step`, `apply`, `archive`, `review`, `followup`, `verify`, `codex`, and `backfill`.
 
 ## Duckboard
 
@@ -182,7 +216,7 @@ Areas, switchable from the sidebar:
 
 - **Dashboard** — active changes, archived changes, in-flight explorations, and a live audit panel that surfaces failing backlinks / missing coverage as you work.
 - **Ideas** — capture future work as lightweight notes and flow them through *Inbox → Exploration → Change → Archive*. Jot an idea with ⌘I, promote a promising one into a full change, and archived ideas stay linked to the change they became.
-- **Change** — a per-change workspace with an AI **chat pane** (its own session history, model selector, and image paste), capability deltas, steps, a changed-files diff view, and a Files explorer.
+- **Change** — a per-change workspace with an AI **chat pane** (its own session history, multi-harness model picker including Claude and Grok, and image paste), capability deltas, steps, a changed-files diff view, and a Files explorer.
 - **Capability & codex trees** — navigable views over `caps/` and `codex/` with inline spec/doc editing and format-on-save.
 
 Tools that work everywhere:
@@ -216,7 +250,7 @@ line_width = 90   # target wrap width for prose (default: 90)
 
 ### Per-stage hooks
 
-Inject project-specific instructions into any workflow stage. Place a markdown file at `duckspec/hooks/<stage>-<position>.md`, where `<position>` is `before` or `after`:
+Inject project-specific instructions into any workflow stage. Place a markdown file at `duckspec/hooks/<stage>-<position>.md`, where `<position>` is `before` or `after` (for example `apply-after.md`, `spec-before.md`):
 
 ```sh
 mkdir -p duckspec/hooks
@@ -225,16 +259,11 @@ Always run `cargo fmt` and `cargo clippy --fix` after modifying Rust files.
 EOF
 ```
 
-When you run `ds template <stage>`, the file's contents are inserted into the rendered template under a `## Before write` or `## After write` section header. The body is emitted verbatim — no H1 or other structure required. An empty or whitespace-only file is treated as no hook.
+When you run `ds template <stage>`, the file's contents are inserted into the rendered template under a `## Before write` or `## After write` section header. The body is emitted verbatim — no H1 or other structure required. An empty or whitespace-only file is treated as no hook. Stage names match the agent templates (`explore`, `propose`, `design`, `spec`, `step`, `apply`, `archive`, `review`, `followup`, `verify`, `codex`, `backfill`).
 
-### Schema overrides
+### Schemas and style
 
-Override the embedded writing / conversation guides to match your project's voice:
-
-```sh
-ds schema writing-guide > duckspec/hooks/writing-guide.md
-# edit the file to taste
-```
+Agents load embedded artifact and style guides with `ds schema <name>` (for example `ds schema style`, `ds schema proposal`, `ds schema review`). These describe how chat and on-disk markdown should look; they are not project-local override files. Prefer per-stage hooks when you need project-specific instructions injected into a template.
 
 ## Development
 
