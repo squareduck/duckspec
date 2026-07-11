@@ -1,8 +1,9 @@
 # Proposal schema
 
-A proposal is the **pitch** for a change: **what** we want and **why** - before
-design and before capability layout. It is not architecture, not a caps list, not
-an impact analysis. Those come later (design, then specs).
+A proposal is the **decision record** for a change: **what** we want and **why**
+- distilled from exploration - before design and before capability layout. It is
+not architecture, not a caps list, not an impact analysis, and not a sales
+narrative. Those come later (design, then specs) or not at all.
 
 ## Structure
 
@@ -18,7 +19,7 @@ an impact analysis. Those come later (design, then specs).
 ## Intent
 
 <what should be true when this change succeeds - outcomes, behaviors, constraints
-on the problem. Product/user language, not module or capability paths.>
+on the problem. User/system language, not module or capability paths.>
 
 ## Non-goals
 
@@ -36,14 +37,16 @@ Recommended sections, not enforced by `ds check` beyond H1 + summary.
 
 ## Quality
 
-- **Motivation** answers why and why now - not a solution design.
+- **Motivation** states the problem and why now from agreed exploration - not a
+  solution design and not a pitch for traction, adoption, or internal buy-in.
 - **Intent** is the success picture: what becomes true, for whom, under what
   constraints. Stay above capabilities and code. Naming exact `caps/` paths or
   listing files is premature here; design and spec discover structure.
 - **Non-goals** bound the problem so later stages do not silently expand it.
-  Feature-level, not “we will not touch crate X” unless that *is* the product
+  Feature-level, not "we will not touch crate X" unless that *is* the product
   boundary.
-- Short and scannable. Persuasive pitch, not a mini-design.
+- **Short and scannable.** Faithful summary of the decision, not a mini-design
+  and not marketing copy.
 - Body markdown follows `style` (load only if not already in context).
 
 ## Formatting
@@ -54,27 +57,36 @@ if not already in context.
 ## Example
 
 ```markdown
-# Add Google OAuth login
+# Next-card composer hints
 
-Let users sign in with Google so signup is not blocked on inventing a password.
+Align empty-composer next actions with trailing agent `next` meta cards so the
+UI and templates share one authority for "what you can do next."
 
 ## Motivation
 
-Analytics show 40% of signup drop-offs happen at password creation. The largest
-segment already has a Google account; meeting them there should recover that
-funnel without weakening account security.
+Templates already emit ranked `next` meta cards. Duckboard still offers a
+separate disk-phase chip ladder and optional under-input suggestions, so
+empty-composer authority is split and users see two systems.
+
+Why now: meta-card syntax is stable; aligning the composer before more stages
+depend on chips avoids dual brains becoming load-bearing.
 
 ## Intent
 
-- A new user can create a session with Google in one consent flow
-- Returning Google users land in the same account they used before
-- Password-based signup remains available; OAuth is an additional path
-- Failure modes (denied consent, IdP outage) leave the user able to try again
-  or use password signup
+- After the first turn, empty-composer next actions come only from a trailing
+  `next` meta card (ranked, capped)
+- The active action appears as ghost text; empty Enter sends it; Tab cycles when
+  there is more than one
+- No trailing `next` after the first turn means no next-action ghost (missing
+  offers are a template fix, not a UI fallback)
+- Empty sessions may still seed one bootstrap action; that path ends after the
+  first turn
+- Optional oneshot suggestions stay under-input only - never empty Enter
 
 ## Non-goals
 
-- Apple or other IdPs in this change
-- Linking an existing email/password account to Google from settings
-- Changing session lifetime or auth factors beyond accepting a Google identity
+- End-to-end structured question-tool support
+- Changing meta-card syntax or inventing new card kinds
+- Redesigning the composer footer
+- Auto-fixing missing `next` cards from disk phase after the first turn
 ```

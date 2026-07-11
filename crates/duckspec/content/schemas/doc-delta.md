@@ -41,6 +41,8 @@ Deeper headings under a section follow the same marker rules when present.
 
 ## Quality
 
+- **Bodies under `+` / `~` / `@`** follow full `ds schema doc` Quality (scaffold
+  vs ship, domain H2s, cold reader, structure when it helps)
 - **Cold reader.** Present-tense description of what is; no change narration
   ("previously", "now also"); no links into `changes/` or `archive/`
 - **Keep pace with the spec.** Spec deltas that add modes, errors, or states

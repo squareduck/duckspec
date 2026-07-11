@@ -56,6 +56,9 @@ still satisfy the full **spec** schema.
   for body changes
 - **Merged result is a cold-reader spec.** Bodies are present-tense contract
   text, not change narration
+- **New and rewritten bodies** follow `ds schema spec` Quality (falsifiability,
+  outcome-not-branch, no design-leak requirements) - do not `@`/`~` a requirement
+  only to restate it in new words
 - Body markdown follows `style` (load only if not already in context)
 
 ## Formatting

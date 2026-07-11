@@ -27,16 +27,26 @@ Body is freeform markdown (headings, prose, lists, tables, diagrams, code).
 
 ## Quality
 
-- **Useful depth.** Cover what a reader needs (behavior, lifecycle, states,
-  modes, errors, interactions). Do not pad by restating the spec line-for-line;
-  do not stop at summary alone when the capability has real shape
-- **Domain H2s.** Name sections after what the capability has (`Session
-  lifecycle`, `Error handling`, …) - not generic shells (`Overview`, `Design
-  decisions`, `Open questions`, `Rationale`)
-- **Cold reader.** Present tense; no references to `proposal.md`, `design.md`,
-  `changes/`, or `archive/`; no transition narration ("previously", "now also")
-- Body markdown follows `style` (load only if not already in context) - tables
-  and diagrams in plain fenced blocks when the host expects that
+- **Scaffold vs ship.** H1 + summary is the structural minimum for pairing
+  during early work - not a finished capability doc. A shipped doc covers what
+  a reader needs to understand the capability. Do not pad by restating the
+  spec line-for-line; do not stop at the summary when the capability has real
+  shape (lifecycle, modes, errors, interactions, …).
+- **Domain H2s.** Name sections after what the capability actually has -
+  `Session lifecycle`, `Token format`, `Retry behavior`, `Error handling`,
+  `Concurrency`, `Rate limits` - whatever shape it has. Avoid generic shells
+  (`Overview`, `Design decisions`, `Open questions`, `Rationale`). Those either
+  belong under the H1 as prose or in a proposal or codex entry.
+- **Structure when it helps.** Table for parallel items with shared attributes
+  (states, modes, errors, config). Diagram for flow, state machine, or structure
+  that is easier to see than to read. Prose when prose is enough. Presentation
+  (including plain fences for tables/diagrams) follows `style` - load only if
+  not already in context.
+- **Cold reader.** Someone who walks up to this file with no knowledge of the
+  change, proposal, design, or prior versions. Present tense. Do not reference
+  `proposal.md`, `design.md`, or anything under `changes/` or `archive/` - those
+  paths will not exist beside the merged doc. Do not narrate the change
+  ("previously", "before the fix", "now also supports").
 
 ## Formatting
 

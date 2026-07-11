@@ -11,11 +11,15 @@ precise behavioral contracts - requirements, scenarios, and paired docs. Every
 ## Voice
 
 - **Precise.** SHALL / SHOULD / MAY mean what they say.
-- **Economical.** Fewer, better scenarios; distinct observable outcomes.
+- **Economical.** Cut ruthlessly; every requirement and scenario must earn its
+  place. Prefer delete over pad.
 - **Outcome over branch.** Not a transcription of implementation paths.
 - **Declarative.** What the system does, not click-through procedures.
-- **Collaborative.** Agree capability placement and each contract with the user
-  before writing - do not invent the tree silently.
+- **Collaborative.** Confirm the capability map, then each cap's outline, before
+  writing - do not invent the tree silently.
+- **Sourced.** Spec only behavior that proposal, design, or review made
+  behavioral - do not invent "complete" coverage of unstated edges. Module
+  boundaries and dependency choices stay in `design.md`.
 
 ## Context
 
@@ -34,57 +38,126 @@ precise behavioral contracts - requirements, scenarios, and paired docs. Every
 
 ## Instructions
 
-Work **one capability at a time** with the user:
+1. **Map** - terse list of every capability this pass will create or update.
+   One H1 per path: `# CREATE <path>` or `# UPDATE <path>`, plus a one-line
+   ownership summary. No requirements, scenarios, or doc bodies in the map.
+   Raise path conflicts with existing caps; adjust with the user before the
+   map gate.
+2. **Confirm map** - trailing `next` meta card with `confirm` only. Wait.
+3. **Outline + write** - one capability at a time, in map order. Present a
+   write gate whose preview is **outline depth** (not full GWT). Apply
+   `ds schema spec` Quality before the gate - drop identity, design-leak, and
+   padded scenarios. After `confirm`: expand to full files per schemas,
+   create/write, `ds format`, `ds check`. Then the next cap.
+4. Repeat until the map is done.
 
-1. **Place** the capability (new path vs delta on existing; parent nesting).
-   Raise conflicts with existing caps; let the user decide. Placement is a live
-   conversation - do not assume a pre-written caps list in the proposal.
-2. **Spec** - new: full `spec.md` per `ds schema spec`. Modified: lightest-touch
-   `spec.delta.md` per `ds schema spec-delta` (prefer `@` + `+` over rewrites).
-3. **Doc** - new: `doc.md` per `ds schema doc`. Modified: `doc.delta.md` when
-   readers need to relearn something. Cold reader; domain H2s; keep pace with
-   the spec.
-4. **Gate**, then create/write, `ds format`, `ds check` per file.
-5. Repeat until the change's behavior for this pass is covered.
+**Closed outline.** The confirmed outline is the closed set of requirements and
+scenarios for that capability. Expansion fills norms and GWT for those names
+only - do not invent new scenarios or requirements while writing files. If
+something essential was missing, rework the outline with the user first.
+
+**On disk after each confirm** (not in the gate preview):
+
+- New: full `spec.md` per `ds schema spec`; `doc.md` per `ds schema doc` when
+  the outline has a Doc section
+- Update: lightest-touch `spec.delta.md` per `ds schema spec-delta` (prefer
+  `@` + `+` over rewrites); `doc.delta.md` when readers need to relearn
+  something
+- Doc bodies follow `ds schema doc` Quality on expansion - never as labels in
+  chat previews
 
 ## Chat
 
-Follow `style`. Placement and contract discussion are freeform. Gate and handoff
-use meta cards as in Write gate and Handoff - do not restate their shapes here.
+Follow `style`. Map and outline discussion are freeform. Every decision that
+expects `confirm` uses a trailing `next` meta card - never prose such as
+"reply confirm". Gate and handoff use meta cards as in Write gate and Handoff
+- do not restate their shapes here. Disagreement is freeform chat (rework the
+last map or outline); do not offer `reject` or `revise` tokens.
 
 ## Write gate
 
-**Confirm-then-write** per capability (spec, then doc when needed). After
-confirmation:
+### Map (chat only - not a write)
+
+```markdown
+# CREATE <path>
+<one-line ownership>
+
+# UPDATE <path>
+<one-line ownership>
+
+> **next**
+>
+> `confirm`  spec these capabilities
+```
+
+### Per capability (confirm-then-write)
+
+Preview stays at **outline depth**. After confirmation:
 
 - `ds create spec <path> --in <name>` and/or `ds create doc <path> --in <name>`
   as needed (deltas: write the `.delta.md` paths the change uses)
-- Write body, then `ds format` and `ds check`
+- Expand outline to full bodies per schemas, then `ds format` and `ds check`
+
+**CREATE capability** - full outline of every requirement and scenario this cap
+will own:
 
 ```markdown
 > **write**
 >
-> Spec for `<capability-path>` at `duckspec/changes/<name>/caps/<path>/spec.md`
+> `<path>` — create spec (+ doc when needed)
 
-# <Capability Title>
+# CREATE <path>
 
-<summary>
+## Doc
+<summary of what the doc will say>
 
 ## Requirement: <name>
-…
+- Scenario: <name> (`test: code`)
+- Scenario: <name> (`test: code`)
 
-### Scenario: <name> (`test: code`)
-…
+## Requirement: <name>
+- Scenario: <name> (`manual: <reason>`)
 
 > **next**
 >
-> `confirm`  write this spec
-> `reject`
+> `confirm`  write this capability
 ```
 
-For deltas, preview marker ops and the new/changed scenario or requirement
-text in real markdown shape. Sanity-check before the gate: falsifiable THENs,
-observable outcomes, no implementation leakage (`ds schema spec` Quality).
+**UPDATE capability** - **delta only**. List only requirements this change
+adds, changes, or removes (`ADD` / `UPDATE` / `REMOVE`). Under an existing
+requirement, list only scenarios that are added, changed, or removed - do not
+restate untouched requirements or scenarios.
+
+```markdown
+> **write**
+>
+> `<path>` — update spec (+ doc when needed)
+
+# UPDATE <path>
+
+## Doc
+<summary of doc changes only>
+
+## ADD Requirement: <name>
+- Scenario: <name> (`test: code`)
+
+## UPDATE Requirement: <name>
+- ADD Scenario: <name> (`test: code`)
+- UPDATE Scenario: <name> (`test: code`)
+- REMOVE Scenario: <name>
+
+## REMOVE Requirement: <name>
+
+> **next**
+>
+> `confirm`  write this capability
+```
+
+Omit `## Doc` when there is no doc work for that path. On UPDATE, omit Doc when
+the doc is unchanged. Scenario lines carry the test marker; leave GWT and
+normative prose for the on-disk expansion. Before the gate and again before
+writing: run `ds schema spec` Quality (falsifiability, outcome-not-branch,
+refactor/stranger tests) - cut anything that fails.
 
 ## Handoff
 
