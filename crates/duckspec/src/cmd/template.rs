@@ -2,13 +2,11 @@ use std::fs;
 use std::path::Path;
 
 use super::common::find_duckspec_root;
-
-const TEMPLATE_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/content/templates");
+use crate::content;
 
 pub fn run(name: String) -> anyhow::Result<()> {
-    let template_path = format!("{TEMPLATE_DIR}/{name}.md");
-    let template = fs::read_to_string(&template_path)
-        .map_err(|_| anyhow::anyhow!("unknown template: {name}"))?;
+    let template = content::template(&name)
+        .ok_or_else(|| anyhow::anyhow!("unknown template: {name}"))?;
 
     let duckspec_root = find_duckspec_root().ok();
     let before = duckspec_root
@@ -18,7 +16,7 @@ pub fn run(name: String) -> anyhow::Result<()> {
         .as_ref()
         .and_then(|root| read_hook_content(root, &name, "after"));
 
-    let output = apply_hooks(&template, before.as_deref(), after.as_deref());
+    let output = apply_hooks(template, before.as_deref(), after.as_deref());
     print!("{output}");
 
     Ok(())
@@ -200,24 +198,15 @@ Just text, no heading.
 
     #[test]
     fn every_stock_template_has_hook_placeholders() {
-        let template_dir = Path::new(TEMPLATE_DIR);
-        let entries = fs::read_dir(template_dir).expect("read templates dir");
         let mut count = 0;
-        for entry in entries {
-            let entry = entry.unwrap();
-            let path = entry.path();
-            if path.extension().is_none_or(|ext| ext != "md") {
-                continue;
-            }
+        for (name, body) in content::templates() {
             count += 1;
-            let content = fs::read_to_string(&path).unwrap();
-            let name = path.file_name().unwrap().to_string_lossy();
             assert!(
-                content.contains("## Before write"),
+                body.contains("## Before write"),
                 "{name} is missing `## Before write` placeholder"
             );
             assert!(
-                content.contains("## After write"),
+                body.contains("## After write"),
                 "{name} is missing `## After write` placeholder"
             );
         }

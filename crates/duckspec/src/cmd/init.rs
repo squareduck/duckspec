@@ -3,7 +3,7 @@ use std::path::Path;
 
 use owo_colors::OwoColorize;
 
-const COMMANDS_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/content/commands");
+use crate::content;
 
 const DUCKSPEC_SUBDIRS: &[&str] = &["archive", "caps", "codex", "changes"];
 
@@ -42,26 +42,19 @@ pub fn run(harness: Option<String>) -> anyhow::Result<()> {
                 )
             })?;
 
-        let source_dir = format!("{COMMANDS_DIR}/{harness_name}");
         let target_dir = cwd.join(target_rel);
         fs::create_dir_all(&target_dir)?;
-
-        install_commands(Path::new(&source_dir), &target_dir)?;
+        install_commands(&harness_name, &target_dir)?;
     }
 
     Ok(())
 }
 
-fn install_commands(source_dir: &Path, target_dir: &Path) -> anyhow::Result<()> {
-    for entry in fs::read_dir(source_dir)? {
-        let entry = entry?;
-        let path = entry.path();
-        if path.extension().and_then(|e| e.to_str()) == Some("md") {
-            let filename = entry.file_name();
-            let dest = target_dir.join(&filename);
-            fs::copy(&path, &dest)?;
-            println!("  {} {}", "installed".green(), dest.display());
-        }
+fn install_commands(harness: &str, target_dir: &Path) -> anyhow::Result<()> {
+    for (filename, body) in content::command_files(harness) {
+        let dest = target_dir.join(filename);
+        fs::write(&dest, body)?;
+        println!("  {} {}", "installed".green(), dest.display());
     }
     Ok(())
 }

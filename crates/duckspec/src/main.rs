@@ -5,6 +5,7 @@
 use clap::{Parser, Subcommand};
 
 mod cmd;
+mod content;
 
 /// duckspec CLI — spec-driven development framework.
 #[derive(Parser, Debug)]
