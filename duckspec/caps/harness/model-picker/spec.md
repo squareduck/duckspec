@@ -18,7 +18,7 @@ flattened into one undifferentiated list.
 - **THEN** each model appears under its owning harness
 
 > test: code
-> - crates/duckboard/src/widget/agent_chat.rs:1963
+> - crates/duckboard/src/widget/agent_chat.rs:1964
 
 ## Requirement: Context fill from the active model's window
 
@@ -36,7 +36,7 @@ against a wrong or assumed window.
 - **THEN** the fill is the used tokens relative to that model's window
 
 > test: code
-> - crates/duckboard/src/widget/agent_chat.rs:1993
+> - crates/duckboard/src/widget/agent_chat.rs:1994
 
 ### Scenario: A model with no known window shows no fill
 
@@ -45,4 +45,4 @@ against a wrong or assumed window.
 - **THEN** the meter shows no fill
 
 > test: code
-> - crates/duckboard/src/widget/agent_chat.rs:2005
+> - crates/duckboard/src/widget/agent_chat.rs:2006

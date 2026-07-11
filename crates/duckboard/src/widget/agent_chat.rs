@@ -1570,6 +1570,7 @@ fn view_thinking_block<'a>(
                 .read_only(true)
                 .fit_content(true)
                 .transparent_bg(true)
+                .base_color(theme::text_secondary())
                 .highlights(hl_ranges, hl_current),
         )
         .padding(iced::Padding {
@@ -2392,6 +2393,42 @@ mod tests {
             }
             other => panic!("expected live Thinking, got {other:?}"),
         }
+    }
+
+    /// @spec chat/transcript Segment construction: Live reasoning with an open answer draft yields Thinking then one Answer
+    #[test]
+    fn live_reasoning_with_open_answer_draft_yields_thinking_then_one_answer() {
+        // GIVEN a streaming session with both pending reasoning and pending answer.
+        let mut session = ChatSession::new("test".into());
+        session.is_streaming = true;
+        session.pending_reasoning = "rethinking the outline".into();
+        session.pending_text = "first draft of the write-gate".into();
+
+        // WHEN the transcript segments are built.
+        let segs = build_transcript_segments(&session);
+
+        // THEN Thinking then one Answer for that open draft (not stacked answers).
+        // Thinking may auto-collapse (`live=false`) when Answer follows — that is
+        // collapse policy, not multi-answer thrash.
+        assert_eq!(segs.len(), 2);
+        match &segs[0] {
+            TranscriptSeg::Thinking { lines, .. } => {
+                assert_eq!(lines, &["rethinking the outline".to_string()]);
+            }
+            other => panic!("expected Thinking first, got {other:?}"),
+        }
+        match &segs[1] {
+            TranscriptSeg::Answer { lines, live } => {
+                assert!(*live, "open draft Answer should be live while streaming");
+                assert_eq!(lines, &["first draft of the write-gate".to_string()]);
+            }
+            other => panic!("expected Answer second, got {other:?}"),
+        }
+        let answer_count = segs
+            .iter()
+            .filter(|s| matches!(s, TranscriptSeg::Answer { .. }))
+            .count();
+        assert_eq!(answer_count, 1, "exactly one Answer for the open draft");
     }
 
     /// @spec chat/transcript Activity pairing: Matching use and result become one done row

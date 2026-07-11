@@ -9,7 +9,9 @@ so the answer stays primary.
 Contiguous same-kind assistant content SHALL coalesce into one Thinking, Activity, or
 Answer segment; a kind switch SHALL open a new segment. While streaming, pending reasoning
 and pending answer text SHALL appear on live Thinking / Answer segments rather than as
-separate committed messages until flushed.
+separate committed messages until flushed. When both pending reasoning and pending answer
+text are open, the transcript SHALL present one live Thinking segment and one live Answer
+segment (not multiple Answer segments for the same uncommitted draft).
 
 > test: code
 
@@ -25,7 +27,7 @@ separate committed messages until flushed.
 - **AND** the reasoning body is not part of the Answer segment
 
 > test: code
-> - crates/duckboard/src/widget/agent_chat.rs:2290
+> - crates/duckboard/src/widget/agent_chat.rs:2291
 
 ### Scenario: Contiguous tools yield one Activity with multiple rows
 
@@ -39,7 +41,7 @@ separate committed messages until flushed.
 - **AND** the segment has one row per tool call
 
 > test: code
-> - crates/duckboard/src/widget/agent_chat.rs:2323
+> - crates/duckboard/src/widget/agent_chat.rs:2324
 
 ### Scenario: Thought, tools, thought, answer yields four segments in order
 
@@ -51,7 +53,7 @@ separate committed messages until flushed.
 - **THEN** the segments are Thinking, Activity, Thinking, Answer in that order
 
 > test: code
-> - crates/duckboard/src/widget/agent_chat.rs:2350
+> - crates/duckboard/src/widget/agent_chat.rs:2351
 
 ### Scenario: Live pending reasoning appears on an open Thinking segment
 
@@ -63,7 +65,21 @@ separate committed messages until flushed.
 - **THEN** a live Thinking segment includes that pending reasoning text
 
 > test: code
-> - crates/duckboard/src/widget/agent_chat.rs:2374
+> - crates/duckboard/src/widget/agent_chat.rs:2375
+
+### Scenario: Live reasoning with an open answer draft yields Thinking then one Answer
+
+- **GIVEN** a streaming session with non-empty pending reasoning and non-empty pending
+  answer text
+
+- **WHEN** the transcript segments are built
+
+- **THEN** the live segments include a Thinking segment then an Answer segment
+
+- **AND** there is exactly one Answer segment for that open draft
+
+> test: code
+> - crates/duckboard/src/widget/agent_chat.rs:2398
 
 ## Requirement: Activity pairing
 
@@ -82,7 +98,7 @@ generic "done" placeholder alone.
 - **AND** the row carries the tool summary and the result body
 
 > test: code
-> - crates/duckboard/src/widget/agent_chat.rs:2397
+> - crates/duckboard/src/widget/agent_chat.rs:2434
 
 ### Scenario: Non-adjacent use and result still pair by id
 
@@ -98,7 +114,7 @@ generic "done" placeholder alone.
 - **AND** no row is labeled only as a generic done placeholder
 
 > test: code
-> - crates/duckboard/src/widget/agent_chat.rs:2420
+> - crates/duckboard/src/widget/agent_chat.rs:2457
 
 ### Scenario: Orphan result is a named done row
 
@@ -108,7 +124,7 @@ generic "done" placeholder alone.
 - **AND** the row is not labeled only as a generic done placeholder
 
 > test: code
-> - crates/duckboard/src/widget/agent_chat.rs:2452
+> - crates/duckboard/src/widget/agent_chat.rs:2489
 
 ## Requirement: Collapse defaults
 
@@ -127,7 +143,7 @@ a finished turn, Thinking and Activity SHALL start collapsed.
 - **THEN** the Thinking segment is collapsed
 
 > test: code
-> - crates/duckboard/src/widget/agent_chat.rs:2612
+> - crates/duckboard/src/widget/agent_chat.rs:2649
 
 ### Scenario: User-expanded Thinking is not auto-collapsed
 
@@ -136,7 +152,7 @@ a finished turn, Thinking and Activity SHALL start collapsed.
 - **THEN** the Thinking segment remains expanded
 
 > test: code
-> - crates/duckboard/src/widget/agent_chat.rs:2669
+> - crates/duckboard/src/widget/agent_chat.rs:2706
 
 ### Scenario: Settled Activity starts collapsed
 
@@ -145,7 +161,7 @@ a finished turn, Thinking and Activity SHALL start collapsed.
 - **THEN** the Activity segment is collapsed
 
 > test: code
-> - crates/duckboard/src/widget/agent_chat.rs:2709
+> - crates/duckboard/src/widget/agent_chat.rs:2746
 
 ## Requirement: Segment presentation
 
@@ -164,7 +180,7 @@ expand only, with no nested per-tool expand state.
 - **AND** the label does not include a duration
 
 > test: code
-> - crates/duckboard/src/widget/agent_chat.rs:2474
+> - crates/duckboard/src/widget/agent_chat.rs:2511
 
 ### Scenario: Activity collapsed label includes count and sample names
 
@@ -174,7 +190,7 @@ expand only, with no nested per-tool expand state.
 - **AND** the label includes sample tool names from the rows
 
 > test: code
-> - crates/duckboard/src/widget/agent_chat.rs:2507
+> - crates/duckboard/src/widget/agent_chat.rs:2544
 
 ### Scenario: Expanded activity exposes status, summary, and truncated output
 
@@ -190,7 +206,7 @@ expand only, with no nested per-tool expand state.
 - **AND** no separate per-tool expand state is required to show that truncated output
 
 > test: code
-> - crates/duckboard/src/widget/agent_chat.rs:2539
+> - crates/duckboard/src/widget/agent_chat.rs:2576
 
 ## Requirement: Meta-card line background
 
@@ -226,3 +242,18 @@ text and from search-match and diff line backgrounds.
 
 > test: code
 > - crates/duckboard/src/meta_card.rs:392
+
+## Requirement: Thinking body fade
+
+Expanded Thinking body text SHALL use a text color that is more faded than Answer body
+text in the same theme, while remaining legible. Thinking headers MAY use a more muted
+color than the Thinking body.
+
+### Scenario: Thinking body is more faded than Answer body
+
+- **GIVEN** a transcript with an expanded Thinking segment and an Answer segment
+- **WHEN** both bodies are presented in the chat UI
+- **THEN** the Thinking body appears more faded than the Answer body
+- **AND** the Thinking body remains legible
+
+> manual: visual contrast in light and dark

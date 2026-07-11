@@ -567,6 +567,8 @@ pub struct TextEdit<'a, M> {
     /// builder, which lives inside the returned Element.
     highlight_ranges: Vec<HighlightRange>,
     current_highlight: Option<HighlightRange>,
+    /// Base ink for unhighlighted body text. `None` uses `theme::text_primary()`.
+    base_color: Option<Color>,
 }
 
 impl<'a, M> TextEdit<'a, M> {
@@ -588,7 +590,18 @@ impl<'a, M> TextEdit<'a, M> {
             static_viewport: false,
             highlight_ranges: Vec::new(),
             current_highlight: None,
+            base_color: None,
         }
+    }
+
+    /// Base ink for plain body text (default: primary). Thinking uses secondary.
+    pub fn base_color(mut self, color: Color) -> Self {
+        self.base_color = Some(color);
+        self
+    }
+
+    fn body_ink(&self) -> Color {
+        self.base_color.unwrap_or_else(theme::text_primary)
     }
 
     /// Overlay match highlights drawn in the muted "search match" background
@@ -1681,7 +1694,7 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for TextEdit<'a, M> {
                                     wrapping: text::Wrapping::None,
                                 },
                                 Point::new(tx, y),
-                                theme::text_primary(),
+                                self.body_ink(),
                                 content_clip,
                             );
                         }
@@ -1950,6 +1963,15 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for TextEdit<'a, M> {
                                             let sx =
                                                 content_x + CONTENT_PAD + vis_start as f32 * cell_w
                                                     - scroll_x;
+                                            // When a base ink is set (e.g. Thinking
+                                            // secondary), override syntax colors so
+                                            // the whole body shares the fade — span
+                                            // colors would otherwise paint near-primary.
+                                            let ink = if self.base_color.is_some() {
+                                                self.body_ink()
+                                            } else {
+                                                span.color
+                                            };
                                             renderer.fill_text(
                                                 iced::advanced::Text {
                                                     content: slice,
@@ -1965,7 +1987,7 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for TextEdit<'a, M> {
                                                     wrapping: text::Wrapping::None,
                                                 },
                                                 Point::new(sx, y),
-                                                span.color,
+                                                ink,
                                                 content_clip,
                                             );
                                         }
@@ -1999,7 +2021,7 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for TextEdit<'a, M> {
                                             wrapping: text::Wrapping::None,
                                         },
                                         Point::new(tx, y),
-                                        theme::text_primary(),
+                                        self.body_ink(),
                                         content_clip,
                                     );
                                 }
@@ -2018,7 +2040,7 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for TextEdit<'a, M> {
                                     wrapping: text::Wrapping::None,
                                 },
                                 Point::new(content_x + CONTENT_PAD - scroll_x, y),
-                                theme::text_primary(),
+                                self.body_ink(),
                                 content_clip,
                             );
                         }

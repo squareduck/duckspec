@@ -1310,6 +1310,199 @@ mod tests {
         );
     }
 
+    // ── chat/stream-ui: answer draft across thought ───────────────────────
+
+    fn committed_answer_texts(session: &ChatSession) -> Vec<String> {
+        session
+            .messages
+            .iter()
+            .filter(|m| m.role == Role::Assistant)
+            .flat_map(|m| m.content.iter())
+            .filter_map(|b| match b {
+                ContentBlock::Text(t) => Some(t.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    // @spec chat/stream-ui Answer draft across thought: Reasoning leaves the open answer uncommitted
+    #[test]
+    fn reasoning_leaves_open_answer_uncommitted() {
+        let mut ax = streaming_session();
+        apply_answer_content_delta(&mut ax.session, "draft answer");
+        let msg_count = ax.session.messages.len();
+
+        let ks = apply_reasoning_content_delta(&mut ax.session, "rethink");
+        assert!(ks, "answer→reasoning is a structural channel switch");
+        assert_eq!(ax.session.pending_text, "draft answer");
+        assert_eq!(ax.session.pending_reasoning, "rethink");
+        assert_eq!(ax.session.messages.len(), msg_count);
+        assert!(
+            committed_answer_texts(&ax.session).is_empty(),
+            "reasoning must not commit the open answer draft"
+        );
+    }
+
+    // @spec chat/stream-ui Answer draft across thought: Answer after reasoning replaces the live draft
+    #[test]
+    fn answer_after_reasoning_replaces_live_draft() {
+        let mut ax = streaming_session();
+        apply_answer_content_delta(&mut ax.session, "first body");
+        apply_reasoning_content_delta(&mut ax.session, "think again");
+
+        let ks = apply_answer_content_delta(&mut ax.session, "second body");
+        assert!(ks, "reasoning→answer is a structural channel switch");
+        assert_eq!(ax.session.pending_text, "second body");
+        assert!(!ax.session.pending_text.contains("first body"));
+        assert!(ax.session.pending_reasoning.is_empty());
+        // Prior draft was replaced, not committed.
+        assert!(
+            committed_answer_texts(&ax.session).is_empty(),
+            "replaced draft must not leave a committed Text for the first body"
+        );
+        // Reasoning from the interlude is committed when answer resumes.
+        assert!(
+            ax.session.messages.iter().any(|m| {
+                m.content
+                    .iter()
+                    .any(|b| matches!(b, ContentBlock::Reasoning(t) if t == "think again"))
+            }),
+            "pending reasoning should flush when answer resumes"
+        );
+    }
+
+    // @spec chat/stream-ui Answer draft across thought: Tool use commits the open answer draft
+    #[test]
+    fn tool_use_commits_open_answer_draft() {
+        let mut ax = streaming_session();
+        apply_answer_content_delta(&mut ax.session, "status before tools");
+
+        // Mirror ToolUse handling: flush drafts, then record the tool.
+        flush_all_pending(&mut ax.session);
+        ax.session.messages.push(ChatMessage {
+            role: Role::Assistant,
+            content: vec![ContentBlock::ToolUse {
+                id: "t1".into(),
+                name: "Read".into(),
+                input: "f".into(),
+            }],
+            timestamp: String::new(),
+            is_priming: false,
+        });
+
+        assert!(ax.session.pending_text.is_empty());
+        assert_eq!(
+            committed_answer_texts(&ax.session),
+            vec!["status before tools".to_string()]
+        );
+    }
+
+    // @spec chat/stream-ui Bounded materialization while streaming: Answer-to-reasoning channel switch materializes without committing the answer
+    #[test]
+    fn answer_to_reasoning_channel_switch_materializes_without_commit() {
+        let mut ax = streaming_session();
+        apply_answer_content_delta(&mut ax.session, "open draft");
+
+        let ks = apply_reasoning_content_delta(&mut ax.session, "thinking…");
+        assert!(ks);
+        assert!(should_materialize_chat_ui(
+            &crate::agent::AgentEvent::ReasoningDelta {
+                text: "thinking…".into()
+            },
+            true,
+            ks,
+        ));
+        assert_eq!(ax.session.pending_text, "open draft");
+        assert!(
+            committed_answer_texts(&ax.session).is_empty(),
+            "channel switch materializes without committing the answer draft"
+        );
+    }
+
+    /// Drive answer → thought → answer replace `n` times (each ends with a draft).
+    fn thrash_replaces(session: &mut ChatSession, n: u32) {
+        apply_answer_content_delta(session, "body-0");
+        for i in 1..=n {
+            apply_reasoning_content_delta(session, "think");
+            apply_answer_content_delta(session, &format!("body-{i}"));
+        }
+    }
+
+    // @spec chat/stream-ui Answer thrash budget: Third answer-after-thought cancels and keeps the last draft
+    #[test]
+    fn third_answer_after_thought_trips_thrash_keeps_last_draft() {
+        let mut ax = streaming_session();
+        // Two allowed replacements → draft is body-2.
+        thrash_replaces(&mut ax.session, 2);
+        assert_eq!(ax.session.pending_text, "body-2");
+        assert!(!ax.session.answer_thrash_tripped);
+        assert_eq!(ax.session.answer_replace_count, 2);
+
+        // Third replace attempt: trip without replacing the last complete draft.
+        apply_reasoning_content_delta(&mut ax.session, "think again");
+        let ks = apply_answer_content_delta(&mut ax.session, "body-3-should-not-apply");
+        assert!(ks);
+        assert!(ax.session.answer_thrash_tripped);
+        assert_eq!(ax.session.pending_text, "body-2");
+
+        // Caller settles: flush draft + stop notice (mirrors main thrash path).
+        on_answer_thrash_trip(&mut ax.session);
+        assert!(ax.session.pending_text.is_empty());
+        assert_eq!(
+            committed_answer_texts(&ax.session),
+            vec!["body-2".to_string()]
+        );
+        assert!(
+            ax.session.messages.iter().any(|m| {
+                m.role == Role::System
+                    && m.content.iter().any(|b| {
+                        matches!(b, ContentBlock::Text(t) if t == ANSWER_THRASH_STOP_NOTICE)
+                    })
+            }),
+            "stop notice must be present as a system message"
+        );
+
+        // Further deltas are dropped.
+        apply_answer_content_delta(&mut ax.session, "late thrash");
+        apply_reasoning_content_delta(&mut ax.session, "late think");
+        assert!(ax.session.pending_text.is_empty());
+        assert!(ax.session.pending_reasoning.is_empty());
+    }
+
+    // @spec chat/stream-ui Answer thrash budget: Tool use resets the thrash budget
+    #[test]
+    fn tool_use_resets_thrash_budget() {
+        let mut ax = streaming_session();
+        thrash_replaces(&mut ax.session, 2);
+        assert_eq!(ax.session.answer_replace_count, 2);
+
+        // Tool boundary: commit draft and reset thrash (mirrors ToolUse handling).
+        flush_all_pending(&mut ax.session);
+        reset_answer_thrash(&mut ax.session);
+        ax.session.messages.push(ChatMessage {
+            role: Role::Assistant,
+            content: vec![ContentBlock::ToolUse {
+                id: "t1".into(),
+                name: "Read".into(),
+                input: "f".into(),
+            }],
+            timestamp: String::new(),
+            is_priming: false,
+        });
+
+        assert_eq!(ax.session.answer_replace_count, 0);
+        assert!(!ax.session.answer_thrash_tripped);
+
+        // A new answer-after-thought replace after tools must not trip solely
+        // from the pre-tool thrash count.
+        apply_answer_content_delta(&mut ax.session, "after-tool-1");
+        apply_reasoning_content_delta(&mut ax.session, "think");
+        apply_answer_content_delta(&mut ax.session, "after-tool-2");
+        assert!(!ax.session.answer_thrash_tripped);
+        assert_eq!(ax.session.pending_text, "after-tool-2");
+        assert_eq!(ax.session.answer_replace_count, 1);
+    }
+
     // ── chat/stream-ui: settled + live editor refresh ─────────────────────
 
     #[test]
@@ -1816,11 +2009,9 @@ fn handle_agent_chat(
             if let Some(handle) = &ax.agent_handle {
                 handle.cancel();
             }
-            // If the user is cancelling a priming turn, drop the staged
-            // follow-up so the post-`TurnComplete` dispatch doesn't fire
-            // their original message after they explicitly backed out.
-            ax.priming_in_flight = false;
-            ax.pending_followup_prompt = None;
+            // Drop staged follow-up so post-`TurnComplete` cannot dispatch
+            // the original message after the user backed out of priming.
+            clear_priming_followup(ax);
         }
         agent_chat::Msg::QueueAction(action) => {
             if let text_edit::EditorAction::OpenUrl(url) = &action {
@@ -2093,6 +2284,7 @@ pub fn recover_from_lost_session(ax: &mut AgentSession, highlighter: &SyntaxHigh
     ax.session.is_streaming = true;
     ax.session.pending_text.clear();
     ax.session.pending_reasoning.clear();
+    reset_answer_thrash(&mut ax.session);
     if let Err(e) = crate::chat_store::save_session(&ax.session, Some(handle.working_dir())) {
         tracing::error!("failed to persist session after resume loss: {e}");
     }
@@ -2286,6 +2478,7 @@ pub fn send_prompt_text(ax: &mut AgentSession, text: String, highlighter: &Synta
     ax.session.is_streaming = true;
     ax.session.pending_text.clear();
     ax.session.pending_reasoning.clear();
+    reset_answer_thrash(&mut ax.session);
     // Persist the transcript the moment the user turn is added, not just on
     // `TurnComplete`. Otherwise closing the app mid-turn drops the in-flight
     // message: the only prior checkpoint is the last completed turn, and on a
@@ -2597,20 +2790,78 @@ pub fn flush_all_pending(session: &mut ChatSession) {
     flush_pending_text(session);
 }
 
+/// Max answer-after-thought replacements allowed before thrash cancel.
+/// Trip when `answer_replace_count` exceeds this (third replace).
+pub const ANSWER_REPLACE_BUDGET: u32 = 2;
+
+/// User-visible stop notice when the thrash budget trips (not a second answer).
+pub const ANSWER_THRASH_STOP_NOTICE: &str =
+    "Stopped: the assistant kept rewriting the same reply. Last draft kept.";
+
+/// Reset thrash counter and trip flag (tool use, turn end, new send).
+pub fn reset_answer_thrash(session: &mut ChatSession) {
+    session.answer_replace_count = 0;
+    session.answer_thrash_tripped = false;
+}
+
+/// Drop AGENTS.md priming flags so TurnComplete cannot dispatch a staged
+/// follow-up after cancel (user CancelPressed or thrash trip).
+pub fn clear_priming_followup(ax: &mut AgentSession) {
+    ax.priming_in_flight = false;
+    ax.pending_followup_prompt = None;
+}
+
+/// Commit the last draft and append the thrash stop notice. Call once when
+/// the budget first trips (before cancelling the agent).
+pub fn on_answer_thrash_trip(session: &mut ChatSession) {
+    flush_all_pending(session);
+    session.messages.push(ChatMessage {
+        role: Role::System,
+        content: vec![ContentBlock::Text(ANSWER_THRASH_STOP_NOTICE.into())],
+        timestamp: String::new(),
+        is_priming: false,
+    });
+}
+
 /// Apply an answer content delta to the session. Returns `true` when this
 /// delta kind-switched away from pending reasoning (structural for the UI).
+///
+/// After reasoning, a non-empty live answer draft is **replaced** (cleared then
+/// appended) so thought↔answer thrash does not concatenate or multi-commit
+/// full answers. Contiguous answer deltas without a reasoning interlude still
+/// append. When the thrash budget is exceeded, the session is marked tripped
+/// (caller should cancel); further deltas no-op until reset.
 pub fn apply_answer_content_delta(session: &mut ChatSession, text: &str) -> bool {
+    if session.answer_thrash_tripped {
+        return false;
+    }
     let kind_switch = !session.pending_reasoning.is_empty();
     flush_pending_reasoning(session);
+    if kind_switch && !session.pending_text.is_empty() {
+        let next = session.answer_replace_count.saturating_add(1);
+        if next > ANSWER_REPLACE_BUDGET {
+            // Keep the last complete draft; do not start a truncated rewrite.
+            session.answer_thrash_tripped = true;
+            return true;
+        }
+        session.pending_text.clear();
+        session.answer_replace_count = next;
+    }
     session.pending_text.push_str(text);
     kind_switch
 }
 
 /// Apply a reasoning content delta to the session. Returns `true` when this
-/// delta kind-switched away from pending answer text (structural for the UI).
+/// delta kind-switched while an answer draft is open (structural for the UI).
+///
+/// Does **not** commit `pending_text` — the open answer stays a live draft
+/// across thought. Commit happens on tool use / turn complete via
+/// [`flush_all_pending`]. No-op after thrash trip.
 pub fn apply_reasoning_content_delta(session: &mut ChatSession, text: &str) -> bool {
+    if session.answer_thrash_tripped {
+        return false;
+    }
     let kind_switch = !session.pending_text.is_empty();
-    flush_pending_text(session);
     session.pending_reasoning.push_str(text);
     kind_switch
 }
@@ -2618,8 +2869,9 @@ pub fn apply_reasoning_content_delta(session: &mut ChatSession, text: &str) -> b
 /// Whether the chat UI must materialize immediately for this agent event.
 ///
 /// Pure answer/reasoning content deltas while streaming are deferred to the
-/// stream UI tick unless `kind_switch` is true (the opposite pending buffer was
-/// flushed). Structural events always materialize.
+/// stream UI tick unless `kind_switch` is true (answer ↔ reasoning channel
+/// switch, whether or not a draft was committed). Structural events always
+/// materialize.
 pub fn should_materialize_chat_ui(
     evt: &crate::agent::AgentEvent,
     is_streaming: bool,
