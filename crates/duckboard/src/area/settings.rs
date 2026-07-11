@@ -243,8 +243,8 @@ fn font_section<'a>(
         .width(40)
         .align_x(Center);
 
-    let size_slider = slider(8.0..=32.0, current_size, on_size)
-        .step(1.0)
+    let size_slider = slider(8.0_f32..=32.0_f32, current_size, on_size)
+        .step(1.0_f32)
         .width(200);
 
     let size_row = row![
