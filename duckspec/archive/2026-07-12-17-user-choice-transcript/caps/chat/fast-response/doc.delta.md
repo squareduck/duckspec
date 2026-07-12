@@ -1,10 +1,4 @@
-# Chat fast response
-
-Source-neutral option chips for mid-turn structured choices: ordered options with ⌘-number
-activation, ephemeral view layout, and empty-send formatting for bare skill names.
-Ordinary refresh leaves the shell empty; a live user-choice request may fill it. Freeform
-submit while awaiting is a custom answer to the pending question. Esc dismisses without
-answering.
+# @ Chat fast response
 
 Source-neutral option chips for mid-turn structured choices and settled oneshot reply
 suggestions: ordered options with ⌘-number activation, ephemeral view layout, and
@@ -13,7 +7,7 @@ in-band answers and shows the question as a chip above the options when prompt t
 present. Settling commits host question and answer transcript chips; cancel commits
 neither. Freeform submit while awaiting is a custom answer to the pending question.
 
-## Shell model
+## ~ Shell model
 
 Fast response is a thin option shell with an activation source. User-choice fills may also
 carry question text for live display and for the settled host log.
@@ -45,33 +39,7 @@ are not stored. Oneshot-hint activation still sends the option text as a normal 
 Empty-send formatting (bare `ds-foo` → `/ds-foo`) remains available for other
 empty-composer bootstrap consumers; it does not imply the shell is filled from disk phase.
 
-## Visibility and keys
-
-```
-| Condition                                               | Chips  |
-|---------------------------------------------------------|--------|
-| No options                                              | Hidden |
-| Main turn open, not awaiting user                       | Hidden |
-| Not awaiting, non-empty composer                        | Hidden |
-| Idle, empty composer, non-empty options                 | Shown  |
-| Awaiting user, empty composer, non-empty options        | Shown  |
-| Awaiting user, non-empty composer (custom answer)       | Shown  |
-```
-
-While awaiting, chips stay visible as the user types a custom answer. When not awaiting, a
-non-empty composer hides chips so typed text is not competing with option chrome
-(including oneshot-hint fill).
-
-```
-| Kind   | Key   | Result      |
-|--------|-------|-------------|
-| Option | ⌘1…⌘n | that option |
-```
-
-Chip labels put the hotkey before the action text; activation uses the option payload
-only.
-
-## Freeform while awaiting (custom answer)
+## @ Freeform while awaiting (custom answer)
 
 When chips reflect a live user choice and the user types freeform text then submits:
 
@@ -93,34 +61,7 @@ awaiting choice + non-empty submit
 | Esc esc          | dismiss        | cancelled              | nothing               |
 ```
 
-## Awaiting composer chrome
-
-While awaiting a user choice, the whole composer section (input, footer strip, model
-selector) uses the same quiet accent tint as numbered option chips so the strip reads as
-the custom-answer surface and the model control does not stand out untinted. Tint clears
-when the session is no longer awaiting.
-
-## Population
-
-```
-refresh / sync
-    │
-    ├─ awaiting user choice?  ──▶ keep user-choice fill
-    ├─ oneshot eligible?      ──▶ options = settled REPLY list (oneshot source)
-    └─ else                   ──▶ empty shell
-```
-
-A live structured question always overwrites oneshot fill. A late oneshot settle does not
-replace a parked user choice. Ordinary scopes do not compose lifecycle phase chips into
-the shell.
-
-## Layout
-
-When chips are visible, they sit in the chat scroll column after transcript content. A top
-pad pins short history so chips sit at the bottom of the viewport; tall content gets zero
-pad and chips follow the last message.
-
-## Live question chip
+## + Live question chip
 
 While awaiting a user choice with non-empty question text, a question chip sits above the
 numbered option chips in the scroll column. The label uses the form `Question: <text>`
@@ -128,7 +69,7 @@ numbered option chips in the scroll column. The label uses the form `Question: <
 chat-area fill (not the quiet-accent option treatment) and is not a selectable ⌘ option.
 Missing or empty question text omits that chip; options still follow ordinary visibility.
 
-## Settled choice transcript
+## + Settled choice transcript
 
 ```
 awaiting choice

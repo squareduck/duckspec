@@ -691,6 +691,23 @@ pub fn chat_fast_response_chip_numbered(_theme: &Theme) -> container::Style {
     tint_fast_response_chip(_theme, accent())
 }
 
+/// Question chip: same geometry as option chips, chat-area fill (agent-like),
+/// not accent-tinted. Used live above options and for settled host question
+/// entries in the transcript.
+pub fn chat_fast_response_chip_question(_theme: &Theme) -> container::Style {
+    let mut border = border_color();
+    border.a *= 0.55;
+    container::Style {
+        background: Some(bg_chat_area().into()),
+        border: Border {
+            color: border,
+            width: 1.0,
+            radius: BORDER_RADIUS.into(),
+        },
+        ..Default::default()
+    }
+}
+
 /// Mix ~8% of `tint` into the muted chrome base (fill + faint border lean).
 fn tint_fast_response_chip(_theme: &Theme, tint: Color) -> container::Style {
     let mut style = chat_fast_response_chip_neutral(_theme);

@@ -238,7 +238,7 @@ equivalent skip).
 - **THEN** the ACP parent surfaces a host user-choice event for those options
 
 > test: code
-> - crates/duckchat-claude-acp/src/claude/ask_user.rs:302
+> - crates/duckchat-claude-acp/src/claude/ask_user.rs:288
 
 ### Scenario: Host selection completes with allow and answers
 
@@ -252,7 +252,7 @@ equivalent skip).
   label
 
 > test: code
-> - crates/duckchat-claude-acp/src/claude/ask_user.rs:221
+> - crates/duckchat-claude-acp/src/claude/ask_user.rs:207
 
 ### Scenario: Host custom freeform answer completes with allow and free-text answers
 
@@ -270,7 +270,7 @@ equivalent skip).
 - **AND** the request is not completed as deny
 
 > test: code
-> - crates/duckchat-claude-acp/src/claude/ask_user.rs:249
+> - crates/duckchat-claude-acp/src/claude/ask_user.rs:235
 
 ### Scenario: Host cancel completes without accepting the questionnaire
 
@@ -279,7 +279,7 @@ equivalent skip).
 - **THEN** Claude's request is completed without accepting the questionnaire
 
 > test: code
-> - crates/duckchat-claude-acp/src/claude/ask_user.rs:274
+> - crates/duckchat-claude-acp/src/claude/ask_user.rs:260
 
 ## Requirement: Ordinary tools stay auto-approved
 
@@ -297,7 +297,7 @@ structured-choice path for clarifying questions.
 - **THEN** the tool is allowed without emitting a host user-choice event
 
 > test: code
-> - crates/duckchat-claude-acp/src/claude/ask_user.rs:288
+> - crates/duckchat-claude-acp/src/claude/ask_user.rs:274
 
 ## Requirement: Oneshot preferred model
 

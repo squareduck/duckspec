@@ -2301,7 +2301,7 @@ mod breadcrumb_tests {
         let mut ax = AgentSession::new("foo".into(), ScopeKind::Change);
         ax.is_awaiting_user = true;
         ax.fast_response =
-            fast_response::from_user_choice(99, [("a".into(), "Alpha".into())]);
+            fast_response::from_user_choice(99, None, [("a".into(), "Alpha".into())]);
         ix.sessions.push(ax);
         interactions.insert(scope, ix);
 
@@ -2315,7 +2315,10 @@ mod breadcrumb_tests {
         assert_eq!(ax.fast_response.options.len(), 1);
         assert!(matches!(
             ax.fast_response.source,
-            FastResponseSource::UserChoice { correlation_id: 99 }
+            FastResponseSource::UserChoice {
+                correlation_id: 99,
+                ..
+            }
         ));
     }
 
@@ -2414,7 +2417,10 @@ mod breadcrumb_tests {
         assert_eq!(ax.fast_response.options[0].id, "opt-a");
         assert!(matches!(
             ax.fast_response.source,
-            FastResponseSource::UserChoice { correlation_id: 7 }
+            FastResponseSource::UserChoice {
+                correlation_id: 7,
+                ..
+            }
         ));
         assert!(ax.is_awaiting_user);
     }
@@ -2429,7 +2435,7 @@ mod breadcrumb_tests {
         let mut ax = AgentSession::new("foo".into(), ScopeKind::Change);
         ax.is_awaiting_user = true;
         ax.fast_response =
-            fast_response::from_user_choice(42, [("q1".into(), "Option one".into())]);
+            fast_response::from_user_choice(42, None, [("q1".into(), "Option one".into())]);
         ax.agent_default_prompts = vec!["would fill if not awaiting".into()];
         ax.next_actions.clear();
 
@@ -2439,7 +2445,10 @@ mod breadcrumb_tests {
         assert_eq!(ax.fast_response.options[0].id, "q1");
         assert!(matches!(
             ax.fast_response.source,
-            FastResponseSource::UserChoice { correlation_id: 42 }
+            FastResponseSource::UserChoice {
+                correlation_id: 42,
+                ..
+            }
         ));
     }
 

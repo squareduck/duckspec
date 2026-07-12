@@ -48,6 +48,10 @@ pub enum ContentBlock {
         name: String,
         output: String,
     },
+    /// Mid-turn structured question text (host display chip).
+    UserChoiceQuestion { text: String },
+    /// Settled pick label or freeform answer (host display chip).
+    UserChoiceAnswer { text: String },
 }
 
 /// In-memory chat session.
@@ -1013,6 +1017,119 @@ mod tests {
             let persisted = load_sessions_for("eager-scope", Some(&root));
             let sess = persisted.iter().find(|s| s.id == "sess-eager").unwrap();
             assert_eq!(sess.messages.len(), 1);
+        });
+    }
+
+    /// @spec chat/persistence User choice content: User-choice question and answer blocks round-trip through persist and load
+    #[test]
+    fn user_choice_question_and_answer_blocks_round_trip_through_persist_and_load() {
+        let tmp = FsTmp::new();
+        with_home(tmp.path(), || {
+            let root = tmp.path().join("project-user-choice-rt");
+            std::fs::create_dir_all(&root).unwrap();
+
+            // GIVEN a session whose messages include user-choice question and answer blocks.
+            let mut session = ChatSession::new("user-choice-scope".into());
+            session.id = "sess-user-choice".into();
+            session.messages = vec![
+                ChatMessage {
+                    role: Role::Assistant,
+                    content: vec![ContentBlock::UserChoiceQuestion {
+                        text: "Ship it?".into(),
+                    }],
+                    timestamp: String::new(),
+                    is_priming: false,
+                },
+                ChatMessage {
+                    role: Role::User,
+                    content: vec![ContentBlock::UserChoiceAnswer {
+                        text: "Later".into(),
+                    }],
+                    timestamp: String::new(),
+                    is_priming: false,
+                },
+            ];
+
+            // WHEN the session is persisted and loaded again.
+            save_session(&session, Some(&root)).unwrap();
+            let loaded = load_sessions_for("user-choice-scope", Some(&root));
+
+            // THEN the loaded session includes both blocks with the same bodies.
+            let sess = loaded.iter().find(|s| s.id == "sess-user-choice").unwrap();
+            assert_eq!(sess.messages.len(), 2);
+            match &sess.messages[0].content[..] {
+                [ContentBlock::UserChoiceQuestion { text }] => {
+                    assert_eq!(text, "Ship it?");
+                }
+                other => panic!("expected UserChoiceQuestion, got {other:?}"),
+            }
+            match &sess.messages[1].content[..] {
+                [ContentBlock::UserChoiceAnswer { text }] => {
+                    assert_eq!(text, "Later");
+                }
+                other => panic!("expected UserChoiceAnswer, got {other:?}"),
+            }
+        });
+    }
+
+    /// @spec chat/persistence User choice content: A legacy session without user-choice content still loads
+    #[test]
+    fn legacy_session_without_user_choice_content_still_loads() {
+        let tmp = FsTmp::new();
+        with_home(tmp.path(), || {
+            let root = tmp.path().join("project-legacy-user-choice");
+            std::fs::create_dir_all(&root).unwrap();
+
+            // GIVEN a session file whose messages use only Text, Reasoning, ToolUse, and
+            // ToolResult content (no user-choice variants).
+            let mut session = ChatSession::new("legacy-uc-scope".into());
+            session.id = "sess-legacy-uc".into();
+            session.messages = vec![
+                user_msg("hello"),
+                ChatMessage {
+                    role: Role::Assistant,
+                    content: vec![
+                        ContentBlock::Reasoning("think".into()),
+                        ContentBlock::Text("hi".into()),
+                        ContentBlock::ToolUse {
+                            id: "t1".into(),
+                            name: "Read".into(),
+                            input: "{}".into(),
+                        },
+                        ContentBlock::ToolResult {
+                            id: "t1".into(),
+                            name: "Read".into(),
+                            output: "ok".into(),
+                        },
+                    ],
+                    timestamp: String::new(),
+                    is_priming: false,
+                },
+            ];
+            save_session(&session, Some(&root)).unwrap();
+
+            let path = scope_dir("legacy-uc-scope", Some(&root)).join("sess-legacy-uc.json");
+            let raw = std::fs::read_to_string(&path).unwrap();
+            assert!(
+                !raw.contains("UserChoiceQuestion") && !raw.contains("UserChoiceAnswer"),
+                "fixture must not contain user-choice variants"
+            );
+
+            // WHEN the session is loaded.
+            let loaded = load_sessions_for("legacy-uc-scope", Some(&root));
+
+            // THEN the load succeeds AND the loaded messages match the file's content.
+            let sess = loaded.iter().find(|s| s.id == "sess-legacy-uc").unwrap();
+            assert_eq!(sess.messages.len(), 2);
+            assert!(matches!(
+                &sess.messages[1].content[..],
+                [
+                    ContentBlock::Reasoning(_),
+                    ContentBlock::Text(_),
+                    ContentBlock::ToolUse { .. },
+                    ContentBlock::ToolResult { .. },
+                ]
+            ));
         });
     }
 

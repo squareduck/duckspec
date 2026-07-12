@@ -2136,19 +2136,23 @@ mod tests {
     // @spec chat/fast-response Freeform while awaiting: Freeform submit completes the pending choice as a custom answer
     #[test]
     fn freeform_submit_completes_the_pending_choice_as_a_custom_answer() {
-        use crate::fast_response::FastResponseSource;
+        use crate::chat_store::{ContentBlock, Role};
+        use crate::fast_response::{self, FastResponseSource};
+        use crate::scope::ScopeKind;
         use duckchat::UserChoiceAnswer;
 
-        // GIVEN awaiting a user choice with freeform text
-        let source = FastResponseSource::UserChoice {
-            correlation_id: 42,
-        };
-        // WHEN submit is planned
-        let plan = plan_freeform_while_awaiting(true, &source, "ship later")
+        // GIVEN awaiting a user choice with freeform text and a question
+        let mut ax = AgentSession::new("foo".into(), ScopeKind::Change);
+        ax.is_awaiting_user = true;
+        ax.fast_response = fast_response::from_user_choice(
+            42,
+            Some("Ship it?".into()),
+            [("opt-a".into(), "Alpha".into())],
+        );
+        let plan = plan_freeform_while_awaiting(true, &ax.fast_response.source, "ship later")
             .expect("freeform while awaiting plans a custom answer");
         assert_eq!(plan.correlation_id, Some(42));
         assert_eq!(plan.text, "ship later");
-        // THEN custom answer (not cancelled) carries freeform text
         let answer = UserChoiceAnswer::Custom {
             text: plan.text.clone(),
         };
@@ -2157,25 +2161,172 @@ mod tests {
             UserChoiceAnswer::Custom { text } if text == "ship later"
         ));
         assert!(!matches!(answer, UserChoiceAnswer::Cancelled));
-        // No separate user transcript message for custom answer activation.
-        let session = crate::chat_store::ChatSession::new("change".into());
-        assert!(
-            !session
-                .messages
-                .iter()
-                .any(|m| matches!(m.role, crate::chat_store::Role::User)),
-            "custom answer must not invent a user message"
-        );
+
+        // Product settle path (wire answer is separate; no handle in this unit test).
+        settle_user_choice_transcript(&mut ax, plan.text.clone());
+
+        // THEN host Q + freeform answer; not an ordinary Text user turn alone.
+        assert!(matches!(
+            ax.session.messages[0].content.as_slice(),
+            [ContentBlock::UserChoiceQuestion { text }] if text == "Question: Ship it?"
+        ));
+        assert!(matches!(
+            ax.session.messages[1].content.as_slice(),
+            [ContentBlock::UserChoiceAnswer { text }] if text == "ship later"
+        ));
+        assert!(!ax.session.messages.iter().any(|m| {
+            m.role == Role::User
+                && m.content
+                    .iter()
+                    .any(|b| matches!(b, ContentBlock::Text(t) if t == "ship later"))
+        }));
+        assert!(!ax.is_awaiting_user);
 
         // Not awaiting → ordinary streaming path (no freeform plan).
+        let source = FastResponseSource::UserChoice {
+            correlation_id: 42,
+            prompt: None,
+        };
         assert!(plan_freeform_while_awaiting(false, &source, "hi").is_none());
         // Empty freeform → no plan.
         assert!(plan_freeform_while_awaiting(true, &source, "  ").is_none());
     }
 
+    // @spec chat/fast-response Question activation: Option activation answers in-band and commits host question and answer
+    #[test]
+    fn option_activation_answers_in_band_and_commits_host_question_and_answer() {
+        use crate::chat_store::{ContentBlock, Role};
+        use crate::fast_response::{self, FastResponsePick};
+        use crate::scope::ScopeKind;
+
+        let hl = SyntaxHighlighter::new();
+        let mut ax = AgentSession::new("foo".into(), ScopeKind::Change);
+        ax.is_awaiting_user = true;
+        ax.fast_response = fast_response::from_user_choice(
+            7,
+            Some("Pick one?".into()),
+            [("opt-a".into(), "Alpha".into()), ("opt-b".into(), "Beta".into())],
+        );
+
+        // WHEN the first option is activated (no agent handle → wire is no-op)
+        activate_fast_response(
+            &mut ax,
+            FastResponsePick::Option {
+                id: "opt-a".into(),
+            },
+            &hl,
+        );
+
+        // THEN host Q + answer label (no hotkey); no ordinary Text user turn for the pick
+        assert_eq!(ax.session.messages.len(), 2);
+        assert_eq!(ax.session.messages[0].role, Role::Assistant);
+        assert!(matches!(
+            ax.session.messages[0].content.as_slice(),
+            [ContentBlock::UserChoiceQuestion { text }] if text == "Question: Pick one?"
+        ));
+        assert_eq!(ax.session.messages[1].role, Role::User);
+        assert!(matches!(
+            ax.session.messages[1].content.as_slice(),
+            [ContentBlock::UserChoiceAnswer { text }] if text == "Alpha"
+        ));
+        assert!(!ax.session.messages.iter().any(|m| {
+            m.content.iter().any(|b| {
+                matches!(b, ContentBlock::Text(t) if t.contains('⌘') || t == "Alpha" || t == "opt-a")
+            })
+        }));
+        assert!(!ax.is_awaiting_user);
+    }
+
+    // @spec chat/fast-response Settled choice transcript: Settle with a prompt commits question then answer without a hotkey
+    #[test]
+    fn settle_with_a_prompt_commits_question_then_answer_without_a_hotkey() {
+        use crate::chat_store::ContentBlock;
+        use crate::fast_response;
+        use crate::scope::ScopeKind;
+
+        let mut ax = AgentSession::new("foo".into(), ScopeKind::Change);
+        ax.is_awaiting_user = true;
+        ax.fast_response = fast_response::from_user_choice(
+            1,
+            Some("Ship later or now?".into()),
+            [("later".into(), "Later".into())],
+        );
+
+        settle_user_choice_transcript(&mut ax, "Later".into());
+
+        assert_eq!(ax.session.messages.len(), 2);
+        assert!(matches!(
+            ax.session.messages[0].content.as_slice(),
+            [ContentBlock::UserChoiceQuestion { text }] if text == "Question: Ship later or now?"
+        ));
+        assert!(matches!(
+            ax.session.messages[1].content.as_slice(),
+            [ContentBlock::UserChoiceAnswer { text }] if text == "Later" && !text.contains('⌘')
+        ));
+        assert!(!ax.is_awaiting_user);
+    }
+
+    // @spec chat/fast-response Settled choice transcript: Settle without a prompt commits answer only
+    #[test]
+    fn settle_without_a_prompt_commits_answer_only() {
+        use crate::chat_store::ContentBlock;
+        use crate::fast_response;
+        use crate::scope::ScopeKind;
+
+        let mut ax = AgentSession::new("foo".into(), ScopeKind::Change);
+        ax.is_awaiting_user = true;
+        ax.fast_response =
+            fast_response::from_user_choice(1, None, [("a".into(), "Alpha".into())]);
+
+        settle_user_choice_transcript(&mut ax, "Alpha".into());
+
+        assert_eq!(ax.session.messages.len(), 1);
+        assert!(matches!(
+            ax.session.messages[0].content.as_slice(),
+            [ContentBlock::UserChoiceAnswer { text }] if text == "Alpha"
+        ));
+        assert!(!ax.session.messages.iter().any(|m| {
+            m.content
+                .iter()
+                .any(|b| matches!(b, ContentBlock::UserChoiceQuestion { .. }))
+        }));
+    }
+
+    // @spec chat/fast-response Settled choice transcript: Cancel commits no choice blocks
+    #[test]
+    fn cancel_commits_no_choice_blocks() {
+        use crate::chat_store::ContentBlock;
+        use crate::fast_response;
+        use crate::scope::ScopeKind;
+
+        let mut ax = AgentSession::new("foo".into(), ScopeKind::Change);
+        ax.is_awaiting_user = true;
+        ax.fast_response = fast_response::from_user_choice(
+            1,
+            Some("Ship it?".into()),
+            [("yes".into(), "Yes".into())],
+        );
+        let before = ax.session.messages.len();
+
+        // Cancel path: clear shell only (no settle).
+        clear_user_choice_shell(&mut ax);
+
+        assert_eq!(ax.session.messages.len(), before);
+        assert!(!ax.session.messages.iter().any(|m| {
+            m.content.iter().any(|b| {
+                matches!(
+                    b,
+                    ContentBlock::UserChoiceQuestion { .. } | ContentBlock::UserChoiceAnswer { .. }
+                )
+            })
+        }));
+        assert!(!ax.is_awaiting_user);
+    }
+
     /// Option activation discards typed freeform so it is not left for a later send.
     #[test]
     fn option_activation_clears_typed_composer_text() {
+        use crate::chat_store::ContentBlock;
         use crate::fast_response::{self, FastResponsePick, FastResponseSource};
         use crate::scope::ScopeKind;
 
@@ -2184,6 +2335,7 @@ mod tests {
         ax.is_awaiting_user = true;
         ax.fast_response = fast_response::from_user_choice(
             7,
+            None,
             [("opt-a".into(), "Alpha".into())],
         );
         ax.chat_input = EditorState::new("partial freeform");
@@ -2206,13 +2358,17 @@ mod tests {
             ax.fast_response.source,
             FastResponseSource::None
         ));
-        assert!(
-            !ax.session
-                .messages
+        // Host answer chip is committed; ordinary Text user turn is not.
+        assert!(ax.session.messages.iter().any(|m| {
+            m.content
                 .iter()
-                .any(|m| matches!(m.role, crate::chat_store::Role::User)),
-            "option activation must not invent a user message"
-        );
+                .any(|b| matches!(b, ContentBlock::UserChoiceAnswer { text } if text == "Alpha"))
+        }));
+        assert!(!ax.session.messages.iter().any(|m| {
+            m.content
+                .iter()
+                .any(|b| matches!(b, ContentBlock::Text(t) if t == "Alpha" || t == "partial freeform"))
+        }));
     }
 
     // ── layout/content-chat-split ─────────────────────────────────────────
@@ -2742,16 +2898,18 @@ fn handle_agent_chat(
                 &ax.fast_response.source,
                 &typed,
             ) {
+                let answer_text = plan.text.clone();
                 if let Some(correlation_id) = plan.correlation_id
-                    && let Some(handle) = ax.agent_handle.as_ref() {
-                        handle.answer_user_choice(
-                            correlation_id,
-                            duckchat::UserChoiceAnswer::Custom {
-                                text: plan.text,
-                            },
-                        );
-                    }
-                clear_user_choice_shell(ax);
+                    && let Some(handle) = ax.agent_handle.as_ref()
+                {
+                    handle.answer_user_choice(
+                        correlation_id,
+                        duckchat::UserChoiceAnswer::Custom {
+                            text: plan.text,
+                        },
+                    );
+                }
+                settle_user_choice_transcript(ax, answer_text);
                 ax.chat_input = EditorState::new("");
                 rehighlight_input(&mut ax.chat_input, highlighter);
                 ax.chat_completion.visible = false;
@@ -3041,13 +3199,8 @@ pub fn recover_from_lost_session(ax: &mut AgentSession, highlighter: &SyntaxHigh
     use crate::chat_store::{ContentBlock, Role};
     use duckchat::{ContextHook, TurnRequest};
 
-    // Same gate as send: do not re-dispatch with a missing model.
-    if !main_chat_turn_allowed(&ax.effective_model()) {
-        ax.session.is_streaming = false;
-        materialize_chat_ui(ax, highlighter);
-        return;
-    }
-
+    // Always drop the dead resume id first — even when we cannot re-dispatch
+    // (missing model) so a later send does not keep calling session/load.
     ax.session.agent_session_id = None;
     ax.session.session_harness = None;
     ax.priming_in_flight = false;
@@ -3057,6 +3210,13 @@ pub fn recover_from_lost_session(ax: &mut AgentSession, highlighter: &SyntaxHigh
 
     if let Some(handle) = ax.agent_handle.as_ref() {
         handle.clear_session_id();
+    }
+
+    // Same gate as send: do not re-dispatch with a missing model.
+    if !main_chat_turn_allowed(&ax.effective_model()) {
+        ax.session.is_streaming = false;
+        materialize_chat_ui(ax, highlighter);
+        return;
     }
 
     // Last non-priming user message is the turn that failed mid-resume.
@@ -3137,7 +3297,7 @@ pub fn recover_from_lost_session(ax: &mut AgentSession, highlighter: &SyntaxHigh
 /// message into the session, marks streaming, clears the input, and rebuilds
 /// the chat editor blocks. No-op if no agent handle is attached.
 /// Activate a fast-response pick. Live user choice answers in-band via the
-/// agent handle (no new user transcript message). Oneshot hints send the
+/// agent handle and commits host Q→A transcript blocks. Oneshot hints send the
 /// option text as a normal user turn. Clears typed composer text when answering
 /// a user choice so a partial custom answer is not left for a later send.
 pub fn activate_fast_response(
@@ -3150,15 +3310,26 @@ pub fn activate_fast_response(
 
     let source = ax.fast_response.source.clone();
     match source {
-        FastResponseSource::UserChoice { correlation_id } => {
-            let answer = match pick {
-                FastResponsePick::Option { id } => UserChoiceAnswer::Selected { option_id: id },
-            };
+        FastResponseSource::UserChoice {
+            correlation_id,
+            prompt: _,
+        } => {
+            let FastResponsePick::Option { id } = pick;
+            let label = ax
+                .fast_response
+                .options
+                .iter()
+                .find(|o| o.id == id)
+                .map(|o| o.label.clone())
+                .unwrap_or_else(|| id.clone());
             // Custom freeform is handled by freeform submit path, not chip pick.
             if let Some(handle) = ax.agent_handle.as_ref() {
-                handle.answer_user_choice(correlation_id, answer);
+                handle.answer_user_choice(
+                    correlation_id,
+                    UserChoiceAnswer::Selected { option_id: id },
+                );
             }
-            clear_user_choice_shell(ax);
+            settle_user_choice_transcript(ax, label);
             // Discard partial freeform typed while chips were still visible.
             ax.chat_input = EditorState::new("");
             rehighlight_input(&mut ax.chat_input, highlighter);
@@ -3209,10 +3380,50 @@ pub fn sync_oneshot_chips(ax: &mut AgentSession, agent_input_hints: bool) {
 }
 
 /// Drop fast-response fill and awaiting flag after answer or turn end.
+/// Does not commit host question/answer transcript blocks (cancel path).
 pub fn clear_user_choice_shell(ax: &mut AgentSession) {
     ax.fast_response = crate::fast_response::clear();
     ax.is_awaiting_user = false;
     ax.fast_response_top_pad = 0.0;
+}
+
+/// Commit host question/answer transcript blocks for a settled choice, then
+/// clear the shell. Caller performs the in-band wire answer separately.
+/// Empty/missing prompt omits the question message; answer is always appended.
+pub fn settle_user_choice_transcript(ax: &mut AgentSession, answer_text: String) {
+    use crate::chat_store::{ChatMessage, ContentBlock, Role};
+    use crate::fast_response::FastResponseSource;
+
+    let prompt = match &ax.fast_response.source {
+        FastResponseSource::UserChoice { prompt, .. } => prompt.clone(),
+        _ => None,
+    };
+    let question = prompt
+        .as_deref()
+        .map(crate::fast_response::format_user_choice_question_text)
+        .filter(|s| !s.is_empty());
+
+    if let Some(text) = question {
+        ax.session.messages.push(ChatMessage {
+            role: Role::Assistant,
+            content: vec![ContentBlock::UserChoiceQuestion { text }],
+            timestamp: String::new(),
+            is_priming: false,
+        });
+    }
+
+    ax.session.messages.push(ChatMessage {
+        role: Role::User,
+        content: vec![ContentBlock::UserChoiceAnswer {
+            text: answer_text,
+        }],
+        timestamp: String::new(),
+        is_priming: false,
+    });
+
+    ax.needs_flush = true;
+    ax.chat_ui_dirty = true;
+    clear_user_choice_shell(ax);
 }
 
 /// Planned freeform submit while a mid-turn choice is pending (custom answer).
@@ -3236,9 +3447,10 @@ pub fn plan_freeform_while_awaiting(
         return None;
     }
     let correlation_id = match source {
-        crate::fast_response::FastResponseSource::UserChoice { correlation_id } => {
-            Some(*correlation_id)
-        }
+        crate::fast_response::FastResponseSource::UserChoice {
+            correlation_id,
+            ..
+        } => Some(*correlation_id),
         crate::fast_response::FastResponseSource::None
         | crate::fast_response::FastResponseSource::OneshotHints => None,
     };
@@ -3248,7 +3460,7 @@ pub fn plan_freeform_while_awaiting(
     })
 }
 
-/// Fill shell from a mid-turn user-choice event (options only; no cancel chip).
+/// Fill shell from a mid-turn user-choice event (options + prompt; no cancel chip).
 pub fn apply_user_choice_request(
     ax: &mut AgentSession,
     correlation_id: u64,
@@ -3256,9 +3468,9 @@ pub fn apply_user_choice_request(
     options: Vec<(String, String)>,
     _allow_cancel: bool,
 ) {
-    let _ = prompt; // reserved for future chrome (question title)
     // UI ignores allow_cancel — shell has no cancel chip; esc/freeform cancel on wire.
-    ax.fast_response = crate::fast_response::from_user_choice(correlation_id, options);
+    ax.fast_response =
+        crate::fast_response::from_user_choice(correlation_id, prompt, options);
     ax.is_awaiting_user = true;
 }
 
@@ -3584,6 +3796,16 @@ fn build_history_preamble(messages: &[crate::chat_store::ChatMessage]) -> String
                 }
                 ContentBlock::ToolResult { name, .. } => {
                     out.push_str(&format!("[tool result: {name}]\n\n"));
+                }
+                ContentBlock::UserChoiceQuestion { text } => {
+                    out.push_str("[Question] ");
+                    out.push_str(text);
+                    out.push_str("\n\n");
+                }
+                ContentBlock::UserChoiceAnswer { text } => {
+                    out.push_str("[Answer] ");
+                    out.push_str(text);
+                    out.push_str("\n\n");
                 }
             }
         }

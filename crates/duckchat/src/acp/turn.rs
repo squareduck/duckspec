@@ -709,6 +709,18 @@ fn product_options_from_permission(options: &[Value]) -> Vec<UserChoiceOption> {
         .collect()
 }
 
+/// Question text for product `session/request_permission` choices.
+/// Claude puts the AskUserQuestion text on `toolCall.title`.
+fn permission_choice_prompt(params: &Value) -> Option<String> {
+    let title = params
+        .pointer("/toolCall/title")
+        .or_else(|| params.pointer("/tool_call/title"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())?;
+    Some(title.to_string())
+}
+
 fn classify_agent_request(method: &str, params: &Value) -> AgentRequestKind {
     match method {
         "session/request_permission" => {
@@ -726,7 +738,7 @@ fn classify_agent_request(method: &str, params: &Value) -> AgentRequestKind {
                     AgentRequestKind::Unknown
                 } else {
                     AgentRequestKind::UserChoice {
-                        prompt: None,
+                        prompt: permission_choice_prompt(params),
                         options: opts,
                         wire: ChoiceWire::Permission,
                     }
@@ -1581,11 +1593,53 @@ mod tests {
             ]
         });
         match classify_agent_request("session/request_permission", &product) {
-            AgentRequestKind::UserChoice { options, .. } => {
+            AgentRequestKind::UserChoice {
+                options, prompt, ..
+            } => {
                 assert_eq!(options[0].id, "x");
                 assert_eq!(options[0].label, "Ship");
+                assert_eq!(prompt, None, "no toolCall.title → no prompt");
             }
             _ => panic!("expected user choice"),
+        }
+
+        // Empty title → no prompt (options still work).
+        let blank_title = json!({
+            "toolCall": { "toolCallId": "q", "title": "   " },
+            "options": [{ "optionId": "a", "name": "A", "kind": "custom" }]
+        });
+        match classify_agent_request("session/request_permission", &blank_title) {
+            AgentRequestKind::UserChoice { prompt, .. } => {
+                assert_eq!(prompt, None);
+            }
+            other => panic!("expected user choice, got {other:?}"),
+        }
+    }
+
+    // @spec harness/acp-client Mid-turn user choice: Permission product choice carries prompt from tool title
+    #[test]
+    fn permission_product_choice_carries_prompt_from_tool_title() {
+        // Claude AskUserQuestion bridge: question text is toolCall.title.
+        let claude_product = json!({
+            "sessionId": "sess-1",
+            "toolCall": {
+                "toolCallId": "ask-user-1",
+                "title": "Ship later or now?"
+            },
+            "options": [
+                { "optionId": "later", "name": "Later", "kind": "custom" },
+                { "optionId": "now", "name": "Now", "kind": "custom" }
+            ]
+        });
+        match classify_agent_request("session/request_permission", &claude_product) {
+            AgentRequestKind::UserChoice {
+                options, prompt, ..
+            } => {
+                assert_eq!(prompt.as_deref(), Some("Ship later or now?"));
+                assert_eq!(options.len(), 2);
+                assert_eq!(options[0].label, "Later");
+            }
+            other => panic!("expected user choice with prompt, got {other:?}"),
         }
     }
 

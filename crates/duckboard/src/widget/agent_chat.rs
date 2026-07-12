@@ -348,6 +348,14 @@ pub enum TranscriptSeg {
         /// True while the activity group is still open in the turn.
         live: bool,
     },
+    /// Settled mid-turn question chip (host display).
+    UserChoiceQuestion {
+        text: String,
+    },
+    /// Settled mid-turn answer chip (host display).
+    UserChoiceAnswer {
+        text: String,
+    },
 }
 
 /// One tool call inside an [`TranscriptSeg::Activity`] group.
@@ -408,6 +416,10 @@ pub fn build_transcript_segments(session: &ChatSession) -> Vec<TranscriptSeg> {
                     Role::Assistant,
                     ContentBlock::ToolUse { id, name, input },
                 ) => {
+                    // Structured questions use host chips, not Activity rows.
+                    if is_host_choice_tool_name(name) {
+                        continue;
+                    }
                     ensure_activity(&mut segs, &mut activity_index);
                     let tools = activity_tools_mut(&mut segs);
                     if let Some(&idx) = activity_index.get(id) {
@@ -428,6 +440,9 @@ pub fn build_transcript_segments(session: &ChatSession) -> Vec<TranscriptSeg> {
                     Role::Assistant,
                     ContentBlock::ToolResult { id, name, output },
                 ) => {
+                    if is_host_choice_tool_name(name) {
+                        continue;
+                    }
                     ensure_activity(&mut segs, &mut activity_index);
                     let tools = activity_tools_mut(&mut segs);
                     if let Some(&idx) = activity_index.get(id) {
@@ -445,6 +460,18 @@ pub fn build_transcript_segments(session: &ChatSession) -> Vec<TranscriptSeg> {
                             status: ToolRowStatus::Done,
                         });
                     }
+                }
+                (_, ContentBlock::UserChoiceQuestion { text }) => {
+                    activity_index.clear();
+                    segs.push(TranscriptSeg::UserChoiceQuestion {
+                        text: text.clone(),
+                    });
+                }
+                (_, ContentBlock::UserChoiceAnswer { text }) => {
+                    activity_index.clear();
+                    segs.push(TranscriptSeg::UserChoiceAnswer {
+                        text: text.clone(),
+                    });
                 }
                 // Non-text user/system content (e.g. tools) is not expected
                 // on those roles — skip rather than invent a segment.
@@ -579,7 +606,9 @@ fn first_sight_collapsed(seg: &TranscriptSeg) -> bool {
         TranscriptSeg::Thinking { live, .. } | TranscriptSeg::Activity { live, .. } => !live,
         TranscriptSeg::User { .. }
         | TranscriptSeg::System { .. }
-        | TranscriptSeg::Answer { .. } => false,
+        | TranscriptSeg::Answer { .. }
+        | TranscriptSeg::UserChoiceQuestion { .. }
+        | TranscriptSeg::UserChoiceAnswer { .. } => false,
     }
 }
 
@@ -628,7 +657,9 @@ pub fn sync_collapse_states(states: &mut Vec<CollapseState>, segs: &[TranscriptS
             }
             TranscriptSeg::User { .. }
             | TranscriptSeg::System { .. }
-            | TranscriptSeg::Answer { .. } => {
+            | TranscriptSeg::Answer { .. }
+            | TranscriptSeg::UserChoiceQuestion { .. }
+            | TranscriptSeg::UserChoiceAnswer { .. } => {
                 states[i].collapsed = false;
             }
         }
@@ -762,6 +793,16 @@ pub fn blocks_from_segments(segs: &[TranscriptSeg]) -> Vec<Block> {
                 label: activity_collapsed_label(tools),
                 lines: activity_body_lines(tools),
             },
+            TranscriptSeg::UserChoiceQuestion { text } => Block {
+                kind: BlockKind::UserChoiceQuestion,
+                label: "Question".to_string(),
+                lines: text_lines(text),
+            },
+            TranscriptSeg::UserChoiceAnswer { text } => Block {
+                kind: BlockKind::UserChoiceAnswer,
+                label: "Answer".to_string(),
+                lines: text_lines(text),
+            },
         })
         .collect()
 }
@@ -857,6 +898,16 @@ fn sanitize_line(line: &str) -> String {
     line.chars()
         .map(|c| if c == '\t' || c.is_control() { ' ' } else { c })
         .collect()
+}
+
+/// Tools that surface as mid-turn host chips (not Activity). Claude's
+/// `AskUserQuestion` and humanized "Ask user question" forms match here.
+fn is_host_choice_tool_name(name: &str) -> bool {
+    let key = normalize_tool_key(name);
+    matches!(
+        key.as_str(),
+        "ask_user_question" | "askuserquestion" | "ask_user" | "askuser"
+    )
 }
 
 /// Produce a short human-readable summary of a tool call.
@@ -1731,7 +1782,36 @@ fn view_block<'a>(
         BlockKind::User | BlockKind::Assistant | BlockKind::System => {
             view_prose_block(idx, block, editor, hl_ranges, hl_current, is_last_answer)
         }
+        BlockKind::UserChoiceQuestion => {
+            view_transcript_choice_chip(block, theme::chat_fast_response_chip_question)
+        }
+        BlockKind::UserChoiceAnswer => {
+            view_transcript_choice_chip(block, theme::chat_fast_response_chip_numbered)
+        }
     }
+}
+
+/// Settled question/answer chip in the transcript (same chrome as live shell).
+fn view_transcript_choice_chip<'a>(
+    block: &'a Block,
+    style: fn(&iced::Theme) -> container::Style,
+) -> Element<'a, Msg> {
+    let label = block.lines.join("\n");
+    if label.is_empty() {
+        return Space::new().into();
+    }
+    let body = text(label)
+        .size(theme::content_size())
+        .color(theme::text_secondary())
+        .font(theme::content_font());
+    let card = container(body)
+        .padding([theme::SPACING_SM, theme::SPACING_MD])
+        .width(Length::Fill)
+        .style(style);
+    container(card)
+        .padding([0.0, theme::SPACING_SM])
+        .width(Length::Fill)
+        .into()
 }
 
 /// User / Answer / System: no header, no chevron.
@@ -1956,6 +2036,7 @@ fn block_header_color(kind: BlockKind) -> iced::Color {
         BlockKind::Activity | BlockKind::ToolUse => theme::text_primary(),
         BlockKind::ToolResult => theme::text_secondary(),
         BlockKind::System => theme::text_muted(),
+        BlockKind::UserChoiceQuestion | BlockKind::UserChoiceAnswer => theme::text_secondary(),
     }
 }
 
@@ -1971,13 +2052,18 @@ fn format_number(n: usize) -> String {
     result
 }
 
-/// Option chrome: numbered chips only. View chrome only until activation sends.
+/// Option chrome: optional question chip, then numbered option chips.
+/// View chrome only until activation / settle commits host blocks.
 fn view_fast_response<'a>(
     fr: &'a crate::fast_response::FastResponse,
 ) -> Element<'a, Msg> {
-    use crate::fast_response::{FastResponsePick, option_chip_label};
+    use crate::fast_response::{FastResponsePick, live_question_prompt, option_chip_label};
 
     let mut col = column![].spacing(theme::SPACING_XS);
+
+    if let Some(prompt) = live_question_prompt(fr) {
+        col = col.push(view_fast_response_question_chip(&prompt));
+    }
 
     for (i, opt) in fr.options.iter().enumerate() {
         col = col.push(view_fast_response_chip(
@@ -1991,6 +2077,19 @@ fn view_fast_response<'a>(
     container(col)
         .padding([0.0, theme::SPACING_SM])
         .width(Length::Fill)
+        .into()
+}
+
+/// Non-selectable question chip above live option chips (chat-area fill).
+fn view_fast_response_question_chip<'a>(prompt: &str) -> Element<'a, Msg> {
+    let body = text(prompt.to_string())
+        .size(theme::content_size())
+        .color(theme::text_secondary())
+        .font(theme::content_font());
+    container(body)
+        .padding([theme::SPACING_SM, theme::SPACING_MD])
+        .width(Length::Fill)
+        .style(theme::chat_fast_response_chip_question)
         .into()
 }
 
@@ -2478,6 +2577,43 @@ mod tests {
         assert!(
             !label.contains("run_terminal") && !label.contains("read_file"),
             "raw harness ids must not appear: {label}"
+        );
+    }
+
+    // @spec chat/transcript Host-choice tools omitted from Activity: AskUserQuestion tool content is omitted from Activity
+    #[test]
+    fn ask_user_question_tools_are_omitted_from_activity() {
+        assert!(is_host_choice_tool_name("AskUserQuestion"));
+        assert!(is_host_choice_tool_name("Ask user question"));
+        assert!(!is_host_choice_tool_name("Read"));
+
+        // GIVEN ToolUse/ToolResult for AskUserQuestion plus a real Read tool
+        let session = assistant_blocks(vec![
+            tool_use("q1", "AskUserQuestion", r#"{"questions":[]}"#),
+            tool_result("q1", "AskUserQuestion", "ok"),
+            tool_use("q2", "Ask user question", r#"{}"#),
+            tool_result("q2", "Ask user question", "ok"),
+            tool_use("r1", "Read", r#"{"path":"a.rs"}"#),
+            tool_result("r1", "Read", "file"),
+        ]);
+        // WHEN transcript segments are built
+        let segs = build_transcript_segments(&session);
+        // THEN no Ask user activity rows; Read still appears
+        let tools = activity_tools(&segs);
+        assert_eq!(tools.len(), 1, "tools={tools:?}");
+        assert!(
+            tools[0].summary.contains("Read"),
+            "expected Read only, got {:?}",
+            tools[0].summary
+        );
+        assert!(
+            segs.iter().all(|s| match s {
+                TranscriptSeg::Activity { tools, .. } => tools
+                    .iter()
+                    .all(|t| !t.summary.to_lowercase().contains("ask user")),
+                _ => true,
+            }),
+            "Ask user question must not appear in Activity: {segs:?}"
         );
     }
 

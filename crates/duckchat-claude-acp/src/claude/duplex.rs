@@ -305,13 +305,7 @@ impl ClaudeDuplex {
 
             if let Some((request_id, tool_name, tool_input)) = parse_control_permission(&raw) {
                 let decision = if tool_name == ASK_USER_QUESTION {
-                    // Surface as tool_call chrome, then ask the host via resolver.
-                    let tool_call_id = format!("ask-user-{request_id}");
-                    on_update(ask_user::tool_call_update(
-                        &self.session_id,
-                        &tool_call_id,
-                        &tool_input,
-                    ));
+                    // Host chips own the UI — do not emit tool_call Activity chrome.
                     resolve(request_id.clone(), tool_name, tool_input).await?
                 } else {
                     // Ordinary tools: never park on host UI (bypass path).

@@ -200,20 +200,6 @@ pub fn parse_control_permission(raw: &Value) -> Option<(String, String, Value)> 
     Some((request_id, tool_name, tool_input))
 }
 
-/// Profile `tool_call` session/update params for an AskUserQuestion.
-pub fn tool_call_update(session_id: &str, tool_call_id: &str, input: &Value) -> Value {
-    json!({
-        "sessionId": session_id,
-        "update": {
-            "sessionUpdate": "tool_call",
-            "toolCallId": tool_call_id,
-            "title": ASK_USER_QUESTION,
-            "status": "pending",
-            "rawInput": input,
-        }
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

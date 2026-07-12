@@ -28,6 +28,10 @@ pub enum BlockKind {
     /// Legacy tool-result card; no longer emitted by the segment builder.
     ToolResult,
     System,
+    /// Settled mid-turn question chip (host display).
+    UserChoiceQuestion,
+    /// Settled mid-turn answer chip (host display).
+    UserChoiceAnswer,
 }
 
 /// A content block within a block-aware editor.
@@ -56,6 +60,8 @@ pub fn block_kind_bg(kind: BlockKind) -> Color {
         BlockKind::Activity | BlockKind::ToolUse => theme::chat_bg_tool_use(),
         BlockKind::ToolResult => theme::chat_bg_tool_result(),
         BlockKind::System => theme::chat_bg_system(),
+        BlockKind::UserChoiceQuestion => theme::bg_chat_area(),
+        BlockKind::UserChoiceAnswer => theme::chat_bg_assistant(),
     }
 }
 
@@ -100,6 +106,7 @@ pub(crate) fn block_header_color(kind: BlockKind) -> Color {
         BlockKind::Activity | BlockKind::ToolUse => theme::accent_dim(),
         BlockKind::ToolResult => theme::success(),
         BlockKind::System => theme::text_muted(),
+        BlockKind::UserChoiceQuestion | BlockKind::UserChoiceAnswer => theme::text_secondary(),
     }
 }
 

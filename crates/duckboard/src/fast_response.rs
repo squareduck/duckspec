@@ -20,7 +20,11 @@ pub enum FastResponseSource {
     #[default]
     None,
     /// Answer via `AgentHandle::answer_user_choice` — not `send_prompt_text`.
-    UserChoice { correlation_id: u64 },
+    UserChoice {
+        correlation_id: u64,
+        /// Question text when known (live chip + settled host log).
+        prompt: Option<String>,
+    },
     /// Settled freeform reply suggestions; activation sends a normal user turn.
     OneshotHints,
 }
@@ -127,9 +131,47 @@ pub fn bottom_pad(viewport_h: f32, content_h: f32, prev_pad: f32) -> f32 {
     (viewport_h - natural).max(0.0)
 }
 
-/// Build shell from a live mid-turn user choice (options only).
+/// Prefix for host question chips (live and settled storage).
+pub const USER_CHOICE_QUESTION_PREFIX: &str = "Question: ";
+
+/// Format question text for host chips / transcript storage.
+/// Prepends `Question: ` when missing; idempotent if already present.
+/// Empty/whitespace input yields an empty string (callers treat as omit).
+pub fn format_user_choice_question_text(raw: &str) -> String {
+    let t = raw.trim();
+    if t.is_empty() {
+        return String::new();
+    }
+    if t.starts_with(USER_CHOICE_QUESTION_PREFIX) {
+        t.to_string()
+    } else {
+        format!("{USER_CHOICE_QUESTION_PREFIX}{t}")
+    }
+}
+
+/// Non-empty formatted question text for a live user-choice shell.
+/// `None` when source is not UserChoice or prompt is empty/missing.
+/// Display form always uses [`format_user_choice_question_text`].
+pub fn live_question_prompt(fr: &FastResponse) -> Option<String> {
+    match &fr.source {
+        FastResponseSource::UserChoice {
+            prompt: Some(p), ..
+        } => {
+            let formatted = format_user_choice_question_text(p);
+            if formatted.is_empty() {
+                None
+            } else {
+                Some(formatted)
+            }
+        }
+        _ => None,
+    }
+}
+
+/// Build shell from a live mid-turn user choice (options + optional prompt).
 pub fn from_user_choice(
     correlation_id: u64,
+    prompt: Option<String>,
     options: impl IntoIterator<Item = (String, String)>,
 ) -> FastResponse {
     let options: Vec<FastResponseOption> = options
@@ -139,7 +181,10 @@ pub fn from_user_choice(
         .collect();
     FastResponse {
         options,
-        source: FastResponseSource::UserChoice { correlation_id },
+        source: FastResponseSource::UserChoice {
+            correlation_id,
+            prompt,
+        },
     }
 }
 
@@ -314,6 +359,54 @@ mod tests {
         assert_eq!(bottom_pad(400.0, 500.0, 0.0), 0.0);
     }
 
+    #[test]
+    fn format_user_choice_question_text_prefixes_and_is_idempotent() {
+        assert_eq!(
+            format_user_choice_question_text("Ship it?"),
+            "Question: Ship it?"
+        );
+        assert_eq!(
+            format_user_choice_question_text("Question: Ship it?"),
+            "Question: Ship it?"
+        );
+        assert_eq!(format_user_choice_question_text("  "), "");
+        assert_eq!(format_user_choice_question_text(""), "");
+    }
+
+    // @spec chat/fast-response Live question chip: Non-empty prompt shows a question chip above options
+    #[test]
+    fn non_empty_prompt_shows_a_question_chip_above_options() {
+        // GIVEN awaiting user choice with non-empty question and options
+        let fr = from_user_choice(
+            1,
+            Some("Ship later or now?".into()),
+            [("later".into(), "Later".into()), ("now".into(), "Now".into())],
+        );
+        assert!(!is_empty(&fr));
+        // WHEN live chrome is derived
+        let q = live_question_prompt(&fr);
+        // THEN question text is present for a chip above options (not a numbered option)
+        assert_eq!(q.as_deref(), Some("Question: Ship later or now?"));
+        assert!(fr.options.iter().all(|o| o.label != "Ship later or now?"));
+        assert!(!fr.options.iter().any(|o| o.id == "Ship later or now?"));
+    }
+
+    // @spec chat/fast-response Live question chip: Empty prompt omits the question chip
+    #[test]
+    fn empty_prompt_omits_the_question_chip() {
+        let fr_none = from_user_choice(1, None, [("a".into(), "Alpha".into())]);
+        assert!(live_question_prompt(&fr_none).is_none());
+        assert_eq!(fr_none.options.len(), 1);
+
+        let fr_blank = from_user_choice(2, Some("   ".into()), [("b".into(), "Beta".into())]);
+        assert!(live_question_prompt(&fr_blank).is_none());
+        assert_eq!(fr_blank.options.len(), 1);
+
+        // Oneshot fill never shows a question chip
+        let oneshot = from_oneshot_hints(["hi".into()]);
+        assert!(live_question_prompt(&oneshot).is_none());
+    }
+
     // @spec chat/fast-response Ephemeral chips: Visible chips are not a stored user message
     #[test]
     fn visible_chips_are_not_a_stored_user_message() {
@@ -323,17 +416,24 @@ mod tests {
         assert!(visible(false, false, true, &fr));
         let action = fr.options.first().expect("option").label.clone();
 
+        // GIVEN visible option chips AND no activation yet — empty session stands in
+        // for "chrome only" (product does not append until settle).
         let session = ChatSession::new("change".into());
-        let has_chip_msg = session.messages.iter().any(|m| {
+        let has_text_chip = session.messages.iter().any(|m| {
             matches!(m.role, Role::User)
                 && m.content.iter().any(|b| match b {
                     ContentBlock::Text(t) => t == &action || t == &option_chip_label(1, &action),
                     _ => false,
                 })
         });
+        let has_choice_answer = session.messages.iter().any(|m| {
+            m.content
+                .iter()
+                .any(|b| matches!(b, ContentBlock::UserChoiceAnswer { .. }))
+        });
         assert!(
-            !has_chip_msg,
-            "chips must not appear in the transcript until activation"
+            !has_text_chip && !has_choice_answer,
+            "option chips must not appear as committed messages until activation"
         );
     }
 
@@ -341,7 +441,7 @@ mod tests {
     #[test]
     fn refresh_does_not_clear_options_while_awaiting_a_user_choice() {
         // GIVEN a session awaiting a user choice with non-empty options
-        let filled = from_user_choice(42, [("opt-a".into(), "Alpha".into())]);
+        let filled = from_user_choice(42, None, [("opt-a".into(), "Alpha".into())]);
         assert!(!is_empty(&filled));
         // WHEN refresh would run while awaiting — product path skips clear
         // (mirrored here: only clear when not awaiting).
@@ -355,17 +455,24 @@ mod tests {
         assert_eq!(after.options.len(), 1);
         assert!(matches!(
             after.source,
-            FastResponseSource::UserChoice { correlation_id: 42 }
+            FastResponseSource::UserChoice {
+                correlation_id: 42,
+                ..
+            }
         ));
     }
 
-    // @spec chat/fast-response Question activation: Option activation answers the pending choice without a new user message
+    // Question activation host commit lives in area::interaction (activate_fast_response).
+    // Wire mapping: pick → Selected option id.
     #[test]
-    fn option_activation_answers_without_new_user_message() {
-        use crate::chat_store::{ChatSession, Role};
+    fn option_pick_maps_to_selected_answer() {
         use duckchat::UserChoiceAnswer;
 
-        let fr = from_user_choice(7, [("opt-a".into(), "Alpha".into())]);
+        let fr = from_user_choice(
+            7,
+            Some("Ship?".into()),
+            [("opt-a".into(), "Alpha".into())],
+        );
         let pick = resolve_cmd_digit(&fr, 1).expect("option");
         assert_eq!(
             pick,
@@ -373,7 +480,6 @@ mod tests {
                 id: "opt-a".into()
             }
         );
-        // Activation maps to Selected — not a user transcript message.
         let answer = match pick {
             FastResponsePick::Option { id } => UserChoiceAnswer::Selected { option_id: id },
         };
@@ -381,11 +487,6 @@ mod tests {
             answer,
             UserChoiceAnswer::Selected { option_id } if option_id == "opt-a"
         ));
-        let session = ChatSession::new("change".into());
-        assert!(
-            !session.messages.iter().any(|m| matches!(m.role, Role::User)),
-            "option activation must not invent a user message"
-        );
     }
 
     // @spec chat/fast-response Oneshot activation: Option activation sends the oneshot text as a user message

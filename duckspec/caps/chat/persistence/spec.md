@@ -19,7 +19,7 @@ readable until a write completes in full.
 - **THEN** the session file on disk still parses as the previously-persisted session
 
 > test: code
-> - crates/duckboard/src/chat_store.rs:840
+> - crates/duckboard/src/chat_store.rs:844
 
 ## Requirement: Non-destructive scope migration
 
@@ -38,7 +38,7 @@ delete it.
 - **THEN** the target scope afterward holds both sessions
 
 > test: code
-> - crates/duckboard/src/chat_store.rs:872
+> - crates/duckboard/src/chat_store.rs:876
 
 ### Scenario: Same-id collision keeps the fuller session and preserves the other
 
@@ -49,7 +49,7 @@ delete it.
 - **AND** the displaced copy is preserved rather than deleted
 
 > test: code
-> - crates/duckboard/src/chat_store.rs:903
+> - crates/duckboard/src/chat_store.rs:907
 
 ## Requirement: In-flight turn durability
 
@@ -67,7 +67,7 @@ persisted during the turn, not only when the turn completes.
 - **THEN** the persisted session includes those streamed messages
 
 > test: code
-> - crates/duckboard/src/chat_store.rs:937
+> - crates/duckboard/src/chat_store.rs:941
 
 ### Scenario: Streamed messages are persisted before turn completion
 
@@ -76,7 +76,7 @@ persisted during the turn, not only when the turn completes.
 - **THEN** the persisted session includes the messages streamed so far
 
 > test: code
-> - crates/duckboard/src/chat_store.rs:989
+> - crates/duckboard/src/chat_store.rs:993
 
 ### Scenario: Eager flush includes pending reasoning as Reasoning content
 
@@ -90,7 +90,7 @@ persisted during the turn, not only when the turn completes.
 - **AND** that body is not stored as Text content
 
 > test: code
-> - crates/duckboard/src/chat_store.rs:1246
+> - crates/duckboard/src/chat_store.rs:1363
 
 ## Requirement: Reasoning content
 
@@ -107,7 +107,7 @@ that contains only legacy content kinds (no Reasoning) SHALL still load.
 - **THEN** the loaded session includes a Reasoning block with the same body
 
 > test: code
-> - crates/duckboard/src/chat_store.rs:1019
+> - crates/duckboard/src/chat_store.rs:1136
 
 ### Scenario: A legacy session without Reasoning still loads
 
@@ -117,7 +117,7 @@ that contains only legacy content kinds (no Reasoning) SHALL still load.
 - **AND** the loaded messages match the file's content
 
 > test: code
-> - crates/duckboard/src/chat_store.rs:1180
+> - crates/duckboard/src/chat_store.rs:1297
 
 ## Requirement: Last-known context usage
 
@@ -134,7 +134,7 @@ session file that omits context usage SHALL still load, with usage treated as ze
 - **THEN** the loaded session has the same context usage total
 
 > test: code
-> - crates/duckboard/src/chat_store.rs:1053
+> - crates/duckboard/src/chat_store.rs:1170
 
 ### Scenario: A legacy session without context usage still loads
 
@@ -144,7 +144,7 @@ session file that omits context usage SHALL still load, with usage treated as ze
 - **AND** the loaded session's context usage total is zero
 
 > test: code
-> - crates/duckboard/src/chat_store.rs:1076
+> - crates/duckboard/src/chat_store.rs:1193
 
 ## Requirement: Unsynced draft durability
 
@@ -161,7 +161,7 @@ omits the field SHALL still load, with no unsynced draft.
 - **THEN** the loaded session holds the same unsynced draft
 
 > test: code
-> - crates/duckboard/src/chat_store.rs:1115
+> - crates/duckboard/src/chat_store.rs:1232
 
 ### Scenario: A legacy session without an unsynced draft still loads
 
@@ -171,4 +171,41 @@ omits the field SHALL still load, with no unsynced draft.
 - **AND** the loaded session holds no unsynced draft
 
 > test: code
-> - crates/duckboard/src/chat_store.rs:1141
+> - crates/duckboard/src/chat_store.rs:1258
+
+## Requirement: User choice content
+
+A chat session SHALL be able to store user-choice question and user-choice answer content
+blocks alongside Text, Reasoning, and tool blocks. Persisting and reloading a session
+SHALL preserve those blocks' bodies. A session file that contains only legacy content
+kinds (no user-choice question or answer blocks) SHALL still load.
+
+> test: code
+
+### Scenario: User-choice question and answer blocks round-trip through persist and load
+
+- **GIVEN** a session whose messages include a user-choice question content block and a
+  user-choice answer content block
+
+- **WHEN** the session is persisted and loaded again
+
+- **THEN** the loaded session includes a user-choice question block with the same body
+
+- **AND** the loaded session includes a user-choice answer block with the same body
+
+> test: code
+> - crates/duckboard/src/chat_store.rs:1023
+
+### Scenario: A legacy session without user-choice content still loads
+
+- **GIVEN** a session file whose messages use only Text, Reasoning, ToolUse, and
+  ToolResult content
+
+- **WHEN** the session is loaded
+
+- **THEN** the load succeeds
+
+- **AND** the loaded messages match the file's content
+
+> test: code
+> - crates/duckboard/src/chat_store.rs:1075

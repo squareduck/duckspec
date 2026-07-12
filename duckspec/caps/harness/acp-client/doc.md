@@ -43,11 +43,12 @@ conversation session id when one is supplied.
 Mid-turn agent→client requests on the main path:
 
 ```
-| Request                                                | Main path                         |
-|--------------------------------------------------------|-----------------------------------|
-| `session/request_permission` (allow/reject kinds only) | Auto-select allow; no host UI     |
-| Structured question (`x.ai/ask_user_question`, etc.)   | User-choice event; park for host  |
-| Unknown method                                         | Safe non-blocking completion      |
+| Request                                                | Main path                                      |
+|--------------------------------------------------------|------------------------------------------------|
+| `session/request_permission` (allow/reject kinds only) | Auto-select allow; no host UI                  |
+| Permission product options (not only allow/reject)     | User-choice event; prompt from toolCall title when present |
+| Structured question (`x.ai/ask_user_question`, etc.)   | User-choice event; prompt from questionnaire; park for host |
+| Unknown method                                         | Safe non-blocking completion                   |
 ```
 
 The host answers a parked choice with a selection, a custom freeform answer, or cancel;

@@ -4436,6 +4436,8 @@ fn chat_block_role_label(kind: widget::text_edit::BlockKind) -> &'static str {
         widget::text_edit::BlockKind::ToolUse => "Tool",
         widget::text_edit::BlockKind::ToolResult => "Result",
         widget::text_edit::BlockKind::System => "System",
+        widget::text_edit::BlockKind::UserChoiceQuestion => "Question",
+        widget::text_edit::BlockKind::UserChoiceAnswer => "Answer",
     }
 }
 
