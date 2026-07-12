@@ -6045,6 +6045,7 @@ mod tests {
             id: id.to_string(),
             display_name: id.to_string(),
             idea_path: None,
+            archived_at: None,
             session_count: 0,
         });
         let mut ix = interaction::InteractionState::default();

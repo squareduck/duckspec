@@ -272,7 +272,10 @@ pub fn update(
             // switching, and the cross-area selection.
         }
         Message::ToggleSection(s) => {
-            let entry = state.section_expanded.entry(s).or_insert(true);
+            let entry = state
+                .section_expanded
+                .entry(s)
+                .or_insert_with(|| section_default_expanded(s));
             *entry = !*entry;
         }
         Message::ToggleTagNode(key) => {
@@ -697,6 +700,12 @@ pub fn view_list<'a>(
     vertical_scroll::view(state.list_scroll, Message::ScrollList, sections)
 }
 
+/// Archive starts collapsed so the list column stays quiet; other sections
+/// default open so new ideas surface immediately.
+fn section_default_expanded(section: IdeaState) -> bool {
+    !matches!(section, IdeaState::Archive)
+}
+
 fn view_section<'a>(
     state: &'a State,
     project: &'a ProjectData,
@@ -712,7 +721,7 @@ fn view_section<'a>(
         .section_expanded
         .get(&section)
         .copied()
-        .unwrap_or(true);
+        .unwrap_or_else(|| section_default_expanded(section));
 
     let count = state.ideas.iter().filter(|i| i.state == section).count();
     let header_label = format!("{label}  ({count})");
@@ -1173,5 +1182,16 @@ mod tests {
         let preview = tabs.preview.expect("preview tab present");
         assert_eq!(preview.id, pinned_tab_id(&new_path));
         assert_eq!(preview.title, "New title");
+    }
+
+    /// @spec archive/browse Archived section visibility: Ideas Archive section starts collapsed
+    #[test]
+    fn ideas_archive_section_starts_collapsed() {
+        let state = State::default();
+        assert!(state.section_expanded.is_empty());
+        assert!(!section_default_expanded(IdeaState::Archive));
+        assert!(section_default_expanded(IdeaState::Inbox));
+        assert!(section_default_expanded(IdeaState::Exploration));
+        assert!(section_default_expanded(IdeaState::Change));
     }
 }

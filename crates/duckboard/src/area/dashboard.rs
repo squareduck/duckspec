@@ -440,10 +440,10 @@ fn view_items_panel<'a>(
     }
 
     // ── Explorations ────────────────────────────────────────────────────
-    // Explorations owned by an idea are hidden here; they surface on the
-    // Ideas list instead.
+    // Idea-owned and archived explorations are hidden here; idea-owned
+    // surface on Ideas, archived on the Archived list.
     let mut exp_list = column![].spacing(2.0);
-    for exp in explorations.iter().filter(|e| e.idea_path.is_none()) {
+    for exp in explorations.iter().filter(|e| e.is_on_live_list()) {
         exp_list = exp_list.push(exploration_row(&exp.id, &exp.display_name));
     }
     let plus_icon = svg(svg::Handle::from_memory(
@@ -470,16 +470,24 @@ fn view_items_panel<'a>(
     exp_list = exp_list.push(new_btn);
     content = content.push(section("Explorations", exp_list.into()));
 
-    // ── Archived ────────────────────────────────────────────────────────
-    if !project.archived_changes.is_empty() {
+    // ── Archived (changes + soft-archived explorations, newest first) ──
+    if crate::area::change::has_archived_section(&project.archived_changes, explorations) {
         let mut list = column![].spacing(2.0);
-        for change in &project.archived_changes {
-            list = list.push(change_row(
-                &change.name,
-                "",
-                0,
-                Message::ArchivedChangeClicked(change.name.clone()),
-            ));
+        for entry in crate::area::change::archived_entries(&project.archived_changes, explorations)
+        {
+            match entry {
+                crate::area::change::ArchivedEntry::Change(change) => {
+                    list = list.push(change_row(
+                        &change.name,
+                        "",
+                        0,
+                        Message::ArchivedChangeClicked(change.name.clone()),
+                    ));
+                }
+                crate::area::change::ArchivedEntry::Exploration(exp) => {
+                    list = list.push(exploration_row(&exp.id, &exp.display_name));
+                }
+            }
         }
         content = content.push(section("Archived", list.into()));
     }

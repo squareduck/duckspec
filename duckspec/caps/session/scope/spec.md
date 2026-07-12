@@ -43,7 +43,7 @@ report completion.
 - **AND** it suggests the apply stage as the next step
 
 > test: code
-> - crates/duckboard/src/area/change.rs:2316
+> - crates/duckboard/src/area/change.rs:2441
 
 ### Scenario: A change with only a proposal reports the design next-stage
 
@@ -52,7 +52,7 @@ report completion.
 - **THEN** it suggests the design stage as the next step
 
 > test: code
-> - crates/duckboard/src/area/change.rs:2366
+> - crates/duckboard/src/area/change.rs:2491
 
 ### Scenario: A change with all steps complete reports completion and the archive next-stage
 
@@ -63,7 +63,7 @@ report completion.
 - **AND** it suggests the archive stage as the next step
 
 > test: code
-> - crates/duckboard/src/area/change.rs:2334
+> - crates/duckboard/src/area/change.rs:2459
 
 ### Scenario: All steps complete with a review suggests the step next-stage
 
@@ -73,7 +73,7 @@ report completion.
 - **THEN** it suggests the step stage as the next step
 
 > test: code
-> - crates/duckboard/src/area/change.rs:2351
+> - crates/duckboard/src/area/change.rs:2476
 
 ## Requirement: Non-change scope orientation
 
@@ -171,7 +171,7 @@ reviews.
   `duckspec/changes/{name}/reviews/{filename}`
 
 > test: code
-> - crates/duckboard/src/area/change.rs:2390
+> - crates/duckboard/src/area/change.rs:2515
 
 ### Scenario: A change with no reviews reports no current review
 
@@ -180,7 +180,7 @@ reviews.
 - **THEN** it does not report a current review
 
 > test: code
-> - crates/duckboard/src/area/change.rs:2412
+> - crates/duckboard/src/area/change.rs:2537
 
 ### Scenario: Adding a review does not change reported step progress
 
@@ -190,4 +190,4 @@ reviews.
 - **THEN** both report the same step progress (done and total)
 
 > test: code
-> - crates/duckboard/src/area/change.rs:2427
+> - crates/duckboard/src/area/change.rs:2552

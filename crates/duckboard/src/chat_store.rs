@@ -532,13 +532,18 @@ pub fn rename_scope(old: &str, new: &str, project_root: Option<&Path>) {
 /// `display_name` is what the UI shows and can be updated by the title
 /// summariser without moving the chat directory. `idea_path` backlinks to
 /// the idea file when the exploration was started from one — idea-owned
-/// explorations are hidden from the Changes area list.
+/// explorations are hidden from the Changes area list. `archived_at` is set
+/// when soft-archived in duckboard; absent means live.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Exploration {
     pub id: String,
     pub display_name: String,
     #[serde(default, alias = "card_id")]
     pub idea_path: Option<String>,
+    /// Soft-archive timestamp (local ISO-8601). `None` = live. Duckboard-only;
+    /// not a `duckspec/archive/` folder.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub archived_at: Option<String>,
     /// Transient cache of `count_sessions(id, ...)` so the UI can decide
     /// whether to arm the destructive close button without `read_dir`-ing
     /// on every redraw. Repopulated by `load_explorations` and
@@ -557,9 +562,52 @@ impl Exploration {
             id: format!("exploration-{nanos}"),
             display_name: format!("Exploration {counter}"),
             idea_path: None,
+            archived_at: None,
             session_count: 0,
         }
     }
+
+    pub fn is_archived(&self) -> bool {
+        self.archived_at.is_some()
+    }
+
+    /// Soft-archive this exploration by stamping `archived_at`. Does not
+    /// delete or move chat sessions on disk.
+    pub fn mark_archived(&mut self) {
+        if self.archived_at.is_none() {
+            self.archived_at = Some(iso8601_local(current_local_datetime()));
+        }
+    }
+
+    /// Change picker / Dashboard Explorations: non–idea-owned and not archived.
+    pub fn is_on_live_list(&self) -> bool {
+        self.idea_path.is_none() && !self.is_archived()
+    }
+
+    /// Change / Dashboard Archived lists: non–idea-owned and archived.
+    pub fn is_on_archived_list(&self) -> bool {
+        self.idea_path.is_none() && self.is_archived()
+    }
+}
+
+/// Local ISO-8601 with numeric offset, matching idea `created` formatting.
+fn iso8601_local(dt: OffsetDateTime) -> String {
+    let off = dt.offset();
+    let total = off.whole_seconds();
+    let sign = if total < 0 { '-' } else { '+' };
+    let abs = total.unsigned_abs();
+    format!(
+        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}{}{:02}:{:02}",
+        dt.year(),
+        dt.month() as u8,
+        dt.day(),
+        dt.hour(),
+        dt.minute(),
+        dt.second(),
+        sign,
+        abs / 3600,
+        (abs % 3600) / 60,
+    )
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -895,6 +943,7 @@ mod tests {
                 id: exp_id.clone(),
                 display_name: "Exp".into(),
                 idea_path: None,
+                archived_at: None,
                 session_count: 0,
             });
 
@@ -1188,6 +1237,74 @@ mod tests {
             let data_b = crate::config::data_dir(Some(&root_b));
             assert!(data_b.join("explorations.json").exists());
             assert!(data_b.join("chats").join("scope-x").join("s.json").exists());
+        });
+    }
+
+    // ── exploration soft archive ────────────────────────────────────────
+
+    /// @spec exploration/archive Soft archive state: Live exploration has no archive stamp
+    #[test]
+    fn live_exploration_has_no_archive_stamp() {
+        let exp = Exploration::new(1);
+        assert!(!exp.is_archived());
+        assert!(exp.archived_at.is_none());
+    }
+
+    /// @spec exploration/archive Soft archive state: Archiving stamps archive time and keeps chats
+    #[test]
+    fn archiving_stamps_archive_time_and_keeps_chats() {
+        let tmp = FsTmp::new();
+        with_home(tmp.path(), || {
+            let root = tmp.path().join("project-archive");
+            std::fs::create_dir_all(&root).unwrap();
+
+            let mut exp = Exploration::new(1);
+            let mut session = ChatSession::new(exp.id.clone());
+            session.id = "1".into();
+            session.messages = vec![user_msg("hello")];
+            save_session(&session, Some(&root)).unwrap();
+            assert_eq!(count_sessions(&exp.id, Some(&root)), 1);
+
+            exp.mark_archived();
+
+            assert!(exp.is_archived());
+            assert!(exp.archived_at.as_ref().is_some_and(|s| !s.is_empty()));
+            assert_eq!(count_sessions(&exp.id, Some(&root)), 1);
+            let reloaded = load_sessions_for(&exp.id, Some(&root));
+            assert_eq!(reloaded.len(), 1);
+            assert_eq!(reloaded[0].messages.len(), 1);
+        });
+    }
+
+    /// @spec exploration/archive Soft archive state: Missing stamp loads as live
+    #[test]
+    fn missing_stamp_loads_as_live() {
+        let tmp = FsTmp::new();
+        with_home(tmp.path(), || {
+            let root = tmp.path().join("project-load");
+            std::fs::create_dir_all(&root).unwrap();
+            let data = crate::config::data_dir(Some(&root));
+            std::fs::create_dir_all(&data).unwrap();
+            // Persist without an archived_at field (pre-soft-archive shape).
+            std::fs::write(
+                data.join("explorations.json"),
+                r#"{
+                  "explorations": [
+                    {
+                      "id": "exploration-legacy",
+                      "display_name": "Legacy",
+                      "idea_path": null
+                    }
+                  ],
+                  "counter": 1
+                }"#,
+            )
+            .unwrap();
+
+            let (exps, _) = load_explorations(Some(&root));
+            assert_eq!(exps.len(), 1);
+            assert!(!exps[0].is_archived());
+            assert!(exps[0].archived_at.is_none());
         });
     }
 }

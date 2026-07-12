@@ -19,7 +19,7 @@ readable until a write completes in full.
 - **THEN** the session file on disk still parses as the previously-persisted session
 
 > test: code
-> - crates/duckboard/src/chat_store.rs:782
+> - crates/duckboard/src/chat_store.rs:830
 
 ## Requirement: Non-destructive scope migration
 
@@ -38,7 +38,7 @@ delete it.
 - **THEN** the target scope afterward holds both sessions
 
 > test: code
-> - crates/duckboard/src/chat_store.rs:814
+> - crates/duckboard/src/chat_store.rs:862
 
 ### Scenario: Same-id collision keeps the fuller session and preserves the other
 
@@ -49,7 +49,7 @@ delete it.
 - **AND** the displaced copy is preserved rather than deleted
 
 > test: code
-> - crates/duckboard/src/chat_store.rs:845
+> - crates/duckboard/src/chat_store.rs:893
 
 ## Requirement: In-flight turn durability
 
@@ -67,7 +67,7 @@ persisted during the turn, not only when the turn completes.
 - **THEN** the persisted session includes those streamed messages
 
 > test: code
-> - crates/duckboard/src/chat_store.rs:879
+> - crates/duckboard/src/chat_store.rs:927
 
 ### Scenario: Streamed messages are persisted before turn completion
 
@@ -76,7 +76,7 @@ persisted during the turn, not only when the turn completes.
 - **THEN** the persisted session includes the messages streamed so far
 
 > test: code
-> - crates/duckboard/src/chat_store.rs:930
+> - crates/duckboard/src/chat_store.rs:979
 
 ### Scenario: Eager flush includes pending reasoning as Reasoning content
 
@@ -90,7 +90,7 @@ persisted during the turn, not only when the turn completes.
 - **AND** that body is not stored as Text content
 
 > test: code
-> - crates/duckboard/src/chat_store.rs:1122
+> - crates/duckboard/src/chat_store.rs:1171
 
 ## Requirement: Reasoning content
 
@@ -107,7 +107,7 @@ that contains only legacy content kinds (no Reasoning) SHALL still load.
 - **THEN** the loaded session includes a Reasoning block with the same body
 
 > test: code
-> - crates/duckboard/src/chat_store.rs:960
+> - crates/duckboard/src/chat_store.rs:1009
 
 ### Scenario: A legacy session without Reasoning still loads
 
@@ -117,7 +117,7 @@ that contains only legacy content kinds (no Reasoning) SHALL still load.
 - **AND** the loaded messages match the file's content
 
 > test: code
-> - crates/duckboard/src/chat_store.rs:1056
+> - crates/duckboard/src/chat_store.rs:1105
 
 ## Requirement: Last-known context usage
 
@@ -134,7 +134,7 @@ session file that omits context usage SHALL still load, with usage treated as ze
 - **THEN** the loaded session has the same context usage total
 
 > test: code
-> - crates/duckboard/src/chat_store.rs:994
+> - crates/duckboard/src/chat_store.rs:1043
 
 ### Scenario: A legacy session without context usage still loads
 
@@ -144,4 +144,4 @@ session file that omits context usage SHALL still load, with usage treated as ze
 - **AND** the loaded session's context usage total is zero
 
 > test: code
-> - crates/duckboard/src/chat_store.rs:1017
+> - crates/duckboard/src/chat_store.rs:1066

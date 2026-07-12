@@ -435,6 +435,8 @@ pub enum Message {
     /// opens the file as a regular file tab.
     SelectExplorerFile(String),
     AddExploration,
+    /// Soft-archive a live exploration (stamp `archived_at`, keep chats).
+    ArchiveExploration(String),
     /// First click on the close button of an exploration that has chat
     /// sessions. Sets `armed_remove_exploration` so the next
     /// `RemoveExploration` for the same id commits.
@@ -498,7 +500,11 @@ pub fn update(
             // another area (the toolbar Change button on an idea, etc.) —
             // the archived section is collapsed by default, so a fresh
             // selection there would otherwise be invisible.
-            let in_archived = project.archived_changes.iter().any(|c| c.name == name);
+            let in_archived = project.archived_changes.iter().any(|c| c.name == name)
+                || state
+                    .explorations
+                    .iter()
+                    .any(|e| e.id == name && e.is_archived());
             let section = if in_archived { "archived" } else { "picker" };
             state.expanded_sections.insert(section.to_string());
 
@@ -646,6 +652,19 @@ pub fn update(
             ix.visible = true;
             crate::chat_store::recount_explorations(
                 &mut state.explorations,
+                project.project_root.as_deref(),
+            );
+        }
+        Message::ArchiveExploration(id) => {
+            if let Some(exp) = state.explorations.iter_mut().find(|e| e.id == id) {
+                exp.mark_archived();
+            }
+            if state.armed_remove_exploration.as_deref() == Some(id.as_str()) {
+                state.armed_remove_exploration = None;
+            }
+            crate::chat_store::save_explorations(
+                &state.explorations,
+                state.exploration_counter,
                 project.project_root.as_deref(),
             );
         }
@@ -1024,6 +1043,104 @@ fn parse_change_inner(path: &str) -> Vec<String> {
     path.split('/').map(str::to_string).collect()
 }
 
+/// Hover leading-control action for an exploration row.
+/// Live → soft archive (one click). Archived → remove with arm when sessions remain.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ExplorationHoverAction {
+    Archive(String),
+    ArmRemove(String),
+    /// `armed` tints the control red (second click after arming).
+    Remove { id: String, armed: bool },
+}
+
+fn exploration_hover_action(exp: &Exploration, armed: bool) -> ExplorationHoverAction {
+    if !exp.is_archived() {
+        ExplorationHoverAction::Archive(exp.id.clone())
+    } else if exp.session_count == 0 {
+        ExplorationHoverAction::Remove {
+            id: exp.id.clone(),
+            armed: false,
+        }
+    } else if armed {
+        ExplorationHoverAction::Remove {
+            id: exp.id.clone(),
+            armed: true,
+        }
+    } else {
+        ExplorationHoverAction::ArmRemove(exp.id.clone())
+    }
+}
+
+fn exploration_hover_button<'a>(action: ExplorationHoverAction) -> Element<'a, Message> {
+    match action {
+        ExplorationHoverAction::Archive(id) => {
+            collapsible::close_button_sized(Message::ArchiveExploration(id), list_view::ICON_SIZE)
+        }
+        ExplorationHoverAction::Remove { id, armed: true } => collapsible::close_button_sized_tinted(
+            Message::RemoveExploration(id),
+            list_view::ICON_SIZE,
+            theme::error(),
+        ),
+        ExplorationHoverAction::Remove { id, armed: false } => {
+            collapsible::close_button_sized(Message::RemoveExploration(id), list_view::ICON_SIZE)
+        }
+        ExplorationHoverAction::ArmRemove(id) => {
+            collapsible::close_button_sized(Message::ArmRemoveExploration(id), list_view::ICON_SIZE)
+        }
+    }
+}
+
+/// Unified Archived list row (Change list + Dashboard).
+#[derive(Debug, Clone, Copy)]
+pub enum ArchivedEntry<'a> {
+    Change(&'a ChangeData),
+    Exploration(&'a Exploration),
+}
+
+impl ArchivedEntry<'_> {
+    /// Sort key: higher is more recent (string-desc works for folder prefixes
+    /// and ISO archive stamps when compared lexicographically).
+    fn sort_key(self) -> String {
+        match self {
+            ArchivedEntry::Change(ch) => ch.name.clone(),
+            ArchivedEntry::Exploration(exp) => exp.archived_at.clone().unwrap_or_default(),
+        }
+    }
+}
+
+/// Non–idea-owned archived explorations + archived changes, newest first.
+pub fn archived_entries<'a>(
+    changes: &'a [ChangeData],
+    explorations: &'a [Exploration],
+) -> Vec<ArchivedEntry<'a>> {
+    let mut entries: Vec<ArchivedEntry<'a>> = changes
+        .iter()
+        .map(ArchivedEntry::Change)
+        .chain(
+            explorations
+                .iter()
+                .filter(|e| e.is_on_archived_list())
+                .map(ArchivedEntry::Exploration),
+        )
+        .collect();
+    entries.sort_by(|a, b| b.sort_key().cmp(&a.sort_key()));
+    entries
+}
+
+pub fn has_archived_section(changes: &[ChangeData], explorations: &[Exploration]) -> bool {
+    !changes.is_empty() || explorations.iter().any(|e| e.is_on_archived_list())
+}
+
+/// Rows under the Change picker: live explorations + active changes.
+fn change_section_count(explorations: &[Exploration], active: &[ChangeData]) -> usize {
+    explorations.iter().filter(|e| e.is_on_live_list()).count() + active.len()
+}
+
+/// Rows under Archived: interleaved archived entries length.
+fn archived_section_count(changes: &[ChangeData], explorations: &[Exploration]) -> usize {
+    archived_entries(changes, explorations).len()
+}
+
 // ── View ─────────────────────────────────────────────────────────────────────
 
 pub fn view_list<'a>(
@@ -1034,8 +1151,8 @@ pub fn view_list<'a>(
 ) -> Element<'a, Message> {
     let mut rows: Vec<ListRow<'a, Message>> = vec![];
 
-    // Exploration changes (virtual) — listed first. Hidden when owned by an idea.
-    for exp in state.explorations.iter().filter(|e| e.idea_path.is_none()) {
+    // Live explorations (virtual) — listed first. Hidden when idea-owned or archived.
+    for exp in state.explorations.iter().filter(|e| e.is_on_live_list()) {
         let is_selected = state.selected_change.as_deref() == Some(exp.id.as_str());
         let is_hovered = state.hovered_exploration.as_deref() == Some(exp.id.as_str());
         let mut r = ListRow::new(exp.display_name.as_str())
@@ -1047,28 +1164,8 @@ pub fn view_list<'a>(
             );
         if is_hovered {
             let armed = state.armed_remove_exploration.as_deref() == Some(exp.id.as_str());
-            // Skip the arming step when there's nothing to lose — first
-            // click is the only click. Otherwise the first click arms
-            // (`ArmRemoveExploration`) and a second matching click commits
-            // (`RemoveExploration`); the armed state tints the X red so
-            // the user can't miss that they're about to delete chats.
-            let close: Element<'a, Message> = if exp.session_count == 0 {
-                collapsible::close_button_sized(
-                    Message::RemoveExploration(exp.id.clone()),
-                    list_view::ICON_SIZE,
-                )
-            } else if armed {
-                collapsible::close_button_sized_tinted(
-                    Message::RemoveExploration(exp.id.clone()),
-                    list_view::ICON_SIZE,
-                    theme::error(),
-                )
-            } else {
-                collapsible::close_button_sized(
-                    Message::ArmRemoveExploration(exp.id.clone()),
-                    list_view::ICON_SIZE,
-                )
-            };
+            let action = exploration_hover_action(exp, armed);
+            let close = exploration_hover_button(action);
             r = r.leading(close);
         } else {
             r = r.icon(ICON_EXPLORE);
@@ -1093,43 +1190,70 @@ pub fn view_list<'a>(
         rows.push(r);
     }
 
+    let change_count = change_section_count(&state.explorations, &project.active_changes);
+    debug_assert_eq!(rows.len(), change_count);
     let selector = list_view::view(rows, None);
 
-    let archived_rows: Vec<ListRow<'a, Message>> = project
-        .archived_changes
-        .iter()
-        .map(|ch| {
-            let is_selected = state.selected_change.as_ref() == Some(&ch.name);
-            let has_err = project
-                .validations
-                .get(&ch.name)
-                .is_some_and(|v| v.total_count() > 0);
-            let base = crate::data::strip_archive_prefix(&ch.name).unwrap_or(&ch.name);
-            let mut r = ListRow::new(ch.name.as_str())
-                .icon(ICON_BRANCH)
-                .selected(is_selected)
-                .errored(has_err)
-                .on_press(Message::SelectChange(ch.name.clone()));
-            if ideas.idea_path_for_change(base).is_some() {
-                r = r.after_icon(idea_link_button(base));
+    let archived_list = archived_entries(&project.archived_changes, &state.explorations);
+    let archived_count = archived_list.len();
+    let archived_rows: Vec<ListRow<'a, Message>> = archived_list
+        .into_iter()
+        .map(|entry| match entry {
+            ArchivedEntry::Change(ch) => {
+                let is_selected = state.selected_change.as_ref() == Some(&ch.name);
+                let has_err = project
+                    .validations
+                    .get(&ch.name)
+                    .is_some_and(|v| v.total_count() > 0);
+                let base = crate::data::strip_archive_prefix(&ch.name).unwrap_or(&ch.name);
+                let mut r = ListRow::new(ch.name.as_str())
+                    .icon(ICON_BRANCH)
+                    .selected(is_selected)
+                    .errored(has_err)
+                    .on_press(Message::SelectChange(ch.name.clone()));
+                if ideas.idea_path_for_change(base).is_some() {
+                    r = r.after_icon(idea_link_button(base));
+                }
+                r
             }
-            r
+            ArchivedEntry::Exploration(exp) => {
+                let is_selected = state.selected_change.as_deref() == Some(exp.id.as_str());
+                let is_hovered = state.hovered_exploration.as_deref() == Some(exp.id.as_str());
+                let mut r = ListRow::new(exp.display_name.as_str())
+                    .selected(is_selected)
+                    .on_press(Message::SelectChange(exp.id.clone()))
+                    .on_hover(
+                        Message::HoverExploration(exp.id.clone()),
+                        Message::UnhoverExploration(exp.id.clone()),
+                    );
+                if is_hovered {
+                    let armed = state.armed_remove_exploration.as_deref() == Some(exp.id.as_str());
+                    r = r.leading(exploration_hover_button(exploration_hover_action(
+                        exp, armed,
+                    )));
+                } else {
+                    r = r.icon(ICON_EXPLORE);
+                }
+                r
+            }
         })
         .collect();
 
-    let archived_section = if project.archived_changes.is_empty() {
-        None
-    } else {
-        Some(collapsible::view(
-            "Archived",
-            state.expanded_sections.contains("archived"),
-            Message::ToggleSection("archived".to_string()),
-            list_view::view(archived_rows, None),
-        ))
-    };
+    let archived_section =
+        if has_archived_section(&project.archived_changes, &state.explorations) {
+            Some(collapsible::view_with_add_owned(
+                format!("Archived  ({archived_count})"),
+                state.expanded_sections.contains("archived"),
+                Message::ToggleSection("archived".to_string()),
+                None,
+                list_view::view(archived_rows, None),
+            ))
+        } else {
+            None
+        };
 
-    let change_section = collapsible::view_with_add(
-        "Change",
+    let change_section = collapsible::view_with_add_owned(
+        format!("Change  ({change_count})"),
         state.expanded_sections.contains("picker"),
         Message::ToggleSection("picker".to_string()),
         Some(collapsible::add_button(Message::AddExploration)),
@@ -1812,6 +1936,7 @@ mod breadcrumb_tests {
                     id: (*id).to_string(),
                     display_name: (*name).to_string(),
                     idea_path: None,
+                    archived_at: None,
                     session_count: 0,
                 })
                 .collect(),
@@ -2447,6 +2572,338 @@ mod breadcrumb_tests {
         assert_eq!(foo.step_count, bar.step_count);
         assert_eq!(foo.steps_done, 1);
         assert_eq!(foo.step_count, 2);
+    }
+
+    // ── exploration archive / live lists ────────────────────────────────
+
+    fn live_list_ids(exps: &[Exploration]) -> Vec<&str> {
+        exps.iter()
+            .filter(|e| e.is_on_live_list())
+            .map(|e| e.id.as_str())
+            .collect()
+    }
+
+    /// @spec exploration/archive Live list membership: Archived non–idea-owned exploration is absent from live lists
+    #[test]
+    fn archived_non_idea_owned_absent_from_live_lists() {
+        let mut exp = Exploration::new(1);
+        exp.mark_archived();
+        assert!(!exp.is_on_live_list());
+        assert!(live_list_ids(std::slice::from_ref(&exp)).is_empty());
+    }
+
+    /// @spec exploration/archive Live list membership: Live non–idea-owned exploration remains on live lists
+    #[test]
+    fn live_non_idea_owned_remains_on_live_lists() {
+        let exp = Exploration::new(1);
+        assert!(exp.is_on_live_list());
+        assert_eq!(
+            live_list_ids(std::slice::from_ref(&exp)),
+            vec![exp.id.as_str()]
+        );
+    }
+
+    /// @spec exploration/archive Hover control by state: Live exploration hover control archives
+    #[test]
+    fn live_exploration_hover_control_archives() {
+        use crate::test_support::{FsTmp, with_home};
+
+        let tmp = FsTmp::new();
+        with_home(tmp.path(), || {
+            let root = tmp.path().join("project");
+            std::fs::create_dir_all(&root).unwrap();
+
+            let exp = Exploration::new(1);
+            let exp_id = exp.id.clone();
+            let mut session = crate::chat_store::ChatSession::new(exp_id.clone());
+            session.id = "1".into();
+            crate::chat_store::save_session(&session, Some(&root)).unwrap();
+
+            let mut state = make_state(&exp_id, &[]);
+            state.explorations = vec![exp];
+            let mut project = make_project(&[], &[]);
+            project.project_root = Some(root.clone());
+            let mut tabs = tab_bar::TabState::default();
+            let mut interactions = HashMap::new();
+            let hl = crate::highlight::SyntaxHighlighter::new();
+
+            assert_eq!(
+                exploration_hover_action(&state.explorations[0], false),
+                ExplorationHoverAction::Archive(exp_id.clone())
+            );
+
+            update(
+                &mut state,
+                &mut tabs,
+                &mut interactions,
+                Message::ArchiveExploration(exp_id.clone()),
+                &project,
+                &hl,
+                false,
+                1200.0,
+            );
+
+            let exp = state.explorations.iter().find(|e| e.id == exp_id).unwrap();
+            assert!(exp.is_archived());
+            assert!(!exp.is_on_live_list());
+            assert_eq!(crate::chat_store::count_sessions(&exp_id, Some(&root)), 1);
+        });
+    }
+
+    /// @spec exploration/archive Hover control by state: Archived exploration hover control removes
+    #[test]
+    fn archived_exploration_hover_control_removes() {
+        use crate::test_support::{FsTmp, with_home};
+
+        let tmp = FsTmp::new();
+        with_home(tmp.path(), || {
+            let root = tmp.path().join("project");
+            std::fs::create_dir_all(&root).unwrap();
+
+            let mut exp = Exploration::new(1);
+            let exp_id = exp.id.clone();
+            exp.mark_archived();
+            exp.session_count = 1;
+
+            let mut session = crate::chat_store::ChatSession::new(exp_id.clone());
+            session.id = "1".into();
+            crate::chat_store::save_session(&session, Some(&root)).unwrap();
+
+            assert!(matches!(
+                exploration_hover_action(&exp, true),
+                ExplorationHoverAction::Remove { armed: true, .. }
+            ));
+
+            let mut state = make_state(&exp_id, &[]);
+            state.explorations = vec![exp];
+            let mut project = make_project(&[], &[]);
+            project.project_root = Some(root.clone());
+            let mut tabs = tab_bar::TabState::default();
+            let mut interactions = HashMap::new();
+            let hl = crate::highlight::SyntaxHighlighter::new();
+
+            update(
+                &mut state,
+                &mut tabs,
+                &mut interactions,
+                Message::RemoveExploration(exp_id.clone()),
+                &project,
+                &hl,
+                false,
+                1200.0,
+            );
+
+            assert!(state.explorations.iter().all(|e| e.id != exp_id));
+            assert_eq!(crate::chat_store::count_sessions(&exp_id, Some(&root)), 0);
+        });
+    }
+
+    /// @spec exploration/archive Hover control by state: Remove with sessions requires arm then commit
+    #[test]
+    fn remove_with_sessions_requires_arm_then_commit() {
+        let mut exp = Exploration::new(1);
+        exp.mark_archived();
+        exp.session_count = 2;
+        let id = exp.id.clone();
+
+        // First activation only arms (control routes to ArmRemove).
+        assert_eq!(
+            exploration_hover_action(&exp, false),
+            ExplorationHoverAction::ArmRemove(id.clone())
+        );
+
+        let mut state = make_state(&id, &[]);
+        state.explorations = vec![exp.clone()];
+        let project = make_project(&[], &[]);
+        let mut tabs = tab_bar::TabState::default();
+        let mut interactions = HashMap::new();
+        let hl = crate::highlight::SyntaxHighlighter::new();
+
+        update(
+            &mut state,
+            &mut tabs,
+            &mut interactions,
+            Message::ArmRemoveExploration(id.clone()),
+            &project,
+            &hl,
+            false,
+            1200.0,
+        );
+        assert_eq!(state.armed_remove_exploration.as_deref(), Some(id.as_str()));
+        assert!(state.explorations.iter().any(|e| e.id == id));
+
+        // Armed second activation routes to Remove.
+        assert_eq!(
+            exploration_hover_action(&exp, true),
+            ExplorationHoverAction::Remove {
+                id: id.clone(),
+                armed: true,
+            }
+        );
+
+        update(
+            &mut state,
+            &mut tabs,
+            &mut interactions,
+            Message::RemoveExploration(id.clone()),
+            &project,
+            &hl,
+            false,
+            1200.0,
+        );
+        assert!(state.explorations.iter().all(|e| e.id != id));
+    }
+
+    /// @spec exploration/archive Hover control by state: Remove with no sessions commits without arm
+    #[test]
+    fn remove_with_no_sessions_commits_without_arm() {
+        let mut exp = Exploration::new(1);
+        exp.mark_archived();
+        exp.session_count = 0;
+        let id = exp.id.clone();
+
+        assert!(matches!(
+            exploration_hover_action(&exp, false),
+            ExplorationHoverAction::Remove { armed: false, .. }
+        ));
+
+        let mut state = make_state(&id, &[]);
+        state.explorations = vec![exp];
+        let project = make_project(&[], &[]);
+        let mut tabs = tab_bar::TabState::default();
+        let mut interactions = HashMap::new();
+        let hl = crate::highlight::SyntaxHighlighter::new();
+
+        update(
+            &mut state,
+            &mut tabs,
+            &mut interactions,
+            Message::RemoveExploration(id.clone()),
+            &project,
+            &hl,
+            false,
+            1200.0,
+        );
+        assert!(state.explorations.iter().all(|e| e.id != id));
+    }
+
+    // ── archive browse ──────────────────────────────────────────────────
+
+    fn entry_ids(entries: &[ArchivedEntry<'_>]) -> Vec<String> {
+        entries
+            .iter()
+            .map(|e| match e {
+                ArchivedEntry::Change(c) => c.name.clone(),
+                ArchivedEntry::Exploration(x) => x.id.clone(),
+            })
+            .collect()
+    }
+
+    /// @spec archive/browse Interleaved archived rows: Archived non–idea-owned explorations appear with archived changes
+    #[test]
+    fn archived_explorations_appear_with_archived_changes() {
+        let project = make_project(&[], &["2026-07-01-01-done"]);
+        let mut exp = Exploration::new(1);
+        exp.mark_archived();
+        let entries = archived_entries(&project.archived_changes, std::slice::from_ref(&exp));
+        let ids = entry_ids(&entries);
+        assert!(ids.iter().any(|id| id == "2026-07-01-01-done"));
+        assert!(ids.iter().any(|id| id == &exp.id));
+    }
+
+    /// @spec archive/browse Interleaved archived rows: Mixed archive rows order by archive date descending
+    #[test]
+    fn mixed_archive_rows_order_by_date_descending() {
+        let project = make_project(
+            &[],
+            &["2026-01-01-01-old", "2026-07-12-09-new"],
+        );
+        let mut older_exp = Exploration::new(1);
+        older_exp.archived_at = Some("2026-03-15T10:00:00+00:00".into());
+        let mut newer_exp = Exploration::new(2);
+        newer_exp.archived_at = Some("2026-07-12T18:00:00+00:00".into());
+        let exps = vec![older_exp.clone(), newer_exp.clone()];
+        let entries = archived_entries(&project.archived_changes, &exps);
+        let ids = entry_ids(&entries);
+        // newest first: late-day exploration, then 09 change, then March exp, then Jan change
+        assert_eq!(
+            ids,
+            vec![
+                newer_exp.id,
+                "2026-07-12-09-new".to_string(),
+                older_exp.id,
+                "2026-01-01-01-old".to_string(),
+            ]
+        );
+    }
+
+    /// @spec archive/browse Interleaved archived rows: Idea-owned archived explorations stay off Change and Dashboard archived lists
+    #[test]
+    fn idea_owned_archived_explorations_stay_off_archived_lists() {
+        let project = make_project(&[], &["2026-07-01-01-done"]);
+        let mut exp = Exploration::new(1);
+        exp.idea_path = Some("/ideas/x.md".into());
+        exp.mark_archived();
+        let entries = archived_entries(&project.archived_changes, std::slice::from_ref(&exp));
+        assert!(!entries
+            .iter()
+            .any(|e| matches!(e, ArchivedEntry::Exploration(_))));
+        assert_eq!(entries.len(), 1);
+    }
+
+    /// @spec archive/browse Archived section visibility: Archived section is empty only when both kinds are empty
+    #[test]
+    fn archived_section_present_with_only_exploration() {
+        let project = make_project(&[], &[]);
+        let mut exp = Exploration::new(1);
+        exp.mark_archived();
+        assert!(has_archived_section(
+            &project.archived_changes,
+            std::slice::from_ref(&exp)
+        ));
+        let entries = archived_entries(&project.archived_changes, std::slice::from_ref(&exp));
+        assert_eq!(entries.len(), 1);
+        assert!(matches!(entries[0], ArchivedEntry::Exploration(_)));
+    }
+
+    /// @spec archive/browse Archived section visibility: Change Archived section starts collapsed
+    #[test]
+    fn change_archived_section_starts_collapsed() {
+        let state = State::new(None);
+        assert!(!state.expanded_sections.contains("archived"));
+        // Section still has rows to show when archives exist; collapsed by default.
+        let project = make_project(&[], &["2026-07-01-01-done"]);
+        assert!(has_archived_section(&project.archived_changes, &[]));
+    }
+
+    #[test]
+    fn section_counts_match_list_membership() {
+        let project = make_project(&["active-a", "active-b"], &["2026-07-01-01-done"]);
+        let live = Exploration::new(1);
+        let mut archived_exp = Exploration::new(2);
+        archived_exp.mark_archived();
+        let mut idea_owned = Exploration::new(3);
+        idea_owned.idea_path = Some("/ideas/x.md".into());
+        let mut idea_archived = Exploration::new(4);
+        idea_archived.idea_path = Some("/ideas/y.md".into());
+        idea_archived.mark_archived();
+        let exps = vec![live, archived_exp, idea_owned, idea_archived];
+
+        // Change: one live non–idea-owned exploration + two active changes.
+        assert_eq!(
+            change_section_count(&exps, &project.active_changes),
+            1 + 2
+        );
+        // Archived: one change + one non–idea-owned archived exploration.
+        assert_eq!(
+            archived_section_count(&project.archived_changes, &exps),
+            2
+        );
+        // Only-exploration archive still counts.
+        assert_eq!(
+            archived_section_count(&[], std::slice::from_ref(&exps[1])),
+            1
+        );
     }
 }
 

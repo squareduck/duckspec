@@ -161,7 +161,10 @@ impl ProjectData {
                 let cap_tree = build_tree(&root.join("caps"), "caps");
                 let codex_entries = build_tree_contents(&root.join("codex"), "codex");
                 let active_changes = build_changes(&root.join("changes"), "changes");
-                let archived_changes = build_changes(&root.join("archive"), "archive");
+                // Archive folders are YYYY-MM-DD-NN-*; reverse ascending dir order
+                // so the most recently archived change is first.
+                let mut archived_changes = build_changes(&root.join("archive"), "archive");
+                archived_changes.reverse();
                 (cap_tree, codex_entries, active_changes, archived_changes)
             }
             None => Default::default(),
@@ -546,5 +549,38 @@ mod tests {
         assert_eq!(strip_archive_prefix("26-04-20-01-foo"), None);
         assert_eq!(strip_archive_prefix("2026-4-20-01-foo"), None);
         assert_eq!(strip_archive_prefix("2026-04-20-01-"), None);
+    }
+
+    /// @spec archive/browse Archived change order: Archived changes list most recent first
+    #[test]
+    fn archived_changes_list_most_recent_first() {
+        let root = std::env::temp_dir().join(format!(
+            "duckboard-archive-order-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let archive = root.join("duckspec/archive");
+        std::fs::create_dir_all(archive.join("2026-01-01-01-old")).unwrap();
+        std::fs::create_dir_all(archive.join("2026-07-12-02-mid")).unwrap();
+        std::fs::create_dir_all(archive.join("2026-07-12-09-new")).unwrap();
+
+        let project = ProjectData::open(&root);
+        let names: Vec<&str> = project
+            .archived_changes
+            .iter()
+            .map(|c| c.name.as_str())
+            .collect();
+        let _ = std::fs::remove_dir_all(&root);
+        assert_eq!(
+            names,
+            vec![
+                "2026-07-12-09-new",
+                "2026-07-12-02-mid",
+                "2026-01-01-01-old"
+            ]
+        );
     }
 }
