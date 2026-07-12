@@ -209,10 +209,26 @@ pub fn update(
             state
                 .ideas
                 .sort_by(|a, b| b.frontmatter.created.cmp(&a.frontmatter.created));
-            open_idea(state, tabs, interactions, &path, project, highlighter);
+            open_idea(
+                state,
+                tabs,
+                interactions,
+                &path,
+                project,
+                highlighter,
+                window_w,
+            );
         }
         Message::SelectIdea(path) => {
-            open_idea(state, tabs, interactions, &path, project, highlighter);
+            open_idea(
+                state,
+                tabs,
+                interactions,
+                &path,
+                project,
+                highlighter,
+                window_w,
+            );
         }
         Message::DeleteIdea(path) => {
             if let Some(idx) = state.ideas.iter().position(|i| i.abs_path == path) {
@@ -537,6 +553,7 @@ pub fn open_idea(
     path: &Path,
     project: &ProjectData,
     highlighter: &SyntaxHighlighter,
+    window_w: f32,
 ) {
     let snapshot = state
         .ideas
@@ -566,7 +583,9 @@ pub fn open_idea(
     if let Some(scope) = maybe_scope {
         let scope_kind = scope.kind();
         let scope_key = scope.key().to_string();
-        let ix = interactions.entry(scope).or_default();
+        let ix = interactions
+            .entry(scope)
+            .or_insert_with(|| InteractionState::for_window(window_w));
         interaction::ensure_sessions_with_label(
             ix,
             &scope_key,
@@ -578,7 +597,7 @@ pub fn open_idea(
         if let Some(ax) = ix.active_mut() {
             ax.idea_description = Some(body.clone());
         }
-        ix.visible = true;
+        interaction::show_panel(ix, window_w);
     }
     let _ = fm;
 }

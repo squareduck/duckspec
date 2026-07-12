@@ -120,11 +120,15 @@ impl State {
             recent = config.projects.recent.len(),
             "duckboard started with no project"
         );
+        let window_width = theme::DEFAULT_WINDOW_WIDTH;
         let mut interactions = HashMap::new();
-        interactions.insert(scope::Scope::Caps, interaction::InteractionState::default());
+        interactions.insert(
+            scope::Scope::Caps,
+            interaction::InteractionState::for_window(window_width),
+        );
         interactions.insert(
             scope::Scope::Codex,
-            interaction::InteractionState::default(),
+            interaction::InteractionState::for_window(window_width),
         );
         Self {
             active_area: Area::Dashboard,
@@ -151,7 +155,7 @@ impl State {
             cached_previews: HashMap::new(),
             cached_active: HashMap::new(),
             interactions,
-            window_width: theme::DEFAULT_WINDOW_WIDTH,
+            window_width,
         }
     }
 
@@ -191,11 +195,13 @@ impl State {
         self.cached_previews.clear();
         self.cached_active.clear();
         self.interactions.clear();
-        self.interactions
-            .insert(scope::Scope::Caps, interaction::InteractionState::default());
+        self.interactions.insert(
+            scope::Scope::Caps,
+            interaction::InteractionState::for_window(self.window_width),
+        );
         self.interactions.insert(
             scope::Scope::Codex,
-            interaction::InteractionState::default(),
+            interaction::InteractionState::for_window(self.window_width),
         );
         self.project.revalidate();
         self.active_area = Area::Dashboard;
@@ -1099,7 +1105,11 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
         }
         Message::Caps(msg) => {
             let needs_focus = is_chat_focus_msg(extract_caps_interaction_msg(&msg));
-            let ix = state.interactions.entry(scope::Scope::Caps).or_default();
+            let window_w = state.window_width;
+            let ix = state
+                .interactions
+                .entry(scope::Scope::Caps)
+                .or_insert_with(|| interaction::InteractionState::for_window(window_w));
             area::caps::update(
                 &mut state.caps,
                 &mut state.tabs,
@@ -1116,7 +1126,11 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
         }
         Message::Codex(msg) => {
             let needs_focus = is_chat_focus_msg(extract_codex_interaction_msg(&msg));
-            let ix = state.interactions.entry(scope::Scope::Codex).or_default();
+            let window_w = state.window_width;
+            let ix = state
+                .interactions
+                .entry(scope::Scope::Codex)
+                .or_insert_with(|| interaction::InteractionState::for_window(window_w));
             area::codex::update(
                 &mut state.codex,
                 &mut state.tabs,
@@ -4869,7 +4883,11 @@ fn route_interaction(state: &mut State, msg: interaction::Msg) -> Task<Message> 
                 );
         }
         Area::Caps => {
-            let ix = state.interactions.entry(scope::Scope::Caps).or_default();
+            let window_w = state.window_width;
+            let ix = state
+                .interactions
+                .entry(scope::Scope::Caps)
+                .or_insert_with(|| interaction::InteractionState::for_window(window_w));
             area::caps::update(
                 &mut state.caps,
                 &mut state.tabs,
@@ -4882,7 +4900,11 @@ fn route_interaction(state: &mut State, msg: interaction::Msg) -> Task<Message> 
                 );
         }
         Area::Codex => {
-            let ix = state.interactions.entry(scope::Scope::Codex).or_default();
+            let window_w = state.window_width;
+            let ix = state
+                .interactions
+                .entry(scope::Scope::Codex)
+                .or_insert_with(|| interaction::InteractionState::for_window(window_w));
             area::codex::update(
                 &mut state.codex,
                 &mut state.tabs,

@@ -21,7 +21,7 @@ boundaries is recorded by the agent runtime and needs no resync.
 - **THEN** the session's unsynced draft equals the kept draft
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:1716
+> - crates/duckboard/src/area/interaction.rs:1730
 
 ### Scenario: User cancel captures the in-flight draft
 
@@ -30,7 +30,7 @@ boundaries is recorded by the agent runtime and needs no resync.
 - **THEN** the session's unsynced draft equals that draft
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:1736
+> - crates/duckboard/src/area/interaction.rs:1750
 
 ### Scenario: Deltas arriving after cancel are part of the captured draft
 
@@ -39,7 +39,7 @@ boundaries is recorded by the agent runtime and needs no resync.
 - **THEN** the session's unsynced draft includes those deltas
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:1772
+> - crates/duckboard/src/area/interaction.rs:1786
 
 ### Scenario: Cancellation with no in-flight draft records nothing
 
@@ -49,7 +49,7 @@ boundaries is recorded by the agent runtime and needs no resync.
 - **THEN** the session has no unsynced draft
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:1755
+> - crates/duckboard/src/area/interaction.rs:1769
 
 ## Requirement: Resync reminder on next send
 
@@ -68,7 +68,7 @@ SHALL clear the unsynced draft without adding a reminder.
 - **THEN** the user's text precedes the unsynced draft in the outgoing prompt
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:1799
+> - crates/duckboard/src/area/interaction.rs:1813
 
 ### Scenario: The reminder rides only one send
 
@@ -77,7 +77,7 @@ SHALL clear the unsynced draft without adding a reminder.
 - **THEN** only the first outgoing prompt carries the draft
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:1819
+> - crates/duckboard/src/area/interaction.rs:1833
 
 ### Scenario: A recovery resend carrying transcript history clears the draft without a reminder
 
@@ -87,4 +87,4 @@ SHALL clear the unsynced draft without adding a reminder.
 - **AND** the recovery prompt carries no resync reminder
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:1836
+> - crates/duckboard/src/area/interaction.rs:1850

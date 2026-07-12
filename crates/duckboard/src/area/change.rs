@@ -511,7 +511,9 @@ pub fn update(
             let kind = state.scope_kind_for(&name);
             let label = state.scope_display_label(&name);
             let scope = state.scope_for(&name);
-            let ix = interactions.entry(scope).or_default();
+            let ix = interactions
+                .entry(scope)
+                .or_insert_with(|| InteractionState::for_window(window_w));
             interaction::ensure_sessions_with_label(
                 ix,
                 &name,
@@ -521,7 +523,7 @@ pub fn update(
                 highlighter,
             );
             if !ix.visible {
-                ix.visible = true;
+                interaction::show_panel(ix, window_w);
             }
         }
         Message::ToggleSection(id) => {
@@ -560,7 +562,9 @@ pub fn update(
             let scope = state.scope_for(&scope_key);
             match msg {
                 interaction::Msg::NewSession => {
-                    let ix = interactions.entry(scope.clone()).or_default();
+                    let ix = interactions
+                        .entry(scope.clone())
+                        .or_insert_with(|| InteractionState::for_window(window_w));
                     interaction::ensure_sessions_with_label(
                         ix,
                         &scope_key,
@@ -640,7 +644,7 @@ pub fn update(
             );
             let ix = interactions
                 .entry(Scope::Exploration(id.clone()))
-                .or_default();
+                .or_insert_with(|| InteractionState::for_window(window_w));
             interaction::ensure_sessions_with_label(
                 ix,
                 &id,
@@ -649,7 +653,7 @@ pub fn update(
                 project.project_root.as_deref(),
                 highlighter,
             );
-            ix.visible = true;
+            interaction::show_panel(ix, window_w);
             crate::chat_store::recount_explorations(
                 &mut state.explorations,
                 project.project_root.as_deref(),

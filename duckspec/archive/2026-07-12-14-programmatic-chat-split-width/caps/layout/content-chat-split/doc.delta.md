@@ -1,21 +1,6 @@
-# Content / chat column split
+# @ Content / chat column split
 
-Default equal free-space width for the content and interaction columns until the user
-customizes via grip drag; absolute width after that; full remaining width for the
-interaction column when content is hidden.
-
-## Free space
-
-In three-column areas, free horizontal space for the content ↔ interaction split is the
-window width minus:
-
-- sidebar and its vertical divider
-- list column and its vertical divider
-- interaction handle (when the handle is shown)
-
-The list column stays fixed-width. Equal split applies only to content and interaction.
-
-## Modes
+## ~ Modes
 
 ```
 ┌─ uncustomized ─────────────────────────────────────────┐
@@ -40,7 +25,7 @@ The list column stays fixed-width. Equal split applies only to content and inter
 └────────────────────────────────────────────────────────┘
 ```
 
-## Grip vs other chrome
+## ~ Grip vs other chrome
 
 ```
 | Action | Effect on width mode |

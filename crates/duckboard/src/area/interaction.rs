@@ -652,6 +652,13 @@ pub fn rebalance_uncustomized(ix: &mut InteractionState, window_w: f32) {
     }
 }
 
+/// Force-show the interaction panel and rebalance uncustomized width from the
+/// live window. Same equal-half rule as door open; does not mark customized.
+pub fn show_panel(ix: &mut InteractionState, window_w: f32) {
+    ix.visible = true;
+    rebalance_uncustomized(ix, window_w);
+}
+
 /// How the interaction column is sized in the three-column row.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum InteractionColumnSize {
@@ -712,13 +719,14 @@ pub struct InteractionState {
     pub chat_section_expanded: bool,
 }
 
-impl Default for InteractionState {
-    fn default() -> Self {
+impl InteractionState {
+    /// Same as [`Default`], but equal width from free space for `window_w`.
+    pub fn for_window(window_w: f32) -> Self {
         Self {
             instance_id: NEXT_INSTANCE_ID.fetch_add(1, Ordering::Relaxed),
             visible: false,
             content_collapsed: false,
-            width: equal_interaction_width(theme::DEFAULT_WINDOW_WIDTH),
+            width: equal_interaction_width(window_w),
             width_customized: false,
             active_tab: ActiveTab::Chat,
             terminals: Vec::new(),
@@ -728,6 +736,12 @@ impl Default for InteractionState {
             active_session: 0,
             chat_section_expanded: false,
         }
+    }
+}
+
+impl Default for InteractionState {
+    fn default() -> Self {
+        Self::for_window(theme::DEFAULT_WINDOW_WIDTH)
     }
 }
 
@@ -2327,6 +2341,59 @@ mod tests {
         rebalance_uncustomized(&mut ix, theme::DEFAULT_WINDOW_WIDTH);
         assert_eq!(ix.width, equal_interaction_width(theme::DEFAULT_WINDOW_WIDTH));
         assert_eq!(ix.width, start_w);
+    }
+
+    // @spec layout/content-chat-split Uncustomized equal width: Panel created for a known window starts at half free space
+    #[test]
+    fn panel_created_for_a_known_window_starts_at_half_free_space() {
+        // GIVEN a window width with free space large enough for half > min
+        // AND that width is not the fixed default window size
+        let window_w = 1800.0;
+        assert_ne!(window_w, theme::DEFAULT_WINDOW_WIDTH);
+        let free = free_content_chat_width(window_w);
+        assert!(
+            free / 2.0 > interaction_toggle::MIN_PANEL_WIDTH,
+            "fixture window must allow a half above min"
+        );
+        // WHEN a new uncustomized panel is constructed for that window
+        let ix = InteractionState::for_window(window_w);
+        // THEN width equals half of free space for that window
+        assert!(!ix.width_customized);
+        assert_eq!(ix.width, equal_interaction_width(window_w));
+        assert_eq!(ix.width, free / 2.0);
+        // Contrast: Default is still tied to DEFAULT_WINDOW_WIDTH
+        assert_eq!(
+            InteractionState::default().width,
+            equal_interaction_width(theme::DEFAULT_WINDOW_WIDTH)
+        );
+    }
+
+    // @spec layout/content-chat-split Uncustomized equal width: Programmatic open rebalances to half free space
+    #[test]
+    fn programmatic_open_rebalances_to_half_free_space() {
+        // GIVEN an uncustomized panel whose width was set for a different window
+        let mut ix = InteractionState::for_window(theme::DEFAULT_WINDOW_WIDTH);
+        assert!(!ix.width_customized);
+        assert!(!ix.visible);
+        let stale = ix.width;
+        // AND content is shown (force-show path keeps equal fixed width, not fill)
+        // AND current window free space allows half above min
+        let current_w = 1800.0;
+        assert_ne!(
+            equal_interaction_width(current_w),
+            stale,
+            "fixture must differ from default half"
+        );
+        assert!(
+            free_content_chat_width(current_w) / 2.0 > interaction_toggle::MIN_PANEL_WIDTH
+        );
+        // WHEN the panel is force-shown without a door open
+        show_panel(&mut ix, current_w);
+        // THEN width equals half free for the current window and stays uncustomized
+        assert!(ix.visible);
+        assert!(!ix.width_customized);
+        assert_eq!(ix.width, equal_interaction_width(current_w));
+        assert_eq!(ix.width, free_content_chat_width(current_w) / 2.0);
     }
 }
 

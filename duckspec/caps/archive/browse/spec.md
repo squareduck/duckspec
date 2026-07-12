@@ -36,7 +36,7 @@ Idea-owned archived explorations SHALL NOT appear on those lists.
 - **THEN** both the change and the exploration appear as rows
 
 > test: code
-> - crates/duckboard/src/area/change.rs:2803
+> - crates/duckboard/src/area/change.rs:2807
 
 ### Scenario: Mixed archive rows order by archive date descending
 
@@ -48,7 +48,7 @@ Idea-owned archived explorations SHALL NOT appear on those lists.
 - **THEN** all rows appear in descending archive-date order
 
 > test: code
-> - crates/duckboard/src/area/change.rs:2815
+> - crates/duckboard/src/area/change.rs:2819
 
 ### Scenario: Idea-owned archived explorations stay off Change and Dashboard archived lists
 
@@ -57,7 +57,7 @@ Idea-owned archived explorations SHALL NOT appear on those lists.
 - **THEN** that exploration does not appear as a row
 
 > test: code
-> - crates/duckboard/src/area/change.rs:2841
+> - crates/duckboard/src/area/change.rs:2845
 
 ## Requirement: Archived section visibility
 
@@ -76,7 +76,7 @@ section SHALL start collapsed until the user expands them.
 - **AND** it contains that exploration
 
 > test: code
-> - crates/duckboard/src/area/change.rs:2855
+> - crates/duckboard/src/area/change.rs:2859
 
 ### Scenario: Ideas Archive section starts collapsed
 
@@ -85,7 +85,7 @@ section SHALL start collapsed until the user expands them.
 - **THEN** the Archive section is collapsed
 
 > test: code
-> - crates/duckboard/src/area/ideas.rs:1187
+> - crates/duckboard/src/area/ideas.rs:1206
 
 ### Scenario: Change Archived section starts collapsed
 
@@ -95,4 +95,4 @@ section SHALL start collapsed until the user expands them.
 - **THEN** the Archived section is collapsed
 
 > test: code
-> - crates/duckboard/src/area/change.rs:2870
+> - crates/duckboard/src/area/change.rs:2874

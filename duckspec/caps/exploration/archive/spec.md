@@ -56,7 +56,7 @@ listed.
 - **THEN** that exploration does not appear on those lists
 
 > test: code
-> - crates/duckboard/src/area/change.rs:2587
+> - crates/duckboard/src/area/change.rs:2591
 
 ### Scenario: Live non–idea-owned exploration remains on live lists
 
@@ -65,7 +65,7 @@ listed.
 - **THEN** that exploration appears on those lists
 
 > test: code
-> - crates/duckboard/src/area/change.rs:2596
+> - crates/duckboard/src/area/change.rs:2600
 
 ## Requirement: Hover control by state
 
@@ -84,7 +84,7 @@ has sessions, and SHALL commit on the first activation when it has none.
 - **AND** its chat sessions remain available under its scope
 
 > test: code
-> - crates/duckboard/src/area/change.rs:2607
+> - crates/duckboard/src/area/change.rs:2611
 
 ### Scenario: Archived exploration hover control removes
 
@@ -95,7 +95,7 @@ has sessions, and SHALL commit on the first activation when it has none.
 - **AND** its chat sessions are deleted
 
 > test: code
-> - crates/duckboard/src/area/change.rs:2654
+> - crates/duckboard/src/area/change.rs:2658
 
 ### Scenario: Remove with sessions requires arm then commit
 
@@ -105,7 +105,7 @@ has sessions, and SHALL commit on the first activation when it has none.
 - **AND** a second activation of the control removes it
 
 > test: code
-> - crates/duckboard/src/area/change.rs:2702
+> - crates/duckboard/src/area/change.rs:2706
 
 ### Scenario: Remove with no sessions commits without arm
 
@@ -114,4 +114,4 @@ has sessions, and SHALL commit on the first activation when it has none.
 - **THEN** the exploration is no longer retained
 
 > test: code
-> - crates/duckboard/src/area/change.rs:2758
+> - crates/duckboard/src/area/change.rs:2762
