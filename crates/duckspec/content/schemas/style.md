@@ -92,7 +92,7 @@ One to three body lines; list order is rank (first is primary):
 ```
 
 - Every send token is wrapped in backticks - slash commands and bare tokens
-  alike: `/ds-step`, `confirm`, `reject`, `revise`, `Create change`, `ignore`, …
+  alike: `/ds-step`, `confirm`, `reject`, `revise`, `Create change`, …
 - Reason is a short UI label (a few words), e.g. `start review workflow` - not a
   paragraph; optional (`reject` may stand alone)
 - Column alignment of reasons is cosmetic only

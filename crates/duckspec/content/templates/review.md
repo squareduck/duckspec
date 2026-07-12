@@ -100,18 +100,20 @@ Keep Why tight; the file can hold longer detail if needed.
 
 ## Handoff
 
-After a clean write, always emit a `next` meta card (≤3 lines, short UI labels,
-rank order). Include only lines that apply:
+After a clean write, emit a `next` meta card only when there is a useful
+action (≤3 lines, short UI labels, rank order). Include only lines that apply:
 
+- `investigate` - dig further in chat
+  (fix path still unclear; cold /ds-spec or /ds-step could not act yet)
 - `/ds-spec` - write specs
-  (when any finding needs new or changed behavior)
+  (primary when behavior or invariants change; pair `/ds-step` second to skip)
 - `/ds-step` - plan implementation
-  (when findings need rework without new caps, or after specs)
+  (specs already cover it, or pure rework)
 - `/ds-archive` - archive change
-  (when verdict accepts the change as done / archive-ready)
-- `ignore` - leave findings
+  (ready to freeze)
 
-Do not auto-start. User may discuss further or request in-place fixes after the
-document exists.
+Offer `/ds-spec` or `/ds-step` only when a cold run could act without
+re-deriving the conversation; otherwise prefer `investigate`. Omit the
+card when none of the above apply. Do not auto-start.
 
 ## After write
