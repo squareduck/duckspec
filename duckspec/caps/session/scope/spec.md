@@ -43,7 +43,7 @@ report completion.
 - **AND** it suggests the apply stage as the next step
 
 > test: code
-> - crates/duckboard/src/area/change.rs:2309
+> - crates/duckboard/src/area/change.rs:2314
 
 ### Scenario: A change with only a proposal reports the design next-stage
 
@@ -52,7 +52,7 @@ report completion.
 - **THEN** it suggests the design stage as the next step
 
 > test: code
-> - crates/duckboard/src/area/change.rs:2359
+> - crates/duckboard/src/area/change.rs:2364
 
 ### Scenario: A change with all steps complete reports completion and the archive next-stage
 
@@ -63,7 +63,7 @@ report completion.
 - **AND** it suggests the archive stage as the next step
 
 > test: code
-> - crates/duckboard/src/area/change.rs:2327
+> - crates/duckboard/src/area/change.rs:2332
 
 ### Scenario: All steps complete with a review suggests the step next-stage
 
@@ -73,7 +73,7 @@ report completion.
 - **THEN** it suggests the step stage as the next step
 
 > test: code
-> - crates/duckboard/src/area/change.rs:2344
+> - crates/duckboard/src/area/change.rs:2349
 
 ## Requirement: Non-change scope orientation
 
@@ -129,7 +129,7 @@ the same session.
 - **THEN** the orientation is part of the message body sent on that turn
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:793
+> - crates/duckboard/src/area/interaction.rs:928
 
 ### Scenario: Orientation is present when the project has no AGENTS.md
 
@@ -138,7 +138,7 @@ the same session.
 - **THEN** the orientation is part of the message body sent on that turn
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:810
+> - crates/duckboard/src/area/interaction.rs:945
 
 ### Scenario: A resumed session does not repeat the orientation
 
@@ -147,7 +147,7 @@ the same session.
 - **THEN** the orientation is not included again
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:830
+> - crates/duckboard/src/area/interaction.rs:965
 
 ## Requirement: Current review in orientation
 
@@ -171,7 +171,7 @@ reviews.
   `duckspec/changes/{name}/reviews/{filename}`
 
 > test: code
-> - crates/duckboard/src/area/change.rs:2383
+> - crates/duckboard/src/area/change.rs:2388
 
 ### Scenario: A change with no reviews reports no current review
 
@@ -180,7 +180,7 @@ reviews.
 - **THEN** it does not report a current review
 
 > test: code
-> - crates/duckboard/src/area/change.rs:2405
+> - crates/duckboard/src/area/change.rs:2410
 
 ### Scenario: Adding a review does not change reported step progress
 
@@ -190,4 +190,4 @@ reviews.
 - **THEN** both report the same step progress (done and total)
 
 > test: code
-> - crates/duckboard/src/area/change.rs:2420
+> - crates/duckboard/src/area/change.rs:2425

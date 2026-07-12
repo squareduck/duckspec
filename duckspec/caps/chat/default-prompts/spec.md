@@ -4,10 +4,11 @@ Conversation-local empty-input defaults from a cheap-model oneshot: parse ordere
 suggestions (heuristic passed only as a soft hint), show and arm them only after the
 oneshot settles, and drive empty Enter plus Tab cycling from that list alone.
 
-Empty-composer next actions from lifecycle bootstrap or a trailing `next` meta card, shown
-as ghost text with empty Enter and Tab cycle; optional settings-gated oneshot reply
-suggestions (up to three freeform `REPLY:` lines) that may fill fast-response chips only
-when there is no next-action ghost.
+Empty-composer next actions from an inherited donor list (empty change sessions after
+new-session creation), lifecycle bootstrap, or a trailing `next` meta card, shown as ghost
+text with empty Enter and Tab cycle; optional settings-gated oneshot reply suggestions (up
+to three freeform `REPLY:` lines) that may fill fast-response chips only when there is no
+next-action ghost.
 
 ## Requirement: Parsed suggestion list
 
@@ -156,7 +157,7 @@ oneshot suggestions.
 - **THEN** the sent text is that active next-action entry
 
 > test: code
-> - crates/duckboard/src/default_prompts.rs:418
+> - crates/duckboard/src/default_prompts.rs:495
 
 ### Scenario: Superseded generation does not arm oneshot
 
@@ -165,7 +166,7 @@ oneshot suggestions.
 - **THEN** the session's ready oneshot suggestion is unchanged
 
 > test: code
-> - crates/duckboard/src/default_prompts.rs:466
+> - crates/duckboard/src/default_prompts.rs:543
 
 ### Scenario: Failed or timed-out oneshot settles without presenting suggestions
 
@@ -176,7 +177,7 @@ oneshot suggestions.
 - **AND** the settled list is empty when the failure produced no parse
 
 > test: code
-> - crates/duckboard/src/default_prompts.rs:473
+> - crates/duckboard/src/default_prompts.rs:550
 
 ### Scenario: Agent handle end while pending leaves suggestions ready empty
 
@@ -187,7 +188,7 @@ oneshot suggestions.
 - **AND** no oneshot loading chrome is shown
 
 > test: code
-> - crates/duckboard/src/default_prompts.rs:488
+> - crates/duckboard/src/default_prompts.rs:565
 
 ### Scenario: Pending oneshot presents no loading chrome
 
@@ -198,7 +199,7 @@ oneshot suggestions.
 - **AND** no oneshot suggestion row is shown under the input
 
 > test: code
-> - crates/duckboard/src/default_prompts.rs:503
+> - crates/duckboard/src/default_prompts.rs:580
 
 ## Requirement: Agent input hints gate
 
@@ -229,7 +230,7 @@ input hints setting.
 - **THEN** a reply-suggestion oneshot is not started
 
 > test: code
-> - crates/duckboard/src/default_prompts.rs:445
+> - crates/duckboard/src/default_prompts.rs:522
 
 ### Scenario: Empty-session next actions remain when agent input hints disabled
 
@@ -240,7 +241,7 @@ input hints setting.
 - **THEN** the list is exactly that single lifecycle option in empty-send form
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:753
+> - crates/duckboard/src/area/interaction.rs:888
 
 ### Scenario: Oneshot launch is skipped when the next-action list is non-empty
 
@@ -251,19 +252,23 @@ input hints setting.
 - **THEN** a reply-suggestion oneshot is not started
 
 > test: code
-> - crates/duckboard/src/default_prompts.rs:457
+> - crates/duckboard/src/default_prompts.rs:534
 
 ## Requirement: Next-action list
 
 The next-action list for the empty composer SHALL be built as follows. When the session
-transcript is empty and a first lifecycle option is present, the list SHALL be exactly
-that option in empty-send form (a single entry). When the session transcript is empty and
-no first lifecycle option is present, the list SHALL be empty. When the session transcript
-is non-empty, the list SHALL be exactly the trailing next actions extracted from the last
-non-priming assistant message (via chat meta-card recognition); if that message has no
-trailing `next` meta card, the list SHALL be empty. Settled oneshot suggestion strings
-SHALL NOT be appended, merged, or substituted into the next-action list. Disk lifecycle
-options beyond the empty-session bootstrap SHALL NOT fill the list after the first turn.
+transcript is empty and a non-empty inherited next-action list is present, the list SHALL
+be exactly that inherited list (in order). When the session transcript is empty, no
+non-empty inherited list is present, and a first lifecycle option is present, the list
+SHALL be exactly that option in empty-send form (a single entry). When the session
+transcript is empty and neither a non-empty inherited list nor a first lifecycle option is
+present, the list SHALL be empty. When the session transcript is non-empty, the list SHALL
+be exactly the trailing next actions extracted from the last non-priming assistant message
+(via chat meta-card recognition); if that message has no trailing `next` meta card, the
+list SHALL be empty. A non-empty transcript SHALL NOT use an inherited next-action list.
+Settled oneshot suggestion strings SHALL NOT be appended, merged, or substituted into the
+next-action list. Disk lifecycle options beyond the empty-session bootstrap SHALL NOT fill
+the list after the first turn.
 
 For an empty exploration session, the first lifecycle option SHALL be the explore stage
 command. For an empty change session, the first lifecycle option SHALL be the first option
@@ -279,7 +284,7 @@ bootstrap.
 - **THEN** the list is exactly that single lifecycle option
 
 > test: code
-> - crates/duckboard/src/default_prompts.rs:250
+> - crates/duckboard/src/default_prompts.rs:258
 
 ### Scenario: Empty session without lifecycle yields empty
 
@@ -289,7 +294,7 @@ bootstrap.
 - **THEN** the list is empty
 
 > test: code
-> - crates/duckboard/src/default_prompts.rs:263
+> - crates/duckboard/src/default_prompts.rs:271
 
 ### Scenario: Non-empty session uses trailing next actions only
 
@@ -305,7 +310,7 @@ bootstrap.
 - **THEN** the list is exactly those two trailing next send tokens in order
 
 > test: code
-> - crates/duckboard/src/default_prompts.rs:273
+> - crates/duckboard/src/default_prompts.rs:281
 
 ### Scenario: Non-empty session without trailing next yields empty
 
@@ -316,7 +321,7 @@ bootstrap.
 - **THEN** the list is empty
 
 > test: code
-> - crates/duckboard/src/default_prompts.rs:293
+> - crates/duckboard/src/default_prompts.rs:301
 
 ### Scenario: Oneshot results do not enter the next-action list
 
@@ -327,7 +332,7 @@ bootstrap.
 - **THEN** the list is empty
 
 > test: code
-> - crates/duckboard/src/default_prompts.rs:302
+> - crates/duckboard/src/default_prompts.rs:310
 
 ### Scenario: Empty exploration session seeds explore
 
@@ -336,7 +341,7 @@ bootstrap.
 - **THEN** the list is exactly the explore stage command in empty-send form
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:719
+> - crates/duckboard/src/area/interaction.rs:765
 
 ### Scenario: Empty change session with unfinished steps seeds apply
 
@@ -346,7 +351,47 @@ bootstrap.
 - **THEN** the list is exactly the apply stage command in empty-send form
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:732
+> - crates/duckboard/src/area/interaction.rs:778
+
+### Scenario: Empty session with inherited next actions uses inherited list
+
+- **GIVEN** an empty session transcript
+- **AND** a non-empty inherited next-action list of two distinct send tokens
+- **AND** a first lifecycle option that differs from those tokens
+- **WHEN** the next-action list is built
+- **THEN** the list is exactly those two inherited send tokens in order
+
+> test: code
+> - crates/duckboard/src/default_prompts.rs:325
+
+### Scenario: Empty session without inherited falls back to lifecycle
+
+- **GIVEN** an empty session transcript
+- **AND** no non-empty inherited next-action list
+- **AND** a first lifecycle option in empty-send form
+- **WHEN** the next-action list is built
+- **THEN** the list is exactly that single lifecycle option
+
+> test: code
+> - crates/duckboard/src/default_prompts.rs:352
+
+### Scenario: Non-empty session drops inheritance
+
+- **GIVEN** a non-empty session transcript
+
+- **AND** a non-empty inherited next-action list
+
+- **AND** a last non-priming assistant message whose trailing next actions are a single
+  send token that differs from the inherited list
+
+- **WHEN** the next-action list is built
+
+- **THEN** the list is exactly that trailing next send token
+
+- **AND** the inherited list is not used
+
+> test: code
+> - crates/duckboard/src/default_prompts.rs:366
 
 ## Requirement: Next-action empty-input send and cycle
 
@@ -372,7 +417,7 @@ list is non-empty (and the main turn is not streaming).
 - **THEN** the sent text is the send text of the entry at the active index
 
 > test: code
-> - crates/duckboard/src/default_prompts.rs:317
+> - crates/duckboard/src/default_prompts.rs:393
 
 ### Scenario: Empty submit is a no-op when the next-action list is empty
 
@@ -382,7 +427,7 @@ list is non-empty (and the main turn is not streaming).
 - **THEN** no next-action message is sent
 
 > test: code
-> - crates/duckboard/src/default_prompts.rs:339
+> - crates/duckboard/src/default_prompts.rs:416
 
 ### Scenario: Tab cycles next actions with wrap
 
@@ -394,7 +439,7 @@ list is non-empty (and the main turn is not streaming).
 - **AND** the composer input remains empty
 
 > test: code
-> - crates/duckboard/src/default_prompts.rs:365
+> - crates/duckboard/src/default_prompts.rs:442
 
 ### Scenario: Multi next shows a tab-available marker
 
@@ -404,7 +449,7 @@ list is non-empty (and the main turn is not streaming).
 - **THEN** a tab-available marker is shown before the ghost text
 
 > test: code
-> - crates/duckboard/src/default_prompts.rs:391
+> - crates/duckboard/src/default_prompts.rs:468
 
 ## Requirement: Oneshot chip eligibility
 
@@ -427,7 +472,7 @@ fill chips.
 - **THEN** oneshot replies are eligible to fill chips
 
 > test: code
-> - crates/duckboard/src/default_prompts.rs:513
+> - crates/duckboard/src/default_prompts.rs:590
 
 ### Scenario: Ineligible when next-action list is non-empty
 
@@ -440,7 +485,7 @@ fill chips.
 - **THEN** oneshot replies are not eligible to fill chips
 
 > test: code
-> - crates/duckboard/src/default_prompts.rs:519
+> - crates/duckboard/src/default_prompts.rs:596
 
 ### Scenario: Ineligible while awaiting a user choice
 
@@ -452,7 +497,7 @@ fill chips.
 - **THEN** oneshot replies are not eligible to fill chips
 
 > test: code
-> - crates/duckboard/src/default_prompts.rs:525
+> - crates/duckboard/src/default_prompts.rs:602
 
 ### Scenario: Ineligible while streaming
 
@@ -465,7 +510,7 @@ fill chips.
 - **THEN** oneshot replies are not eligible to fill chips
 
 > test: code
-> - crates/duckboard/src/default_prompts.rs:531
+> - crates/duckboard/src/default_prompts.rs:608
 
 ### Scenario: Ineligible when the settled list is empty
 
@@ -478,4 +523,49 @@ fill chips.
 - **THEN** oneshot replies are not eligible to fill chips
 
 > test: code
-> - crates/duckboard/src/default_prompts.rs:537
+> - crates/duckboard/src/default_prompts.rs:614
+
+## Requirement: New-session next-action inheritance
+
+When a new change chat session is created for multi-session change chat, if the session
+that was active at creation has a non-empty next-action list, the new empty session SHALL
+receive that list as its inherited next-action list and its next-action list SHALL match
+those send tokens in order. The active next action on the new session SHALL be the first
+entry. When the active session's next-action list is empty at creation, the new empty
+session SHALL NOT receive an inherited list and SHALL follow empty-session next-action
+list rules without inheritance. Inheritance applies only while the new session transcript
+remains empty. Oneshot reply suggestions SHALL NOT be copied onto the new session by this
+path.
+
+### Scenario: New change session inherits active session next actions
+
+- **GIVEN** a change scope with multi-session chat
+- **AND** the active session has a non-empty next-action list of two distinct send tokens
+- **WHEN** a new chat session is created for that change
+- **THEN** the new session's next-action list is exactly those two send tokens in order
+- **AND** the new session transcript is empty
+
+> test: code
+> - crates/duckboard/src/area/interaction.rs:799
+
+### Scenario: New change session with empty donor keeps bootstrap behavior
+
+- **GIVEN** a change scope with multi-session chat
+- **AND** the active session has an empty next-action list
+- **AND** a first lifecycle option for that change in empty-send form
+- **WHEN** a new chat session is created for that change
+- **THEN** the new session's next-action list is exactly that single lifecycle option
+
+> test: code
+> - crates/duckboard/src/area/interaction.rs:828
+
+### Scenario: Inherited list starts at first action
+
+- **GIVEN** a change scope with multi-session chat
+- **AND** the active session has a next-action list of two or more send tokens
+- **AND** the active session's active next-action index is not the first entry
+- **WHEN** a new chat session is created for that change
+- **THEN** empty submit on the new session sends the first inherited send token
+
+> test: code
+> - crates/duckboard/src/area/interaction.rs:854

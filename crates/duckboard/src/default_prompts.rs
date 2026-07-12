@@ -1,9 +1,9 @@
 //! Pure helpers for empty-composer next actions and reply-suggestion oneshot.
 //!
-//! Next actions: empty-session lifecycle bootstrap or trailing `next` meta card.
-//! Oneshot: settled parse (agent input hints gated) may fill fast-response chips
-//! when eligible — separate from next actions. Empty Enter / Tab own next
-//! actions only. No under-input oneshot chrome.
+//! Next actions: empty-session inherited list or lifecycle bootstrap, else
+//! trailing `next` meta card. Oneshot: settled parse (agent input hints gated)
+//! may fill fast-response chips when eligible — separate from next actions.
+//! Empty Enter / Tab own next actions only. No under-input oneshot chrome.
 
 use crate::chat_store::{ChatMessage, ChatSession, ContentBlock, Role};
 use crate::meta_card::{NextAction, trailing_next_actions};
@@ -22,15 +22,23 @@ pub fn oneshot_replies_trimmed(oneshot_replies: &[String]) -> Vec<String> {
 
 /// Build the next-action list for the empty composer.
 ///
-/// - Empty session: first lifecycle option in empty-send form (0 or 1 entry).
-/// - Non-empty: trailing next actions from the last assistant message only.
+/// - Empty session + non-empty inherited: that list (outranks bootstrap).
+/// - Empty session otherwise: first lifecycle option in empty-send form (0 or 1).
+/// - Non-empty: trailing next actions from the last assistant message only
+///   (inherited is ignored).
 /// - Never merges oneshot results or post-first-turn disk lifecycle options.
 pub fn next_action_list(
     session_empty: bool,
     bootstrap: Option<&str>,
     last_assistant: Option<&str>,
+    inherited: Option<&[NextAction]>,
 ) -> Vec<NextAction> {
     if session_empty {
+        if let Some(inh) = inherited {
+            if !inh.is_empty() {
+                return inh.to_vec();
+            }
+        }
         return match crate::fast_response::lifecycle_send_text(bootstrap) {
             Some(send) => vec![NextAction {
                 send,
@@ -251,11 +259,11 @@ mod tests {
     #[test]
     fn empty_session_seeds_first_lifecycle() {
         // GIVEN empty transcript + first lifecycle option in empty-send form
-        let got = next_action_list(true, Some("/ds-explore"), None);
+        let got = next_action_list(true, Some("/ds-explore"), None, None);
         assert_eq!(got.len(), 1);
         assert_eq!(got[0].send, "/ds-explore");
         // Bare name formats with leading slash.
-        let got = next_action_list(true, Some("ds-propose"), None);
+        let got = next_action_list(true, Some("ds-propose"), None, None);
         assert_eq!(got.len(), 1);
         assert_eq!(got[0].send, "/ds-propose");
     }
@@ -264,9 +272,9 @@ mod tests {
     #[test]
     fn empty_session_without_lifecycle_yields_empty() {
         // GIVEN empty transcript + no first lifecycle option
-        let got = next_action_list(true, None, None);
+        let got = next_action_list(true, None, None, None);
         assert!(got.is_empty());
-        let got = next_action_list(true, Some("  "), None);
+        let got = next_action_list(true, Some("  "), None, None);
         assert!(got.is_empty());
     }
 
@@ -282,7 +290,7 @@ Done.
 > `/ds-spec`  write specs
 > `/ds-design`  design it
 ";
-        let got = next_action_list(false, Some("/ds-explore"), Some(assistant));
+        let got = next_action_list(false, Some("/ds-explore"), Some(assistant), None);
         assert_eq!(got.len(), 2);
         assert_eq!(got[0].send, "/ds-spec");
         assert_eq!(got[1].send, "/ds-design");
@@ -295,7 +303,7 @@ Done.
     fn non_empty_session_without_trailing_next_yields_empty() {
         // GIVEN non-empty session + assistant without trailing next + lifecycle present
         let assistant = "Just some prose, no meta card.";
-        let got = next_action_list(false, Some("/ds-explore"), Some(assistant));
+        let got = next_action_list(false, Some("/ds-explore"), Some(assistant), None);
         assert!(got.is_empty());
     }
 
@@ -305,13 +313,81 @@ Done.
         // GIVEN non-empty session + no trailing next + settled oneshot suggestion
         // next_action_list never takes oneshot input — only assistant + bootstrap.
         let assistant = "No trailing next here.";
-        let got = next_action_list(false, None, Some(assistant));
+        let got = next_action_list(false, None, Some(assistant), None);
         assert!(got.is_empty());
         // Oneshot display is a separate path.
         let oneshot = oneshot_display_prompts(&["nice reply".into()], true);
         assert_eq!(oneshot, vec!["nice reply"]);
         // Merging is not part of next_action_list.
         assert!(got.is_empty());
+    }
+
+    // @spec chat/default-prompts Next-action list: Empty session with inherited next actions uses inherited list
+    #[test]
+    fn empty_session_with_inherited_next_actions_uses_inherited_list() {
+        // GIVEN empty transcript + two inherited send tokens + different lifecycle
+        let inherited = [
+            NextAction {
+                send: "/ds-spec".into(),
+                reason: Some("write specs".into()),
+            },
+            NextAction {
+                send: "confirm".into(),
+                reason: None,
+            },
+        ];
+        let got = next_action_list(
+            true,
+            Some("/ds-explore"),
+            None,
+            Some(&inherited),
+        );
+        // THEN exactly the inherited tokens in order (not lifecycle)
+        assert_eq!(got.len(), 2);
+        assert_eq!(got[0].send, "/ds-spec");
+        assert_eq!(got[1].send, "confirm");
+        assert!(!got.iter().any(|a| a.send == "/ds-explore"));
+    }
+
+    // @spec chat/default-prompts Next-action list: Empty session without inherited falls back to lifecycle
+    #[test]
+    fn empty_session_without_inherited_falls_back_to_lifecycle() {
+        // GIVEN empty transcript + no non-empty inherited + lifecycle option
+        let got = next_action_list(true, Some("/ds-propose"), None, None);
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].send, "/ds-propose");
+        // Empty inherited slice is treated as absent.
+        let empty: &[NextAction] = &[];
+        let got = next_action_list(true, Some("ds-apply"), None, Some(empty));
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].send, "/ds-apply");
+    }
+
+    // @spec chat/default-prompts Next-action list: Non-empty session drops inheritance
+    #[test]
+    fn non_empty_session_drops_inheritance() {
+        // GIVEN non-empty session + inherited list + trailing next with different token
+        let inherited = [NextAction {
+            send: "confirm".into(),
+            reason: None,
+        }];
+        let assistant = "\
+Done.
+
+> **next**
+>
+> `/ds-step`  plan implementation
+";
+        let got = next_action_list(
+            false,
+            Some("/ds-explore"),
+            Some(assistant),
+            Some(&inherited),
+        );
+        // THEN trailing next only; inherited not used
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].send, "/ds-step");
+        assert!(!got.iter().any(|a| a.send == "confirm"));
     }
 
     // @spec chat/default-prompts Next-action empty-input send and cycle: Empty submit sends the active next action
@@ -329,6 +405,7 @@ Done.
 > `/ds-design`
 ",
             ),
+            None,
         );
         assert_eq!(
             next_empty_submit_text(false, &actions, 1).as_deref(),

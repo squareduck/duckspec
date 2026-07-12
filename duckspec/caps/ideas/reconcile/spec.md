@@ -98,7 +98,7 @@ one.
 - **THEN** the selection references the idea at its new location
 
 > test: code
-> - crates/duckboard/src/area/ideas.rs:1127
+> - crates/duckboard/src/area/ideas.rs:1132
 
 ### Scenario: The open idea editor tracks the idea after relocation
 
@@ -108,7 +108,7 @@ one.
 - **AND** its label reflects the idea's current title
 
 > test: code
-> - crates/duckboard/src/area/ideas.rs:1144
+> - crates/duckboard/src/area/ideas.rs:1149
 
 ## Requirement: Reconciliation on archival detection
 

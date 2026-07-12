@@ -368,11 +368,15 @@ pub struct AgentSession {
     /// True while a reply-suggestion oneshot is outstanding for
     /// `default_prompts_gen`. Does not disarm next-action empty Enter / Tab.
     pub default_prompts_pending: bool,
-    /// Empty-composer next actions (lifecycle bootstrap or trailing `next`).
-    /// Ephemeral — not persisted. Refreshed from last assistant / scope facts.
+    /// Empty-composer next actions (inherited, lifecycle bootstrap, or trailing
+    /// `next`). Ephemeral — not persisted. Refreshed from last assistant /
+    /// scope facts / inherited list.
     pub next_actions: Vec<crate::meta_card::NextAction>,
     /// Active index into `next_actions` for ghost / empty Enter / Tab cycle.
     pub next_action_idx: usize,
+    /// Donor list for empty-session ghost continuity after NewSession.
+    /// Ephemeral — not persisted. Cleared when the session is no longer empty.
+    pub inherited_next_actions: Option<Vec<crate::meta_card::NextAction>>,
     /// Lifecycle facts for this session's change scope (phase, step progress,
     /// next stage). Refreshed alongside `fast_response`; `None` for
     /// non-change scopes. Feeds the first-turn scope orientation blurb.
@@ -483,6 +487,7 @@ impl AgentSession {
             default_prompts_pending: false,
             next_actions: Vec::new(),
             next_action_idx: 0,
+            inherited_next_actions: None,
             scope_facts: None,
             queue_editor: None,
             idea_description: None,
@@ -537,14 +542,18 @@ impl AgentSession {
         }
     }
 
-    /// Rebuild `next_actions` from empty-session lifecycle bootstrap or the
-    /// trailing `next` card on the last non-priming assistant message.
+    /// Rebuild `next_actions` from empty-session inherited list or lifecycle
+    /// bootstrap, or the trailing `next` card on the last non-priming
+    /// assistant message.
     ///
     /// `after_turn`: pass true from TurnComplete so the ghost starts at the
     /// first ranked action. Chrome/scope rebuilds pass false so Tab cycle is
     /// preserved while the list is unchanged.
     pub fn refresh_next_actions(&mut self, after_turn: bool) {
         let session_empty = self.session.messages.is_empty();
+        if !session_empty {
+            self.inherited_next_actions = None;
+        }
         let bootstrap = self.lifecycle_bootstrap();
         let last_assistant = if session_empty {
             None
@@ -555,10 +564,14 @@ impl AgentSession {
         let prev_sends: Vec<String> =
             self.next_actions.iter().map(|a| a.send.clone()).collect();
         let prev_idx = self.next_action_idx;
+        // Clone so list rebuild can take owned slices without fighting other
+        // borrows of `self` (bootstrap points into scope_facts).
+        let inherited = self.inherited_next_actions.clone();
         self.next_actions = crate::default_prompts::next_action_list(
             session_empty,
             bootstrap,
             last_assistant.as_deref(),
+            inherited.as_deref(),
         );
         let prev_refs: Vec<&str> = prev_sends.iter().map(String::as_str).collect();
         let new_refs: Vec<&str> = self.next_actions.iter().map(|a| a.send.as_str()).collect();
@@ -658,6 +671,39 @@ impl Default for InteractionState {
     }
 }
 
+/// Build a fresh empty session, optionally inheriting next actions from the
+/// current active session (change multi-session only).
+///
+/// Call while `ix.active()` is still the donor — before inserting the new
+/// session at index 0. When `scope_kind` is Change and the donor has a
+/// non-empty `next_actions` list, that list is sticky-inherited; otherwise
+/// the empty session follows normal lifecycle bootstrap once scope facts are
+/// present. Active index starts at 0.
+pub fn new_session_with_inherited_next_actions(
+    ix: &InteractionState,
+    scope_key: String,
+    scope_kind: ScopeKind,
+) -> AgentSession {
+    let donor = ix.active();
+    let donor_actions = match (scope_kind, donor) {
+        (ScopeKind::Change, Some(d)) if !d.next_actions.is_empty() => {
+            Some(d.next_actions.clone())
+        }
+        _ => None,
+    };
+    let mut fresh = AgentSession::new(scope_key, scope_kind);
+    // Same change scope as the donor — carry facts so empty-donor bootstrap
+    // can resolve without waiting for the next project refresh tick.
+    if let Some(d) = donor {
+        fresh.scope_facts = d.scope_facts.clone();
+    }
+    if let Some(actions) = donor_actions {
+        fresh.inherited_next_actions = Some(actions);
+    }
+    fresh.refresh_next_actions(true);
+    fresh
+}
+
 impl InteractionState {
     pub fn active(&self) -> Option<&AgentSession> {
         self.sessions.get(self.active_session)
@@ -748,6 +794,95 @@ mod tests {
         // THEN the list is exactly the apply stage command in empty-send form
         assert_eq!(ax.next_actions.len(), 1);
         assert_eq!(ax.next_actions[0].send, "/ds-apply");
+    }
+
+    // @spec chat/default-prompts New-session next-action inheritance: New change session inherits active session next actions
+    #[test]
+    fn new_change_session_inherits_active_session_next_actions() {
+        // GIVEN change multi-session chat + active session with two next actions
+        let mut donor = AgentSession::new("foo".into(), ScopeKind::Change);
+        donor.next_actions = vec![
+            crate::meta_card::NextAction {
+                send: "/ds-spec".into(),
+                reason: Some("write specs".into()),
+            },
+            crate::meta_card::NextAction {
+                send: "confirm".into(),
+                reason: None,
+            },
+        ];
+        donor.next_action_idx = 0;
+        let mut ix = InteractionState::default();
+        ix.sessions.push(donor);
+        ix.active_session = 0;
+        // WHEN a new chat session is created for that change
+        let fresh = new_session_with_inherited_next_actions(&ix, "foo".into(), ScopeKind::Change);
+        // THEN the new session's list matches the donor tokens; transcript empty
+        assert!(fresh.session.messages.is_empty());
+        assert_eq!(fresh.next_actions.len(), 2);
+        assert_eq!(fresh.next_actions[0].send, "/ds-spec");
+        assert_eq!(fresh.next_actions[1].send, "confirm");
+        assert!(fresh.inherited_next_actions.is_some());
+    }
+
+    // @spec chat/default-prompts New-session next-action inheritance: New change session with empty donor keeps bootstrap behavior
+    #[test]
+    fn new_change_session_with_empty_donor_keeps_bootstrap_behavior() {
+        // GIVEN change multi-session + active empty next_actions + lifecycle option
+        let mut donor = AgentSession::new("foo".into(), ScopeKind::Change);
+        donor.next_actions.clear();
+        donor.scope_facts = Some(crate::area::change::ChangeScopeFacts {
+            phase: "proposal",
+            steps_done: 0,
+            step_count: 0,
+            active_step_tasks: None,
+            next_command: Some("ds-propose".into()),
+            current_review: None,
+        });
+        let mut ix = InteractionState::default();
+        ix.sessions.push(donor);
+        ix.active_session = 0;
+        // WHEN a new chat session is created for that change
+        let fresh = new_session_with_inherited_next_actions(&ix, "foo".into(), ScopeKind::Change);
+        // THEN bootstrap only (no inheritance)
+        assert!(fresh.inherited_next_actions.is_none());
+        assert_eq!(fresh.next_actions.len(), 1);
+        assert_eq!(fresh.next_actions[0].send, "/ds-propose");
+        assert!(fresh.session.messages.is_empty());
+    }
+
+    // @spec chat/default-prompts New-session next-action inheritance: Inherited list starts at first action
+    #[test]
+    fn inherited_list_starts_at_first_action() {
+        // GIVEN donor with ≥2 next actions and active index not first
+        let mut donor = AgentSession::new("foo".into(), ScopeKind::Change);
+        donor.next_actions = vec![
+            crate::meta_card::NextAction {
+                send: "/ds-spec".into(),
+                reason: None,
+            },
+            crate::meta_card::NextAction {
+                send: "/ds-design".into(),
+                reason: None,
+            },
+        ];
+        donor.next_action_idx = 1;
+        let mut ix = InteractionState::default();
+        ix.sessions.push(donor);
+        ix.active_session = 0;
+        // WHEN a new chat session is created for that change
+        let fresh = new_session_with_inherited_next_actions(&ix, "foo".into(), ScopeKind::Change);
+        // THEN empty submit sends the first inherited token
+        assert_eq!(fresh.next_action_idx, 0);
+        assert_eq!(
+            crate::default_prompts::next_empty_submit_text(
+                false,
+                &fresh.next_actions,
+                fresh.next_action_idx
+            )
+            .as_deref(),
+            Some("/ds-spec")
+        );
     }
 
     // @spec chat/default-prompts Agent input hints gate: Empty-session next actions remain when agent input hints disabled

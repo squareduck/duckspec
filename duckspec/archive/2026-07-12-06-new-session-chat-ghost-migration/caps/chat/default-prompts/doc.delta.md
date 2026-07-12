@@ -1,4 +1,4 @@
-# Chat default prompts
+# @ Chat default prompts
 
 Conversation-local empty-input defaults from a cheap-model oneshot: parse ordered `REPLY:`
 suggestions (lifecycle heuristic passed only as a soft request hint), show and arm them
@@ -11,7 +11,7 @@ text with empty Enter and Tab cycle; optional settings-gated oneshot reply sugge
 to three freeform `REPLY:` lines) that may fill fast-response chips only when there is no
 next-action ghost.
 
-## Surfaces
+## ~ Surfaces
 
 Two empty-composer surfaces stay separate:
 
@@ -35,7 +35,7 @@ disk-phase fallback and not re-inheritance.
 There is no under-input oneshot row, no oneshot loading strip, and no empty Cmd-Enter path
 for oneshot suggestions. Empty Enter remains next-action only.
 
-## Next-action list
+## ~ Next-action list
 
 ```
 session empty + inherited non-empty
@@ -66,29 +66,3 @@ Empty Enter sends the active send token. Tab / Shift-Tab cycle when there are tw
 actions; a small tab-available marker appears **before** the ghost only then. Ghost text
 is the active send token via the empty-input placeholder (hidden while streaming). A newly
 created empty change session that inherited a list starts at the first action.
-
-## Oneshot pipeline
-
-When agent input hints is enabled (default off), after a non-priming turn the harness may
-run a short oneshot only when the next-action list is empty after that turn's refresh. The
-request embeds the **full** last assistant message and preceding user message (no line
-truncation, no lifecycle heuristic, no slash-command priming list). The instruction asks
-for up to three plain `REPLY:` lines in order: most likely reply, alternative reply, and
-negative or decline reply (omit a line when it does not fit) — freeform user text, not
-stage-command autocomplete.
-
-```
-TurnComplete + agent hints ON + next-actions empty
-    │
-    ▼
-cheap-model oneshot
-    │
-    ├── REPLY: lines (0–3)  ──▶ settled list → chip fill when eligible
-    └── fail / timeout / empty  ──▶ ready empty list (no chips)
-```
-
-While oneshot is pending, no loading chrome is shown and chips are not filled from that
-in-flight generation. Pending oneshot does **not** block empty Enter for next actions.
-Eligibility for chip fill is evaluated separately (idle, not awaiting a user choice, empty
-next-action list, non-empty settled list, hints on) — see chat fast response for shell
-population and activation.

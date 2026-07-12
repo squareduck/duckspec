@@ -562,7 +562,12 @@ pub fn update(
                         project.project_root.as_deref(),
                         highlighter,
                     );
-                    let new_session = AgentSession::new(scope_key.clone(), kind);
+                    // Donor is still active — inherit next actions before insert.
+                    let new_session = interaction::new_session_with_inherited_next_actions(
+                        ix,
+                        scope_key.clone(),
+                        kind,
+                    );
                     let _ = crate::chat_store::save_session(
                         &new_session.session,
                         project.project_root.as_deref(),

@@ -215,7 +215,7 @@ SHALL NOT replace the shell while the session is awaiting a user choice.
 - **THEN** the options list remains non-empty
 
 > test: code
-> - crates/duckboard/src/area/change.rs:2146
+> - crates/duckboard/src/area/change.rs:2151
 > - crates/duckboard/src/fast_response.rs:340
 
 ### Scenario: Ordinary refresh leaves options empty when oneshot is ineligible
@@ -226,7 +226,7 @@ SHALL NOT replace the shell while the session is awaiting a user choice.
 - **THEN** the options list is empty
 
 > test: code
-> - crates/duckboard/src/area/change.rs:2106
+> - crates/duckboard/src/area/change.rs:2111
 
 ### Scenario: Refresh preserves oneshot fill when still eligible
 
@@ -238,7 +238,7 @@ SHALL NOT replace the shell while the session is awaiting a user choice.
 - **AND** the options match the settled oneshot list in order
 
 > test: code
-> - crates/duckboard/src/area/change.rs:2185
+> - crates/duckboard/src/area/change.rs:2190
 
 ### Scenario: Settled eligible oneshot fills the option shell
 
@@ -248,7 +248,7 @@ SHALL NOT replace the shell while the session is awaiting a user choice.
 - **THEN** the options list contains those settled replies in order
 
 > test: code
-> - crates/duckboard/src/area/change.rs:2225
+> - crates/duckboard/src/area/change.rs:2230
 
 ### Scenario: Live user choice overwrites oneshot fill
 
@@ -259,7 +259,7 @@ SHALL NOT replace the shell while the session is awaiting a user choice.
 - **AND** the shell is no longer filled from oneshot hints
 
 > test: code
-> - crates/duckboard/src/area/change.rs:2253
+> - crates/duckboard/src/area/change.rs:2258
 
 ### Scenario: Oneshot settle does not replace a live user-choice fill
 
@@ -269,7 +269,7 @@ SHALL NOT replace the shell while the session is awaiting a user choice.
 - **THEN** the options list remains the user-choice options
 
 > test: code
-> - crates/duckboard/src/area/change.rs:2285
+> - crates/duckboard/src/area/change.rs:2290
 
 ## Requirement: Question activation
 
@@ -316,7 +316,7 @@ transcript message solely for that custom answer.
 - **AND** the text is not left only staged in the interrupt queue
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:1690
+> - crates/duckboard/src/area/interaction.rs:1825
 
 ## Requirement: Awaiting composer chrome
 

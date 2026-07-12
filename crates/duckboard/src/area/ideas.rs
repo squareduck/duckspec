@@ -468,7 +468,12 @@ fn handle_interaction(
                 project.project_root.as_deref(),
                 highlighter,
             );
-            let new_session = interaction::AgentSession::new(scope_key.clone(), scope_kind);
+            // Donor is still active — inherit next actions before insert.
+            let new_session = interaction::new_session_with_inherited_next_actions(
+                ix,
+                scope_key.clone(),
+                scope_kind,
+            );
             let _ = crate::chat_store::save_session(
                 &new_session.session,
                 project.project_root.as_deref(),
