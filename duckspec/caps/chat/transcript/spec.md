@@ -27,7 +27,7 @@ segment (not multiple Answer segments for the same uncommitted draft).
 - **AND** the reasoning body is not part of the Answer segment
 
 > test: code
-> - crates/duckboard/src/widget/agent_chat.rs:2658
+> - crates/duckboard/src/widget/agent_chat.rs:2618
 
 ### Scenario: Contiguous tools yield one Activity with multiple rows
 
@@ -41,7 +41,7 @@ segment (not multiple Answer segments for the same uncommitted draft).
 - **AND** the segment has one row per tool call
 
 > test: code
-> - crates/duckboard/src/widget/agent_chat.rs:2691
+> - crates/duckboard/src/widget/agent_chat.rs:2651
 
 ### Scenario: Thought, tools, thought, answer yields four segments in order
 
@@ -53,7 +53,7 @@ segment (not multiple Answer segments for the same uncommitted draft).
 - **THEN** the segments are Thinking, Activity, Thinking, Answer in that order
 
 > test: code
-> - crates/duckboard/src/widget/agent_chat.rs:2718
+> - crates/duckboard/src/widget/agent_chat.rs:2678
 
 ### Scenario: Live pending reasoning appears on an open Thinking segment
 
@@ -65,7 +65,7 @@ segment (not multiple Answer segments for the same uncommitted draft).
 - **THEN** a live Thinking segment includes that pending reasoning text
 
 > test: code
-> - crates/duckboard/src/widget/agent_chat.rs:2742
+> - crates/duckboard/src/widget/agent_chat.rs:2702
 
 ### Scenario: Live reasoning with an open answer draft yields Thinking then one Answer
 
@@ -79,7 +79,7 @@ segment (not multiple Answer segments for the same uncommitted draft).
 - **AND** there is exactly one Answer segment for that open draft
 
 > test: code
-> - crates/duckboard/src/widget/agent_chat.rs:2765
+> - crates/duckboard/src/widget/agent_chat.rs:2725
 
 ## Requirement: Activity pairing
 
@@ -98,7 +98,7 @@ generic "done" placeholder alone.
 - **AND** the row carries the tool summary and the result body
 
 > test: code
-> - crates/duckboard/src/widget/agent_chat.rs:2801
+> - crates/duckboard/src/widget/agent_chat.rs:2761
 
 ### Scenario: Non-adjacent use and result still pair by id
 
@@ -114,7 +114,7 @@ generic "done" placeholder alone.
 - **AND** no row is labeled only as a generic done placeholder
 
 > test: code
-> - crates/duckboard/src/widget/agent_chat.rs:2824
+> - crates/duckboard/src/widget/agent_chat.rs:2784
 
 ### Scenario: Orphan result is a named done row
 
@@ -124,7 +124,7 @@ generic "done" placeholder alone.
 - **AND** the row is not labeled only as a generic done placeholder
 
 > test: code
-> - crates/duckboard/src/widget/agent_chat.rs:2856
+> - crates/duckboard/src/widget/agent_chat.rs:2816
 
 ## Requirement: Collapse defaults
 
@@ -143,7 +143,7 @@ a finished turn, Thinking and Activity SHALL start collapsed.
 - **THEN** the Thinking segment is collapsed
 
 > test: code
-> - crates/duckboard/src/widget/agent_chat.rs:3250
+> - crates/duckboard/src/widget/agent_chat.rs:3210
 
 ### Scenario: User-expanded Thinking is not auto-collapsed
 
@@ -152,7 +152,7 @@ a finished turn, Thinking and Activity SHALL start collapsed.
 - **THEN** the Thinking segment remains expanded
 
 > test: code
-> - crates/duckboard/src/widget/agent_chat.rs:3307
+> - crates/duckboard/src/widget/agent_chat.rs:3267
 
 ### Scenario: Settled Activity starts collapsed
 
@@ -161,7 +161,7 @@ a finished turn, Thinking and Activity SHALL start collapsed.
 - **THEN** the Activity segment is collapsed
 
 > test: code
-> - crates/duckboard/src/widget/agent_chat.rs:3347
+> - crates/duckboard/src/widget/agent_chat.rs:3307
 
 ## Requirement: Segment presentation
 
@@ -180,7 +180,7 @@ expand only, with no nested per-tool expand state.
 - **AND** the label does not include a duration
 
 > test: code
-> - crates/duckboard/src/widget/agent_chat.rs:2878
+> - crates/duckboard/src/widget/agent_chat.rs:2838
 
 ### Scenario: Activity collapsed label includes count and sample names
 
@@ -190,7 +190,7 @@ expand only, with no nested per-tool expand state.
 - **AND** the label includes sample tool names from the rows
 
 > test: code
-> - crates/duckboard/src/widget/agent_chat.rs:2911
+> - crates/duckboard/src/widget/agent_chat.rs:2871
 
 ### Scenario: Expanded activity exposes status, summary, and truncated output
 
@@ -206,7 +206,7 @@ expand only, with no nested per-tool expand state.
 - **AND** no separate per-tool expand state is required to show that truncated output
 
 > test: code
-> - crates/duckboard/src/widget/agent_chat.rs:2943
+> - crates/duckboard/src/widget/agent_chat.rs:2903
 
 ## Requirement: Meta-card line background
 
@@ -279,4 +279,4 @@ Activity rows under ordinary segment construction.
 - **AND** the Activity segment includes a row for the ordinary tool
 
 > test: code
-> - crates/duckboard/src/widget/agent_chat.rs:2583
+> - crates/duckboard/src/widget/agent_chat.rs:2543

@@ -3,7 +3,7 @@
 use iced::Task;
 use iced::advanced::widget::{Id, Operation, operation};
 use iced::widget::{
-    Space, button, column, container, pick_list, row, rule, scrollable, stack, text,
+    Space, button, column, container, pick_list, row, rule, scrollable, text,
 };
 use iced::{Element, Length, Rectangle, Vector};
 
@@ -1762,7 +1762,7 @@ pub fn measure_scroll_bounds() -> iced::Task<(f32, f32)> {
 /// - **User**: bordered card on the "paper" surface (no label, no chevron).
 /// - **Answer / System**: plain text flowing on the chat background.
 /// - **Thinking**: muted collapsible header; body when expanded.
-/// - **Activity**: framed group card with quiet tool rows when expanded.
+/// - **Activity**: same flat secondary chrome + quiet tool rows when expanded.
 fn view_block<'a>(
     idx: usize,
     block: &'a Block,
@@ -1857,6 +1857,33 @@ fn view_prose_block<'a>(
     }
 }
 
+/// Flat collapsible header: chevron + muted label (shared by Thinking and Activity).
+fn secondary_segment_header<'a>(
+    expanded: bool,
+    label: impl Into<String>,
+    on_toggle: Msg,
+) -> Element<'a, Msg> {
+    let label = text(label.into())
+        .size(theme::content_size())
+        .font(theme::content_font())
+        .color(theme::text_muted());
+    let header_row = row![collapsible::chevron(expanded), label]
+        .spacing(theme::SPACING_XS)
+        .align_y(iced::Alignment::Center);
+    let header_content: Element<'a, Msg> = button(header_row)
+        .on_press(on_toggle)
+        .padding(0.0)
+        .style(|_theme, _status| iced::widget::button::Style {
+            background: None,
+            ..Default::default()
+        })
+        .into();
+    container(header_content)
+        .padding([theme::SPACING_XS, theme::SPACING_MD])
+        .width(Length::Fill)
+        .into()
+}
+
 /// Thinking: collapsible muted header; expanded body is the thought text.
 fn view_thinking_block<'a>(
     idx: usize,
@@ -1873,27 +1900,8 @@ fn view_thinking_block<'a>(
     } else {
         block.label.clone()
     };
-    let label_color = theme::text_muted();
-
-    let label = text(header_label)
-        .size(theme::content_size())
-        .font(theme::content_font())
-        .color(label_color);
-    let header_row = row![collapsible::chevron(!collapsed), label]
-        .spacing(theme::SPACING_XS)
-        .align_y(iced::Alignment::Center);
-    let header_content: Element<'a, Msg> = button(header_row)
-        .on_press(Msg::ToggleCollapse(idx))
-        .padding(0.0)
-        .style(|_theme, _status| iced::widget::button::Style {
-            background: None,
-            ..Default::default()
-        })
-        .into();
-
-    let header = container(header_content)
-        .padding([theme::SPACING_XS, theme::SPACING_MD])
-        .width(Length::Fill);
+    let header =
+        secondary_segment_header(!collapsed, header_label, Msg::ToggleCollapse(idx));
 
     let mut col = column![header].width(Length::Fill);
     if body_shown && let Some(ed) = editor {
@@ -1924,7 +1932,7 @@ fn view_thinking_block<'a>(
         .into()
 }
 
-/// Activity group: framed card with summary header and quiet tool rows.
+/// Activity group: flat secondary header with quiet tool rows (no card chrome).
 fn view_activity_block<'a>(
     idx: usize,
     block: &'a Block,
@@ -1933,42 +1941,12 @@ fn view_activity_block<'a>(
     hl_ranges: Vec<text_edit::HighlightRange>,
     hl_current: Option<text_edit::HighlightRange>,
 ) -> Element<'a, Msg> {
-    let label_color = block_header_color(block.kind);
     let has_content = !block.lines.is_empty();
     let body_shown = has_content && !collapsed && editor.is_some();
+    let header =
+        secondary_segment_header(!collapsed, block.label.clone(), Msg::ToggleCollapse(idx));
 
-    // Activity headers use the content (monospace) font so tool names and
-    // paths read like code, matching the quiet-row body below.
-    let header_content: Element<'a, Msg> = {
-        let label = text(&block.label)
-            .size(theme::content_size())
-            .font(theme::content_font())
-            .color(label_color);
-        let header_row = row![collapsible::chevron(!collapsed), label]
-            .spacing(theme::SPACING_XS)
-            .align_y(iced::Alignment::Center);
-        button(header_row)
-            .on_press(Msg::ToggleCollapse(idx))
-            .padding(0.0)
-            .style(|_theme, _status| iced::widget::button::Style {
-                background: None,
-                ..Default::default()
-            })
-            .into()
-    };
-
-    let header_style = if body_shown {
-        theme::chat_tool_card_header_open
-    } else {
-        theme::chat_tool_card_header_alone
-    };
-    let header = container(header_content)
-        .padding([theme::SPACING_SM, theme::SPACING_MD])
-        .width(Length::Fill)
-        .style(header_style);
-
-    let mut card_col = column![header].width(Length::Fill);
-
+    let mut col = column![header].width(Length::Fill);
     if body_shown && let Some(ed) = editor {
         let body = container(
             text_edit::TextEdit::new(ed, move |action| Msg::ChatAction(idx, action))
@@ -1978,23 +1956,20 @@ fn view_activity_block<'a>(
                 .read_only(true)
                 .fit_content(true)
                 .transparent_bg(true)
+                .base_color(theme::text_secondary())
                 .highlights(hl_ranges, hl_current),
         )
-        .padding([theme::SPACING_SM, theme::SPACING_MD])
-        .width(Length::Fill)
-        .style(theme::chat_tool_card_body);
-        card_col = card_col.push(body);
+        .padding(iced::Padding {
+            top: 0.0,
+            right: theme::SPACING_MD,
+            bottom: theme::SPACING_SM,
+            left: theme::SPACING_MD,
+        })
+        .width(Length::Fill);
+        col = col.push(body);
     }
 
-    // Outer: stack the column underneath a transparent-bg, border-only
-    // overlay so the 1px frame draws on top of the header/body surfaces.
-    let border_overlay = container(Space::new())
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .style(theme::chat_tool_card_frame);
-    let framed = stack![card_col, border_overlay];
-
-    container(framed)
+    container(col)
         .padding([0.0, theme::SPACING_SM])
         .width(Length::Fill)
         .into()
@@ -2023,21 +1998,6 @@ fn view_selection_chip<'a>(label: String, tentative: bool) -> Element<'a, Msg> {
     .padding([2.0, theme::SPACING_SM])
     .style(style)
     .into()
-}
-
-/// Header label color for a block kind (re-exported from text_edit for convenience).
-fn block_header_color(kind: BlockKind) -> iced::Color {
-    match kind {
-        BlockKind::User => theme::accent(),
-        BlockKind::Assistant => theme::text_secondary(),
-        BlockKind::Reasoning => theme::text_muted(),
-        // Activity sits in a neutral palette so tool names stay legible
-        // without competing with the accent-colored User card.
-        BlockKind::Activity | BlockKind::ToolUse => theme::text_primary(),
-        BlockKind::ToolResult => theme::text_secondary(),
-        BlockKind::System => theme::text_muted(),
-        BlockKind::UserChoiceQuestion | BlockKind::UserChoiceAnswer => theme::text_secondary(),
-    }
 }
 
 fn format_number(n: usize) -> String {

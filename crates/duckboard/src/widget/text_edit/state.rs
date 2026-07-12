@@ -102,9 +102,9 @@ pub(crate) fn block_header_color(kind: BlockKind) -> Color {
     match kind {
         BlockKind::User => theme::accent(),
         BlockKind::Assistant => theme::text_secondary(),
-        BlockKind::Reasoning => theme::text_muted(),
-        BlockKind::Activity | BlockKind::ToolUse => theme::accent_dim(),
-        BlockKind::ToolResult => theme::success(),
+        // Thinking and Activity share muted secondary-header ink.
+        BlockKind::Reasoning | BlockKind::Activity | BlockKind::ToolUse => theme::text_muted(),
+        BlockKind::ToolResult => theme::text_secondary(),
         BlockKind::System => theme::text_muted(),
         BlockKind::UserChoiceQuestion | BlockKind::UserChoiceAnswer => theme::text_secondary(),
     }
