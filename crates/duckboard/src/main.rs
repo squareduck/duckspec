@@ -1564,6 +1564,13 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                         force_materialize = true;
                     }
                     AgentEvent::TurnComplete => {
+                        // A user-cancelled turn may have streamed more answer
+                        // text after the cancel press; re-capture so the
+                        // resync draft matches everything the transcript kept.
+                        if ax.cancel_in_flight {
+                            interaction::capture_unsynced_draft(&mut ax.session);
+                            ax.cancel_in_flight = false;
+                        }
                         interaction::flush_all_pending(&mut ax.session);
                         interaction::reset_answer_thrash(&mut ax.session);
                         ax.session.is_streaming = false;
@@ -6294,6 +6301,7 @@ mod tests {
     }
 
     /// Seed a Change scope with two sessions (first is active).
+    #[allow(clippy::too_many_arguments)] // seed parameters are irreducibly distinct
     fn seed_multi_session_change(
         state: &mut State,
         change: &str,

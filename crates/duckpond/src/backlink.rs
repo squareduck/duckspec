@@ -60,9 +60,9 @@ pub fn parse_backlink_line(line: &str) -> Option<BacklinkRef> {
     }
 
     // First token is the capability path (no whitespace).
-    let (cap_path, rest) = match rest.find(' ') {
-        Some(pos) => (&rest[..pos], rest[pos..].trim_start()),
-        None => return None,
+    let (cap_path, rest) = {
+        let pos = rest.find(' ')?;
+        (&rest[..pos], rest[pos..].trim_start())
     };
 
     if rest.is_empty() {
@@ -71,16 +71,14 @@ pub fn parse_backlink_line(line: &str) -> Option<BacklinkRef> {
 
     // Everything up to the first colon is the requirement name.
     // Everything after is the scenario name.
-    let (requirement, scenario) = match rest.find(':') {
-        Some(pos) => {
-            let req = rest[..pos].trim();
-            let scn = rest[pos + 1..].trim();
-            if req.is_empty() || scn.is_empty() {
-                return None;
-            }
-            (req, scn)
+    let (requirement, scenario) = {
+        let pos = rest.find(':')?;
+        let req = rest[..pos].trim();
+        let scn = rest[pos + 1..].trim();
+        if req.is_empty() || scn.is_empty() {
+            return None;
         }
-        None => return None,
+        (req, scn)
     };
 
     // Normalize whitespace: collapse runs to single spaces.

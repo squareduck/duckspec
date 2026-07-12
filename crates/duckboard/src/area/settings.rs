@@ -43,6 +43,7 @@ const ONESHOT_HARNESS_ORDER: &[&str] = &["claude-code", "grok"];
 /// Which harnesses should offer an oneshot model picker.
 ///
 /// Empty when agent input hints are off, or when a harness has no catalog models.
+#[cfg(test)]
 pub fn oneshot_picker_harnesses(
     agent_input_hints: bool,
     catalog: &[(impl AsRef<str>, &[ModelInfo])],

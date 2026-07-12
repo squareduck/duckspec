@@ -43,18 +43,17 @@ pub fn map_update(params: &Value, context_window: Option<usize>) -> Option<Agent
                         .unwrap_or_default(),
                 });
             }
-            Some("tool_call_update") => {
+            Some("tool_call_update")
                 // Only a *completed* update carries a result; earlier
                 // in-progress updates (status `pending`/`in_progress`) are
                 // skipped so a call surfaces as exactly one use + one result.
-                if update.get("status").and_then(Value::as_str) == Some("completed") {
+                if update.get("status").and_then(Value::as_str) == Some("completed") => {
                     return Some(AgentEvent::ToolResult {
                         id: str_field(update, "toolCallId")?,
                         name: title(update),
                         output: tool_output(update),
                     });
                 }
-            }
             _ => {}
         }
     }

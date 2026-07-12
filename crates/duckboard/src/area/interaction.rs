@@ -441,6 +441,11 @@ pub struct AgentSession {
     /// Cleared on cancel/error so a backed-out priming doesn't strand a
     /// phantom command.
     pub pending_followup_prompt: Option<String>,
+    /// True between a user cancel and that turn's `TurnComplete`. Deltas can
+    /// keep arriving until the agent actually stops; the `TurnComplete`
+    /// handler re-captures the unsynced draft when this is set so late text
+    /// the user saw is part of the resync. Reset when a new turn starts.
+    pub cancel_in_flight: bool,
     /// True when messages have been streamed into this session since its last
     /// persist. Set by the message-mutating `AgentEvent`s, cleared by the
     /// coalesced eager flush and the turn-boundary save. Transient — never
@@ -501,6 +506,7 @@ impl AgentSession {
             chat_input_focused: false,
             priming_in_flight: false,
             pending_followup_prompt: None,
+            cancel_in_flight: false,
             needs_flush: false,
             chat_ui_dirty: false,
         }
@@ -1705,6 +1711,160 @@ mod tests {
         assert!(ax.session.answer_replace_count <= ANSWER_REPLACE_BUDGET);
     }
 
+    // ── chat/cancel-resync: draft capture on cancellation ─────────────────
+
+    // @spec chat/cancel-resync Draft capture on cancellation: Thrash trip captures the kept draft
+    #[test]
+    fn thrash_trip_captures_the_kept_draft() {
+        let mut ax = streaming_session();
+        // GIVEN a streaming turn whose in-flight answer draft is non-empty.
+        thrash_replaces(&mut ax.session, ANSWER_REPLACE_BUDGET);
+        let kept = format!("body-{ANSWER_REPLACE_BUDGET}");
+        assert_eq!(ax.session.pending_text, kept);
+
+        // WHEN the answer-thrash budget trips and the turn is cancelled
+        // (mirrors the main path: trip settle before cancelling the agent).
+        apply_reasoning_content_delta(&mut ax.session, "think again");
+        apply_answer_content_delta(&mut ax.session, "over-budget rewrite");
+        assert!(ax.session.answer_thrash_tripped);
+        on_answer_thrash_trip(&mut ax.session);
+
+        // THEN the session's unsynced draft equals the kept draft.
+        assert_eq!(ax.session.unsynced_draft.as_deref(), Some(kept.as_str()));
+    }
+
+    // @spec chat/cancel-resync Draft capture on cancellation: User cancel captures the in-flight draft
+    #[test]
+    fn user_cancel_captures_the_in_flight_draft() {
+        let mut ax = streaming_session();
+        // GIVEN a streaming turn whose in-flight answer draft is non-empty.
+        apply_answer_content_delta(&mut ax.session, "half-written reply");
+        assert_eq!(ax.session.pending_text, "half-written reply");
+
+        // WHEN the user cancels the turn (mirrors the CancelPressed arm,
+        // which captures before signalling the agent handle).
+        capture_unsynced_draft(&mut ax.session);
+
+        // THEN the session's unsynced draft equals that draft.
+        assert_eq!(
+            ax.session.unsynced_draft.as_deref(),
+            Some("half-written reply")
+        );
+    }
+
+    // @spec chat/cancel-resync Draft capture on cancellation: Cancellation with no in-flight draft records nothing
+    #[test]
+    fn cancellation_with_no_in_flight_draft_records_nothing() {
+        let mut ax = streaming_session();
+        // GIVEN a streaming turn whose answer text was committed at a tool
+        // boundary AND no answer text has streamed since.
+        apply_answer_content_delta(&mut ax.session, "committed before tools");
+        flush_all_pending(&mut ax.session);
+        assert!(ax.session.pending_text.is_empty());
+
+        // WHEN the turn is cancelled.
+        capture_unsynced_draft(&mut ax.session);
+
+        // THEN the session has no unsynced draft.
+        assert_eq!(ax.session.unsynced_draft, None);
+    }
+
+    // @spec chat/cancel-resync Draft capture on cancellation: Deltas arriving after cancel are part of the captured draft
+    #[test]
+    fn deltas_arriving_after_cancel_are_part_of_the_captured_draft() {
+        let mut ax = streaming_session();
+        // GIVEN a streaming turn cancelled by the user with a non-empty
+        // in-flight answer draft (capture at cancel press).
+        apply_answer_content_delta(&mut ax.session, "first half");
+        capture_unsynced_draft(&mut ax.session);
+        ax.cancel_in_flight = true;
+
+        // WHEN further answer deltas arrive before the turn ends (the
+        // TurnComplete handler re-captures while cancel is in flight).
+        apply_answer_content_delta(&mut ax.session, " and late tail");
+        if ax.cancel_in_flight {
+            capture_unsynced_draft(&mut ax.session);
+            ax.cancel_in_flight = false;
+        }
+
+        // THEN the session's unsynced draft includes those deltas.
+        assert_eq!(
+            ax.session.unsynced_draft.as_deref(),
+            Some("first half and late tail")
+        );
+    }
+
+    // ── chat/cancel-resync: resync reminder on next send ──────────────────
+
+    // @spec chat/cancel-resync Resync reminder on next send: The next send carries the draft after the user's text
+    #[test]
+    fn next_send_carries_the_draft_after_the_users_text() {
+        let mut ax = streaming_session();
+        // GIVEN a session holding an unsynced draft.
+        ax.session.unsynced_draft = Some("outline gate preview".into());
+
+        // WHEN a prompt is sent on that session (mirrors send_prompt_text).
+        let prompt = apply_resync_reminder("confirm".into(), &mut ax.session);
+
+        // THEN the outgoing prompt begins with the user's text AND the
+        // unsynced draft follows it.
+        assert!(prompt.starts_with("confirm"), "user text must stay first: {prompt}");
+        let user_pos = prompt.find("confirm").unwrap();
+        let draft_pos = prompt
+            .find("outline gate preview")
+            .expect("draft must ride the prompt");
+        assert!(draft_pos > user_pos);
+    }
+
+    // @spec chat/cancel-resync Resync reminder on next send: The reminder rides only one send
+    #[test]
+    fn reminder_rides_only_one_send() {
+        let mut ax = streaming_session();
+        // GIVEN a session holding an unsynced draft.
+        ax.session.unsynced_draft = Some("outline gate preview".into());
+
+        // WHEN two prompts are sent in sequence on that session.
+        let first = apply_resync_reminder("confirm".into(), &mut ax.session);
+        let second = apply_resync_reminder("next message".into(), &mut ax.session);
+
+        // THEN only the first outgoing prompt carries the draft.
+        assert!(first.contains("outline gate preview"));
+        assert_eq!(second, "next message");
+        assert_eq!(ax.session.unsynced_draft, None);
+    }
+
+    // @spec chat/cancel-resync Resync reminder on next send: A recovery resend carrying transcript history clears the draft without a reminder
+    #[test]
+    fn recovery_resend_clears_the_draft_without_a_reminder() {
+        let mut ax = streaming_session();
+        // GIVEN a session holding an unsynced draft, whose transcript keeps
+        // that draft as a committed assistant message.
+        ax.session.messages.push(ChatMessage {
+            role: Role::Assistant,
+            content: vec![ContentBlock::Text("kept outline draft".into())],
+            timestamp: String::new(),
+            is_priming: false,
+        });
+        ax.session.messages.push(ChatMessage {
+            role: Role::User,
+            content: vec![ContentBlock::Text("confirm".into())],
+            timestamp: String::new(),
+            is_priming: false,
+        });
+        ax.session.unsynced_draft = Some("kept outline draft".into());
+
+        // WHEN a recovery send carries the transcript history in its prompt.
+        let history_end = ax.session.messages.len() - 1;
+        let prompt = build_recovery_prompt(&mut ax.session, history_end, "confirm");
+
+        // THEN the session afterward holds no unsynced draft AND the
+        // recovery prompt carries no resync reminder (the history preamble
+        // already carries the kept draft).
+        assert_eq!(ax.session.unsynced_draft, None);
+        assert!(!prompt.contains("<system-reminder>"));
+        assert!(prompt.contains("kept outline draft"));
+    }
+
     // ── chat/stream-ui: settled + live editor refresh ─────────────────────
 
     #[test]
@@ -2509,6 +2669,12 @@ fn handle_agent_chat(
         }
 
         agent_chat::Msg::CancelPressed => {
+            // The agent runtime will not record the still-streaming reply of
+            // a cancelled turn; stash it so the next send can resync it.
+            // Deltas may keep arriving until the agent stops — mark the
+            // cancel so TurnComplete re-captures the grown draft.
+            capture_unsynced_draft(&mut ax.session);
+            ax.cancel_in_flight = true;
             if let Some(handle) = &ax.agent_handle {
                 handle.cancel();
             }
@@ -2756,12 +2922,7 @@ pub fn recover_from_lost_session(ax: &mut AgentSession, highlighter: &SyntaxHigh
         return;
     };
 
-    let history = &ax.session.messages[..last_idx];
-    let prompt = if history.is_empty() {
-        text.clone()
-    } else {
-        build_history_preamble(history) + &text
-    };
+    let prompt = build_recovery_prompt(&mut ax.session, last_idx, &text);
 
     let mut system_additions = Vec::new();
     let scope = crate::scope::SessionScope {
@@ -2792,6 +2953,7 @@ pub fn recover_from_lost_session(ax: &mut AgentSession, highlighter: &SyntaxHigh
     ax.session.pending_text.clear();
     ax.session.pending_reasoning.clear();
     reset_answer_thrash(&mut ax.session);
+    ax.cancel_in_flight = false;
     if let Err(e) = crate::chat_store::save_session(&ax.session, Some(handle.working_dir())) {
         tracing::error!("failed to persist session after resume loss: {e}");
     }
@@ -3102,6 +3264,13 @@ pub fn send_prompt_text(ax: &mut AgentSession, text: String, highlighter: &Synta
         ax.session.last_seeded_description = Some(desc.clone());
     }
 
+    // Resync a cancelled turn's kept draft: the agent runtime never recorded
+    // that reply, so carry it once as agent-facing context after the user's
+    // text. Clears the draft; the save below persists the clear so a resend
+    // cannot replay a stale reminder. The transcript keeps only the user's
+    // text.
+    let prompt = apply_resync_reminder(prompt, &mut ax.session);
+
     ax.session.messages.push(crate::chat_store::ChatMessage {
         role: crate::chat_store::Role::User,
         content: vec![crate::chat_store::ContentBlock::Text(text)],
@@ -3112,6 +3281,9 @@ pub fn send_prompt_text(ax: &mut AgentSession, text: String, highlighter: &Synta
     ax.session.pending_text.clear();
     ax.session.pending_reasoning.clear();
     reset_answer_thrash(&mut ax.session);
+    // A new turn is starting — a stale cancel flag must not make this turn's
+    // completed draft look cancelled at its TurnComplete.
+    ax.cancel_in_flight = false;
     // Persist the transcript the moment the user turn is added, not just on
     // `TurnComplete`. Otherwise closing the app mid-turn drops the in-flight
     // message: the only prior checkpoint is the last completed turn, and on a
@@ -3181,6 +3353,24 @@ pub(crate) fn resolve_turn_model(
 /// don't have a Claude `--resume` session id but need to hand the agent
 /// context from earlier turns. Returns a block ending with a separator; the
 /// caller appends the new user message after it.
+/// Build the lost-session recovery prompt: the transcript history rides the
+/// prompt as a preamble, so any kept draft is already carried as a committed
+/// message — clear the unsynced draft rather than adding a duplicate resync
+/// reminder.
+pub fn build_recovery_prompt(
+    session: &mut ChatSession,
+    history_end: usize,
+    text: &str,
+) -> String {
+    session.unsynced_draft = None;
+    let history = &session.messages[..history_end];
+    if history.is_empty() {
+        text.to_string()
+    } else {
+        build_history_preamble(history) + text
+    }
+}
+
 fn build_history_preamble(messages: &[crate::chat_store::ChatMessage]) -> String {
     use crate::chat_store::{ContentBlock, Role};
 
@@ -3444,9 +3634,37 @@ pub fn clear_priming_followup(ax: &mut AgentSession) {
     ax.pending_followup_prompt = None;
 }
 
+/// Stash the in-flight answer draft at cancellation (user cancel or thrash
+/// trip) so the next send can resync it to the agent. Text already committed
+/// at tool boundaries is recorded by the agent runtime and is not captured;
+/// an empty draft leaves the session's unsynced draft untouched.
+pub fn capture_unsynced_draft(session: &mut ChatSession) {
+    if !session.pending_text.is_empty() {
+        session.unsynced_draft = Some(session.pending_text.clone());
+    }
+}
+
+/// Carry a cancelled turn's kept draft into the outgoing prompt as a
+/// system-reminder appended **after** the user's text (front-inlining breaks
+/// slash-command parsing, and `system_additions` only takes effect on a
+/// session's first turn). Takes — and thus clears — the session's unsynced
+/// draft, so the reminder rides exactly one send. No-op without a draft.
+pub fn apply_resync_reminder(prompt: String, session: &mut ChatSession) -> String {
+    let Some(draft) = session.unsynced_draft.take() else {
+        return prompt;
+    };
+    format!(
+        "{prompt}\n\n<system-reminder>\nYour previous reply was interrupted and \
+         your runtime never recorded it, but the user saw it in full. Treat the \
+         reply below as one you already sent — the user's message above responds \
+         to it. Do not respond to this block itself.\n\n{draft}\n</system-reminder>"
+    )
+}
+
 /// Commit the last draft and append the thrash stop notice. Call once when
 /// the budget first trips (before cancelling the agent).
 pub fn on_answer_thrash_trip(session: &mut ChatSession) {
+    capture_unsynced_draft(session);
     flush_all_pending(session);
     session.messages.push(ChatMessage {
         role: Role::System,
@@ -3954,7 +4172,7 @@ pub fn merge_sessions(into: &mut InteractionState, incoming: Vec<AgentSession>, 
         }
     }
     into.sessions
-        .sort_by(|a, b| b.session.created_at_nanos.cmp(&a.session.created_at_nanos));
+        .sort_by_key(|s| std::cmp::Reverse(s.session.created_at_nanos));
     if let Some(id) = active_id
         && let Some(idx) = into.find_session_index(&id)
     {

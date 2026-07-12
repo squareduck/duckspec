@@ -26,14 +26,14 @@ pub fn schema(name: &str) -> Option<&'static str> {
 /// Whether `commands/{harness}/` exists in the embed.
 #[cfg(test)]
 pub fn has_harness(harness: &str) -> bool {
-    CONTENT.get_dir(&format!("commands/{harness}")).is_some()
+    CONTENT.get_dir(format!("commands/{harness}")).is_some()
 }
 
 /// Markdown files under `commands/{harness}/`.
 ///
 /// Each entry is `(file_name, utf8_body)`.
 pub fn command_files(harness: &str) -> impl Iterator<Item = (&'static str, &'static str)> {
-    let Some(dir) = CONTENT.get_dir(&format!("commands/{harness}")) else {
+    let Some(dir) = CONTENT.get_dir(format!("commands/{harness}")) else {
         return Box::new(std::iter::empty())
             as Box<dyn Iterator<Item = (&'static str, &'static str)>>;
     };
@@ -84,7 +84,7 @@ mod tests {
     fn claude_commands_are_present() {
         assert!(has_harness("claude"));
         let names: Vec<_> = command_files("claude").map(|(n, _)| n).collect();
-        assert!(names.iter().any(|n| *n == "ds-explore.md"));
+        assert!(names.contains(&"ds-explore.md"));
         assert!(!names.is_empty());
     }
 }

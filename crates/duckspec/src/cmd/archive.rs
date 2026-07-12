@@ -198,15 +198,14 @@ fn build_plan(
                     });
                 }
             }
-            ArtifactKind::DocDelta => {
-                if components.len() > 3 && components[2] == "caps" {
+            ArtifactKind::DocDelta
+                if components.len() > 3 && components[2] == "caps" => {
                     let cap_path: PathBuf = components[3..components.len() - 1].iter().collect();
                     deltas.push(DeltaOp {
                         delta_path: file_path.clone(),
                         target_relative: cap_path.join("doc.md"),
                     });
                 }
-            }
             _ => {}
         }
     }

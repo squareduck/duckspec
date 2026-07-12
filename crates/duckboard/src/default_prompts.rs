@@ -34,11 +34,10 @@ pub fn next_action_list(
     inherited: Option<&[NextAction]>,
 ) -> Vec<NextAction> {
     if session_empty {
-        if let Some(inh) = inherited {
-            if !inh.is_empty() {
+        if let Some(inh) = inherited
+            && !inh.is_empty() {
                 return inh.to_vec();
             }
-        }
         return match crate::fast_response::lifecycle_send_text(bootstrap) {
             Some(send) => vec![NextAction {
                 send,

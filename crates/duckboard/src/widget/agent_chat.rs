@@ -2020,7 +2020,7 @@ pub fn filter_commands(commands: &[SlashCommand], query: &str) -> Vec<(usize, i3
         .enumerate()
         .filter_map(|(i, cmd)| fuzzy_score(query, &cmd.name).map(|s| (i, s)))
         .collect();
-    matches.sort_by(|a, b| b.1.cmp(&a.1));
+    matches.sort_by_key(|m| std::cmp::Reverse(m.1));
     matches
 }
 

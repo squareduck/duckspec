@@ -1123,7 +1123,7 @@ pub fn archived_entries<'a>(
                 .map(ArchivedEntry::Exploration),
         )
         .collect();
-    entries.sort_by(|a, b| b.sort_key().cmp(&a.sort_key()));
+    entries.sort_by_key(|e| std::cmp::Reverse(e.sort_key()));
     entries
 }
 
@@ -1137,6 +1137,7 @@ fn change_section_count(explorations: &[Exploration], active: &[ChangeData]) -> 
 }
 
 /// Rows under Archived: interleaved archived entries length.
+#[cfg(test)]
 fn archived_section_count(changes: &[ChangeData], explorations: &[Exploration]) -> usize {
     archived_entries(changes, explorations).len()
 }

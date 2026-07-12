@@ -66,6 +66,7 @@ impl ModelCatalog {
     }
 
     /// Ingest pre-fetched per-harness slices (tests / custom refresh sources).
+    #[cfg(test)]
     pub fn refresh_from(
         &self,
         slices: impl IntoIterator<Item = (impl Into<String>, Vec<ModelInfo>)>,
@@ -539,10 +540,8 @@ mod tests {
     fn offered_selectable_models_are_the_catalog_contents() {
         // GIVEN a process model catalog with models from one or more harnesses
         let cat = ModelCatalog::new();
-        let contents = vec![
-            mi("claude-code", "opus", None),
-            mi("grok", "grok-4.5", Some(256_000)),
-        ];
+        let contents = [mi("claude-code", "opus", None),
+            mi("grok", "grok-4.5", Some(256_000))];
         cat.refresh_from([
             ("claude-code", vec![contents[0].clone()]),
             ("grok", vec![contents[1].clone()]),

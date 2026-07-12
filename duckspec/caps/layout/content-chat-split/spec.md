@@ -30,7 +30,7 @@ recompute this equal width.
 - **THEN** the width equals half of free space for that window
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:1963
+> - crates/duckboard/src/area/interaction.rs:2123
 
 ### Scenario: Resize rebalances to half free space
 
@@ -44,7 +44,7 @@ recompute this equal width.
 - **THEN** the interaction column width equals half of free space for the new window
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:1982
+> - crates/duckboard/src/area/interaction.rs:2142
 
 ### Scenario: Half floors at minimum panel width
 
@@ -54,7 +54,7 @@ recompute this equal width.
 - **THEN** the width equals the minimum panel width
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:1996
+> - crates/duckboard/src/area/interaction.rs:2156
 
 ### Scenario: Half may exceed the old fixed max width
 
@@ -65,7 +65,7 @@ recompute this equal width.
 - **AND** the width is greater than 800 logical pixels
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:2014
+> - crates/duckboard/src/area/interaction.rs:2174
 
 ## Requirement: Grip customization
 
@@ -88,7 +88,7 @@ collapsing/restoring the content column SHALL NOT mark the panel customized by i
   is shown
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:2032
+> - crates/duckboard/src/area/interaction.rs:2192
 
 ### Scenario: Resize after lock keeps absolute width
 
@@ -98,7 +98,7 @@ collapsing/restoring the content column SHALL NOT mark the panel customized by i
 - **THEN** the interaction column width remains that absolute width
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:2053
+> - crates/duckboard/src/area/interaction.rs:2213
 
 ### Scenario: Open/close and content collapse do not lock
 
@@ -114,7 +114,7 @@ collapsing/restoring the content column SHALL NOT mark the panel customized by i
   window while the content column is shown
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:2122
+> - crates/duckboard/src/area/interaction.rs:2282
 
 ## Requirement: Content-hidden fill
 
@@ -141,7 +141,7 @@ content is visible).
   than a fixed equal-split width
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:2073
+> - crates/duckboard/src/area/interaction.rs:2233
 
 ### Scenario: No open tabs hides content column
 
@@ -153,7 +153,7 @@ content is visible).
 - **AND** the interaction column fills the remaining width after fixed left chrome
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:2090
+> - crates/duckboard/src/area/interaction.rs:2250
 
 ### Scenario: Opening a tab restores content column
 
@@ -169,4 +169,4 @@ content is visible).
 - **AND** the interaction column uses its equal or customized fixed width rather than fill
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:2106
+> - crates/duckboard/src/area/interaction.rs:2266

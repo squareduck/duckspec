@@ -98,6 +98,11 @@ pub struct ChatSession {
     /// the composer meter can show correct-ish fill after app restart.
     /// Zero when never observed or on legacy files without the field.
     pub context_tokens: usize,
+    /// Kept answer draft of a cancelled turn (user cancel or thrash trip)
+    /// that the agent runtime never recorded. Carried into the next send as
+    /// a system-reminder, then cleared. Persisted so the resync survives a
+    /// restart between the cancellation and the next send.
+    pub unsynced_draft: Option<String>,
 }
 
 impl ChatSession {
@@ -127,6 +132,7 @@ impl ChatSession {
             last_seeded_description: None,
             selected_model: None,
             context_tokens: 0,
+            unsynced_draft: None,
         }
     }
 }
@@ -151,6 +157,8 @@ struct PersistedSession {
     selected_model: Option<ModelRef>,
     #[serde(default)]
     context_tokens: usize,
+    #[serde(default)]
+    unsynced_draft: Option<String>,
 }
 
 /// What the title summariser should summarise. A "bare slash command" turn
@@ -346,9 +354,10 @@ pub fn load_sessions_for(scope: &str, project_root: Option<&Path>) -> Vec<ChatSe
             last_seeded_description: persisted.last_seeded_description,
             selected_model: persisted.selected_model,
             context_tokens: persisted.context_tokens,
+            unsynced_draft: persisted.unsynced_draft,
         });
     }
-    sessions.sort_by(|a, b| b.created_at_nanos.cmp(&a.created_at_nanos));
+    sessions.sort_by_key(|s| std::cmp::Reverse(s.created_at_nanos));
     // At load time we don't yet have the caller's preferred label (exploration
     // display_name may differ from scope key). Use the scope key as a
     // placeholder; callers re-reconcile with the right label afterwards.
@@ -391,6 +400,7 @@ pub fn save_session(session: &ChatSession, project_root: Option<&Path>) -> anyho
         last_seeded_description: session.last_seeded_description.clone(),
         selected_model: session.selected_model.clone(),
         context_tokens: session.context_tokens,
+        unsynced_draft: session.unsynced_draft.clone(),
     };
     let data = serde_json::to_string_pretty(&persisted)?;
     write_atomic(&path, data.as_bytes())?;
@@ -1098,6 +1108,71 @@ mod tests {
             // THEN the load succeeds AND the loaded session's context usage total is zero.
             let sess = loaded.iter().find(|s| s.id == "sess-legacy-ctx").unwrap();
             assert_eq!(sess.context_tokens, 0);
+            assert_eq!(sess.messages.len(), 1);
+        });
+    }
+
+    /// @spec chat/persistence Unsynced draft durability: Unsynced draft round-trips through persist and load
+    #[test]
+    fn unsynced_draft_round_trips_through_persist_and_load() {
+        let tmp = FsTmp::new();
+        with_home(tmp.path(), || {
+            let root = tmp.path().join("project-draft-rt");
+            std::fs::create_dir_all(&root).unwrap();
+
+            // GIVEN a session holding an unsynced draft.
+            let mut session = ChatSession::new("draft-scope".into());
+            session.id = "sess-draft".into();
+            session.unsynced_draft = Some("interrupted reply body".into());
+
+            // WHEN the session is persisted and loaded again.
+            save_session(&session, Some(&root)).unwrap();
+            let loaded = load_sessions_for("draft-scope", Some(&root));
+
+            // THEN the loaded session holds the same unsynced draft.
+            let sess = loaded.iter().find(|s| s.id == "sess-draft").unwrap();
+            assert_eq!(
+                sess.unsynced_draft.as_deref(),
+                Some("interrupted reply body")
+            );
+        });
+    }
+
+    /// @spec chat/persistence Unsynced draft durability: A legacy session without an unsynced draft still loads
+    #[test]
+    fn legacy_session_without_unsynced_draft_still_loads() {
+        let tmp = FsTmp::new();
+        with_home(tmp.path(), || {
+            let root = tmp.path().join("project-legacy-draft");
+            std::fs::create_dir_all(&root).unwrap();
+
+            // GIVEN a session file that does not include an unsynced draft field.
+            let dir = scope_dir("legacy-draft-scope", Some(&root));
+            std::fs::create_dir_all(&dir).unwrap();
+            let path = dir.join("sess-legacy-draft.json");
+            let raw = r#"{
+  "id": "sess-legacy-draft",
+  "created_at_nanos": 1,
+  "messages": [
+    {
+      "role": "User",
+      "content": [{ "Text": "hello" }],
+      "timestamp": ""
+    }
+  ]
+}"#;
+            std::fs::write(&path, raw).unwrap();
+            assert!(
+                !raw.contains("unsynced_draft"),
+                "fixture must omit unsynced_draft"
+            );
+
+            // WHEN the session is loaded.
+            let loaded = load_sessions_for("legacy-draft-scope", Some(&root));
+
+            // THEN the load succeeds AND the loaded session holds no unsynced draft.
+            let sess = loaded.iter().find(|s| s.id == "sess-legacy-draft").unwrap();
+            assert_eq!(sess.unsynced_draft, None);
             assert_eq!(sess.messages.len(), 1);
         });
     }
