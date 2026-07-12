@@ -360,7 +360,7 @@ pub struct AgentSession {
     /// True while a mid-turn structured choice is pending. Chips stay visible
     /// even though `is_streaming` remains true for the open turn.
     pub is_awaiting_user: bool,
-    /// Settled oneshot parse for under-input chrome only.
+    /// Settled oneshot reply strings (0–3); may fill fast-response chips when eligible.
     /// Ephemeral — not persisted. Never seeded into `next_actions`.
     pub agent_default_prompts: Vec<String>,
     /// Monotonic generation; oneshot results apply only when gen matches.
@@ -501,11 +501,16 @@ impl AgentSession {
     /// Invalidate in-flight reply-suggestion oneshots and drop agent defaults.
     /// No oneshot is outstanding for the new gen, so readiness is ready with an
     /// empty list until the next TurnComplete spawns one. Called when a turn
-    /// starts streaming. Does not clear `next_actions`.
+    /// starts streaming. Does not clear `next_actions`. Clears oneshot-hint
+    /// chips when not awaiting a user choice.
     pub fn clear_agent_default_prompts(&mut self) {
         self.default_prompts_gen = self.default_prompts_gen.wrapping_add(1);
         self.agent_default_prompts.clear();
         self.default_prompts_pending = false;
+        if !self.is_awaiting_user {
+            self.fast_response = crate::fast_response::clear();
+            self.fast_response_top_pad = 0.0;
+        }
     }
 
     /// Mark a new reply-suggestion oneshot as in flight for the current gen.
@@ -562,7 +567,7 @@ impl AgentSession {
         );
     }
 
-    /// Under-input oneshot suggestions when agent input hints is enabled.
+    /// Settled oneshot display list when agent input hints is enabled.
     /// Never includes next-card actions or lifecycle bootstrap.
     pub fn session_oneshot_prompts(&self, agent_input_hints: bool) -> Vec<String> {
         crate::default_prompts::oneshot_display_prompts(
@@ -1882,7 +1887,7 @@ fn handle_agent_chat(
     state: &mut InteractionState,
     msg: agent_chat::Msg,
     highlighter: &SyntaxHighlighter,
-    agent_input_hints: bool,
+    _agent_input_hints: bool,
 ) {
     let Some(ax) = state.active_mut() else { return };
     match msg {
@@ -2095,23 +2100,7 @@ fn handle_agent_chat(
             // working and signal focus for the follow-up focus task.
             ax.chat_input_focused = true;
         }
-        agent_chat::Msg::SendOneshotSuggestion => {
-            // Empty Cmd-Enter: send armed oneshot when ready; else no-op.
-            // Never used for next actions (those own plain Enter).
-            if !ax.chat_input.text().trim().is_empty() {
-                return;
-            }
-            let prompts = ax.session_oneshot_prompts(agent_input_hints);
-            let Some(text) = crate::default_prompts::oneshot_cmd_submit_text(
-                ax.default_prompts_pending,
-                ax.session.is_streaming,
-                agent_input_hints,
-                &prompts,
-            ) else {
-                return;
-            };
-            send_prompt_text(ax, text, highlighter);
-        }
+
         agent_chat::Msg::CancelPressed => {
             if let Some(handle) = &ax.agent_handle {
                 handle.cancel();
@@ -2426,9 +2415,10 @@ pub fn recover_from_lost_session(ax: &mut AgentSession, highlighter: &SyntaxHigh
 /// Send `text` as a new user turn on the active agent handle. Pushes the user
 /// message into the session, marks streaming, clears the input, and rebuilds
 /// the chat editor blocks. No-op if no agent handle is attached.
-/// Activate a fast-response pick. For a live user choice, answers in-band via
-/// the agent handle and does not invent a user transcript message. Clears any
-/// typed composer text so a partial custom answer is not left for a later send.
+/// Activate a fast-response pick. Live user choice answers in-band via the
+/// agent handle (no new user transcript message). Oneshot hints send the
+/// option text as a normal user turn. Clears typed composer text when answering
+/// a user choice so a partial custom answer is not left for a later send.
 pub fn activate_fast_response(
     ax: &mut AgentSession,
     pick: crate::fast_response::FastResponsePick,
@@ -2453,9 +2443,47 @@ pub fn activate_fast_response(
             rehighlight_input(&mut ax.chat_input, highlighter);
             ax.chat_completion.visible = false;
         }
+        FastResponseSource::OneshotHints => {
+            let FastResponsePick::Option { id: text } = pick;
+            ax.agent_default_prompts.clear();
+            ax.default_prompts_pending = false;
+            ax.fast_response = crate::fast_response::clear();
+            ax.fast_response_top_pad = 0.0;
+            send_prompt_text(ax, text, highlighter);
+        }
         FastResponseSource::None => {
             // No live source — nothing to activate (shell should be empty).
         }
+    }
+}
+
+/// Derive the fast-response shell from settled oneshot replies when eligible.
+/// Leaves a parked user-choice fill alone. Otherwise fills from oneshot or
+/// clears the shell.
+pub fn sync_oneshot_chips(ax: &mut AgentSession, agent_input_hints: bool) {
+    use crate::fast_response::{self, FastResponseSource};
+
+    if ax.is_awaiting_user
+        || matches!(
+            ax.fast_response.source,
+            FastResponseSource::UserChoice { .. }
+        )
+    {
+        return;
+    }
+
+    let prompts = ax.session_oneshot_prompts(agent_input_hints);
+    if crate::default_prompts::oneshot_chips_allowed(
+        ax.session.is_streaming,
+        ax.is_awaiting_user,
+        ax.next_actions.len(),
+        agent_input_hints,
+        prompts.len(),
+    ) {
+        ax.fast_response = fast_response::from_oneshot_hints(prompts);
+    } else {
+        ax.fast_response = fast_response::clear();
+        ax.fast_response_top_pad = 0.0;
     }
 }
 
@@ -2490,7 +2518,8 @@ pub fn plan_freeform_while_awaiting(
         crate::fast_response::FastResponseSource::UserChoice { correlation_id } => {
             Some(*correlation_id)
         }
-        crate::fast_response::FastResponseSource::None => None,
+        crate::fast_response::FastResponseSource::None
+        | crate::fast_response::FastResponseSource::OneshotHints => None,
     };
     Some(FreeformWhileAwaitingPlan {
         correlation_id,
@@ -3573,7 +3602,7 @@ pub fn view_column<'a, M: 'a + Clone>(
         Option<crate::widget::text_edit::HighlightRange>,
     )>,
     find_toolbar: Option<Element<'a, M>>,
-    agent_input_hints: bool,
+    _agent_input_hints: bool,
 ) -> Element<'a, M> {
     use iced::widget::column;
 
@@ -3622,7 +3651,6 @@ pub fn view_column<'a, M: 'a + Clone>(
                     context_max: agent_chat::model_context_window(&effective_model),
                 };
                 let w = wrap.clone();
-                let oneshot_prompts = ax.session_oneshot_prompts(agent_input_hints);
                 let next_action_idx = crate::default_prompts::clamp_active_index(
                     ax.next_actions.len(),
                     ax.next_action_idx,
@@ -3639,8 +3667,6 @@ pub fn view_column<'a, M: 'a + Clone>(
                     status,
                     &ax.next_actions,
                     next_action_idx,
-                    oneshot_prompts,
-                    ax.default_prompts_pending,
                     &ax.fast_response,
                     ax.fast_response_top_pad,
                     &ax.selection_pinned,

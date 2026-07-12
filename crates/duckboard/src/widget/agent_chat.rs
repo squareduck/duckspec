@@ -3,7 +3,6 @@
 use iced::widget::{
     Space, button, column, container, pick_list, row, rule, scrollable, stack, text,
 };
-use iced::widget::text::Wrapping;
 
 pub const CHAT_SCROLLABLE_ID: &str = "agent-chat-scroll";
 pub const CHAT_INPUT_ID: &str = "agent-chat-input";
@@ -58,8 +57,6 @@ pub enum Msg {
     ModelSelected(ModelChoice),
     /// Cycle empty-input next actions (`+1` Tab, `-1` Shift-Tab).
     CycleNextAction(i8),
-    /// Empty Cmd-Enter: send the armed oneshot suggestion when ready.
-    SendOneshotSuggestion,
     /// Layout measure of the chat scrollable (viewport + content heights).
     /// Used to recompute the bottom-pin pad even when content fits the
     /// viewport and iced suppresses `on_scroll` notifications.
@@ -1061,10 +1058,6 @@ pub fn view<'a>(
     status: StatusInfo,
     next_actions: &'a [crate::meta_card::NextAction],
     next_action_idx: usize,
-    // Under-input oneshot suggestions (never next-card actions).
-    oneshot_prompts: Vec<String>,
-    // True while the reply-suggestion oneshot is outstanding.
-    default_prompts_pending: bool,
     // Multi-option fast-response shell (send form derived in view).
     fast_response: &'a crate::fast_response::FastResponse,
     // Spacer above chips when history is shorter than the viewport.
@@ -1190,10 +1183,9 @@ pub fn view<'a>(
 
     // Input area — promoted to the custom TextEdit widget so prompts get
     // markdown syntax highlighting and the full editor toolkit (undo,
-    // word-nav, selection). Plain Enter sends via `on_submit`; empty Cmd+Enter
-    // sends oneshot; Shift+Enter inserts a newline. Grows via `fit_content`.
-    // Display-only key prefixes on ghost / oneshot text; send paths never
-    // include the markers (next_actions.send / oneshot_cmd_submit_text).
+    // word-nav, selection). Plain Enter sends via `on_submit`; Shift+Enter
+    // inserts a newline. Grows via `fit_content`. Display-only key prefixes on
+    // ghost text; send paths use next_actions.send only.
     let show_tab_marker = crate::default_prompts::next_tab_marker_visible(
         input_empty,
         status.is_streaming,
@@ -1220,29 +1212,10 @@ pub fn view<'a>(
         .fit_content(true)
         .max_rows(CHAT_INPUT_MAX_ROWS)
         .transparent_bg(true)
-        .on_submit(Msg::SendPressed)
-        .on_empty_cmd_submit(Msg::SendOneshotSuggestion);
+        .on_submit(Msg::SendPressed);
     if !ghost.is_empty() {
         input = input.placeholder(ghost);
     }
-
-    // Oneshot chrome under the input only when empty and not mid-turn:
-    // loading while pending, list when ready. Never lists next-card actions.
-    let defaults_chrome = crate::default_prompts::defaults_chrome(
-        input_empty,
-        default_prompts_pending,
-        status.is_streaming,
-        oneshot_prompts.len(),
-    );
-    let defaults_chrome_el: Option<Element<'a, Msg>> = match defaults_chrome {
-        crate::default_prompts::DefaultsChrome::Hidden => None,
-        crate::default_prompts::DefaultsChrome::Loading => {
-            Some(view_default_prompts_loading())
-        }
-        crate::default_prompts::DefaultsChrome::List => oneshot_prompts
-            .first()
-            .map(|s| view_oneshot_suggestion(s)),
-    };
 
     let input_divider = rule::horizontal(1).style(|_theme: &iced::Theme| rule::Style {
         color: theme::border_color(),
@@ -1401,9 +1374,6 @@ pub fn view<'a>(
     }
 
     composer_col = composer_col.push(input);
-    if let Some(chrome) = defaults_chrome_el {
-        composer_col = composer_col.push(chrome);
-    }
     composer_col = composer_col.push(meta_row);
 
     // Horizontal padding here sums with TextEdit's internal CONTENT_PAD (8px)
@@ -1791,54 +1761,6 @@ fn view_fast_response_chip<'a>(
         })
         .into()
 }
-
-/// Quiet loading strip while the reply-suggestion oneshot is pending.
-fn view_default_prompts_loading<'a>() -> Element<'a, Msg> {
-    const CONTENT_PAD: f32 = 8.0;
-    container(
-        text("…")
-            .size(theme::content_size())
-            .color(theme::text_muted())
-            .font(theme::content_font()),
-    )
-    .padding(iced::Padding {
-        top: text_edit::CONTENT_PAD_Y,
-        right: 0.0,
-        bottom: text_edit::CONTENT_PAD_Y,
-        left: CONTENT_PAD,
-    })
-    .width(Length::Fill)
-    .into()
-}
-
-/// Under-input oneshot: display-only `⌘↩` prefix before the suggestion text.
-/// Soft-wraps; full text stays visible. Send uses the bare suggestion string.
-fn view_oneshot_suggestion<'a>(suggestion: &str) -> Element<'a, Msg> {
-    const CONTENT_PAD: f32 = 8.0;
-    let color = theme::text_muted();
-    let label = format!(
-        "{}  {suggestion}",
-        crate::default_prompts::ONESHOT_CMD_ENTER_MARKER
-    );
-    container(
-        text(label)
-            .size(theme::content_size())
-            .color(color)
-            // UI font so ⌘ renders; content monospace often lacks the glyph.
-            .font(theme::ui_font())
-            .width(Length::Fill)
-            .wrapping(Wrapping::Word),
-    )
-    .padding(iced::Padding {
-        top: text_edit::CONTENT_PAD_Y,
-        right: 0.0,
-        bottom: text_edit::CONTENT_PAD_Y,
-        left: CONTENT_PAD,
-    })
-    .width(Length::Fill)
-    .into()
-}
-
 
 // view_status_bar removed: model + context now blend into the input area
 // (see `view`), and stream state is conveyed by the streaming indicator.

@@ -101,15 +101,16 @@ impl std::fmt::Display for DuplexError {
 }
 
 impl ClaudeDuplex {
+    /// Test helper: [`open_with_first_prompt_resolved`] with auto-allow for all
+    /// control permissions (no parent AskUserQuestion bridge).
+    ///
     /// Spawn Claude, write the first user message, then read init + stream until
     /// `result`. Live `claude` only emits a session id after user content, so
     /// this path never waits for init before write.
     ///
-    /// Profile updates are delivered via `on_update` as each Claude line is
-    /// mapped (not batched until the end).
-    ///
     /// `resume`: `None` for a fresh conversation; `Some(id)` for `--resume`.
     /// Missing resume sessions surface as [`DuplexError::SessionNotFound`].
+    #[cfg(test)]
     pub async fn open_with_first_prompt(
         factory: &ClaudeSpawnFactory,
         cwd: &Path,
@@ -136,8 +137,9 @@ impl ClaudeDuplex {
         .await
     }
 
-    /// Like [`open_with_first_prompt`] with an explicit control-permission resolver
-    /// (used when the ACP parent can answer AskUserQuestion mid-turn).
+    /// Spawn Claude, write the first user message, then stream until `result`,
+    /// with an explicit control-permission resolver (ACP parent answers
+    /// AskUserQuestion mid-turn).
     #[allow(clippy::too_many_arguments)]
     pub async fn open_with_first_prompt_resolved(
         factory: &ClaudeSpawnFactory,
@@ -232,19 +234,14 @@ impl ClaudeDuplex {
         Ok(duplex)
     }
 
-    /// Write one user message and stream mapped profile updates until `result`.
-    ///
-    /// Each mapped update is delivered via `on_update` as soon as its Claude
-    /// line is read — before the prompt result is known.
-    ///
-    /// Control / permission lines are resolved via `resolve` (AskUserQuestion →
-    /// parent choice; ordinary tools → auto-allow).
+    /// Test helper: [`prompt_with_resolver`] with auto-allow for all control
+    /// permissions (no parent AskUserQuestion bridge).
+    #[cfg(test)]
     pub async fn prompt(
         &mut self,
         content: Vec<Value>,
         on_update: &mut (dyn FnMut(Value) + Send),
     ) -> Result<(), DuplexError> {
-        // Default: auto-allow every control permission (headless / tests without bridge).
         let mut auto = |_rid: String, _name: String, _input: Value| {
             Box::pin(async { Ok(ask_user::auto_allow_ordinary_tool()) })
                 as Pin<Box<dyn Future<Output = Result<PermissionDecision, DuplexError>> + Send>>
@@ -253,7 +250,13 @@ impl ClaudeDuplex {
             .await
     }
 
-    /// Like [`prompt`](Self::prompt) with an explicit control-permission resolver.
+    /// Write one user message and stream mapped profile updates until `result`.
+    ///
+    /// Each mapped update is delivered via `on_update` as soon as its Claude
+    /// line is read — before the prompt result is known.
+    ///
+    /// Control / permission lines are resolved via `resolve` (AskUserQuestion →
+    /// parent choice; ordinary tools → auto-allow).
     pub async fn prompt_with_resolver(
         &mut self,
         content: Vec<Value>,

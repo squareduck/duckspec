@@ -4,32 +4,21 @@ Conversation-local empty-input defaults from a cheap-model oneshot: parse ordere
 suggestions (heuristic passed only as a soft hint), show and arm them only after the
 oneshot settles, and drive empty Enter plus Tab cycling from that list alone.
 
-Empty-composer next actions from lifecycle bootstrap (empty session) or a trailing `next`
-meta card (after the first turn), shown as ghost text with empty Enter and Tab cycle;
-optional settings-gated oneshot reply suggestion as a single under-input line sent only
-with empty Cmd-Enter.
+Empty-composer next actions from lifecycle bootstrap or a trailing `next` meta card, shown
+as ghost text with empty Enter and Tab cycle; optional settings-gated oneshot reply
+suggestions (up to three freeform `REPLY:` lines) that may fill fast-response chips only
+when there is no next-action ghost.
 
 ## Requirement: Parsed suggestion list
 
-Raw model output SHALL be reduced to at most one non-empty string taken from lines that
+Raw model output SHALL be reduced to at most three non-empty strings taken from lines that
 start with the prefix `REPLY:`, in source order. Lines that do not match that prefix SHALL
 be ignored. Text after the prefix is trimmed; empty results after trim are dropped.
 Unknown slash forms (including command names not in any allow-list) SHALL be kept as
 written. A soft character budget in the oneshot instruction SHALL NOT cause the parser to
 truncate reply text — over-budget strings SHALL be kept in full after trim. When more than
-one `REPLY:` line is present, only the first non-empty result SHALL be kept.
-
-> test: code
-
-### Scenario: REPLY lines capped at one
-
-- **GIVEN** model output with two lines each starting with `REPLY:` and non-empty text
-- **WHEN** the suggestion list is parsed
-- **THEN** the list has exactly one entry
-- **AND** that entry is the first reply text in source order
-
-> test: code
-> - crates/duckchat/src/reply_suggest.rs:64
+three `REPLY:` lines are present, only the first three non-empty results SHALL be kept.
+When fewer than three non-empty results are present, all of them SHALL be kept in order.
 
 ### Scenario: No matching lines yields an empty list
 
@@ -38,7 +27,7 @@ one `REPLY:` line is present, only the first non-empty result SHALL be kept.
 - **THEN** the list is empty
 
 > test: code
-> - crates/duckchat/src/reply_suggest.rs:78
+> - crates/duckchat/src/reply_suggest.rs:94
 
 ### Scenario: Unknown slash text is preserved
 
@@ -47,7 +36,7 @@ one `REPLY:` line is present, only the first non-empty result SHALL be kept.
 - **THEN** the list contains that slash text unchanged
 
 > test: code
-> - crates/duckchat/src/reply_suggest.rs:85
+> - crates/duckchat/src/reply_suggest.rs:101
 
 ### Scenario: Reply longer than 100 characters is preserved in full
 
@@ -59,7 +48,27 @@ one `REPLY:` line is present, only the first non-empty result SHALL be kept.
 - **THEN** the list contains that full reply text unchanged (no character truncation)
 
 > test: code
-> - crates/duckchat/src/reply_suggest.rs:98
+> - crates/duckchat/src/reply_suggest.rs:114
+
+### Scenario: REPLY lines capped at three
+
+- **GIVEN** model output with four lines each starting with `REPLY:` and non-empty text
+- **WHEN** the suggestion list is parsed
+- **THEN** the list has exactly three entries
+- **AND** those entries are the first three reply texts in source order
+
+> test: code
+> - crates/duckchat/src/reply_suggest.rs:65
+
+### Scenario: Fewer than three REPLY lines are kept as-is
+
+- **GIVEN** model output with two lines each starting with `REPLY:` and non-empty text
+- **WHEN** the suggestion list is parsed
+- **THEN** the list has exactly two entries
+- **AND** those entries are the two reply texts in source order
+
+> test: code
+> - crates/duckchat/src/reply_suggest.rs:81
 
 ## Requirement: Oneshot request framing
 
@@ -67,12 +76,12 @@ The reply-suggestion request SHALL carry the full last assistant message and the
 user message when present, without line-count truncation and without a truncation marker
 for omitted earlier lines. The request SHALL NOT include a lifecycle heuristic. The
 request SHALL NOT include discovered slash command names as priming hints. The instruction
-framing SHALL ask for at most one line of the form `REPLY: <text>` that suggests a natural
-freeform user response continuing the dialogue from those messages, and SHALL NOT prefer
-duckspec stage slash commands as the default job of the oneshot. An empty assistant
-message SHALL yield an empty suggestion list without calling the model.
-
-> test: code
+framing SHALL ask for up to three lines of the form `REPLY: <text>` that suggest natural
+freeform user responses continuing the dialogue — in order: most likely reply, alternative
+reply, and negative or decline reply — and SHALL allow omitting a line when it does not
+fit. The instruction SHALL NOT prefer duckspec stage slash commands as the default job of
+the oneshot. An empty assistant message SHALL yield an empty suggestion list without
+calling the model.
 
 ### Scenario: Full assistant and user messages are embedded without line truncation
 
@@ -84,7 +93,7 @@ message SHALL yield an empty suggestion list without calling the model.
 - **AND** no line-truncation marker is present for omitted earlier content
 
 > test: code
-> - crates/duckchat/src/reply_suggest.rs:108
+> - crates/duckchat/src/reply_suggest.rs:124
 
 ### Scenario: Lifecycle heuristic is not included in the request
 
@@ -93,18 +102,7 @@ message SHALL yield an empty suggestion list without calling the model.
 - **THEN** the prompt body does not include a lifecycle heuristic block
 
 > test: code
-> - crates/duckchat/src/reply_suggest.rs:155
-
-### Scenario: Instruction asks for a freeform user reply and at most one REPLY line
-
-- **GIVEN** the shared reply-suggestion instruction text
-- **WHEN** the instruction is inspected
-- **THEN** it asks for a natural freeform user reply continuing the dialogue
-- **AND** it allows at most one `REPLY:` line
-- **AND** it does not prefer stage slash commands as the oneshot's primary job
-
-> test: code
-> - crates/duckchat/src/reply_suggest.rs:172
+> - crates/duckchat/src/reply_suggest.rs:171
 
 ### Scenario: Empty assistant yields empty list without a model call
 
@@ -114,48 +112,40 @@ message SHALL yield an empty suggestion list without calling the model.
 - **AND** no model call is made
 
 > test: code
-> - crates/duckchat/src/reply_suggest.rs:199
+> - crates/duckchat/src/reply_suggest.rs:227
+
+### Scenario: Instruction asks for up to three ordered freeform REPLY lines
+
+- **GIVEN** the shared reply-suggestion instruction text
+
+- **WHEN** the instruction is inspected
+
+- **THEN** it asks for natural freeform user replies continuing the dialogue
+
+- **AND** it allows up to three `REPLY:` lines in order most likely, alternative, and
+  negative or decline
+
+- **AND** it does not prefer stage slash commands as the oneshot's primary job
+
+> test: code
+> - crates/duckchat/src/reply_suggest.rs:188
 
 ## Requirement: Oneshot readiness
 
 After a non-priming turn completes and a reply-suggestion oneshot is started for a
 generation, oneshot suggestions SHALL be pending until that oneshot settles (success or
-failure for any reason, including oneshot timeout) for the same generation. While pending
-and the composer input is empty, the under-input oneshot row SHALL NOT present a
-suggestion string and a loading indicator SHALL be shown instead; empty Cmd-Enter SHALL
-NOT send a oneshot suggestion. Pending oneshot state SHALL NOT block empty Enter from
-sending an armed next action. When the oneshot settles for the matching generation,
-oneshot suggestions SHALL become ready: a non-empty single suggestion is presented under
-the input and empty Cmd-Enter is armed. Results for a superseded generation SHALL NOT
-present or arm oneshot suggestions. When no oneshot is outstanding, oneshot suggestions
-are ready (the suggestion may be absent). If the chat agent handle ends while a
-reply-suggestion oneshot is outstanding for the current generation without a matching
-settle, oneshot suggestions SHALL become ready (they SHALL NOT remain pending). While a
-main agent turn is in progress (streaming), under-input oneshot chrome SHALL NOT be
-presented — neither as a suggestion row nor as a loading indicator.
-
-> test: code
-
-### Scenario: Pending hides oneshot row and shows loading
-
-- **GIVEN** a pending reply-suggestion oneshot
-- **AND** an empty composer input
-- **WHEN** the under-input oneshot chrome is rendered
-- **THEN** the oneshot suggestion string is not shown
-- **AND** a loading indicator is shown
-
-> test: code
-> - crates/duckboard/src/default_prompts.rs:482
-
-### Scenario: Empty Cmd-Enter is a no-op while oneshot pending
-
-- **GIVEN** a pending reply-suggestion oneshot
-- **AND** an empty composer input
-- **WHEN** the user presses Cmd-Enter
-- **THEN** no oneshot suggestion is sent
-
-> test: code
-> - crates/duckboard/src/default_prompts.rs:497
+failure for any reason, including oneshot timeout) for the same generation. While pending,
+the system SHALL NOT present oneshot loading chrome and SHALL NOT present oneshot chip
+options from that in-flight generation. Pending oneshot state SHALL NOT block empty Enter
+from sending an armed next action. When the oneshot settles for the matching generation,
+oneshot suggestions SHALL become ready: a non-empty parse is the settled list used for
+chip eligibility; an empty parse or failure yields a ready empty list. Results for a
+superseded generation SHALL NOT change the session's ready oneshot list. When no oneshot
+is outstanding, oneshot suggestions are ready (the list may be empty). If the chat agent
+handle ends while a reply-suggestion oneshot is outstanding for the current generation
+without a matching settle, oneshot suggestions SHALL become ready (they SHALL NOT remain
+pending). There is no under-input oneshot suggestion row and no empty Cmd-Enter path for
+oneshot suggestions.
 
 ### Scenario: Empty Enter still sends next action while oneshot pending
 
@@ -166,19 +156,7 @@ presented — neither as a suggestion row nor as a loading indicator.
 - **THEN** the sent text is that active next-action entry
 
 > test: code
-> - crates/duckboard/src/default_prompts.rs:443
-
-### Scenario: Ready after settle arms the oneshot row
-
-- **GIVEN** a reply-suggestion oneshot that has settled for the current generation
-- **AND** a non-empty oneshot suggestion
-- **AND** an empty composer input
-- **WHEN** the under-input oneshot chrome is rendered
-- **THEN** that suggestion is shown
-- **AND** empty Cmd-Enter sends that suggestion
-
-> test: code
-> - crates/duckboard/src/default_prompts.rs:508
+> - crates/duckboard/src/default_prompts.rs:418
 
 ### Scenario: Superseded generation does not arm oneshot
 
@@ -187,44 +165,40 @@ presented — neither as a suggestion row nor as a loading indicator.
 - **THEN** the session's ready oneshot suggestion is unchanged
 
 > test: code
-> - crates/duckboard/src/default_prompts.rs:525
+> - crates/duckboard/src/default_prompts.rs:466
 
-### Scenario: Main turn in progress hides oneshot chrome
-
-- **GIVEN** a main agent turn is in progress
-- **AND** an empty composer input
-- **AND** a non-empty oneshot suggestion would otherwise be available
-- **WHEN** the under-input oneshot chrome is rendered
-- **THEN** the oneshot suggestion is not shown
-- **AND** a oneshot loading indicator is not shown
-
-> test: code
-> - crates/duckboard/src/default_prompts.rs:532
-
-### Scenario: Timed-out or failed oneshot settles to ready empty
+### Scenario: Failed or timed-out oneshot settles without presenting suggestions
 
 - **GIVEN** a pending reply-suggestion oneshot
 - **AND** that oneshot settles as a failure for the current generation
-- **AND** an empty composer input
-- **WHEN** the under-input oneshot chrome is rendered
-- **THEN** a loading indicator is not shown
-- **AND** oneshot suggestions are ready
-- **AND** no oneshot suggestion string is shown when the failure produced no parse
+- **WHEN** the settled oneshot list is inspected
+- **THEN** oneshot suggestions are ready
+- **AND** the settled list is empty when the failure produced no parse
 
 > test: code
-> - crates/duckboard/src/default_prompts.rs:551
+> - crates/duckboard/src/default_prompts.rs:473
 
-### Scenario: Agent handle ends while oneshot pending becomes ready
+### Scenario: Agent handle end while pending leaves suggestions ready empty
 
 - **GIVEN** a pending reply-suggestion oneshot
 - **AND** the chat agent handle ends without a settle for that generation
-- **AND** an empty composer input
-- **WHEN** the under-input oneshot chrome is rendered
-- **THEN** a loading indicator is not shown
-- **AND** oneshot suggestions are ready
+- **WHEN** oneshot readiness is inspected
+- **THEN** oneshot suggestions are ready
+- **AND** no oneshot loading chrome is shown
 
 > test: code
-> - crates/duckboard/src/default_prompts.rs:572
+> - crates/duckboard/src/default_prompts.rs:488
+
+### Scenario: Pending oneshot presents no loading chrome
+
+- **GIVEN** a pending reply-suggestion oneshot
+- **AND** an empty composer input
+- **WHEN** empty-composer oneshot chrome is evaluated
+- **THEN** no oneshot loading indicator is shown
+- **AND** no oneshot suggestion row is shown under the input
+
+> test: code
+> - crates/duckboard/src/default_prompts.rs:503
 
 ## Requirement: Agent input hints gate
 
@@ -232,10 +206,11 @@ A global agent input hints setting SHALL control whether reply-suggestion onesho
 after turns. The setting SHALL default to disabled. When agent input hints is disabled, a
 reply-suggestion oneshot SHALL NOT be started after a non-priming turn completes. When
 agent input hints is enabled, oneshot launch follows the non-priming turn rules of this
-capability (assistant text present and other launch conditions). There is no separate
-auto-messages setting that suppresses oneshots or next-action lists. Empty-session
-next-action bootstrap and the next-action list SHALL NOT depend on the agent input hints
-setting.
+capability (assistant text present and other launch conditions) and SHALL NOT start when
+the next-action list for that session is non-empty after the turn's next-action refresh.
+There is no separate auto-messages setting that suppresses oneshots or next-action lists.
+Empty-session next-action bootstrap and the next-action list SHALL NOT depend on the agent
+input hints setting.
 
 ### Scenario: Default agent input hints setting is disabled
 
@@ -244,7 +219,7 @@ setting.
 - **THEN** it is disabled
 
 > test: code
-> - crates/duckboard/src/config.rs:235
+> - crates/duckboard/src/config.rs:236
 
 ### Scenario: Oneshot launch requires agent input hints enabled
 
@@ -254,7 +229,7 @@ setting.
 - **THEN** a reply-suggestion oneshot is not started
 
 > test: code
-> - crates/duckboard/src/default_prompts.rs:470
+> - crates/duckboard/src/default_prompts.rs:445
 
 ### Scenario: Empty-session next actions remain when agent input hints disabled
 
@@ -265,7 +240,18 @@ setting.
 - **THEN** the list is exactly that single lifecycle option in empty-send form
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:745
+> - crates/duckboard/src/area/interaction.rs:750
+
+### Scenario: Oneshot launch is skipped when the next-action list is non-empty
+
+- **GIVEN** agent input hints enabled
+- **AND** a non-priming turn that has assistant text
+- **AND** a non-empty next-action list after that turn's next-action refresh
+- **WHEN** oneshot launch is decided
+- **THEN** a reply-suggestion oneshot is not started
+
+> test: code
+> - crates/duckboard/src/default_prompts.rs:457
 
 ## Requirement: Next-action list
 
@@ -293,7 +279,7 @@ bootstrap.
 - **THEN** the list is exactly that single lifecycle option
 
 > test: code
-> - crates/duckboard/src/default_prompts.rs:275
+> - crates/duckboard/src/default_prompts.rs:250
 
 ### Scenario: Empty session without lifecycle yields empty
 
@@ -303,7 +289,7 @@ bootstrap.
 - **THEN** the list is empty
 
 > test: code
-> - crates/duckboard/src/default_prompts.rs:288
+> - crates/duckboard/src/default_prompts.rs:263
 
 ### Scenario: Non-empty session uses trailing next actions only
 
@@ -319,7 +305,7 @@ bootstrap.
 - **THEN** the list is exactly those two trailing next send tokens in order
 
 > test: code
-> - crates/duckboard/src/default_prompts.rs:298
+> - crates/duckboard/src/default_prompts.rs:273
 
 ### Scenario: Non-empty session without trailing next yields empty
 
@@ -330,7 +316,7 @@ bootstrap.
 - **THEN** the list is empty
 
 > test: code
-> - crates/duckboard/src/default_prompts.rs:318
+> - crates/duckboard/src/default_prompts.rs:293
 
 ### Scenario: Oneshot results do not enter the next-action list
 
@@ -341,7 +327,7 @@ bootstrap.
 - **THEN** the list is empty
 
 > test: code
-> - crates/duckboard/src/default_prompts.rs:327
+> - crates/duckboard/src/default_prompts.rs:302
 
 ### Scenario: Empty exploration session seeds explore
 
@@ -350,7 +336,7 @@ bootstrap.
 - **THEN** the list is exactly the explore stage command in empty-send form
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:711
+> - crates/duckboard/src/area/interaction.rs:716
 
 ### Scenario: Empty change session with unfinished steps seeds apply
 
@@ -360,7 +346,7 @@ bootstrap.
 - **THEN** the list is exactly the apply stage command in empty-send form
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:724
+> - crates/duckboard/src/area/interaction.rs:729
 
 ## Requirement: Next-action empty-input send and cycle
 
@@ -386,7 +372,7 @@ list is non-empty (and the main turn is not streaming).
 - **THEN** the sent text is the send text of the entry at the active index
 
 > test: code
-> - crates/duckboard/src/default_prompts.rs:342
+> - crates/duckboard/src/default_prompts.rs:317
 
 ### Scenario: Empty submit is a no-op when the next-action list is empty
 
@@ -396,7 +382,7 @@ list is non-empty (and the main turn is not streaming).
 - **THEN** no next-action message is sent
 
 > test: code
-> - crates/duckboard/src/default_prompts.rs:364
+> - crates/duckboard/src/default_prompts.rs:339
 
 ### Scenario: Tab cycles next actions with wrap
 
@@ -408,7 +394,7 @@ list is non-empty (and the main turn is not streaming).
 - **AND** the composer input remains empty
 
 > test: code
-> - crates/duckboard/src/default_prompts.rs:390
+> - crates/duckboard/src/default_prompts.rs:365
 
 ### Scenario: Multi next shows a tab-available marker
 
@@ -418,83 +404,78 @@ list is non-empty (and the main turn is not streaming).
 - **THEN** a tab-available marker is shown before the ghost text
 
 > test: code
-> - crates/duckboard/src/default_prompts.rs:416
+> - crates/duckboard/src/default_prompts.rs:391
 
-## Requirement: Oneshot empty-input send
+## Requirement: Oneshot chip eligibility
 
-When the composer input is empty, oneshot suggestions are ready, and a non-empty oneshot
-suggestion is armed, Cmd-Enter SHALL send that suggestion. When no oneshot suggestion is
-armed, or oneshot suggestions are not ready, empty Cmd-Enter SHALL NOT send a oneshot
-suggestion. Empty Enter SHALL NOT send the oneshot suggestion (next actions own empty
-Enter). Empty Shift-Enter SHALL NOT send the oneshot suggestion.
-
-> test: code
-
-### Scenario: Empty Cmd-Enter sends the armed oneshot suggestion
-
-- **GIVEN** an empty composer input
-- **AND** ready oneshot suggestions
-- **AND** a non-empty armed oneshot suggestion
-- **WHEN** the user presses Cmd-Enter
-- **THEN** the sent text is that oneshot suggestion
+Settled oneshot replies SHALL be eligible to fill fast-response chips only when all of the
+following hold: agent input hints is enabled; no main agent turn is streaming; the session
+is not awaiting a user choice; the next-action list is empty; and the settled oneshot list
+is non-empty. When any of those conditions fails, oneshot replies SHALL NOT be eligible to
+fill chips.
 
 > test: code
-> - crates/duckboard/src/default_prompts.rs:589
 
-### Scenario: Empty Cmd-Enter is a no-op when no oneshot suggestion
+### Scenario: Eligible when idle with no next actions and a settled list
 
-- **GIVEN** an empty composer input
-- **AND** ready oneshot suggestions
-- **AND** no armed oneshot suggestion
-- **WHEN** the user presses Cmd-Enter
-- **THEN** no oneshot suggestion is sent
-
-> test: code
-> - crates/duckboard/src/default_prompts.rs:599
-
-### Scenario: Empty Enter does not send the oneshot suggestion
-
-- **GIVEN** an empty composer input
-- **AND** ready oneshot suggestions
-- **AND** a non-empty armed oneshot suggestion
+- **GIVEN** agent input hints enabled
+- **AND** no main agent turn in progress
+- **AND** the session is not awaiting a user choice
 - **AND** an empty next-action list
-- **WHEN** the user submits with empty input
-- **THEN** no message is sent
+- **AND** a non-empty settled oneshot list
+- **WHEN** oneshot chip eligibility is evaluated
+- **THEN** oneshot replies are eligible to fill chips
 
 > test: code
-> - crates/duckboard/src/default_prompts.rs:614
+> - crates/duckboard/src/default_prompts.rs:513
 
-## Requirement: Oneshot presentation
+### Scenario: Ineligible when next-action list is non-empty
 
-When the under-input oneshot chrome presents a ready non-empty oneshot suggestion, a
-Cmd-Enter marker SHALL appear before the suggestion text. The marker SHALL be legible in
-the UI (not a broken fallback glyph). The suggestion SHALL soft-wrap within the composer
-width. The full suggestion text SHALL remain visible — the chrome SHALL NOT hard-truncate
-or ellipsize the displayed value for length.
-
-> test: code
-
-### Scenario: Armed oneshot shows a Cmd-Enter marker before the suggestion
-
-- **GIVEN** a ready non-empty oneshot suggestion
-- **AND** an empty composer input
-- **WHEN** the under-input oneshot chrome is rendered
-- **THEN** a Cmd-Enter marker is shown before the suggestion text
+- **GIVEN** agent input hints enabled
+- **AND** no main agent turn in progress
+- **AND** the session is not awaiting a user choice
+- **AND** a non-empty next-action list
+- **AND** a non-empty settled oneshot list
+- **WHEN** oneshot chip eligibility is evaluated
+- **THEN** oneshot replies are not eligible to fill chips
 
 > test: code
-> - crates/duckboard/src/default_prompts.rs:627
+> - crates/duckboard/src/default_prompts.rs:519
 
-### Scenario: Long oneshot soft-wraps without clipping
+### Scenario: Ineligible while awaiting a user choice
 
-- **GIVEN** a ready non-empty oneshot suggestion whose text is wider than the composer
-  pane
+- **GIVEN** agent input hints enabled
+- **AND** the session is awaiting a user choice
+- **AND** an empty next-action list
+- **AND** a non-empty settled oneshot list
+- **WHEN** oneshot chip eligibility is evaluated
+- **THEN** oneshot replies are not eligible to fill chips
 
-- **AND** an empty composer input
+> test: code
+> - crates/duckboard/src/default_prompts.rs:525
 
-- **WHEN** the under-input oneshot chrome is rendered
+### Scenario: Ineligible while streaming
 
-- **THEN** that suggestion's text soft-wraps within the composer width
+- **GIVEN** agent input hints enabled
+- **AND** a main agent turn in progress
+- **AND** the session is not awaiting a user choice
+- **AND** an empty next-action list
+- **AND** a non-empty settled oneshot list
+- **WHEN** oneshot chip eligibility is evaluated
+- **THEN** oneshot replies are not eligible to fill chips
 
-- **AND** the entire suggestion text is visible without ellipsis or hard clip
+> test: code
+> - crates/duckboard/src/default_prompts.rs:531
 
-> manual: iced layout — confirm oneshot row soft-wraps and shows full text
+### Scenario: Ineligible when the settled list is empty
+
+- **GIVEN** agent input hints enabled
+- **AND** no main agent turn in progress
+- **AND** the session is not awaiting a user choice
+- **AND** an empty next-action list
+- **AND** an empty settled oneshot list
+- **WHEN** oneshot chip eligibility is evaluated
+- **THEN** oneshot replies are not eligible to fill chips
+
+> test: code
+> - crates/duckboard/src/default_prompts.rs:537

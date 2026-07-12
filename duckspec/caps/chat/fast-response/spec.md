@@ -8,6 +8,14 @@ while awaiting completes the pending choice as a custom answer (not cancel + nex
 While awaiting, the composer section uses a quiet accent tint, including the model
 selector.
 
+Source-neutral option chips for mid-turn structured choices and settled oneshot reply
+suggestions: ordered options with ⌘-number activation, ephemeral view layout, and
+empty-send formatting for bare skill names. A live user-choice request fills the shell for
+in-band answers; settled oneshot hints may fill it for ordinary user-message sends when
+eligible. Freeform composer submit while awaiting completes the pending choice as a custom
+answer. While awaiting, the composer section uses a quiet accent tint, including the model
+selector.
+
 ## Requirement: Ephemeral chips
 
 Fast-response chips SHALL NOT be stored in the session transcript as committed user
@@ -24,7 +32,7 @@ session.
 - **THEN** it does not contain a user message whose sole purpose is a fast-response chip
 
 > test: code
-> - crates/duckboard/src/fast_response.rs:298
+> - crates/duckboard/src/fast_response.rs:317
 
 ## Requirement: Visibility
 
@@ -33,11 +41,8 @@ least one option; either no main agent turn is in progress, or the session is aw
 user choice for an open turn; and either the composer input is empty, or the session is
 awaiting a user choice. While awaiting a user choice, a non-empty composer SHALL NOT hide
 the chips (composer is the custom-answer surface). When the session is not awaiting a user
-choice, a non-empty composer SHALL hide the chips. A pending or settled oneshot for
-under-input reply suggestions SHALL NOT hide the chips when those gates hold. The chips
-SHALL NOT be shown when any gate fails.
-
-> test: code
+choice, a non-empty composer SHALL hide the chips. The chips SHALL NOT be shown when any
+gate fails.
 
 ### Scenario: Idle empty composer with options shows chips
 
@@ -48,7 +53,7 @@ SHALL NOT be shown when any gate fails.
 - **THEN** the chips are shown
 
 > test: code
-> - crates/duckboard/src/fast_response.rs:196
+> - crates/duckboard/src/fast_response.rs:215
 
 ### Scenario: Streaming without awaiting user hides chips
 
@@ -60,7 +65,7 @@ SHALL NOT be shown when any gate fails.
 - **THEN** the chips are not shown
 
 > test: code
-> - crates/duckboard/src/fast_response.rs:203
+> - crates/duckboard/src/fast_response.rs:222
 
 ### Scenario: Awaiting user shows chips while turn is open
 
@@ -72,7 +77,7 @@ SHALL NOT be shown when any gate fails.
 - **THEN** the chips are shown
 
 > test: code
-> - crates/duckboard/src/fast_response.rs:210
+> - crates/duckboard/src/fast_response.rs:229
 
 ### Scenario: Non-empty composer hides chips when not awaiting
 
@@ -83,7 +88,7 @@ SHALL NOT be shown when any gate fails.
 - **THEN** the chips are not shown
 
 > test: code
-> - crates/duckboard/src/fast_response.rs:218
+> - crates/duckboard/src/fast_response.rs:237
 
 ### Scenario: Awaiting user shows chips with non-empty composer
 
@@ -94,7 +99,7 @@ SHALL NOT be shown when any gate fails.
 - **THEN** the chips are shown
 
 > test: code
-> - crates/duckboard/src/fast_response.rs:226
+> - crates/duckboard/src/fast_response.rs:245
 
 ### Scenario: Empty options hide chips
 
@@ -105,7 +110,7 @@ SHALL NOT be shown when any gate fails.
 - **THEN** the chips are not shown
 
 > test: code
-> - crates/duckboard/src/fast_response.rs:235
+> - crates/duckboard/src/fast_response.rs:254
 
 ## Requirement: Key resolution
 
@@ -124,7 +129,7 @@ oneshot suggestion. There is no cancel key binding on the shell.
 - **THEN** the selection is the second option
 
 > test: code
-> - crates/duckboard/src/fast_response.rs:243
+> - crates/duckboard/src/fast_response.rs:262
 
 ### Scenario: Resolution is a no-op when chips not visible
 
@@ -133,7 +138,7 @@ oneshot suggestion. There is no cancel key binding on the shell.
 - **THEN** there is no selection
 
 > test: code
-> - crates/duckboard/src/fast_response.rs:257
+> - crates/duckboard/src/fast_response.rs:276
 
 ## Requirement: Chip labels
 
@@ -152,7 +157,7 @@ present a cancel chip.
 - **AND** the label includes `/ds-step` after the hotkey
 
 > test: code
-> - crates/duckboard/src/fast_response.rs:276
+> - crates/duckboard/src/fast_response.rs:295
 
 ## Requirement: Bottom pad
 
@@ -178,7 +183,7 @@ not sufficient).
 - **THEN** the pad height is 300
 
 > test: code
-> - crates/duckboard/src/fast_response.rs:286
+> - crates/duckboard/src/fast_response.rs:305
 
 ### Scenario: Content at or above viewport yields zero pad
 
@@ -188,27 +193,20 @@ not sufficient).
 - **THEN** the pad height is 0
 
 > test: code
-> - crates/duckboard/src/fast_response.rs:292
+> - crates/duckboard/src/fast_response.rs:311
 
 ## Requirement: Population
 
 For ordinary change, exploration, caps, and codex chat sessions, fast-response options
-SHALL be empty after a refresh that is not carrying a live user-choice fill — the product
-path does not compose lifecycle phase chips, affirm rows, or decline rows into the shell.
-While the session is awaiting a user choice with non-empty options, a refresh SHALL NOT
-clear those options. A later non-question path MAY fill the shell; until filled, the shell
-remains empty and therefore not shown.
+SHALL be empty after a refresh when the session is not awaiting a user choice and oneshot
+replies are not eligible to fill chips. While the session is awaiting a user choice with
+non-empty options, a refresh SHALL NOT clear those options. When oneshot replies are
+eligible, a refresh SHALL re-sync the shell from the settled oneshot list (non-empty
+options with oneshot-hint authority). A live mid-turn user-choice request SHALL fill the
+shell from that choice and SHALL overwrite any oneshot-hint fill. A settled oneshot result
+SHALL NOT replace the shell while the session is awaiting a user choice.
 
 > test: code
-
-### Scenario: Ordinary refresh leaves options empty when not awaiting a choice
-
-- **GIVEN** a change or exploration session that is not awaiting a user choice
-- **WHEN** fast response is refreshed for that session
-- **THEN** the options list is empty
-
-> test: code
-> - crates/duckboard/src/area/change.rs:2118
 
 ### Scenario: Refresh does not clear options while awaiting a user choice
 
@@ -217,8 +215,61 @@ remains empty and therefore not shown.
 - **THEN** the options list remains non-empty
 
 > test: code
-> - crates/duckboard/src/area/change.rs:2143
-> - crates/duckboard/src/fast_response.rs:321
+> - crates/duckboard/src/area/change.rs:2146
+> - crates/duckboard/src/fast_response.rs:340
+
+### Scenario: Ordinary refresh leaves options empty when oneshot is ineligible
+
+- **GIVEN** a change or exploration session that is not awaiting a user choice
+- **AND** oneshot replies are not eligible to fill chips
+- **WHEN** fast response is refreshed for that session
+- **THEN** the options list is empty
+
+> test: code
+> - crates/duckboard/src/area/change.rs:2106
+
+### Scenario: Refresh preserves oneshot fill when still eligible
+
+- **GIVEN** a session that is not awaiting a user choice
+- **AND** oneshot replies are eligible with a non-empty settled list
+- **AND** the shell is filled from that oneshot list
+- **WHEN** fast response is refreshed for that session
+- **THEN** the options list remains non-empty
+- **AND** the options match the settled oneshot list in order
+
+> test: code
+> - crates/duckboard/src/area/change.rs:2185
+
+### Scenario: Settled eligible oneshot fills the option shell
+
+- **GIVEN** a session that is not awaiting a user choice
+- **AND** oneshot replies are eligible with a non-empty settled list
+- **WHEN** the oneshot shell is synced
+- **THEN** the options list contains those settled replies in order
+
+> test: code
+> - crates/duckboard/src/area/change.rs:2225
+
+### Scenario: Live user choice overwrites oneshot fill
+
+- **GIVEN** a shell filled from settled oneshot hints
+- **AND** a mid-turn user-choice request with at least one option
+- **WHEN** that user-choice request is applied
+- **THEN** the options list matches the user-choice options
+- **AND** the shell is no longer filled from oneshot hints
+
+> test: code
+> - crates/duckboard/src/area/change.rs:2253
+
+### Scenario: Oneshot settle does not replace a live user-choice fill
+
+- **GIVEN** a session awaiting a user choice with non-empty fast-response options
+- **AND** a settled oneshot list that would be eligible if not awaiting
+- **WHEN** the oneshot shell is synced
+- **THEN** the options list remains the user-choice options
+
+> test: code
+> - crates/duckboard/src/area/change.rs:2285
 
 ## Requirement: Question activation
 
@@ -236,7 +287,7 @@ append a new user message to the session transcript for that activation.
 - **AND** the session transcript does not gain a new user message for the activation
 
 > test: code
-> - crates/duckboard/src/fast_response.rs:343
+> - crates/duckboard/src/fast_response.rs:362
 
 ## Requirement: Freeform while awaiting
 
@@ -265,7 +316,7 @@ transcript message solely for that custom answer.
 - **AND** the text is not left only staged in the interrupt queue
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:1680
+> - crates/duckboard/src/area/interaction.rs:1685
 
 ## Requirement: Awaiting composer chrome
 
@@ -285,7 +336,7 @@ it does not stand out as an untinted control.
 - **THEN** the composer section uses the quiet accent awaiting tint
 
 > test: code
-> - crates/duckboard/src/fast_response.rs:372
+> - crates/duckboard/src/fast_response.rs:413
 
 ### Scenario: Not awaiting leaves the composer section untinted
 
@@ -294,7 +345,7 @@ it does not stand out as an untinted control.
 - **THEN** the composer section does not use the quiet accent awaiting tint
 
 > test: code
-> - crates/duckboard/src/fast_response.rs:389
+> - crates/duckboard/src/fast_response.rs:430
 
 ### Scenario: Model selector matches the composer section tint while awaiting
 
@@ -303,7 +354,7 @@ it does not stand out as an untinted control.
 - **THEN** it uses the same quiet accent awaiting tint as the composer section
 
 > test: code
-> - crates/duckboard/src/fast_response.rs:401
+> - crates/duckboard/src/fast_response.rs:442
 
 ## Requirement: Empty-send formatting
 
@@ -321,7 +372,7 @@ string.
 - **THEN** the send text is that name with a single leading `/`
 
 > test: code
-> - crates/duckboard/src/fast_response.rs:174
+> - crates/duckboard/src/fast_response.rs:193
 
 ### Scenario: Already-slashed command is preserved
 
@@ -330,4 +381,22 @@ string.
 - **THEN** the send text equals the stored name
 
 > test: code
-> - crates/duckboard/src/fast_response.rs:187
+> - crates/duckboard/src/fast_response.rs:206
+
+## Requirement: Oneshot activation
+
+When the shell is filled from settled oneshot reply hints and chips are visible,
+activating an option SHALL send that option's text as a normal user message on the
+session. It SHALL NOT complete a mid-turn user choice in-band for that activation.
+
+> test: code
+
+### Scenario: Option activation sends the oneshot text as a user message
+
+- **GIVEN** visible chips filled from settled oneshot hints with at least one option
+- **WHEN** the first option is activated
+- **THEN** a new user message is sent whose text is that option's text
+- **AND** no mid-turn user choice is completed in-band for the activation
+
+> test: code
+> - crates/duckboard/src/fast_response.rs:391

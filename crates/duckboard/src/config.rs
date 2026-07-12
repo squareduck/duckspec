@@ -18,7 +18,7 @@ pub struct Config {
     /// the built-in default. Legacy bare-string values load as the
     /// `claude-code` harness via `ModelRef`'s deserialize shim.
     pub model_defaults: HashMap<String, ModelRef>,
-    /// Chat affordances: under-input agent hints.
+    /// Chat affordances: optional oneshot reply chips after a turn.
     pub chat: ChatConfig,
 }
 
@@ -26,7 +26,8 @@ pub struct Config {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ChatConfig {
-    /// Under-input agent (oneshot) suggestions after a turn. Default off.
+    /// After a turn, run a cheap oneshot for freeform reply chips when eligible.
+    /// Default off (model cost).
     pub agent_input_hints: bool,
 }
 

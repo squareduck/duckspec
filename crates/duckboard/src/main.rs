@@ -1172,6 +1172,7 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                 area::change::refresh_fast_response(
                     &mut state.interactions,
                     &state.project,
+                    state.config.chat.agent_input_hints,
                     dirty,
                 );
                 return focus_chat_input();
@@ -1581,7 +1582,8 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                                 ax.idea_description.clone(),
                             ));
                         }
-                        // Reply-suggestion oneshot: gated by agent input hints.
+                        // Reply-suggestion oneshot: gated by agent input hints
+                        // and empty next-action list (skip model when ghost wins).
                         if let Some((assistant, user)) =
                             default_prompts::last_assistant_and_user(&ax.session)
                         {
@@ -1590,6 +1592,7 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                                 agent_input_hints,
                                 was_priming,
                                 has_assistant,
+                                ax.next_actions.is_empty(),
                             ) && let Some(handle) = ax.agent_handle.clone()
                             {
                                 ax.begin_default_prompts_oneshot();
@@ -1602,6 +1605,8 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                                 ));
                             }
                         }
+                        // Shell empty until oneshot settles (or clear if ineligible).
+                        interaction::sync_oneshot_chips(ax, agent_input_hints);
                     }
                     AgentEvent::Error(msg) => {
                         // Defensive: stringified session-not-found (older
@@ -1675,8 +1680,8 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                         // confuse the next reconnect.
                         ax.priming_in_flight = false;
                         ax.pending_followup_prompt = None;
-                        // Belt: do not leave reply-suggestion chrome on loading
-                        // when the worker is gone with no DefaultPromptsReady.
+                        // Drop in-flight oneshot list/chips when the worker is
+                        // gone with no DefaultPromptsReady settle.
                         ax.clear_agent_default_prompts();
                         // Paint any deferred stream tail and drop streaming chrome.
                         force_materialize = true;
@@ -1839,6 +1844,7 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
             prompts_gen,
             result,
         } => {
+            let agent_input_hints = state.config.chat.agent_input_hints;
             let Some(ax) = state.agent_session_mut(&key) else {
                 return Task::none();
             };
@@ -1857,9 +1863,10 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                 return Task::none();
             };
             // Oneshot list (parse only; empty on fail) is ready. Next actions
-            // are independent and not updated here.
+            // are independent and not updated here. Sync chips when eligible.
             ax.agent_default_prompts = list;
             ax.default_prompts_pending = false;
+            interaction::sync_oneshot_chips(ax, agent_input_hints);
         }
         Message::ThemeChanged(mode) => {
             theme::set_mode(mode);
@@ -3132,7 +3139,6 @@ fn is_chat_focus_msg(msg: Option<&interaction::Msg>) -> bool {
                 // Empty Enter / send remounts input state; restore caret like Tab cycle.
                 | interaction::Msg::AgentChat(
                     ChatMsg::SendPressed
-                        | ChatMsg::SendOneshotSuggestion
                         | ChatMsg::ActivateFastResponse(_)
                         | ChatMsg::CycleNextAction(_)
                 )
@@ -3372,7 +3378,7 @@ struct ReconcileOutcome {
 
 /// Reload `ProjectData` and reconcile duckboard-local state: promote a selected
 /// exploration if a new change appeared, migrate subscriptions when a change
-/// was archived externally, and refresh the obvious-command hint.
+/// was archived externally, and refresh lifecycle next-command / oneshot chips.
 fn reload_and_reconcile(state: &mut State) -> ReconcileOutcome {
     use std::collections::HashSet;
 
@@ -3454,7 +3460,12 @@ fn reload_and_reconcile(state: &mut State) -> ReconcileOutcome {
     }
 
     let dirty = !state.change.changed_files.is_empty();
-    area::change::refresh_fast_response(&mut state.interactions, &state.project, dirty);
+    area::change::refresh_fast_response(
+        &mut state.interactions,
+        &state.project,
+        state.config.chat.agent_input_hints,
+        dirty,
+    );
     ReconcileOutcome {
         archived: archived_any,
         promoted,
@@ -3880,7 +3891,12 @@ fn refresh_changed_files(state: &mut State) {
     }
     // Commit chrome depends on dirty; recompose when the file list updates.
     let dirty = !state.change.changed_files.is_empty();
-    area::change::refresh_fast_response(&mut state.interactions, &state.project, dirty);
+    area::change::refresh_fast_response(
+        &mut state.interactions,
+        &state.project,
+        state.config.chat.agent_input_hints,
+        dirty,
+    );
 }
 
 /// Re-read any open `file:`-prefixed tabs whose underlying path matches
@@ -4080,7 +4096,6 @@ fn update_focused_column(state: &mut State, message: &Message) {
                     | ChatMsg::QueueAction(_)
                     | ChatMsg::SendPressed
                     | ChatMsg::ActivateFastResponse(_)
-                    | ChatMsg::SendOneshotSuggestion
                     | ChatMsg::ChatScrolled(_)
                     | ChatMsg::CycleNextAction(_)
             );

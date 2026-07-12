@@ -705,7 +705,7 @@ pub fn update(
     }
 
     let vcs_dirty = !state.changed_files.is_empty();
-    refresh_fast_response(interactions, project, vcs_dirty);
+    refresh_fast_response(interactions, project, agent_input_hints, vcs_dirty);
     // Cheap: one `read_dir` per exploration. Keeps `Exploration.session_count`
     // in sync so the close-button arming logic doesn't `read_dir` per frame.
     crate::chat_store::recount_explorations(
@@ -716,10 +716,10 @@ pub fn update(
 
 /// Compute the suggested next /ds-* command (without the leading slash) given
 /// the selected change's artifact state. Returns `None` for archived changes
-/// or when nothing is selected. Test-only — production paths use
-/// `refresh_obvious_command`, which iterates all interaction scopes.
+/// or when nothing is selected. Test-only — production paths refresh
+/// `scope_facts` / next-action bootstrap via `refresh_fast_response`.
 #[cfg(test)]
-fn compute_obvious_command(state: &State, project: &ProjectData) -> Option<String> {
+fn compute_lifecycle_command(state: &State, project: &ProjectData) -> Option<String> {
     let selected = state.selected_change.as_deref()?;
 
     // Exploration (virtual) — always orient first.
@@ -727,7 +727,7 @@ fn compute_obvious_command(state: &State, project: &ProjectData) -> Option<Strin
         return Some("ds-explore".into());
     }
 
-    obvious_command_from_artifacts(selected, project)
+    lifecycle_command_from_artifacts(selected, project)
 }
 
 /// A change's lifecycle position, derived from its artifact and step state.
@@ -897,35 +897,25 @@ pub fn change_scope_facts(name: &str, project: &ProjectData) -> Option<ChangeSco
     ))
 }
 
-/// Product path leaves fast response empty (options filled later for questions).
-/// Scope / phase / VCS no longer compose chips.
-pub fn build_fast_response(
-    _scope: &Scope,
-    _project: &ProjectData,
-    _session_empty: bool,
-    _vcs_dirty: bool,
-) -> crate::fast_response::FastResponse {
-    crate::fast_response::FastResponse::default()
-}
-
 /// Suggested next `/ds-*` command for a change, derived from its lifecycle
 /// facts. Thin caller over `change_scope_facts` so the placeholder and the
 /// scope orientation share one source of truth. Production paths derive the
-/// command inline from already-computed facts in `refresh_obvious_command`;
-/// this wrapper exists for the test-only `compute_obvious_command`.
+/// command from already-computed facts in `refresh_fast_response`; this
+/// wrapper exists for the test-only `compute_lifecycle_command`.
 #[cfg(test)]
-fn obvious_command_from_artifacts(name: &str, project: &ProjectData) -> Option<String> {
+fn lifecycle_command_from_artifacts(name: &str, project: &ProjectData) -> Option<String> {
     change_scope_facts(name, project).and_then(|f| f.next_command)
 }
 
-/// Refresh `fast_response` (empty shell) and `scope_facts` on every session of
-/// every change / exploration interaction. `scope_facts` still drives orientation
-/// and empty-session next-action bootstrap; shell options stay empty. Skips the
-/// shell when a session is awaiting a user choice so a live fill is not cleared.
+/// Refresh `scope_facts` and re-sync fast-response chips on every session of
+/// every change / exploration interaction. `scope_facts` drives orientation and
+/// empty-session next-action bootstrap. Shell is re-derived from settled oneshot
+/// when eligible; a parked user-choice fill is left alone.
 pub fn refresh_fast_response(
     interactions: &mut HashMap<Scope, InteractionState>,
     project: &ProjectData,
-    vcs_dirty: bool,
+    agent_input_hints: bool,
+    _vcs_dirty: bool,
 ) {
     for (scope, ix) in interactions.iter_mut() {
         if matches!(scope, Scope::Caps | Scope::Codex) {
@@ -937,15 +927,13 @@ pub fn refresh_fast_response(
             Scope::Exploration(_) | Scope::Caps | Scope::Codex => None,
         };
         for ax in ix.sessions.iter_mut() {
-            let session_empty = ax.session.messages.is_empty();
-            if !ax.is_awaiting_user {
-                ax.fast_response =
-                    build_fast_response(scope, project, session_empty, vcs_dirty);
-            }
             ax.scope_facts = facts.clone();
             // Next-action list uses scope_facts bootstrap and last assistant.
             // Not a turn boundary — keep Tab index if the list is unchanged.
             ax.refresh_next_actions(false);
+            // Re-sync oneshot chips after next-actions (eligibility depends on
+            // empty next-action list). Leaves UserChoice fills alone.
+            super::interaction::sync_oneshot_chips(ax, agent_input_hints);
         }
     }
 }
@@ -1909,7 +1897,7 @@ mod breadcrumb_tests {
     }
 
     #[test]
-    fn obvious_nothing_selected() {
+    fn lifecycle_nothing_selected() {
         let state = State {
             selected_change: None,
             expanded_sections: HashSet::new(),
@@ -1927,49 +1915,49 @@ mod breadcrumb_tests {
             pending_bindings: HashMap::new(),
         };
         let project = make_project(&[], &[]);
-        assert_eq!(compute_obvious_command(&state, &project), None);
+        assert_eq!(compute_lifecycle_command(&state, &project), None);
     }
 
     #[test]
-    fn obvious_exploration_always_explore() {
+    fn lifecycle_exploration_always_explore() {
         let state = make_state("exploration-1000", &[("exploration-1000", "Exploration 1")]);
         let project = make_project(&[], &[]);
         assert_eq!(
-            compute_obvious_command(&state, &project).as_deref(),
+            compute_lifecycle_command(&state, &project).as_deref(),
             Some("ds-explore")
         );
     }
 
     #[test]
-    fn obvious_archived_is_none() {
+    fn lifecycle_archived_is_none() {
         let state = make_state("2026-04-20-01-foo", &[]);
         let project = make_project(&[], &["2026-04-20-01-foo"]);
-        assert_eq!(compute_obvious_command(&state, &project), None);
+        assert_eq!(compute_lifecycle_command(&state, &project), None);
     }
 
     #[test]
-    fn obvious_empty_change_suggests_propose() {
+    fn lifecycle_empty_change_suggests_propose() {
         let state = make_state("foo", &[]);
         let project = make_project(&["foo"], &[]);
         assert_eq!(
-            compute_obvious_command(&state, &project).as_deref(),
+            compute_lifecycle_command(&state, &project).as_deref(),
             Some("ds-propose")
         );
     }
 
     #[test]
-    fn obvious_with_proposal_suggests_design() {
+    fn lifecycle_with_proposal_suggests_design() {
         let state = make_state("foo", &[]);
         let mut project = make_project(&["foo"], &[]);
         set_change(&mut project, "foo", |c| c.has_proposal = true);
         assert_eq!(
-            compute_obvious_command(&state, &project).as_deref(),
+            compute_lifecycle_command(&state, &project).as_deref(),
             Some("ds-design")
         );
     }
 
     #[test]
-    fn obvious_with_design_suggests_spec() {
+    fn lifecycle_with_design_suggests_spec() {
         let state = make_state("foo", &[]);
         let mut project = make_project(&["foo"], &[]);
         set_change(&mut project, "foo", |c| {
@@ -1977,13 +1965,13 @@ mod breadcrumb_tests {
             c.has_design = true;
         });
         assert_eq!(
-            compute_obvious_command(&state, &project).as_deref(),
+            compute_lifecycle_command(&state, &project).as_deref(),
             Some("ds-spec")
         );
     }
 
     #[test]
-    fn obvious_feature_flow_with_caps_suggests_step() {
+    fn lifecycle_feature_flow_with_caps_suggests_step() {
         let state = make_state("foo", &[]);
         let mut project = make_project(&["foo"], &[]);
         set_change(&mut project, "foo", |c| {
@@ -1992,13 +1980,13 @@ mod breadcrumb_tests {
             c.cap_tree = vec![tree_node("caps/auth")];
         });
         assert_eq!(
-            compute_obvious_command(&state, &project).as_deref(),
+            compute_lifecycle_command(&state, &project).as_deref(),
             Some("ds-step")
         );
     }
 
     #[test]
-    fn obvious_caps_without_design_still_suggests_step() {
+    fn lifecycle_caps_without_design_still_suggests_step() {
         // Design is optional: a feature change can go proposal → spec → step
         // with no design.md. Caps-but-no-steps must suggest `ds-step`, never
         // `ds-archive`, regardless of whether a design exists.
@@ -2009,13 +1997,13 @@ mod breadcrumb_tests {
             c.cap_tree = vec![tree_node("caps/auth")];
         });
         assert_eq!(
-            compute_obvious_command(&state, &project).as_deref(),
+            compute_lifecycle_command(&state, &project).as_deref(),
             Some("ds-step")
         );
     }
 
     #[test]
-    fn obvious_steps_unfinished_suggests_apply() {
+    fn lifecycle_steps_unfinished_suggests_apply() {
         let state = make_state("foo", &[]);
         let mut project = make_project(&["foo"], &[]);
         set_change(&mut project, "foo", |c| {
@@ -2025,7 +2013,7 @@ mod breadcrumb_tests {
             c.steps = vec![step(false), step(true)];
         });
         assert_eq!(
-            compute_obvious_command(&state, &project).as_deref(),
+            compute_lifecycle_command(&state, &project).as_deref(),
             Some("ds-apply")
         );
     }
@@ -2100,7 +2088,7 @@ mod breadcrumb_tests {
     }
 
     #[test]
-    fn obvious_all_steps_done_suggests_archive() {
+    fn lifecycle_all_steps_done_suggests_archive() {
         let state = make_state("foo", &[]);
         let mut project = make_project(&["foo"], &[]);
         set_change(&mut project, "foo", |c| {
@@ -2110,15 +2098,19 @@ mod breadcrumb_tests {
             c.steps = vec![step(true), step(true)];
         });
         assert_eq!(
-            compute_obvious_command(&state, &project).as_deref(),
+            compute_lifecycle_command(&state, &project).as_deref(),
             Some("ds-archive")
         );
     }
 
-    // @spec chat/fast-response Population: Ordinary refresh leaves options empty when not awaiting a choice
+    // @spec chat/fast-response Population: Ordinary refresh leaves options empty when oneshot is ineligible
     #[test]
-    fn ordinary_refresh_leaves_options_empty_when_not_awaiting_a_choice() {
-        // GIVEN scopes that previously could produce phase chips (now empty)
+    fn ordinary_refresh_leaves_options_empty_when_oneshot_is_ineligible() {
+        use crate::area::interaction::{AgentSession, InteractionState};
+        use crate::scope::{Scope, ScopeKind};
+        use std::collections::HashMap;
+
+        // GIVEN not awaiting and oneshot ineligible (hints off / empty list)
         let mut project = make_project(&["foo"], &[]);
         set_change(&mut project, "foo", |c| {
             c.has_proposal = true;
@@ -2126,18 +2118,29 @@ mod breadcrumb_tests {
             c.cap_tree = vec![tree_node("caps/auth")];
             c.steps = vec![step(false)];
         });
-        for (scope, empty) in [
-            (Scope::Change("foo".into()), true),
-            (Scope::Change("foo".into()), false),
-            (Scope::Exploration("exploration-1".into()), true),
-            (Scope::Exploration("exploration-1".into()), false),
-        ] {
-            let fr = build_fast_response(&scope, &project, empty, true);
-            assert!(
-                fr.options.is_empty(),
-                "options empty for {scope:?} empty={empty}"
-            );
-        }
+        let mut interactions = HashMap::new();
+        let scope = Scope::Change("foo".into());
+        let mut ix = InteractionState::default();
+        let mut ax = AgentSession::new("foo".into(), ScopeKind::Change);
+        // Non-empty session without trailing next → empty next-actions; still
+        // ineligible without settled oneshot + hints.
+        ax.session.messages.push(crate::chat_store::ChatMessage {
+            role: crate::chat_store::Role::User,
+            content: vec![crate::chat_store::ContentBlock::Text("hi".into())],
+            timestamp: String::new(),
+            is_priming: false,
+        });
+        ax.agent_default_prompts = vec!["would show if eligible".into()];
+        ix.sessions.push(ax);
+        interactions.insert(scope, ix);
+
+        refresh_fast_response(&mut interactions, &project, false, false);
+
+        let ax = interactions
+            .get(&Scope::Change("foo".into()))
+            .and_then(|i| i.sessions.first())
+            .expect("session");
+        assert!(ax.fast_response.options.is_empty());
     }
 
     // @spec chat/fast-response Population: Refresh does not clear options while awaiting a user choice
@@ -2165,7 +2168,7 @@ mod breadcrumb_tests {
         ix.sessions.push(ax);
         interactions.insert(scope, ix);
 
-        refresh_fast_response(&mut interactions, &project, false);
+        refresh_fast_response(&mut interactions, &project, true, false);
 
         let ax = interactions
             .get(&Scope::Change("foo".into()))
@@ -2176,6 +2179,130 @@ mod breadcrumb_tests {
         assert!(matches!(
             ax.fast_response.source,
             FastResponseSource::UserChoice { correlation_id: 99 }
+        ));
+    }
+
+    // @spec chat/fast-response Population: Refresh preserves oneshot fill when still eligible
+    #[test]
+    fn refresh_preserves_oneshot_fill_when_still_eligible() {
+        use crate::area::interaction::{AgentSession, InteractionState};
+        use crate::fast_response::{self, FastResponseSource};
+        use crate::scope::{Scope, ScopeKind};
+        use std::collections::HashMap;
+
+        let project = make_project(&["foo"], &[]);
+        let mut interactions = HashMap::new();
+        let scope = Scope::Change("foo".into());
+        let mut ix = InteractionState::default();
+        let mut ax = AgentSession::new("foo".into(), ScopeKind::Change);
+        // Non-empty session, no trailing next → empty next-actions.
+        ax.session.messages.push(crate::chat_store::ChatMessage {
+            role: crate::chat_store::Role::Assistant,
+            content: vec![crate::chat_store::ContentBlock::Text("done".into())],
+            timestamp: String::new(),
+            is_priming: false,
+        });
+        ax.agent_default_prompts = vec!["most likely".into(), "alt".into()];
+        ax.fast_response = fast_response::from_oneshot_hints(ax.agent_default_prompts.clone());
+        ix.sessions.push(ax);
+        interactions.insert(scope, ix);
+
+        refresh_fast_response(&mut interactions, &project, true, false);
+
+        let ax = interactions
+            .get(&Scope::Change("foo".into()))
+            .and_then(|i| i.sessions.first())
+            .expect("session");
+        assert_eq!(ax.fast_response.options.len(), 2);
+        assert_eq!(ax.fast_response.options[0].label, "most likely");
+        assert_eq!(ax.fast_response.options[1].label, "alt");
+        assert!(matches!(
+            ax.fast_response.source,
+            FastResponseSource::OneshotHints
+        ));
+    }
+
+    // @spec chat/fast-response Population: Settled eligible oneshot fills the option shell
+    #[test]
+    fn settled_eligible_oneshot_fills_the_option_shell() {
+        use crate::area::interaction::{self, AgentSession};
+        use crate::fast_response::FastResponseSource;
+        use crate::scope::ScopeKind;
+
+        let mut ax = AgentSession::new("foo".into(), ScopeKind::Change);
+        ax.session.messages.push(crate::chat_store::ChatMessage {
+            role: crate::chat_store::Role::Assistant,
+            content: vec![crate::chat_store::ContentBlock::Text("done".into())],
+            timestamp: String::new(),
+            is_priming: false,
+        });
+        ax.agent_default_prompts = vec!["yes".into(), "no".into(), "maybe".into()];
+        ax.refresh_next_actions(true);
+        assert!(ax.next_actions.is_empty());
+
+        interaction::sync_oneshot_chips(&mut ax, true);
+
+        assert_eq!(ax.fast_response.options.len(), 3);
+        assert_eq!(ax.fast_response.options[0].id, "yes");
+        assert!(matches!(
+            ax.fast_response.source,
+            FastResponseSource::OneshotHints
+        ));
+    }
+
+    // @spec chat/fast-response Population: Live user choice overwrites oneshot fill
+    #[test]
+    fn live_user_choice_overwrites_oneshot_fill() {
+        use crate::area::interaction::{self, AgentSession};
+        use crate::fast_response::{self, FastResponseSource};
+        use crate::scope::ScopeKind;
+
+        let mut ax = AgentSession::new("foo".into(), ScopeKind::Change);
+        ax.fast_response =
+            fast_response::from_oneshot_hints(vec!["oneshot a".into(), "oneshot b".into()]);
+        assert!(matches!(
+            ax.fast_response.source,
+            FastResponseSource::OneshotHints
+        ));
+
+        interaction::apply_user_choice_request(
+            &mut ax,
+            7,
+            None,
+            vec![("opt-a".into(), "Alpha".into())],
+            false,
+        );
+
+        assert_eq!(ax.fast_response.options.len(), 1);
+        assert_eq!(ax.fast_response.options[0].id, "opt-a");
+        assert!(matches!(
+            ax.fast_response.source,
+            FastResponseSource::UserChoice { correlation_id: 7 }
+        ));
+        assert!(ax.is_awaiting_user);
+    }
+
+    // @spec chat/fast-response Population: Oneshot settle does not replace a live user-choice fill
+    #[test]
+    fn oneshot_settle_does_not_replace_a_live_user_choice_fill() {
+        use crate::area::interaction::{self, AgentSession};
+        use crate::fast_response::{self, FastResponseSource};
+        use crate::scope::ScopeKind;
+
+        let mut ax = AgentSession::new("foo".into(), ScopeKind::Change);
+        ax.is_awaiting_user = true;
+        ax.fast_response =
+            fast_response::from_user_choice(42, [("q1".into(), "Option one".into())]);
+        ax.agent_default_prompts = vec!["would fill if not awaiting".into()];
+        ax.next_actions.clear();
+
+        interaction::sync_oneshot_chips(&mut ax, true);
+
+        assert_eq!(ax.fast_response.options.len(), 1);
+        assert_eq!(ax.fast_response.options[0].id, "q1");
+        assert!(matches!(
+            ax.fast_response.source,
+            FastResponseSource::UserChoice { correlation_id: 42 }
         ));
     }
 

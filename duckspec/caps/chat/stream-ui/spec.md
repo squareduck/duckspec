@@ -27,7 +27,7 @@ Deferred materialization SHALL NOT drop stream text from the session.
   run for those deltas
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:1072
+> - crates/duckboard/src/area/interaction.rs:1077
 
 ### Scenario: Reasoning deltas accumulate on the session without materialization
 
@@ -42,7 +42,7 @@ Deferred materialization SHALL NOT drop stream text from the session.
   run for those deltas
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:1099
+> - crates/duckboard/src/area/interaction.rs:1104
 
 ## Requirement: Bounded materialization while streaming
 
@@ -72,7 +72,7 @@ tick and regardless of stick-to-bottom.
 - **THEN** chat UI materialization does not run for those deltas alone
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:1125
+> - crates/duckboard/src/area/interaction.rs:1130
 
 ### Scenario: Stream UI tick materializes accumulated session answer text into the chat UI
 
@@ -88,7 +88,7 @@ tick and regardless of stick-to-bottom.
 - **AND** the live answer presented by the chat UI includes that session answer text
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:1161
+> - crates/duckboard/src/area/interaction.rs:1166
 
 ### Scenario: Stream UI tick skips materialize while scrolled up in history
 
@@ -99,7 +99,7 @@ tick and regardless of stick-to-bottom.
 - **AND** the session still holds the accumulated pure-content text
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:1194
+> - crates/duckboard/src/area/interaction.rs:1199
 
 ### Scenario: Re-sticking to bottom materializes deferred content
 
@@ -113,7 +113,7 @@ tick and regardless of stick-to-bottom.
 - **AND** the live answer presented by the chat UI includes the deferred session text
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:1212
+> - crates/duckboard/src/area/interaction.rs:1217
 
 ### Scenario: Tool use materializes the chat UI immediately with an Activity row
 
@@ -123,7 +123,7 @@ tick and regardless of stick-to-bottom.
 - **AND** the chat UI includes an Activity row for that tool
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:1241
+> - crates/duckboard/src/area/interaction.rs:1246
 
 ### Scenario: Turn complete materializes the final answer immediately
 
@@ -137,7 +137,7 @@ tick and regardless of stick-to-bottom.
   UI tick
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:1283
+> - crates/duckboard/src/area/interaction.rs:1288
 
 ### Scenario: Answer-to-reasoning channel switch materializes without committing the answer
 
@@ -147,7 +147,7 @@ tick and regardless of stick-to-bottom.
 - **AND** the open answer draft remains uncommitted on the session
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:1403
+> - crates/duckboard/src/area/interaction.rs:1408
 
 ## Requirement: Settled and live editor refresh
 
@@ -176,7 +176,7 @@ still keep their editors.
 - **AND** that editor is not replaced by a newly constructed editor for the same lines
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:1533
+> - crates/duckboard/src/area/interaction.rs:1538
 
 ### Scenario: Suffix-growing live answer refreshes in place
 
@@ -190,7 +190,7 @@ still keep their editors.
 - **AND** the editor is not constructed as a brand-new editor from the full joined text
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:1573
+> - crates/duckboard/src/area/interaction.rs:1578
 
 ### Scenario: Block list reshape uses full rebuild for affected indices
 
@@ -205,7 +205,7 @@ still keep their editors.
 - **AND** any earlier block whose lines are unchanged keeps its existing editor
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:1613
+> - crates/duckboard/src/area/interaction.rs:1618
 
 ## Requirement: Hybrid layout reuse
 
@@ -262,7 +262,7 @@ answer draft into the session’s messages before the tool is recorded.
   draft
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:1331
+> - crates/duckboard/src/area/interaction.rs:1336
 
 ### Scenario: Answer after reasoning replaces the live draft
 
@@ -273,7 +273,7 @@ answer draft into the session’s messages before the tool is recorded.
 - **AND** the live answer draft does not retain the first body
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:1349
+> - crates/duckboard/src/area/interaction.rs:1354
 
 ### Scenario: Tool use commits the open answer draft
 
@@ -283,7 +283,7 @@ answer draft into the session’s messages before the tool is recorded.
 - **AND** the live answer draft is empty
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:1377
+> - crates/duckboard/src/area/interaction.rs:1382
 
 ## Requirement: Answer thrash budget
 
@@ -310,7 +310,7 @@ separated by tools do not share a budget.
 - **AND** a short stop notice is shown that is not a second full answer rewrite
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:1434
+> - crates/duckboard/src/area/interaction.rs:1439
 
 ### Scenario: Tool use resets the thrash budget
 
@@ -325,4 +325,4 @@ separated by tools do not share a budget.
 - **THEN** the in-flight turn is not cancelled solely for exceeding the thrash budget
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:1475
+> - crates/duckboard/src/area/interaction.rs:1480

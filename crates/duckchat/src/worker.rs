@@ -21,8 +21,9 @@ use crate::request::{ReplySuggestionRequest, TitleRequest, TurnRequest};
 use crate::runtime::OneshotKind;
 use crate::title::{build_title_prompt, clean_title};
 
-/// Wall-clock budget for one oneshot Work item (`ensure_hot` + `prompt`).
-pub const ONESHOT_CALL_BUDGET: Duration = Duration::from_secs(10);
+/// Wall-clock oneshot call budget for one Work item (`ensure_hot` + `prompt`).
+/// Matches the warm-runtime contract (thirty seconds of wall-clock time).
+pub const ONESHOT_CALL_BUDGET: Duration = Duration::from_secs(30);
 
 /// Commands the caller can queue on the main worker loop.
 #[derive(Debug)]
@@ -180,7 +181,7 @@ pub fn spawn_worker<P: Provider + 'static>(
 }
 
 /// Like [`spawn_worker`], but with an explicit oneshot Work budget (tests inject
-/// a short budget so hang recovery does not wait the full production 10s).
+/// a short budget so hang recovery does not wait the full production budget).
 fn spawn_worker_with_oneshot_budget<P: Provider + 'static>(
     provider: P,
     working_dir: PathBuf,
@@ -870,7 +871,7 @@ mod tests {
         handle.shutdown();
     }
 
-    /// Short budget for hang-recovery tests (production is 10s).
+    /// Short budget for hang-recovery tests (production uses [`ONESHOT_CALL_BUDGET`]).
     const TEST_ONESHOT_BUDGET: Duration = Duration::from_millis(80);
 
     // @spec harness/warm-runtime Oneshot call budget and recovery: Over-budget oneshot returns an error

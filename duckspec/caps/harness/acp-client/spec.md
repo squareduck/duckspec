@@ -35,7 +35,7 @@ allowed to spawn again and, when a prior session id is supplied, resume that id.
   session id
 
 > test: code
-> - crates/duckchat/src/acp/runtime.rs:736
+> - crates/duckchat/src/acp/runtime.rs:749
 
 ### Scenario: After cancel, a later turn may spawn again and resume a prior session id
 
@@ -46,7 +46,7 @@ allowed to spawn again and, when a prior session id is supplied, resume that id.
 - **AND** it opens the session by resuming that id
 
 > test: code
-> - crates/duckchat/src/acp/runtime.rs:772
+> - crates/duckchat/src/acp/runtime.rs:785
 
 ## Requirement: Session open and resume
 
@@ -87,7 +87,7 @@ session-not-found outcome so the caller can drop the id and retry.
 - **THEN** it surfaces the rebound session id for the caller to persist
 
 > test: code
-> - crates/duckchat/src/acp/runtime.rs:696
+> - crates/duckchat/src/acp/runtime.rs:709
 
 ### Scenario: A failed load of a missing session surfaces session-not-found
 

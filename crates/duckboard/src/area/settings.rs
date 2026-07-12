@@ -159,7 +159,7 @@ fn chat_section<'a>(config: &Config) -> Element<'a, Message> {
         .size(theme::font_md())
         .color(theme::text_primary());
     let desc = text(
-        "Under-input agent reply suggestions (Cmd-Enter when armed). \
+        "Optional freeform reply chips after a turn (⌘-number when shown). \
          Applies to all projects.",
     )
     .size(theme::font_sm())
@@ -169,7 +169,9 @@ fn chat_section<'a>(config: &Config) -> Element<'a, Message> {
         .label("Agent input hints")
         .on_toggle(Message::AgentInputHintsToggled);
     let agent_help = text(
-        "After a turn, suggest one freeform reply under the empty composer (Cmd-Enter).",
+        "When enabled (default off), a settled oneshot may offer up to three freeform \
+         replies as fast-response chips — only while idle, with no next-action ghost, \
+         and not while a question tool is active. Click or ⌘n to send.",
     )
     .size(theme::font_sm())
     .color(theme::text_muted());

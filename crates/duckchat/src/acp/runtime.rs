@@ -289,13 +289,21 @@ impl AcpOneshotRuntime {
     }
 
     fn pick_model(&self) -> Option<String> {
-        if let Some(pref) = &self.preferred_model
-            && self.models.iter().any(|m| m.id == *pref)
-        {
-            return Some(pref.clone());
-        }
-        self.models.first().map(|m| m.id.clone())
+        pick_oneshot_model(self.preferred_model.as_deref(), &self.models)
     }
+}
+
+/// Select oneshot model: preferred id if advertised, else first advertised.
+pub(crate) fn pick_oneshot_model(
+    preferred: Option<&str>,
+    models: &[AcpModel],
+) -> Option<String> {
+    if let Some(pref) = preferred
+        && models.iter().any(|m| m.id == pref)
+    {
+        return Some(pref.to_string());
+    }
+    models.first().map(|m| m.id.clone())
 }
 
 #[async_trait]
@@ -320,6 +328,11 @@ impl OneshotRuntime for AcpOneshotRuntime {
         let model = self
             .pick_model()
             .ok_or_else(|| Error::Other("agent advertised no models for oneshot".into()))?;
+        tracing::debug!(
+            %model,
+            preferred = ?self.preferred_model,
+            "oneshot selected model"
+        );
         let content = text_prompt_content(&text);
 
         // Cancel token is cooperative while prompt is polling; if the future is
@@ -942,5 +955,43 @@ mod tests {
             "shutdown drops heat; next ensure_hot may spawn again"
         );
         rt.shutdown().await;
+    }
+
+    fn acp_model(id: &str) -> AcpModel {
+        AcpModel {
+            id: id.to_string(),
+            name: format!("{id} display"),
+            context_window: None,
+        }
+    }
+
+    // Claude preferred oneshot model is the curated haiku alias.
+    const PREFERRED: &str = "haiku";
+
+    // @spec harness/claude Oneshot preferred model: Preferred oneshot model is selected when advertised
+    #[test]
+    fn preferred_oneshot_model_is_selected_when_advertised() {
+        // GIVEN preferred haiku among others (fable listed first)
+        let models = vec![
+            acp_model("fable"),
+            acp_model("opus"),
+            acp_model("sonnet"),
+            acp_model(PREFERRED),
+        ];
+        // WHEN selecting for title/reply oneshot
+        let selected = pick_oneshot_model(Some(PREFERRED), &models);
+        // THEN preferred oneshot model wins
+        assert_eq!(selected.as_deref(), Some(PREFERRED));
+    }
+
+    // @spec harness/claude Oneshot preferred model: Oneshot model falls back when preferred is absent
+    #[test]
+    fn oneshot_model_falls_back_when_preferred_is_absent() {
+        // GIVEN advertised models without haiku
+        let models = vec![acp_model("fable"), acp_model("sonnet")];
+        // WHEN selecting for oneshot
+        let selected = pick_oneshot_model(Some(PREFERRED), &models);
+        // THEN another advertised model (first), not failure
+        assert_eq!(selected.as_deref(), Some("fable"));
     }
 }

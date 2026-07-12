@@ -129,7 +129,7 @@ SHALL NOT resume a prior oneshot conversation session.
 - **AND** it does not resume the prior oneshot session id
 
 > test: code
-> - crates/duckchat/src/acp/runtime.rs:839
+> - crates/duckchat/src/acp/runtime.rs:852
 
 ### Scenario: An oneshot call on a hot path reuses the process
 
@@ -138,7 +138,7 @@ SHALL NOT resume a prior oneshot conversation session.
 - **THEN** the harness does not spawn a new agent process for that call
 
 > test: code
-> - crates/duckchat/src/acp/runtime.rs:871
+> - crates/duckchat/src/acp/runtime.rs:884
 
 ## Requirement: Native Grok agent launch
 

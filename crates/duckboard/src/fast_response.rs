@@ -1,11 +1,10 @@
 //! Pure helpers for multi-option fast-response chips: ordered options,
 //! visibility, key resolution, and chip labels.
 //!
-//! Product path leaves the shell empty after ordinary refresh. A live mid-turn
-//! user choice fills options with a `UserChoice` source. Independent of oneshot
-//! suggestions — pending oneshot is not a visibility gate. No cancel chip or
-//! ⌘⌫ binding; turn cancel / freeform-while-awaiting complete parked choices
-//! on the agent wire.
+//! A live mid-turn user choice fills options with a `UserChoice` source.
+//! Settled oneshot reply suggestions may fill with `OneshotHints` when
+//! eligible. No cancel chip or ⌘⌫ binding; turn cancel / freeform-while-awaiting
+//! complete parked choices on the agent wire.
 
 /// One chip option: wire id for activation, label for display.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -22,6 +21,8 @@ pub enum FastResponseSource {
     None,
     /// Answer via `AgentHandle::answer_user_choice` — not `send_prompt_text`.
     UserChoice { correlation_id: u64 },
+    /// Settled freeform reply suggestions; activation sends a normal user turn.
+    OneshotHints,
 }
 
 /// Ordered option chips (no cancel field).
@@ -52,9 +53,9 @@ pub fn format_lifecycle_command(cmd: &str) -> Option<String> {
     }
 }
 
-/// Soft-hint / legacy single-command empty-send form.
-pub fn bubble_send_text(obvious_command: Option<&str>) -> Option<String> {
-    obvious_command.and_then(format_lifecycle_command)
+/// Lifecycle empty-send form for bootstrap / next-action seeds.
+pub fn lifecycle_send_text(command: Option<&str>) -> Option<String> {
+    command.and_then(format_lifecycle_command)
 }
 
 pub fn is_empty(fr: &FastResponse) -> bool {
@@ -139,6 +140,24 @@ pub fn from_user_choice(
     FastResponse {
         options,
         source: FastResponseSource::UserChoice { correlation_id },
+    }
+}
+
+/// Build shell from settled oneshot reply suggestions (id == label == text).
+pub fn from_oneshot_hints(replies: impl IntoIterator<Item = String>) -> FastResponse {
+    let options: Vec<FastResponseOption> = replies
+        .into_iter()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .take(9)
+        .map(|text| FastResponseOption {
+            id: text.clone(),
+            label: text,
+        })
+        .collect();
+    FastResponse {
+        options,
+        source: FastResponseSource::OneshotHints,
     }
 }
 
@@ -367,6 +386,28 @@ mod tests {
             !session.messages.iter().any(|m| matches!(m.role, Role::User)),
             "option activation must not invent a user message"
         );
+    }
+
+    // @spec chat/fast-response Oneshot activation: Option activation sends the oneshot text as a user message
+    #[test]
+    fn option_activation_sends_the_oneshot_text_as_a_user_message() {
+        // GIVEN oneshot-hint shell (not UserChoice in-band)
+        let fr = from_oneshot_hints(["sounds good".into(), "no thanks".into()]);
+        assert!(matches!(fr.source, FastResponseSource::OneshotHints));
+        // WHEN first option is activated — pick id is the freeform send text
+        let pick = resolve_cmd_digit_when_visible(false, false, true, &fr, 1).expect("visible");
+        assert_eq!(
+            pick,
+            FastResponsePick::Option {
+                id: "sounds good".into()
+            }
+        );
+        // Oneshot activation path is send_prompt_text with that id (product),
+        // not answer_user_choice.
+        assert!(!matches!(
+            fr.source,
+            FastResponseSource::UserChoice { .. }
+        ));
     }
 
     // @spec chat/fast-response Awaiting composer chrome: Awaiting user applies quiet accent tint to the composer section

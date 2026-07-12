@@ -514,7 +514,7 @@ fn handle_interaction(
     // (this update path doesn't go through change::update).
     // Dirty unknown here; main's refresh_changed_files / change update
     // re-applies with the real flag. Gate row still tracks session emptiness.
-    super::change::refresh_fast_response(interactions, project, false);
+    super::change::refresh_fast_response(interactions, project, agent_input_hints, false);
     let _ = fm;
 }
 
