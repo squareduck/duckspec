@@ -1285,6 +1285,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "duckchat-codex-acp"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "base64",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "duckpond"
 version = "0.1.0"
 dependencies = [

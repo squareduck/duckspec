@@ -113,7 +113,7 @@ of models offered for selection SHALL include the models of every registered har
 - **THEN** the provider that runs the turn is the one identified by that harness
 
 > test: code
-> - crates/duckboard/src/agent.rs:453
+> - crates/duckboard/src/agent.rs:482
 
 ### Scenario: The offered models span every registered harness
 
@@ -122,7 +122,7 @@ of models offered for selection SHALL include the models of every registered har
 - **THEN** the list includes models from every registered harness
 
 > test: code
-> - crates/duckboard/src/agent.rs:470
+> - crates/duckboard/src/agent.rs:502
 
 ## Requirement: Global default model setting
 
@@ -151,7 +151,7 @@ model in catalog order.
 - **THEN** the global default is `grok` / `grok-4.5`
 
 > test: code
-> - crates/duckboard/src/agent.rs:702
+> - crates/duckboard/src/agent.rs:743
 
 ### Scenario: An unset global default is seeded from the first catalog model when the former built-in is absent
 
@@ -161,7 +161,7 @@ model in catalog order.
 - **THEN** the global default is the first model in catalog order
 
 > test: code
-> - crates/duckboard/src/agent.rs:725
+> - crates/duckboard/src/agent.rs:766
 
 ## Requirement: Send requires an available model
 

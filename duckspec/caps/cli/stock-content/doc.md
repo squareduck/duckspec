@@ -23,19 +23,22 @@ the binary already holds their bodies; a release install does not need that tree
 `ds init` (no harness) only ensures the `duckspec/` skeleton exists under the current
 working directory.
 
-`ds init <harness>` also installs stock command files for a supported harness into a
+`ds init <harness>` also installs stock agent stage content for a supported harness into a
 harness-specific project directory:
 
 ```
-| Harness  | Install path           |
-| -------- | ---------------------- |
-| claude   | `.claude/commands/`    |
-| opencode | `.opencode/commands/`  |
+| Harness  | Install path           | Layout                                      |
+| -------- | ---------------------- | ------------------------------------------- |
+| claude   | `.claude/commands/`    | Flat `ds-*.md` command stubs                |
+| opencode | `.opencode/commands/`  | Flat `ds-*.md` command stubs                |
+| codex    | `.agents/skills/`      | Skill dirs: `<stage>/SKILL.md` per stage    |
 ```
 
-Each installed file is a small markdown stub agents load as a slash command (typically
-invoking `ds template <stage>`). Re-running `ds init <harness>` overwrites those files
-with the stock bodies from the current binary.
+Claude and OpenCode install small markdown stubs agents load as slash commands (typically
+invoking `ds template <stage>`). Codex installs the same stage set as Agent Skills under
+`.agents/skills`, which is where Codex discovers repo skills. Re-running
+`ds init
+<harness>` overwrites those files with the stock bodies from the current binary.
 
 ## Templates and schemas
 

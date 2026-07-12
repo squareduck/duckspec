@@ -59,9 +59,9 @@ jobs:
           echo "version=${V}" >> "$GITHUB_OUTPUT"
 
       - name: Build release binaries
-        # duckchat-claude-acp is also built by `just bundle` into the app
-        # bundle; building it here warms the release cache for that step.
-        run: cargo build --release -p duckspec -p duckboard -p duckchat-claude-acp
+        # Harness ACP agents are also built by `just bundle` into the app
+        # bundle; building them here warms the release cache for that step.
+        run: cargo build --release -p duckspec -p duckboard -p duckchat-claude-acp -p duckchat-codex-acp
 
       - name: Package ds tarball
         id: ds

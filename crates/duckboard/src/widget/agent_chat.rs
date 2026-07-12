@@ -175,6 +175,7 @@ fn harness_display(harness: &str) -> &str {
     match harness {
         "claude-code" => "Claude Code",
         "grok" => "Grok",
+        "openai-codex" => "OpenAI Codex",
         other => other,
     }
 }

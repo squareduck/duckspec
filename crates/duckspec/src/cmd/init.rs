@@ -7,9 +7,19 @@ use crate::content;
 
 const DUCKSPEC_SUBDIRS: &[&str] = &["archive", "caps", "codex", "changes"];
 
-const HARNESS_COMMAND_DIR: &[(&str, &str)] = &[
-    ("claude", ".claude/commands"),
-    ("opencode", ".opencode/commands"),
+/// How stock commands are laid out under `content/commands/{harness}/`.
+#[derive(Clone, Copy)]
+enum InstallLayout {
+    /// Flat `ds-*.md` files → target dir (claude / opencode).
+    FlatMarkdown,
+    /// Skill directories with `SKILL.md` → target dir (codex → `.agents/skills`).
+    SkillDirs,
+}
+
+const HARNESS_COMMAND_DIR: &[(&str, &str, InstallLayout)] = &[
+    ("claude", ".claude/commands", InstallLayout::FlatMarkdown),
+    ("opencode", ".opencode/commands", InstallLayout::FlatMarkdown),
+    ("codex", ".agents/skills", InstallLayout::SkillDirs),
 ];
 
 pub fn run(harness: Option<String>) -> anyhow::Result<()> {
@@ -27,34 +37,61 @@ pub fn run(harness: Option<String>) -> anyhow::Result<()> {
 
     // Install harness commands if requested.
     if let Some(harness_name) = harness {
-        let target_rel = HARNESS_COMMAND_DIR
+        let (target_rel, layout) = HARNESS_COMMAND_DIR
             .iter()
-            .find(|(name, _)| *name == harness_name)
-            .map(|(_, dir)| *dir)
+            .find(|(name, _, _)| *name == harness_name)
+            .map(|(_, dir, layout)| (*dir, *layout))
             .ok_or_else(|| {
                 anyhow::anyhow!(
                     "unknown harness: {harness_name} (supported: {})",
-                    HARNESS_COMMAND_DIR
-                        .iter()
-                        .map(|(name, _)| *name)
-                        .collect::<Vec<_>>()
-                        .join(", ")
+                    supported_harnesses().join(", ")
                 )
             })?;
 
+        if !content::has_harness(&harness_name) {
+            anyhow::bail!(
+                "unknown harness: {harness_name} (no stock content; supported: {})",
+                supported_harnesses().join(", ")
+            );
+        }
+
         let target_dir = cwd.join(target_rel);
         fs::create_dir_all(&target_dir)?;
-        install_commands(&harness_name, &target_dir)?;
+        install_commands(&harness_name, &target_dir, layout)?;
     }
 
     Ok(())
 }
 
-fn install_commands(harness: &str, target_dir: &Path) -> anyhow::Result<()> {
-    for (filename, body) in content::command_files(harness) {
-        let dest = target_dir.join(filename);
-        fs::write(&dest, body)?;
-        println!("  {} {}", "installed".green(), dest.display());
+fn supported_harnesses() -> Vec<&'static str> {
+    HARNESS_COMMAND_DIR
+        .iter()
+        .map(|(name, _, _)| *name)
+        .collect()
+}
+
+fn install_commands(
+    harness: &str,
+    target_dir: &Path,
+    layout: InstallLayout,
+) -> anyhow::Result<()> {
+    match layout {
+        InstallLayout::FlatMarkdown => {
+            for (filename, body) in content::command_files(harness) {
+                let dest = target_dir.join(filename);
+                fs::write(&dest, body)?;
+                println!("  {} {}", "installed".green(), dest.display());
+            }
+        }
+        InstallLayout::SkillDirs => {
+            for (dir_name, body) in content::skill_dirs(harness) {
+                let skill_dir = target_dir.join(dir_name);
+                fs::create_dir_all(&skill_dir)?;
+                let dest = skill_dir.join("SKILL.md");
+                fs::write(&dest, body)?;
+                println!("  {} {}", "installed".green(), dest.display());
+            }
+        }
     }
     Ok(())
 }

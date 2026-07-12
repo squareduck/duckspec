@@ -19,7 +19,7 @@ struct Cli {
 enum Command {
     /// Create duckspec/ directory structure, optionally install agent templates.
     Init {
-        /// Harness to install templates for (claude, opencode).
+        /// Harness to install templates for (claude, opencode, codex).
         harness: Option<String>,
     },
     /// Print active changes, capability/codex counts, or details for a path.

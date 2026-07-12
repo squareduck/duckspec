@@ -180,3 +180,70 @@ fn unknown_harness_is_rejected_by_name() {
         "error must not be a filesystem path miss for stock content; got:\n{combined}"
     );
 }
+
+/// @spec cli/stock-content Stock content from the binary: Known codex skills are installed under .agents/skills
+#[test]
+fn known_codex_skills_are_installed_under_agents_skills() {
+    let project = tempfile::tempdir().unwrap();
+    let root = project.path();
+
+    let output = ds_in(root, &["init", "codex"]);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "init codex must succeed; stderr:\n{stderr}"
+    );
+
+    let stock = STOCK_COMMANDS
+        .get_dir("codex")
+        .expect("stock codex skills present at compile time");
+    let target = root.join(".agents/skills");
+    assert!(
+        target.is_dir(),
+        ".agents/skills must exist after init codex"
+    );
+
+    let mut installed = 0usize;
+    for skill_dir in stock.dirs() {
+        let dir_name = skill_dir
+            .path()
+            .file_name()
+            .and_then(|n| n.to_str())
+            .expect("utf-8 skill dir name");
+        // Paths in include_dir are embed-root-relative; match by basename.
+        let skill_md = skill_dir
+            .files()
+            .find(|f| {
+                f.path()
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    == Some("SKILL.md")
+            })
+            .expect("stock skill has SKILL.md");
+        installed += 1;
+        let dest = target.join(dir_name).join("SKILL.md");
+        let body = fs::read_to_string(&dest).unwrap_or_else(|e| {
+            panic!("expected installed {dir_name}/SKILL.md: {e}");
+        });
+        let expected = skill_md
+            .contents_utf8()
+            .expect("stock skill is valid UTF-8");
+        assert_eq!(
+            body, expected,
+            "installed {dir_name}/SKILL.md must match stock skill body"
+        );
+    }
+    assert!(
+        installed > 0,
+        "expected at least one stock codex skill directory"
+    );
+
+    // Re-init overwrites skill bodies.
+    let propose = target.join("ds-propose/SKILL.md");
+    fs::write(&propose, "stale body\n").unwrap();
+    let re = ds_in(root, &["init", "codex"]);
+    assert!(re.status.success(), "re-init codex must succeed");
+    let restored = fs::read_to_string(&propose).unwrap();
+    assert_ne!(restored, "stale body\n");
+    assert!(restored.contains("ds template propose"));
+}

@@ -26,7 +26,7 @@ harness’s catalog slice with the discovered models.
   catalog slice
 
 > test: code
-> - crates/duckboard/src/agent.rs:492
+> - crates/duckboard/src/agent.rs:533
 
 ### Scenario: Successful refresh replaces that harness’s catalog slice
 
@@ -36,7 +36,7 @@ harness’s catalog slice with the discovered models.
 - **THEN** the harness’s catalog slice is the newly discovered set
 
 > test: code
-> - crates/duckboard/src/agent.rs:514
+> - crates/duckboard/src/agent.rs:555
 
 ## Requirement: Catalog is the selection source
 
@@ -53,7 +53,7 @@ model’s harness and id when present.
 - **THEN** the listed models are exactly the catalog contents
 
 > test: code
-> - crates/duckboard/src/agent.rs:571
+> - crates/duckboard/src/agent.rs:612
 
 ### Scenario: Context window lookup uses the catalog entry for the selected model
 
@@ -63,7 +63,7 @@ model’s harness and id when present.
 - **THEN** the resolved window is the window from that catalog entry
 
 > test: code
-> - crates/duckboard/src/agent.rs:592
+> - crates/duckboard/src/agent.rs:633
 
 ## Requirement: Clear slice on empty rediscovery
 
@@ -82,7 +82,7 @@ slice empty without panicking.
 - **THEN** the harness’s catalog slice is empty
 
 > test: code
-> - crates/duckboard/src/agent.rs:538
+> - crates/duckboard/src/agent.rs:579
 
 ### Scenario: Cold failure leaves that harness empty without panic
 
@@ -93,4 +93,4 @@ slice empty without panicking.
 - **AND** the refresh completes without panicking
 
 > test: code
-> - crates/duckboard/src/agent.rs:556
+> - crates/duckboard/src/agent.rs:597

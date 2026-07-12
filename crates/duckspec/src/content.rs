@@ -24,12 +24,11 @@ pub fn schema(name: &str) -> Option<&'static str> {
 }
 
 /// Whether `commands/{harness}/` exists in the embed.
-#[cfg(test)]
 pub fn has_harness(harness: &str) -> bool {
     CONTENT.get_dir(format!("commands/{harness}")).is_some()
 }
 
-/// Markdown files under `commands/{harness}/`.
+/// Flat markdown files under `commands/{harness}/` (claude / opencode).
 ///
 /// Each entry is `(file_name, utf8_body)`.
 pub fn command_files(harness: &str) -> impl Iterator<Item = (&'static str, &'static str)> {
@@ -43,6 +42,33 @@ pub fn command_files(harness: &str) -> impl Iterator<Item = (&'static str, &'sta
             return None;
         }
         let body = f.contents_utf8().expect("stock content is valid UTF-8");
+        Some((name, body))
+    }))
+}
+
+/// Skill directories under `commands/{harness}/` (codex layout).
+///
+/// Each entry is `(skill_dir_name, SKILL.md utf8 body)`. Only immediate child
+/// directories that contain a `SKILL.md` are yielded.
+pub fn skill_dirs(harness: &str) -> impl Iterator<Item = (&'static str, &'static str)> {
+    let Some(dir) = CONTENT.get_dir(format!("commands/{harness}")) else {
+        return Box::new(std::iter::empty())
+            as Box<dyn Iterator<Item = (&'static str, &'static str)>>;
+    };
+    // include_dir stores file paths relative to the embed root (e.g.
+    // `commands/codex/ds-propose/SKILL.md`), so look up by basename via
+    // `files()` rather than `get_file("SKILL.md")`.
+    Box::new(dir.dirs().filter_map(|skill_dir| {
+        let name = skill_dir.path().file_name()?.to_str()?;
+        let skill_md = skill_dir.files().find(|f| {
+            f.path()
+                .file_name()
+                .and_then(|n| n.to_str())
+                == Some("SKILL.md")
+        })?;
+        let body = skill_md
+            .contents_utf8()
+            .expect("stock skill is valid UTF-8");
         Some((name, body))
     }))
 }
@@ -86,5 +112,21 @@ mod tests {
         let names: Vec<_> = command_files("claude").map(|(n, _)| n).collect();
         assert!(names.contains(&"ds-explore.md"));
         assert!(!names.is_empty());
+    }
+
+    #[test]
+    fn codex_skills_are_present() {
+        assert!(has_harness("codex"));
+        let names: Vec<_> = skill_dirs("codex").map(|(n, _)| n).collect();
+        assert!(names.contains(&"ds-propose"));
+        assert!(names.contains(&"ds-explore"));
+        assert!(!names.is_empty());
+        // Skill bodies carry frontmatter + stage instruction.
+        let propose = skill_dirs("codex")
+            .find(|(n, _)| *n == "ds-propose")
+            .map(|(_, b)| b)
+            .unwrap();
+        assert!(propose.contains("name: ds-propose"));
+        assert!(propose.contains("ds template propose"));
     }
 }

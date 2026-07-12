@@ -22,6 +22,7 @@ pub mod worker;
 pub mod acp;
 pub mod claude_code;
 pub mod grok;
+pub mod openai_codex;
 
 pub use cancel::CancelToken;
 pub use cwd::normalize_cwd;

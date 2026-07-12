@@ -16,6 +16,7 @@ pub use duckchat::{AgentHandle, ModelInfo, ModelRef, SlashCommand};
 
 use duckchat::claude_code::ClaudeCodeProvider;
 use duckchat::grok::GrokProvider;
+use duckchat::openai_codex::OpenaiCodexProvider;
 use duckchat::Provider;
 
 /// Shared Claude provider so model discovery is memoized across catalog reads.
@@ -28,6 +29,12 @@ fn claude_provider() -> &'static ClaudeCodeProvider {
 fn grok_provider() -> &'static GrokProvider {
     static GROK: OnceLock<GrokProvider> = OnceLock::new();
     GROK.get_or_init(GrokProvider::new)
+}
+
+/// Shared Codex provider — handshake is expensive; one instance for the process.
+fn openai_codex_provider() -> &'static OpenaiCodexProvider {
+    static CODEX: OnceLock<OpenaiCodexProvider> = OnceLock::new();
+    CODEX.get_or_init(OpenaiCodexProvider::new)
 }
 
 /// Process-local catalog of models discovered from each available provider.
@@ -58,6 +65,7 @@ impl ModelCatalog {
     pub fn refresh_registered(&self) {
         self.apply_harness("claude-code", claude_provider().list_models());
         self.apply_harness("grok", grok_provider().list_models());
+        self.apply_harness("openai-codex", openai_codex_provider().list_models());
     }
 
     /// Ingest pre-fetched per-harness slices (tests / custom refresh sources).
@@ -73,7 +81,7 @@ impl ModelCatalog {
 
     pub fn all(&self) -> Vec<ModelInfo> {
         let map = self.by_harness.read().expect("model catalog lock");
-        // Stable harness order: claude-code then grok, then any others alphabetically.
+        // Stable harness order: claude-code, grok, openai-codex, then any others alphabetically.
         let mut keys: Vec<String> = map.keys().cloned().collect();
         keys.sort_by(|a, b| {
             harness_rank(a)
@@ -107,7 +115,8 @@ fn harness_rank(h: &str) -> u8 {
     match h {
         "claude-code" => 0,
         "grok" => 1,
-        _ => 2,
+        "openai-codex" => 2,
+        _ => 3,
     }
 }
 
@@ -231,6 +240,15 @@ fn default_oneshot_match(harness: &str, catalog: &[ModelInfo]) -> Option<String>
                     .find(|m| m.id.to_ascii_lowercase().contains("fast"))
             })
             .map(|m| m.id.clone()),
+        "openai-codex" => catalog
+            .iter()
+            .find(|m| m.id == "gpt-5.4-mini")
+            .or_else(|| {
+                catalog
+                    .iter()
+                    .find(|m| m.id.to_ascii_lowercase().contains("mini"))
+            })
+            .map(|m| m.id.clone()),
         _ => None,
     }
 }
@@ -243,12 +261,14 @@ fn default_oneshot_match(harness: &str, catalog: &[ModelInfo]) -> Option<String>
 enum Harness {
     ClaudeCode,
     Grok,
+    OpenaiCodex,
 }
 
 impl Harness {
     fn dispatch(harness: &str) -> Self {
         match harness {
             "grok" => Harness::Grok,
+            "openai-codex" => Harness::OpenaiCodex,
             _ => Harness::ClaudeCode,
         }
     }
@@ -348,6 +368,15 @@ fn agent_stream(
                 Harness::ClaudeCode => {
                     drive_provider(
                         ClaudeCodeProvider::new(),
+                        project_root,
+                        sender,
+                        oneshot_model,
+                    )
+                    .await
+                }
+                Harness::OpenaiCodex => {
+                    drive_provider(
+                        OpenaiCodexProvider::new(),
                         project_root,
                         sender,
                         oneshot_model,
@@ -463,6 +492,9 @@ mod tests {
         assert_eq!(Harness::dispatch("claude-code"), Harness::ClaudeCode);
         assert_eq!(ClaudeCodeProvider::new().id(), "claude-code");
 
+        assert_eq!(Harness::dispatch("openai-codex"), Harness::OpenaiCodex);
+        assert_eq!(OpenaiCodexProvider::new().id(), "openai-codex");
+
         // Unknown / legacy ids fall back to Claude Code, never panic.
         assert_eq!(Harness::dispatch("legacy-bare-id"), Harness::ClaudeCode);
     }
@@ -470,9 +502,9 @@ mod tests {
     // @spec harness/selection Harness dispatch: The offered models span every registered harness
     #[test]
     fn offered_models_span_every_harness() {
-        // Two registered harnesses, each offering a model. Catalog contents
+        // Registered harnesses each offering a model. Catalog contents
         // (what `available_models` exposes) must include a model from every
-        // harness.
+        // harness under test.
         let cat = ModelCatalog::new();
         cat.refresh_from([
             (
@@ -480,6 +512,10 @@ mod tests {
                 vec![mi("claude-code", "opus", None)],
             ),
             ("grok", vec![mi("grok", "grok-4.5", Some(256_000))]),
+            (
+                "openai-codex",
+                vec![mi("openai-codex", "gpt-5.4-mini", None)],
+            ),
         ]);
         let offered = cat.all();
         let harnesses: std::collections::HashSet<&str> =
@@ -487,6 +523,11 @@ mod tests {
 
         assert!(harnesses.contains("claude-code"));
         assert!(harnesses.contains("grok"));
+        assert!(harnesses.contains("openai-codex"));
+        // Rank order: claude-code, grok, openai-codex
+        assert_eq!(offered[0].harness, "claude-code");
+        assert_eq!(offered[1].harness, "grok");
+        assert_eq!(offered[2].harness, "openai-codex");
     }
 
     /// @spec harness/model-catalog Startup catalog refresh: App start refreshes models for each available provider
