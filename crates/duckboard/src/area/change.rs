@@ -472,6 +472,7 @@ pub fn update(
     project: &ProjectData,
     highlighter: &crate::highlight::SyntaxHighlighter,
     agent_input_hints: bool,
+    window_w: f32,
 ) {
     match message {
         Message::SelectChange(name) => {
@@ -609,6 +610,7 @@ pub fn update(
                         project.project_root.as_deref(),
                         highlighter,
                         agent_input_hints,
+                        window_w,
                     );
                 }
             }

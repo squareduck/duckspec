@@ -620,6 +620,57 @@ impl AgentSession {
     }
 }
 
+// ── Content / chat free-space geometry ──────────────────────────────────────
+
+/// Free width for the content ↔ interaction split: window minus fixed left
+/// chrome (sidebar, list, their 1px dividers) and the interaction handle.
+/// Matches `view_area_three_column` + outer sidebar row geometry.
+pub fn free_content_chat_width(window_w: f32) -> f32 {
+    let fixed = theme::SIDEBAR_WIDTH
+        + 1.0 // sidebar_divider
+        + theme::LIST_COLUMN_WIDTH
+        + 1.0 // list divider
+        + interaction_toggle::HANDLE_WIDTH;
+    (window_w - fixed).max(0.0)
+}
+
+/// Uncustomized interaction column width: half of free space, floored at min.
+pub fn equal_interaction_width(window_w: f32) -> f32 {
+    (free_content_chat_width(window_w) / 2.0).max(interaction_toggle::MIN_PANEL_WIDTH)
+}
+
+/// Recompute equal width when the panel has not been grip-customized.
+pub fn rebalance_uncustomized(ix: &mut InteractionState, window_w: f32) {
+    if !ix.width_customized {
+        ix.width = equal_interaction_width(window_w);
+    }
+}
+
+/// How the interaction column is sized in the three-column row.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum InteractionColumnSize {
+    /// Content is shown — fixed absolute/equal width.
+    Fixed(f32),
+    /// Content is hidden — fill remaining free space after left chrome.
+    Fill,
+}
+
+/// Resolve interaction column size from whether content is shown and the
+/// remembered split width (used only when content is visible).
+pub fn interaction_column_size(show_content: bool, width: f32) -> InteractionColumnSize {
+    if show_content {
+        InteractionColumnSize::Fixed(width)
+    } else {
+        InteractionColumnSize::Fill
+    }
+}
+
+/// Whether the content column is shown in a three-column area.
+/// True only when there is at least one open tab and content is not collapsed.
+pub fn show_content_column(has_tabs: bool, content_collapsed: bool) -> bool {
+    has_tabs && !content_collapsed
+}
+
 // ── Interaction state ───────────────────────────────────────────────────────
 
 pub struct InteractionState {
@@ -634,6 +685,8 @@ pub struct InteractionState {
     /// split width to restore to.
     pub content_collapsed: bool,
     pub width: f32,
+    /// False until the user first middle-grip sets width. Session memory only.
+    pub width_customized: bool,
     /// Currently selected tab.
     pub active_tab: ActiveTab,
     /// Terminal tabs (chat is implicit at the start of the bar).
@@ -659,7 +712,8 @@ impl Default for InteractionState {
             instance_id: NEXT_INSTANCE_ID.fetch_add(1, Ordering::Relaxed),
             visible: false,
             content_collapsed: false,
-            width: theme::INTERACTION_COLUMN_WIDTH,
+            width: equal_interaction_width(theme::DEFAULT_WINDOW_WIDTH),
+            width_customized: false,
             active_tab: ActiveTab::Chat,
             terminals: Vec::new(),
             next_terminal_id: 1,
@@ -1903,6 +1957,217 @@ mod tests {
             "option activation must not invent a user message"
         );
     }
+
+    // ── layout/content-chat-split ─────────────────────────────────────────
+
+    // @spec layout/content-chat-split Uncustomized equal width: Default half of free space
+    #[test]
+    fn default_half_of_free_space() {
+        // GIVEN an uncustomized panel + window with free space large enough for half > min
+        let window_w = theme::DEFAULT_WINDOW_WIDTH;
+        let free = free_content_chat_width(window_w);
+        assert!(
+            free / 2.0 > interaction_toggle::MIN_PANEL_WIDTH,
+            "fixture window must allow a half above min"
+        );
+        // WHEN the interaction column width is resolved
+        let width = equal_interaction_width(window_w);
+        // THEN width equals half of free space
+        assert_eq!(width, free / 2.0);
+        let ix = InteractionState::default();
+        assert!(!ix.width_customized);
+        assert_eq!(ix.width, equal_interaction_width(window_w));
+    }
+
+    // @spec layout/content-chat-split Uncustomized equal width: Resize rebalances to half free space
+    #[test]
+    fn resize_rebalances_to_half_free_space() {
+        // GIVEN an uncustomized panel
+        let mut ix = InteractionState::default();
+        assert!(!ix.width_customized);
+        // WHEN the window width changes to a new size still above min half
+        let new_w = 1600.0;
+        rebalance_uncustomized(&mut ix, new_w);
+        // THEN width equals half free for the new window
+        assert_eq!(ix.width, equal_interaction_width(new_w));
+        assert_eq!(ix.width, free_content_chat_width(new_w) / 2.0);
+    }
+
+    // @spec layout/content-chat-split Uncustomized equal width: Half floors at minimum panel width
+    #[test]
+    fn half_floors_at_minimum_panel_width() {
+        // GIVEN free space less than twice the minimum panel width
+        // free = W - SIDEBAR - 1 - LIST - 1 - HANDLE; want free < 2 * MIN
+        let fixed = theme::SIDEBAR_WIDTH
+            + 1.0
+            + theme::LIST_COLUMN_WIDTH
+            + 1.0
+            + interaction_toggle::HANDLE_WIDTH;
+        let window_w = fixed + interaction_toggle::MIN_PANEL_WIDTH; // free = MIN < 2*MIN
+        assert!(free_content_chat_width(window_w) < 2.0 * interaction_toggle::MIN_PANEL_WIDTH);
+        // WHEN width is resolved
+        let width = equal_interaction_width(window_w);
+        // THEN width equals the minimum panel width
+        assert_eq!(width, interaction_toggle::MIN_PANEL_WIDTH);
+    }
+
+    // @spec layout/content-chat-split Uncustomized equal width: Half may exceed the old fixed max width
+    #[test]
+    fn half_may_exceed_the_old_fixed_max_width() {
+        // GIVEN free space more than twice 800
+        let fixed = theme::SIDEBAR_WIDTH
+            + 1.0
+            + theme::LIST_COLUMN_WIDTH
+            + 1.0
+            + interaction_toggle::HANDLE_WIDTH;
+        let window_w = fixed + 1601.0; // free > 1600 → half > 800
+        assert!(free_content_chat_width(window_w) > 1600.0);
+        // WHEN width is resolved
+        let width = equal_interaction_width(window_w);
+        // THEN half free and > 800
+        assert_eq!(width, free_content_chat_width(window_w) / 2.0);
+        assert!(width > 800.0);
+    }
+
+    // @spec layout/content-chat-split Grip customization: First grip width change locks absolute width
+    #[test]
+    fn first_grip_width_change_locks_absolute_width() {
+        // GIVEN an uncustomized panel
+        let mut ix = InteractionState::default();
+        assert!(!ix.width_customized);
+        let hl = SyntaxHighlighter::new();
+        // WHEN the grip sets an absolute width
+        let chosen = 350.0;
+        update(
+            &mut ix,
+            Msg::Handle(interaction_toggle::HandleMsg::SetWidth(chosen)),
+            &hl,
+            false,
+        );
+        // THEN customized with that absolute width
+        assert!(ix.width_customized);
+        assert_eq!(ix.width, chosen);
+        assert!(!ix.content_collapsed);
+    }
+
+    // @spec layout/content-chat-split Grip customization: Resize after lock keeps absolute width
+    #[test]
+    fn resize_after_lock_keeps_absolute_width() {
+        // GIVEN a customized panel with remembered absolute width
+        let mut ix = InteractionState::default();
+        let hl = SyntaxHighlighter::new();
+        let locked = 420.0;
+        update(
+            &mut ix,
+            Msg::Handle(interaction_toggle::HandleMsg::SetWidth(locked)),
+            &hl,
+            false,
+        );
+        assert!(ix.width_customized);
+        // WHEN window width changes
+        rebalance_uncustomized(&mut ix, 1800.0);
+        // THEN absolute width is kept
+        assert_eq!(ix.width, locked);
+    }
+
+    // @spec layout/content-chat-split Content-hidden fill: Interaction column fills when content column is hidden
+    #[test]
+    fn interaction_column_fills_when_content_column_is_hidden() {
+        // GIVEN a visible interaction panel with a remembered split width
+        let remembered = 400.0;
+        // AND the content column is not shown
+        // WHEN the three-column area is laid out
+        let size = interaction_column_size(false, remembered);
+        // THEN the interaction column fills remaining width rather than fixed equal-split
+        assert_eq!(size, InteractionColumnSize::Fill);
+        // Contrast: with content shown, the remembered width is fixed
+        assert_eq!(
+            interaction_column_size(true, remembered),
+            InteractionColumnSize::Fixed(remembered)
+        );
+    }
+
+    // @spec layout/content-chat-split Content-hidden fill: No open tabs hides content column
+    #[test]
+    fn no_open_tabs_hides_content_column() {
+        // GIVEN a three-column area with no open tabs and content not collapsed
+        let has_tabs = false;
+        let content_collapsed = false;
+        // WHEN layout visibility is resolved
+        let show = show_content_column(has_tabs, content_collapsed);
+        // THEN content is not shown and interaction fills
+        assert!(!show);
+        assert_eq!(
+            interaction_column_size(show, 400.0),
+            InteractionColumnSize::Fill
+        );
+    }
+
+    // @spec layout/content-chat-split Content-hidden fill: Opening a tab restores content column
+    #[test]
+    fn opening_a_tab_restores_content_column() {
+        // GIVEN content hidden because there are no open tabs
+        assert!(!show_content_column(false, false));
+        // WHEN a list selection opens a tab (has_tabs becomes true)
+        let show = show_content_column(true, false);
+        // THEN content is shown and interaction uses fixed width
+        assert!(show);
+        let remembered = 437.0;
+        assert_eq!(
+            interaction_column_size(show, remembered),
+            InteractionColumnSize::Fixed(remembered)
+        );
+    }
+
+    // @spec layout/content-chat-split Grip customization: Open/close and content collapse do not lock
+    #[test]
+    fn open_close_and_content_collapse_do_not_lock() {
+        // GIVEN an uncustomized panel
+        let mut ix = InteractionState::default();
+        let hl = SyntaxHighlighter::new();
+        let start_w = ix.width;
+        // WHEN closed and opened again
+        update(
+            &mut ix,
+            Msg::Handle(interaction_toggle::HandleMsg::Toggle),
+            &hl,
+            false,
+        );
+        assert!(ix.visible);
+        update(
+            &mut ix,
+            Msg::Handle(interaction_toggle::HandleMsg::Toggle),
+            &hl,
+            false,
+        );
+        assert!(!ix.visible);
+        update(
+            &mut ix,
+            Msg::Handle(interaction_toggle::HandleMsg::Toggle),
+            &hl,
+            false,
+        );
+        // AND content collapsed and restored without a grip width change
+        update(
+            &mut ix,
+            Msg::Handle(interaction_toggle::HandleMsg::SetCollapsed(true)),
+            &hl,
+            false,
+        );
+        assert!(ix.content_collapsed);
+        update(
+            &mut ix,
+            Msg::Handle(interaction_toggle::HandleMsg::SetCollapsed(false)),
+            &hl,
+            false,
+        );
+        assert!(!ix.content_collapsed);
+        // THEN still uncustomized and equal width for current (default) window
+        assert!(!ix.width_customized);
+        rebalance_uncustomized(&mut ix, theme::DEFAULT_WINDOW_WIDTH);
+        assert_eq!(ix.width, equal_interaction_width(theme::DEFAULT_WINDOW_WIDTH));
+        assert_eq!(ix.width, start_w);
+    }
 }
 
 // ── Shared messages ─────────────────────────────────────────────────────────
@@ -1961,6 +2226,8 @@ pub fn update(
             }
             interaction_toggle::HandleMsg::SetWidth(w) => {
                 state.width = w;
+                // First grip drag locks absolute width for the rest of the session.
+                state.width_customized = true;
                 // A width drag means the content column is showing again.
                 state.content_collapsed = false;
             }
@@ -3463,13 +3730,18 @@ pub fn update_with_side_effects(
     project_root: Option<&std::path::Path>,
     highlighter: &SyntaxHighlighter,
     agent_input_hints: bool,
+    window_w: f32,
 ) {
-    update(
+    let just_opened = update(
         state,
         msg,
         highlighter,
         agent_input_hints,
     );
+    // Uncustomized panels rebalance to half free space when the door opens.
+    if just_opened {
+        rebalance_uncustomized(state, window_w);
+    }
 
     // Persist a just-changed per-chat model selection. Done here (not in
     // `handle_agent_chat`) because this is the layer that has `project_root`.

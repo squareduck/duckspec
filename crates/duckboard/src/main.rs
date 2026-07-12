@@ -98,6 +98,9 @@ pub(crate) struct State {
     /// (Caps | Codex | Change(name) | Exploration(id)). Survives area
     /// switches; the visible column reads from the active area's scope.
     pub(crate) interactions: HashMap<scope::Scope, interaction::InteractionState>,
+    /// Logical window width for equal content/chat free-space split.
+    /// Seeded from the default window size; updated on resize.
+    window_width: f32,
 }
 
 impl State {
@@ -148,6 +151,7 @@ impl State {
             cached_previews: HashMap::new(),
             cached_active: HashMap::new(),
             interactions,
+            window_width: theme::DEFAULT_WINDOW_WIDTH,
         }
     }
 
@@ -402,6 +406,8 @@ enum Message {
     // The window received a close request. We persist every session before
     // letting the window actually close (see `main`'s `exit_on_close_request`).
     WindowCloseRequested(iced::window::Id),
+    /// Logical window size changed — rebalance uncustomized interaction widths.
+    WindowResized(iced::Size),
 }
 
 // ── Update ───────────────────────────────────────────────────────────────────
@@ -949,6 +955,7 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                         &state.project,
                         &state.highlighter,
                         state.config.chat.agent_input_hints,
+                        state.window_width,
                         );
                     return restore_chat_scroll(state);
                 }
@@ -962,6 +969,7 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                         &state.project,
                         &state.highlighter,
                         state.config.chat.agent_input_hints,
+                        state.window_width,
                         );
                     return Task::batch([restore_chat_scroll(state), focus_chat_input()]);
                 }
@@ -981,6 +989,7 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                         &state.project,
                         &state.highlighter,
                         state.config.chat.agent_input_hints,
+                        state.window_width,
                         );
                     return restore_chat_scroll(state);
                 }
@@ -1032,6 +1041,7 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                             &state.project,
                             &state.highlighter,
                             state.config.chat.agent_input_hints,
+                        state.window_width,
                             );
                         return restore_chat_scroll(state);
                     }
@@ -1062,6 +1072,7 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                         &state.project,
                         &state.highlighter,
                         state.config.chat.agent_input_hints,
+                        state.window_width,
                         );
                     if needs_focus {
                         return focus_chat_input();
@@ -1091,6 +1102,7 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                 &state.project,
                 &state.highlighter,
                 state.config.chat.agent_input_hints,
+                        state.window_width,
                 );
             if needs_focus {
                 return focus_chat_input();
@@ -1107,6 +1119,7 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                 &state.project,
                 &state.highlighter,
                 state.config.chat.agent_input_hints,
+                        state.window_width,
                 );
             if needs_focus {
                 return focus_chat_input();
@@ -1176,6 +1189,7 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                     &state.project,
                     &state.highlighter,
                     state.config.chat.agent_input_hints,
+                        state.window_width,
                     );
                 // SelectIdea spawns the exploration session with
                 // empty chrome; refresh so the chat input renders lifecycle
@@ -1222,6 +1236,7 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                     &state.project,
                     &state.highlighter,
                     state.config.chat.agent_input_hints,
+                        state.window_width,
                     );
                 return restore_chat_scroll(state);
             }
@@ -1250,6 +1265,7 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                 &state.project,
                 &state.highlighter,
                 state.config.chat.agent_input_hints,
+                        state.window_width,
                 );
             if focus_tag_input {
                 return iced::widget::operation::focus(area::ideas::TAG_INPUT_ID);
@@ -1949,6 +1965,12 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                 interaction::flush_sessions(ix, proj_root.as_deref());
             }
             return iced::window::close(id);
+        }
+        Message::WindowResized(size) => {
+            state.window_width = size.width;
+            for ix in state.interactions.values_mut() {
+                interaction::rebalance_uncustomized(ix, size.width);
+            }
         }
         Message::KeyPress(key, mods, text) => {
             // Disarm any pending dirty-tab close on the next keypress.
@@ -4691,6 +4713,7 @@ fn route_interaction(state: &mut State, msg: interaction::Msg) -> Task<Message> 
                 &state.project,
                 &state.highlighter,
                 state.config.chat.agent_input_hints,
+                        state.window_width,
                 );
         }
         Area::Caps => {
@@ -4703,6 +4726,7 @@ fn route_interaction(state: &mut State, msg: interaction::Msg) -> Task<Message> 
                 &state.project,
                 &state.highlighter,
                 state.config.chat.agent_input_hints,
+                        state.window_width,
                 );
         }
         Area::Codex => {
@@ -4715,6 +4739,7 @@ fn route_interaction(state: &mut State, msg: interaction::Msg) -> Task<Message> 
                 &state.project,
                 &state.highlighter,
                 state.config.chat.agent_input_hints,
+                        state.window_width,
                 );
         }
         Area::Ideas => {
@@ -4726,6 +4751,7 @@ fn route_interaction(state: &mut State, msg: interaction::Msg) -> Task<Message> 
                 &state.project,
                 &state.highlighter,
                 state.config.chat.agent_input_hints,
+                        state.window_width,
                 );
         }
         Area::Dashboard | Area::Settings => {}
@@ -5195,9 +5221,8 @@ fn view_area_three_column(state: &State) -> Element<'_, Message> {
         .width(1.0)
         .style(theme::divider);
 
-    // Change area exploration mode: skip the content column when there are no
-    // tabs open, so the empty state instructions are visible without an empty
-    // editor consuming the middle of the screen.
+    // Exploration without tabs still omits the door handle so the empty-state
+    // instructions dominate; content hide is tab-based for every area.
     let is_exploration =
         state.active_area == Area::Change && state.change.is_exploration_selected();
     let has_tabs = state.tabs.preview.is_some() || !state.tabs.file_tabs.is_empty();
@@ -5211,21 +5236,28 @@ fn view_area_three_column(state: &State) -> Element<'_, Message> {
     ];
 
     let content_collapsed = ix.is_some_and(|i| i.content_collapsed);
-    // The content column shows unless we're in tab-less exploration or the
-    // door has been dragged fully open over it.
-    let show_content = (!is_exploration || has_tabs) && !content_collapsed;
+    // Content shows only when there is at least one open tab and the door has
+    // not collapsed it. No tabs → hide empty shell; chat fills free space.
+    let show_content = interaction::show_content_column(has_tabs, content_collapsed);
 
     if show_content {
         row_items = row_items.push(container(content).width(Length::Fill).height(Length::Fill));
     }
 
     let visible = ix.is_some_and(|i| i.visible);
-    let width = ix.map_or(theme::INTERACTION_COLUMN_WIDTH, |i| i.width);
+    let width = ix.map_or(
+        interaction::equal_interaction_width(state.window_width),
+        |i| i.width,
+    );
+    let free_max = interaction::free_content_chat_width(state.window_width);
 
+    // Door handle: always when tabs exist; for non-exploration also when the
+    // panel is available without tabs (so chat can open/close while content is hidden).
     if !is_exploration || has_tabs {
-        let toggle = widget::interaction_toggle::view(visible, content_collapsed, width, |m| {
-            Message::Interaction(interaction::Msg::Handle(m))
-        });
+        let toggle =
+            widget::interaction_toggle::view(visible, content_collapsed, width, free_max, |m| {
+                Message::Interaction(interaction::Msg::Handle(m))
+            });
         row_items = row_items.push(toggle);
     }
 
@@ -5261,10 +5293,9 @@ fn view_area_three_column(state: &State) -> Element<'_, Message> {
         let col = container(interaction_col)
             .height(Length::Fill)
             .style(theme::surface);
-        let col = if show_content {
-            col.width(ix.width)
-        } else {
-            col.width(Length::Fill)
+        let col = match interaction::interaction_column_size(show_content, ix.width) {
+            interaction::InteractionColumnSize::Fixed(w) => col.width(w),
+            interaction::InteractionColumnSize::Fill => col.width(Length::Fill),
         };
         row_items = row_items.push(col);
     }
@@ -5545,6 +5576,11 @@ fn subscription(state: &State) -> Subscription<Message> {
     // goes away. Paired with `exit_on_close_request(false)` in `main`.
     subs.push(iced::window::close_requests().map(Message::WindowCloseRequested));
 
+    // Equal content/chat split tracks free space; uncustomized panels rebalance.
+    subs.push(
+        iced::window::resize_events().map(|(_id, size)| Message::WindowResized(size)),
+    );
+
     // ~60fps tick driving terminal edge auto-scroll. Only subscribed while a
     // terminal drag holds the pointer past an edge, so the render loop stays
     // idle otherwise.
@@ -5674,7 +5710,7 @@ fn main() -> iced::Result {
         .subscription(subscription)
         .title("duckboard")
         .theme(theme_fn)
-        .window_size((1200.0, 800.0))
+        .window_size((theme::DEFAULT_WINDOW_WIDTH, 800.0))
         // We flush every chat session on close before letting the window go
         // away (see `Message::WindowCloseRequested`), so suppress the default
         // close-on-request behavior.

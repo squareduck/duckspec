@@ -439,8 +439,8 @@ pub const SPACING_XL: f32 = 24.0;
 
 pub const SIDEBAR_WIDTH: f32 = 48.0;
 pub const LIST_COLUMN_WIDTH: f32 = 260.0;
-/// Default chat/terminal column width on a fresh interaction panel.
-pub const INTERACTION_COLUMN_WIDTH: f32 = 480.0;
+/// Logical window width seed matching `iced::application` `.window_size` default.
+pub const DEFAULT_WINDOW_WIDTH: f32 = 1200.0;
 pub const BORDER_RADIUS: f32 = 4.0;
 
 // ── Custom theme ───────────────────────────────────────────────────────────
