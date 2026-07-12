@@ -461,7 +461,9 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                     area::settings::Message::LoadFonts,
                 );
             }
-            return restore_chat_scroll(state);
+            // Chat scroll restore is owned by `update_with_scroll_preservation`
+            // (identity change without open/switch → Restore).
+            return Task::none();
         }
         Message::ModelCatalogReady => {
             // Catalog was filled on a background task; this message forces a
@@ -957,7 +959,9 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                         state.config.chat.agent_input_hints,
                         state.window_width,
                         );
-                    return restore_chat_scroll(state);
+                    // Scroll: open/switch → snap-to-latest in
+                    // `update_with_scroll_preservation`.
+                    return Task::none();
                 }
                 area::dashboard::Message::AddExploration => {
                     switch_area(state, Area::Change);
@@ -971,7 +975,8 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                         state.config.chat.agent_input_hints,
                         state.window_width,
                         );
-                    return Task::batch([restore_chat_scroll(state), focus_chat_input()]);
+                    // Scroll: open/switch → snap-to-latest in wrapper.
+                    return focus_chat_input();
                 }
                 area::dashboard::Message::SelectAuditError {
                     change,
@@ -1043,7 +1048,8 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                             state.config.chat.agent_input_hints,
                         state.window_width,
                             );
-                        return restore_chat_scroll(state);
+                        // Scroll: open/switch → snap-to-latest in wrapper.
+                        return Task::none();
                     }
                 }
                 area::change::Message::AddFile => {
@@ -1238,7 +1244,8 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                     state.config.chat.agent_input_hints,
                         state.window_width,
                     );
-                return restore_chat_scroll(state);
+                // Scroll: open/switch → snap-to-latest in wrapper.
+                return Task::none();
             }
             // Chip click: shift held → promote to primary; otherwise open
             // the input pre-filled for rename. Modifier state lives in a
@@ -2598,6 +2605,23 @@ fn tab_display_path(tab: &tab_bar::Tab, project_root: Option<&Path>) -> String {
     tab.title.clone()
 }
 
+/// Active chat identity: scope plus session id. Used to decide whether a
+/// message changed which chat is visible (open/switch vs layout preserve).
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ChatIdentity {
+    scope: scope::Scope,
+    session_id: String,
+}
+
+fn active_chat_identity(state: &State) -> Option<ChatIdentity> {
+    let scope = state.active_scope()?;
+    let ax = state.interactions.get(&scope)?.active()?;
+    Some(ChatIdentity {
+        scope,
+        session_id: ax.session.id.clone(),
+    })
+}
+
 /// Restore the chat scrollable's viewport for the area we just switched to.
 /// `AgentSession` survives area switches but the iced `Scrollable` widget
 /// is rebuilt fresh on each view, defaulting back to (0, 0). We replay the
@@ -2613,14 +2637,122 @@ fn restore_chat_scroll(state: &State) -> Task<Message> {
     let Some(ax) = ix.active() else {
         return Task::none();
     };
-    if ax.stick_to_bottom {
-        iced::widget::operation::snap_to_end(widget::agent_chat::CHAT_SCROLLABLE_ID)
-    } else {
-        let y = ax.last_chat_offset_y.unwrap_or(0.0);
-        iced::widget::operation::scroll_to(
+    match restored_viewport_intent(ax.stick_to_bottom, ax.last_chat_offset_y) {
+        RestoredViewport::Latest => {
+            iced::widget::operation::snap_to_end(widget::agent_chat::CHAT_SCROLLABLE_ID)
+        }
+        RestoredViewport::Offset(y) => iced::widget::operation::scroll_to(
             widget::agent_chat::CHAT_SCROLLABLE_ID,
             iced::widget::scrollable::AbsoluteOffset { x: 0.0, y },
+        ),
+    }
+}
+
+/// Pure post-update scroll action when identity / message class is known.
+/// Extracted so unit tests can cover session-scroll policy without iced Tasks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ChatScrollPolicy {
+    /// Same identity: replay pre-update layout snapshot.
+    Preserve,
+    /// Intentional open/switch: force latest.
+    SnapLatest,
+    /// Identity changed without open/switch (area nav, incidental area entry):
+    /// restore the newly active session's memory. Single owner is the wrapper.
+    Restore,
+    /// No identity-driven scroll action from the wrapper.
+    None,
+}
+
+/// Decide scroll policy after `update` from identity change + message class.
+fn chat_scroll_policy(
+    identity_changed: bool,
+    opens_or_switches: bool,
+    has_snapshot: bool,
+) -> ChatScrollPolicy {
+    if identity_changed {
+        if opens_or_switches {
+            ChatScrollPolicy::SnapLatest
+        } else {
+            ChatScrollPolicy::Restore
+        }
+    } else if has_snapshot {
+        ChatScrollPolicy::Preserve
+    } else {
+        ChatScrollPolicy::None
+    }
+}
+
+/// Viewport intent used by restore / after snap-to-latest.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum RestoredViewport {
+    Latest,
+    Offset(f32),
+}
+
+fn restored_viewport_intent(stick_to_bottom: bool, last_offset: Option<f32>) -> RestoredViewport {
+    if stick_to_bottom {
+        RestoredViewport::Latest
+    } else {
+        RestoredViewport::Offset(last_offset.unwrap_or(0.0))
+    }
+}
+
+/// Engage stick-to-bottom on a session before snapping the scrollable to end.
+fn engage_stick_to_latest(ax: &mut interaction::AgentSession) {
+    ax.stick_to_bottom = true;
+    ax.pending_snap_to_bottom = false;
+}
+
+/// Force the active session to latest (stick + snap_to_end). Used when the
+/// active chat identity changes through an intentional open or switch.
+fn snap_chat_to_latest(state: &mut State) -> Task<Message> {
+    if let Some(scope) = state.active_scope()
+        && let Some(ix) = state.interactions.get_mut(&scope)
+        && let Some(ax) = ix.active_mut()
+    {
+        engage_stick_to_latest(ax);
+    }
+    iced::widget::operation::snap_to_end(widget::agent_chat::CHAT_SCROLLABLE_ID)
+}
+
+/// True when the message intentionally opens or switches the active chat
+/// session (scope pick, session tab, new/clear, dashboard open, cross-links).
+/// Pure area navigation is not included — that restores remembered viewport.
+fn message_opens_or_switches_chat(message: &Message) -> bool {
+    fn is_session_mgmt(im: &interaction::Msg) -> bool {
+        matches!(
+            im,
+            interaction::Msg::NewSession
+                | interaction::Msg::SelectSession(_)
+                | interaction::Msg::ClearSession
         )
+    }
+    match message {
+        Message::Interaction(im) => is_session_mgmt(im),
+        Message::Change(m) => match m {
+            area::change::Message::Interaction(im) => is_session_mgmt(im),
+            area::change::Message::SelectChange(_)
+            | area::change::Message::AddExploration
+            | area::change::Message::OpenIdeaForChange(_) => true,
+            _ => false,
+        },
+        Message::Caps(area::caps::Message::Interaction(im))
+        | Message::Codex(area::codex::Message::Interaction(im)) => is_session_mgmt(im),
+        Message::Ideas(m) => match m {
+            area::ideas::Message::Interaction(im) => is_session_mgmt(im),
+            area::ideas::Message::SelectIdea(_)
+            | area::ideas::Message::StartExploration(_)
+            | area::ideas::Message::OpenChange(_) => true,
+            _ => false,
+        },
+        Message::Dashboard(m) => matches!(
+            m,
+            area::dashboard::Message::ChangeClicked(_)
+                | area::dashboard::Message::ArchivedChangeClicked(_)
+                | area::dashboard::Message::ExplorationClicked(_)
+                | area::dashboard::Message::AddExploration
+        ),
+        _ => false,
     }
 }
 
@@ -2772,11 +2904,13 @@ fn update_with_scroll_preservation(state: &mut State, message: Message) -> Task<
     // Chrome pad measure messages must not snapshot/replay scroll — they only
     // adjust an in-scroll spacer.
     let is_chrome_layout = is_chrome_layout_message(&message);
+    let id_before = active_chat_identity(state);
     let snapshot = if is_chat_scroll_message(&message) || is_chrome_layout {
         None
     } else {
         capture_chat_scroll_snapshot(state)
     };
+    let opens_or_switches = message_opens_or_switches_chat(&message);
     state.chat_scroll_overridden = false;
     let tab_before = state.tabs.active_tab().map(|t| t.id.clone());
     // A list click that opens content re-expands the content column even when
@@ -2820,9 +2954,20 @@ fn update_with_scroll_preservation(state: &mut State, message: Message) -> Task<
             maybe_measure_chrome_pad(state),
         ]);
     }
-    let task = match snapshot {
-        Some(snap) => Task::batch([task, replay_chat_scroll(snap)]),
-        None => task,
+    let id_after = active_chat_identity(state);
+    // When the active chat identity changes, never replay the previous
+    // session's layout snapshot onto the new one. Open/switch → latest;
+    // area nav and other non-open identity changes → restore (wrapper owns it).
+    let policy = chat_scroll_policy(
+        id_before != id_after,
+        opens_or_switches,
+        snapshot.is_some(),
+    );
+    let task = match policy {
+        ChatScrollPolicy::Preserve => Task::batch([task, replay_chat_scroll(snapshot.unwrap())]),
+        ChatScrollPolicy::None => task,
+        ChatScrollPolicy::SnapLatest => Task::batch([task, snap_chat_to_latest(state)]),
+        ChatScrollPolicy::Restore => Task::batch([task, restore_chat_scroll(state)]),
     };
     // After layout-affecting updates, measure scroll bounds so the bottom-pin
     // pad works when content still fits the viewport (no on_scroll from iced).
@@ -6122,5 +6267,313 @@ mod tests {
     #[test]
     fn ignores_command_without_create_change() {
         assert_eq!(parse_create_change(&bash("ds status")), None);
+    }
+
+    // ── chat/session-scroll ──────────────────────────────────────────────────
+
+    /// Seed a scope with one session; returns the session id.
+    fn seed_scoped_session(
+        state: &mut State,
+        scope: scope::Scope,
+        kind: scope::ScopeKind,
+        session_id: &str,
+        stick: bool,
+        offset: Option<f32>,
+    ) -> String {
+        let mut ax = interaction::AgentSession::new(scope.key().to_string(), kind);
+        ax.session.id = session_id.to_string();
+        ax.stick_to_bottom = stick;
+        ax.last_chat_offset_y = offset;
+        let mut ix = interaction::InteractionState::default();
+        ix.sessions.push(ax);
+        ix.active_session = 0;
+        ix.visible = true;
+        state.interactions.insert(scope, ix);
+        session_id.to_string()
+    }
+
+    /// Seed a Change scope with two sessions (first is active).
+    fn seed_multi_session_change(
+        state: &mut State,
+        change: &str,
+        s1: &str,
+        s2: &str,
+        s1_stick: bool,
+        s1_offset: Option<f32>,
+        s2_stick: bool,
+        s2_offset: Option<f32>,
+    ) {
+        let scope = scope::Scope::Change(change.to_string());
+        let mut a1 = interaction::AgentSession::new(change.into(), scope::ScopeKind::Change);
+        a1.session.id = s1.to_string();
+        a1.stick_to_bottom = s1_stick;
+        a1.last_chat_offset_y = s1_offset;
+        let mut a2 = interaction::AgentSession::new(change.into(), scope::ScopeKind::Change);
+        a2.session.id = s2.to_string();
+        a2.stick_to_bottom = s2_stick;
+        a2.last_chat_offset_y = s2_offset;
+        let mut ix = interaction::InteractionState::default();
+        ix.sessions.push(a1);
+        ix.sessions.push(a2);
+        ix.active_session = 0;
+        ix.visible = true;
+        state.interactions.insert(scope, ix);
+        state.change.selected_change = Some(change.to_string());
+        state.active_area = Area::Change;
+    }
+
+    fn seed_exploration_idea(
+        state: &mut State,
+        path: &std::path::Path,
+        exp_id: &str,
+        session_id: &str,
+        stick: bool,
+        offset: Option<f32>,
+    ) {
+        state.ideas.ideas.push(idea_store::Idea {
+            abs_path: path.to_path_buf(),
+            state: idea_store::IdeaState::Exploration,
+            primary_tag_path: vec![],
+            frontmatter: idea_store::Frontmatter {
+                title: exp_id.to_string(),
+                created: "0".into(),
+                exploration: Some(exp_id.to_string()),
+                ..Default::default()
+            },
+        });
+        seed_scoped_session(
+            state,
+            scope::Scope::Exploration(exp_id.to_string()),
+            scope::ScopeKind::Exploration,
+            session_id,
+            stick,
+            offset,
+        );
+    }
+
+    fn active_ax(state: &State) -> &interaction::AgentSession {
+        let scope = state.active_scope().expect("active scope");
+        state
+            .interactions
+            .get(&scope)
+            .and_then(|ix| ix.active())
+            .expect("active session")
+    }
+
+    /// Run production update wrapper (drop iced Tasks).
+    fn run_scroll_message(state: &mut State, message: Message) {
+        let _ = update_with_scroll_preservation(state, message);
+    }
+
+    /// @spec chat/session-scroll Open and switch show latest: Intentional session open or switch lands at latest
+    #[test]
+    fn intentional_session_open_or_switch_lands_at_latest() {
+        // GIVEN two exploration chats; currently on e1 mid-history
+        let mut state = State::new();
+        let p1 = std::path::PathBuf::from("/ideas/exploration/e1.md");
+        let p2 = std::path::PathBuf::from("/ideas/exploration/e2.md");
+        seed_exploration_idea(&mut state, &p1, "exploration-1", "sess-1", false, Some(120.0));
+        seed_exploration_idea(&mut state, &p2, "exploration-2", "sess-2", false, Some(50.0));
+        state.active_area = Area::Ideas;
+        state.ideas.selected = Some(p1.clone());
+
+        // WHEN selecting the other idea (intentional open of a different session)
+        run_scroll_message(
+            &mut state,
+            Message::Ideas(area::ideas::Message::SelectIdea(p2)),
+        );
+
+        // THEN the newly active session is at latest intent (stick on)
+        let ax = active_ax(&state);
+        assert_eq!(ax.session.id, "sess-2");
+        assert!(
+            ax.stick_to_bottom,
+            "open/switch must engage stick so viewport lands at latest"
+        );
+        assert_eq!(
+            restored_viewport_intent(ax.stick_to_bottom, ax.last_chat_offset_y),
+            RestoredViewport::Latest
+        );
+    }
+
+    /// @spec chat/session-scroll Open and switch show latest: Stick-to-bottom engages on open or switch
+    #[test]
+    fn stick_to_bottom_engages_on_open_or_switch() {
+        // GIVEN multi-session change; active session scrolled mid-history
+        let mut state = State::new();
+        seed_multi_session_change(
+            &mut state,
+            "my-change",
+            "sess-a",
+            "sess-b",
+            false,
+            Some(80.0),
+            false,
+            Some(10.0),
+        );
+
+        // WHEN switching session tab
+        run_scroll_message(
+            &mut state,
+            Message::Change(area::change::Message::Interaction(
+                interaction::Msg::SelectSession("sess-b".into()),
+            )),
+        );
+
+        // THEN stick-to-bottom is engaged on the newly active session
+        let ax = active_ax(&state);
+        assert_eq!(ax.session.id, "sess-b");
+        assert!(ax.stick_to_bottom);
+        assert!(!ax.pending_snap_to_bottom);
+    }
+
+    /// @spec chat/session-scroll Area navigation restores viewport: Area change restores remembered mid-history
+    #[test]
+    fn area_change_restores_remembered_mid_history() {
+        // GIVEN change chat scrolled away from bottom
+        let mut state = State::new();
+        seed_scoped_session(
+            &mut state,
+            scope::Scope::Change("my-change".into()),
+            scope::ScopeKind::Change,
+            "sess-1",
+            false,
+            Some(240.0),
+        );
+        seed_scoped_session(
+            &mut state,
+            scope::Scope::Caps,
+            scope::ScopeKind::Caps,
+            "caps-1",
+            true,
+            None,
+        );
+        state.active_area = Area::Change;
+        state.change.selected_change = Some("my-change".into());
+
+        // WHEN navigating to another area and back without changing session identity
+        run_scroll_message(&mut state, Message::AreaSelected(Area::Caps));
+        run_scroll_message(&mut state, Message::AreaSelected(Area::Change));
+
+        // THEN remembered mid-history intent is intact (not force-latest)
+        let ax = active_ax(&state);
+        assert_eq!(ax.session.id, "sess-1");
+        assert!(!ax.stick_to_bottom);
+        assert_eq!(ax.last_chat_offset_y, Some(240.0));
+        assert_eq!(
+            restored_viewport_intent(ax.stick_to_bottom, ax.last_chat_offset_y),
+            RestoredViewport::Offset(240.0)
+        );
+    }
+
+    /// @spec chat/session-scroll Area navigation restores viewport: Area change keeps stick-to-bottom when that was the prior intent
+    #[test]
+    fn area_change_keeps_stick_to_bottom_when_prior_intent() {
+        // GIVEN change chat with stick-to-bottom engaged
+        let mut state = State::new();
+        seed_scoped_session(
+            &mut state,
+            scope::Scope::Change("my-change".into()),
+            scope::ScopeKind::Change,
+            "sess-1",
+            true,
+            Some(0.0),
+        );
+        seed_scoped_session(
+            &mut state,
+            scope::Scope::Caps,
+            scope::ScopeKind::Caps,
+            "caps-1",
+            false,
+            Some(99.0),
+        );
+        state.active_area = Area::Change;
+        state.change.selected_change = Some("my-change".into());
+
+        // WHEN navigating away and back
+        run_scroll_message(&mut state, Message::AreaSelected(Area::Caps));
+        run_scroll_message(&mut state, Message::AreaSelected(Area::Change));
+
+        // THEN stick remains engaged (latest intent preserved)
+        let ax = active_ax(&state);
+        assert!(ax.stick_to_bottom);
+        assert_eq!(
+            restored_viewport_intent(ax.stick_to_bottom, ax.last_chat_offset_y),
+            RestoredViewport::Latest
+        );
+    }
+
+    /// @spec chat/session-scroll Layout preserve stays within session identity: Same session keeps viewport across layout-affecting update
+    #[test]
+    fn same_session_keeps_viewport_across_layout_update() {
+        // GIVEN active change session mid-history
+        let mut state = State::new();
+        seed_scoped_session(
+            &mut state,
+            scope::Scope::Change("my-change".into()),
+            scope::ScopeKind::Change,
+            "sess-1",
+            false,
+            Some(180.0),
+        );
+        state.active_area = Area::Change;
+        state.change.selected_change = Some("my-change".into());
+        let id_before = active_chat_identity(&state);
+
+        // WHEN a layout-affecting update does not change chat identity
+        run_scroll_message(
+            &mut state,
+            Message::Change(area::change::Message::ToggleSection("picker".into())),
+        );
+
+        // THEN session identity and scroll intent are unchanged
+        assert_eq!(active_chat_identity(&state), id_before);
+        let ax = active_ax(&state);
+        assert!(!ax.stick_to_bottom);
+        assert_eq!(ax.last_chat_offset_y, Some(180.0));
+    }
+
+    /// @spec chat/session-scroll Layout preserve stays within session identity: Session identity change does not apply prior session offset
+    #[test]
+    fn session_identity_change_does_not_apply_prior_session_offset() {
+        // GIVEN multi-session change; s1 mid-history (offset 320), s2 mid-history (offset 10)
+        let mut state = State::new();
+        seed_multi_session_change(
+            &mut state,
+            "my-change",
+            "sess-a",
+            "sess-b",
+            false,
+            Some(320.0),
+            false,
+            Some(10.0),
+        );
+        let prior_id = active_chat_identity(&state);
+        assert_eq!(prior_id.as_ref().map(|i| i.session_id.as_str()), Some("sess-a"));
+
+        // WHEN switching to the other session
+        run_scroll_message(
+            &mut state,
+            Message::Change(area::change::Message::Interaction(
+                interaction::Msg::SelectSession("sess-b".into()),
+            )),
+        );
+
+        // THEN new session is not layout-preserved at the prior session's offset:
+        // production open/switch path snaps to latest (stick on), not offset 320.
+        let after = active_chat_identity(&state);
+        assert_ne!(prior_id, after);
+        let ax = active_ax(&state);
+        assert_eq!(ax.session.id, "sess-b");
+        assert!(
+            ax.stick_to_bottom,
+            "identity change must not preserve prior session mid-history as layout replay"
+        );
+        assert_eq!(
+            restored_viewport_intent(ax.stick_to_bottom, ax.last_chat_offset_y),
+            RestoredViewport::Latest
+        );
+        // Prior session's remembered offset must not be copied onto the new session.
+        assert_ne!(ax.last_chat_offset_y, Some(320.0));
     }
 }

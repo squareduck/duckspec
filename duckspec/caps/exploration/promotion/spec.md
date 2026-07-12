@@ -24,7 +24,7 @@ exploration is currently selected.
 - **AND** the exploration's chat sessions are accessible under the change's scope
 
 > test: code
-> - crates/duckboard/src/main.rs:5914
+> - crates/duckboard/src/main.rs:6059
 
 ### Scenario: Unbound change adopts no exploration
 
@@ -35,7 +35,7 @@ exploration is currently selected.
 - **AND** the selected exploration's chat sessions remain under their own scope
 
 > test: code
-> - crates/duckboard/src/main.rs:5946
+> - crates/duckboard/src/main.rs:6091
 
 ## Requirement: Bindings are single-use
 
@@ -52,7 +52,7 @@ already promoted — does not promote an exploration again.
 - **THEN** no exploration is promoted into the change
 
 > test: code
-> - crates/duckboard/src/main.rs:6036
+> - crates/duckboard/src/main.rs:6181
 
 ## Requirement: Chat focus after bound promotion
 
@@ -72,7 +72,7 @@ binding SHALL NOT force chat input focus as a result of that detection alone.
 - **AND** the chat input has keyboard focus
 
 > test: code
-> - crates/duckboard/src/main.rs:5978
+> - crates/duckboard/src/main.rs:6123
 
 ### Scenario: Unbound new change does not force chat input focus
 
@@ -83,4 +83,4 @@ binding SHALL NOT force chat input focus as a result of that detection alone.
 - **AND** the chat input still does not have keyboard focus
 
 > test: code
-> - crates/duckboard/src/main.rs:6008
+> - crates/duckboard/src/main.rs:6153
