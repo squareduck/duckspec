@@ -316,7 +316,7 @@ transcript message solely for that custom answer.
 - **AND** the text is not left only staged in the interrupt queue
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:1685
+> - crates/duckboard/src/area/interaction.rs:1687
 
 ## Requirement: Awaiting composer chrome
 

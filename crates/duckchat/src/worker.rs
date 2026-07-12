@@ -176,8 +176,15 @@ pub fn spawn_worker<P: Provider + 'static>(
     provider: P,
     working_dir: PathBuf,
     events: mpsc::Sender<AgentEvent>,
+    oneshot_model: Option<String>,
 ) -> AgentHandle {
-    spawn_worker_with_oneshot_budget(provider, working_dir, events, ONESHOT_CALL_BUDGET)
+    spawn_worker_with_oneshot_budget(
+        provider,
+        working_dir,
+        events,
+        ONESHOT_CALL_BUDGET,
+        oneshot_model,
+    )
 }
 
 /// Like [`spawn_worker`], but with an explicit oneshot Work budget (tests inject
@@ -187,6 +194,7 @@ fn spawn_worker_with_oneshot_budget<P: Provider + 'static>(
     working_dir: PathBuf,
     events: mpsc::Sender<AgentEvent>,
     oneshot_budget: Duration,
+    oneshot_model: Option<String>,
 ) -> AgentHandle {
     let (cmd_tx, mut cmd_rx) = mpsc::unbounded_channel::<AgentCommand>();
     let (oneshot_tx, mut oneshot_rx) = mpsc::unbounded_channel::<OneshotCommand>();
@@ -201,7 +209,7 @@ fn spawn_worker_with_oneshot_budget<P: Provider + 'static>(
     };
 
     let mut main = provider.open_main_runtime(&working_dir);
-    let mut oneshot = provider.open_oneshot_runtime(&working_dir);
+    let mut oneshot = provider.open_oneshot_runtime(&working_dir, oneshot_model);
 
     // Oneshot loop: serializes title + reply; concurrent with the main loop.
     tokio::spawn(async move {
@@ -380,6 +388,8 @@ mod tests {
         oneshot_sessions: Mutex<Vec<u64>>,
         oneshot_rotate: AtomicUsize,
         oneshot_shutdown: AtomicUsize,
+        /// Preferred model id passed into `open_oneshot_runtime`.
+        oneshot_preferred: Mutex<Option<String>>,
         /// True while a oneshot prompt body is executing.
         oneshot_in_flight: AtomicBool,
         /// Peak concurrent oneshot prompt executions (should stay ≤ 1).
@@ -623,7 +633,12 @@ mod tests {
             })
         }
 
-        fn open_oneshot_runtime(&self, _working_dir: &Path) -> Box<dyn OneshotRuntime> {
+        fn open_oneshot_runtime(
+            &self,
+            _working_dir: &Path,
+            preferred_model: Option<String>,
+        ) -> Box<dyn OneshotRuntime> {
+            *self.log.oneshot_preferred.lock().unwrap() = preferred_model;
             Box::new(FakeOneshotRuntime {
                 log: self.log.clone(),
                 hot: false,
@@ -668,7 +683,7 @@ mod tests {
     async fn title_summary_is_requested_through_the_chat_handle() {
         let log = Arc::new(FakeLog::default());
         let (tx, mut rx) = mpsc::channel(16);
-        let handle = spawn_worker(FakeProvider::new(log.clone()), std::env::temp_dir(), tx);
+        let handle = spawn_worker(FakeProvider::new(log.clone()), std::env::temp_dir(), tx, None);
 
         // First turn activates paths (not required for title, but realistic).
         handle.send_prompt("hello".into());
@@ -689,7 +704,7 @@ mod tests {
     async fn reply_suggestions_are_requested_through_the_chat_handle() {
         let log = Arc::new(FakeLog::default());
         let (tx, mut rx) = mpsc::channel(16);
-        let handle = spawn_worker(FakeProvider::new(log.clone()), std::env::temp_dir(), tx);
+        let handle = spawn_worker(FakeProvider::new(log.clone()), std::env::temp_dir(), tx, None);
 
         handle.send_prompt("hello".into());
         drain_until_turn_complete(&mut rx).await;
@@ -710,7 +725,7 @@ mod tests {
     async fn first_turn_succeeds_without_a_prior_pre_warm_call() {
         let log = Arc::new(FakeLog::default());
         let (tx, mut rx) = mpsc::channel(16);
-        let handle = spawn_worker(FakeProvider::new(log.clone()), std::env::temp_dir(), tx);
+        let handle = spawn_worker(FakeProvider::new(log.clone()), std::env::temp_dir(), tx, None);
 
         // No ensure_hot / pre-warm API call — just send.
         handle.send_prompt("first turn".into());
@@ -732,7 +747,7 @@ mod tests {
     async fn oneshot_after_first_send_needs_no_separate_pre_warm_api() {
         let log = Arc::new(FakeLog::default());
         let (tx, mut rx) = mpsc::channel(16);
-        let handle = spawn_worker(FakeProvider::new(log.clone()), std::env::temp_dir(), tx);
+        let handle = spawn_worker(FakeProvider::new(log.clone()), std::env::temp_dir(), tx, None);
 
         handle.send_prompt("first".into());
         drain_until_turn_complete(&mut rx).await;
@@ -751,7 +766,7 @@ mod tests {
     async fn title_and_reply_suggestions_run_one_at_a_time_on_the_oneshot_path() {
         let log = Arc::new(FakeLog::default());
         let (tx, mut rx) = mpsc::channel(16);
-        let handle = spawn_worker(FakeProvider::new(log.clone()), std::env::temp_dir(), tx);
+        let handle = spawn_worker(FakeProvider::new(log.clone()), std::env::temp_dir(), tx, None);
 
         handle.send_prompt("go".into());
         drain_until_turn_complete(&mut rx).await;
@@ -783,7 +798,7 @@ mod tests {
     async fn a_second_oneshot_call_does_not_resume_the_prior_oneshot_session() {
         let log = Arc::new(FakeLog::default());
         let (tx, mut rx) = mpsc::channel(16);
-        let handle = spawn_worker(FakeProvider::new(log.clone()), std::env::temp_dir(), tx);
+        let handle = spawn_worker(FakeProvider::new(log.clone()), std::env::temp_dir(), tx, None);
 
         handle.send_prompt("go".into());
         drain_until_turn_complete(&mut rx).await;
@@ -820,6 +835,7 @@ mod tests {
             FakeProvider::with_hang(log.clone(), hang.clone()),
             std::env::temp_dir(),
             tx,
+            None,
         );
 
         handle.send_prompt("long turn".into());
@@ -857,7 +873,7 @@ mod tests {
         // Fake provider is cold-capable: no process reuse beyond ensure_hot bookkeeping.
         let log = Arc::new(FakeLog::default());
         let (tx, _rx) = mpsc::channel(16);
-        let handle = spawn_worker(FakeProvider::new(log.clone()), std::env::temp_dir(), tx);
+        let handle = spawn_worker(FakeProvider::new(log.clone()), std::env::temp_dir(), tx, None);
 
         let title = handle
             .title_summary(TitleRequest::new("cold path title"))
@@ -884,6 +900,7 @@ mod tests {
             std::env::temp_dir(),
             tx,
             TEST_ONESHOT_BUDGET,
+            None,
         );
 
         let started = std::time::Instant::now();
@@ -907,6 +924,29 @@ mod tests {
         handle.shutdown();
     }
 
+    /// Host-resolved oneshot preference is passed into `open_oneshot_runtime`.
+    #[tokio::test]
+    async fn spawn_worker_opens_oneshot_with_preferred_model() {
+        let log = Arc::new(FakeLog::default());
+        let (tx, _rx) = mpsc::channel(16);
+        let handle = spawn_worker(
+            FakeProvider::new(log.clone()),
+            std::env::temp_dir(),
+            tx,
+            Some("haiku".into()),
+        );
+        // Allow the worker task to open runtimes.
+        tokio::task::yield_now().await;
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        let preferred = log.oneshot_preferred.lock().unwrap().clone();
+        assert_eq!(
+            preferred.as_deref(),
+            Some("haiku"),
+            "expected preferred oneshot model passed to open_oneshot_runtime"
+        );
+        handle.shutdown();
+    }
+
     // @spec harness/warm-runtime Oneshot call budget and recovery: Later oneshot succeeds after prior oneshot failure
     #[tokio::test]
     async fn later_oneshot_succeeds_after_prior_oneshot_failure() {
@@ -917,6 +957,7 @@ mod tests {
             std::env::temp_dir(),
             tx,
             TEST_ONESHOT_BUDGET,
+            None,
         );
 
         let first = handle

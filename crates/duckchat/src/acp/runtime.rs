@@ -293,17 +293,55 @@ impl AcpOneshotRuntime {
     }
 }
 
-/// Select oneshot model: preferred id if advertised, else first advertised.
+/// Select oneshot model from the advertise set.
+///
+/// 1. Exact preferred id if present
+/// 2. Substring match (e.g. preferred `haiku` → `claude-haiku-4-5-…`)
+/// 3. Cheap/fast default needles (haiku, then composer+fast, then fast)
+/// 4. First advertised model
 pub(crate) fn pick_oneshot_model(
     preferred: Option<&str>,
     models: &[AcpModel],
 ) -> Option<String> {
-    if let Some(pref) = preferred
-        && models.iter().any(|m| m.id == pref)
-    {
-        return Some(pref.to_string());
+    if models.is_empty() {
+        return None;
     }
-    models.first().map(|m| m.id.clone())
+    if let Some(pref) = preferred {
+        let pref = pref.trim();
+        if !pref.is_empty() {
+            if let Some(m) = models.iter().find(|m| m.id == pref) {
+                return Some(m.id.clone());
+            }
+            let pref_l = pref.to_ascii_lowercase();
+            if let Some(m) = models
+                .iter()
+                .find(|m| m.id.to_ascii_lowercase().contains(&pref_l))
+            {
+                return Some(m.id.clone());
+            }
+        }
+    }
+    default_oneshot_from_advertised(models)
+}
+
+/// Prefer cheap/fast advertised models when no usable preferred id was given.
+fn default_oneshot_from_advertised(models: &[AcpModel]) -> Option<String> {
+    models
+        .iter()
+        .find(|m| m.id.to_ascii_lowercase().contains("haiku"))
+        .or_else(|| {
+            models.iter().find(|m| {
+                let id = m.id.to_ascii_lowercase();
+                id.contains("composer") && id.contains("fast")
+            })
+        })
+        .or_else(|| {
+            models
+                .iter()
+                .find(|m| m.id.to_ascii_lowercase().contains("fast"))
+        })
+        .or_else(|| models.first())
+        .map(|m| m.id.clone())
 }
 
 #[async_trait]
@@ -965,7 +1003,7 @@ mod tests {
         }
     }
 
-    // Claude preferred oneshot model is the curated haiku alias.
+    // Claude preferred oneshot model is the curated haiku alias (or full id).
     const PREFERRED: &str = "haiku";
 
     // @spec harness/claude Oneshot preferred model: Preferred oneshot model is selected when advertised
@@ -993,5 +1031,36 @@ mod tests {
         let selected = pick_oneshot_model(Some(PREFERRED), &models);
         // THEN another advertised model (first), not failure
         assert_eq!(selected.as_deref(), Some("fable"));
+    }
+
+    #[test]
+    fn bare_haiku_preferred_matches_full_api_id() {
+        // GIVEN live advertise full ids (Sonnet first) and bare preferred "haiku"
+        let models = vec![
+            acp_model("claude-sonnet-5"),
+            acp_model("claude-opus-4-8"),
+            acp_model("claude-haiku-4-5-20251001"),
+        ];
+        // WHEN selecting with bare alias preferred
+        let selected = pick_oneshot_model(Some("haiku"), &models);
+        // THEN the full haiku id wins, not the first catalog entry
+        assert_eq!(selected.as_deref(), Some("claude-haiku-4-5-20251001"));
+    }
+
+    #[test]
+    fn no_preferred_defaults_to_haiku_or_fast_among_full_ids() {
+        let models = vec![
+            acp_model("claude-sonnet-5"),
+            acp_model("claude-haiku-4-5-20251001"),
+        ];
+        let selected = pick_oneshot_model(None, &models);
+        assert_eq!(selected.as_deref(), Some("claude-haiku-4-5-20251001"));
+
+        let grok = vec![
+            acp_model("grok-4.5"),
+            acp_model("grok-composer-2.5-fast"),
+        ];
+        let selected = pick_oneshot_model(None, &grok);
+        assert_eq!(selected.as_deref(), Some("grok-composer-2.5-fast"));
     }
 }

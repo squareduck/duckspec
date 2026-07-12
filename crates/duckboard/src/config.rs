@@ -29,6 +29,28 @@ pub struct ChatConfig {
     /// After a turn, run a cheap oneshot for freeform reply chips when eligible.
     /// Default off (model cost).
     pub agent_input_hints: bool,
+    /// Preferred oneshot model id per harness (`claude-code`, `grok`, …).
+    /// Global (not per-project). Absent key → string-match default from catalog.
+    pub oneshot_models: HashMap<String, String>,
+}
+
+impl ChatConfig {
+    /// Configured oneshot model id for `harness`, if any.
+    pub fn oneshot_model(&self, harness: &str) -> Option<&str> {
+        self.oneshot_models.get(harness).map(String::as_str)
+    }
+
+    /// Set or clear the global oneshot model preference for `harness`.
+    pub fn set_oneshot_model(&mut self, harness: &str, model: Option<String>) {
+        match model {
+            Some(m) => {
+                self.oneshot_models.insert(harness.to_string(), m);
+            }
+            None => {
+                self.oneshot_models.remove(harness);
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -247,6 +269,7 @@ mod tests {
     fn missing_chat_table_deserializes_to_defaults() {
         let cfg: Config = toml::from_str("").expect("empty toml");
         assert!(!cfg.chat.agent_input_hints);
+        assert!(cfg.chat.oneshot_models.is_empty());
     }
 
     #[test]
@@ -262,5 +285,42 @@ auto_messages = true
         .expect("legacy chat table");
         // THEN load succeeds and agent_input_hints is honored
         assert!(cfg.chat.agent_input_hints);
+    }
+
+    /// @spec chat/oneshot-models Global per-harness oneshot preference: A configured oneshot model for a harness is stored globally
+    #[test]
+    fn configured_oneshot_model_for_a_harness_is_stored_globally() {
+        // GIVEN a preferred oneshot model id for a harness
+        let mut cfg = Config::default();
+
+        // WHEN the oneshot model setting is saved
+        cfg.chat
+            .set_oneshot_model("claude-code", Some("haiku".into()));
+
+        // THEN that preference is stored as a global application setting for that harness
+        assert_eq!(cfg.chat.oneshot_model("claude-code"), Some("haiku"));
+        let toml = toml::to_string(&cfg).unwrap();
+        let loaded: Config = toml::from_str(&toml).unwrap();
+        assert_eq!(loaded.chat.oneshot_model("claude-code"), Some("haiku"));
+    }
+
+    /// @spec chat/oneshot-models Global per-harness oneshot preference: Preferences are keyed by harness not by project
+    #[test]
+    fn preferences_are_keyed_by_harness_not_by_project() {
+        // GIVEN a preferred oneshot model for a harness
+        // AND more than one project
+        let mut cfg = Config::default();
+        cfg.chat
+            .set_oneshot_model("grok", Some("grok-composer-2.5-fast".into()));
+
+        // WHEN the oneshot model setting is read in either project
+        // THEN the same global preference for that harness is returned
+        // (oneshot_models live on chat config, not model_defaults / project hash)
+        assert!(cfg.model_defaults.is_empty());
+        assert_eq!(
+            cfg.chat.oneshot_model("grok"),
+            Some("grok-composer-2.5-fast")
+        );
+        assert_eq!(cfg.chat.oneshot_model("claude-code"), None);
     }
 }

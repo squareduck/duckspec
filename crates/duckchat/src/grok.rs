@@ -26,9 +26,9 @@ use crate::title::{build_title_prompt, clean_title};
 /// Stable harness id shared by every model this provider owns.
 const HARNESS: &str = "grok";
 
-/// Preferred model for the one-shot `title_summary` call — grok's cheapest,
-/// fastest. Falls back to any other advertised model when absent (see
-/// [`pick_title_model`]).
+/// Default preferred oneshot model (title summary / reply suggest) when present
+/// in the advertised catalog. Falls back to another available model when absent
+/// (see [`pick_title_model`]).
 const TITLE_MODEL: &str = "grok-composer-2.5-fast";
 
 /// [`Provider`] over the `grok` CLI. Models and their context windows are
@@ -128,16 +128,22 @@ impl Provider for GrokProvider {
         Box::new(AcpMainRuntime::new(self.launch.clone(), working_dir))
     }
 
-    fn open_oneshot_runtime(&self, working_dir: &Path) -> Box<dyn OneshotRuntime> {
+    fn open_oneshot_runtime(
+        &self,
+        working_dir: &Path,
+        preferred_model: Option<String>,
+    ) -> Box<dyn OneshotRuntime> {
+        // Host preferred when set; otherwise advertise-side default needles.
         Box::new(AcpOneshotRuntime::with_preferred_model(
             self.launch.clone(),
             working_dir,
-            Some(TITLE_MODEL.to_string()),
+            preferred_model,
         ))
     }
 
     async fn title_summary(&self, req: TitleRequest, working_dir: &Path) -> Result<String, Error> {
-        let mut rt = self.open_oneshot_runtime(working_dir);
+        // TITLE_MODEL needle matches full ids via pick_oneshot_model substring.
+        let mut rt = self.open_oneshot_runtime(working_dir, Some(TITLE_MODEL.to_string()));
         let raw = rt
             .prompt(OneshotKind::Title, build_title_prompt(&req))
             .await?;
@@ -153,7 +159,7 @@ impl Provider for GrokProvider {
             return Ok(Vec::new());
         }
 
-        let mut rt = self.open_oneshot_runtime(working_dir);
+        let mut rt = self.open_oneshot_runtime(working_dir, Some(TITLE_MODEL.to_string()));
         let body = build_reply_suggest_prompt(&req);
         let text = format!("{REPLY_SUGGEST_INSTRUCTION}\n\n{body}");
         let raw = rt.prompt(OneshotKind::ReplySuggest, text).await?;
@@ -176,14 +182,37 @@ pub fn grok_agent_launch() -> AgentLaunch {
 }
 
 /// Map a handshake-advertised model onto a neutral [`ModelInfo`], tagging it
-/// with the grok harness and carrying its context window.
+/// with the grok harness and carrying its context window and display name.
 fn to_model_info(m: crate::acp::AcpModel) -> ModelInfo {
     ModelInfo {
         harness: HARNESS.to_string(),
-        id: m.id,
-        display: m.name,
+        id: m.id.clone(),
+        display: humanize_display(&m.id, &m.name),
         context_window: m.context_window,
     }
+}
+
+/// Prefer a human advertised name; otherwise light-prettify the bare id.
+fn humanize_display(id: &str, advertised: &str) -> String {
+    let advertised = advertised.trim();
+    if !advertised.is_empty() && advertised != id {
+        return advertised.to_string();
+    }
+    id.split(['-', '_'])
+        .filter(|s| !s.is_empty())
+        .map(|part| {
+            if part.chars().all(|c| c.is_ascii_digit() || c == '.') {
+                part.to_string()
+            } else {
+                let mut c = part.chars();
+                match c.next() {
+                    Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
+                    None => String::new(),
+                }
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 #[cfg(test)]
@@ -335,6 +364,32 @@ mod tests {
         assert!(listed.iter().all(|m| m.context_window.is_some()));
         assert_eq!(listed[0].id, "grok-4.5");
         assert_eq!(listed[0].context_window, Some(256_000));
+    }
+
+    /// @spec harness/grok Model discovery: Each listed model carries a display name
+    #[test]
+    fn each_listed_model_carries_a_display_name() {
+        // GIVEN a grok handshake advertising its available models
+        let handshake = vec![
+            AcpModel {
+                id: "grok-4.5".into(),
+                name: "Grok 4.5".into(),
+                context_window: Some(256_000),
+            },
+            AcpModel {
+                id: "grok-composer-2.5-fast".into(),
+                name: "grok-composer-2.5-fast".into(), // bare id → humanize
+                context_window: Some(128_000),
+            },
+        ];
+
+        // WHEN the harness lists models
+        let listed: Vec<ModelInfo> = handshake.into_iter().map(to_model_info).collect();
+
+        // THEN each returned model carries a non-empty display name
+        assert!(listed.iter().all(|m| !m.display.is_empty()));
+        assert_eq!(listed[0].display, "Grok 4.5");
+        assert_eq!(listed[1].display, "Grok Composer 2.5 Fast");
     }
 
     /// @spec harness/grok Model discovery: Title model falls back when the preferred fast model is absent

@@ -6,6 +6,7 @@
 
 mod agent;
 mod claude;
+mod models;
 
 use std::io::Write;
 use std::process::ExitCode;
@@ -62,7 +63,7 @@ async fn run() -> anyhow::Result<()> {
 
         match method {
             "initialize" => {
-                write_result(id, agent.initialize())?;
+                write_result(id, agent.initialize().await)?;
             }
             "session/new" => match agent.session_new(&params).await {
                 Ok(result) => write_result(id, result)?,

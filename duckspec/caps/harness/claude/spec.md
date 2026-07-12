@@ -23,7 +23,7 @@ run Claude turns.
 - **AND** the host does not drive Claude via an in-host stream-json client
 
 > test: code
-> - crates/duckchat/src/claude_code.rs:244
+> - crates/duckchat/src/claude_code.rs:315
 
 ### Scenario: The agent uses the official claude CLI as its backend
 
@@ -52,7 +52,7 @@ Claude Code native session id.
 - **THEN** the open completes without starting the official `claude` process
 
 > test: code
-> - crates/duckchat-claude-acp/src/agent.rs:681
+> - crates/duckchat-claude-acp/src/agent.rs:672
 
 ### Scenario: A turn without a prior session opens a new session and surfaces Claude's native session id
 
@@ -62,7 +62,7 @@ Claude Code native session id.
 - **AND** it surfaces Claude Code's native session id
 
 > test: code
-> - crates/duckchat-claude-acp/src/agent.rs:718
+> - crates/duckchat-claude-acp/src/agent.rs:709
 
 ### Scenario: A turn with a prior Claude session id resumes that id
 
@@ -71,7 +71,7 @@ Claude Code native session id.
 - **THEN** it opens the session by resuming that same id
 
 > test: code
-> - crates/duckchat-claude-acp/src/agent.rs:756
+> - crates/duckchat-claude-acp/src/agent.rs:747
 
 ## Requirement: Duplex main heat
 
@@ -94,7 +94,7 @@ when a prior session id is supplied, resume that id.
   session id
 
 > test: code
-> - crates/duckchat-claude-acp/src/agent.rs:809
+> - crates/duckchat-claude-acp/src/agent.rs:800
 
 ### Scenario: After cancel, a later turn may start Claude again and resume a prior session id
 
@@ -105,7 +105,7 @@ when a prior session id is supplied, resume that id.
 - **AND** it opens the session by resuming that id
 
 > test: code
-> - crates/duckchat-claude-acp/src/agent.rs:863
+> - crates/duckchat-claude-acp/src/agent.rs:854
 
 ## Requirement: Profile-compatible event emission
 
@@ -147,7 +147,7 @@ rather than only after the turn has completed.
   prompt result
 
 > test: code
-> - crates/duckchat-claude-acp/src/agent.rs:938
+> - crates/duckchat-claude-acp/src/agent.rs:929
 
 ### Scenario: A Claude tool call surfaces as profile tool use then result
 
@@ -302,9 +302,9 @@ structured-choice path for clarifying questions.
 ## Requirement: Oneshot preferred model
 
 Title-summary and reply-suggestion oneshots on the Claude harness SHALL select the
-preferred cheap/fast model (the curated `haiku` alias) when that model is among the models
-the agent advertises. When the preferred model is not advertised, those oneshots SHALL
-select another advertised model rather than failing. Main conversation turns SHALL NOT be
+preferred oneshot model for that harness when that model is among the models the agent
+advertises. When the preferred model is not advertised, those oneshots SHALL select
+another advertised model rather than failing. Main conversation turns SHALL NOT be
 required to use this preferred oneshot model (session model selection is separate).
 
 > test: code
@@ -312,14 +312,14 @@ required to use this preferred oneshot model (session model selection is separat
 ### Scenario: Preferred oneshot model is selected when advertised
 
 - **GIVEN** the Claude agent advertising available models that include the preferred
-  oneshot model among others
+  oneshot model for that harness among others
 
 - **WHEN** the harness selects a model for a title-summary or reply-suggestion oneshot
 
 - **THEN** it selects the preferred oneshot model
 
 > test: code
-> - crates/duckchat/src/acp/runtime.rs:971
+> - crates/duckchat/src/acp/runtime.rs:1009
 
 ### Scenario: Oneshot model falls back when preferred is absent
 
@@ -331,4 +331,81 @@ required to use this preferred oneshot model (session model selection is separat
 - **THEN** it selects another advertised model rather than failing
 
 > test: code
-> - crates/duckchat/src/acp/runtime.rs:987
+> - crates/duckchat/src/acp/runtime.rs:1025
+
+## Requirement: Model discovery
+
+Listing Claude models on the host SHALL return the models the owned Claude agent
+advertises on initialize, each tagged with the Claude harness. Each listed model SHALL
+carry a human-readable display name. When the agent advertises a context window for a
+model, that listing SHALL carry the same window; when it does not, the listing SHALL leave
+the window unknown. When discovery cannot obtain an advertised set, listing SHALL return
+an empty list without panicking.
+
+> test: code
+
+### Scenario: Listed models come from the agent advertise set
+
+- **GIVEN** the owned Claude agent advertising a set of available models on initialize
+- **WHEN** the harness lists models
+- **THEN** the listed models are exactly that advertised set
+- **AND** each listed model is tagged with the Claude harness
+
+> test: code
+> - crates/duckchat/src/claude_code.rs:385
+
+### Scenario: Each listed model carries a display name
+
+- **GIVEN** the owned Claude agent advertising models with display names
+- **WHEN** the harness lists models
+- **THEN** each listed model carries a non-empty display name
+
+> test: code
+> - crates/duckchat/src/claude_code.rs:413
+
+### Scenario: A model with a known context window carries that window
+
+- **GIVEN** the owned Claude agent advertising a model with a known context window
+- **WHEN** the harness lists models
+- **THEN** that listed model carries the same context window
+
+> test: code
+> - crates/duckchat/src/claude_code.rs:439
+
+### Scenario: Discovery failure yields an empty host list without panic
+
+- **GIVEN** an environment where Claude model discovery cannot obtain an advertised set
+- **WHEN** the harness lists models
+- **THEN** the model list is empty
+- **AND** the listing completes without panicking
+
+> test: code
+> - crates/duckchat/src/claude_code.rs:456
+
+## Requirement: Agent model advertise
+
+On initialize, the owned Claude ACP agent SHALL advertise its available models to the
+host. When live discovery of Claude models succeeds, that advertise set SHALL be the live
+catalog. When live discovery fails, the agent SHALL advertise a curated alias fallback set
+rather than an empty advertise set.
+
+> test: code
+
+### Scenario: Successful live discovery advertises those models on initialize
+
+- **GIVEN** live Claude model discovery succeeding with a non-empty catalog
+- **WHEN** the agent completes initialize
+- **THEN** the initialize result advertises that live catalog
+
+> test: code
+> - crates/duckchat-claude-acp/src/models.rs:261
+
+### Scenario: Failed live discovery advertises the curated alias fallback
+
+- **GIVEN** live Claude model discovery failing
+- **WHEN** the agent completes initialize
+- **THEN** the initialize result advertises the curated alias fallback set
+- **AND** the advertise set is non-empty
+
+> test: code
+> - crates/duckchat-claude-acp/src/models.rs:295

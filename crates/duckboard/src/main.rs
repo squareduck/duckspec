@@ -387,6 +387,8 @@ enum Message {
     Settings(area::settings::Message),
     // System theme changed
     ThemeChanged(theme::ColorMode),
+    /// App-start model catalog refresh finished; re-read pickers / oneshot resolve.
+    ModelCatalogReady,
     // Animation tick for the streaming indicator; only fires while a session
     // is streaming (see `subscription`).
     StreamTick,
@@ -454,6 +456,16 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                 );
             }
             return restore_chat_scroll(state);
+        }
+        Message::ModelCatalogReady => {
+            // Catalog was filled on a background task; this message forces a
+            // re-render and subscription rebuild so model/oneshot pickers and
+            // worker oneshot preferred ids re-resolve from the live catalog.
+            tracing::info!(
+                models = agent::available_models().len(),
+                "model catalog ready"
+            );
+            return Task::none();
         }
         Message::Refresh => {
             let outcome = reload_and_reconcile(state);
@@ -5379,8 +5391,13 @@ fn subscription(state: &State) -> Subscription<Message> {
                     session.project_model_default.as_ref(),
                 )
                 .harness;
+                let oneshot_model = agent::resolved_oneshot_model_for(
+                    &harness,
+                    state.config.chat.oneshot_model(&harness),
+                );
                 subs.push(
-                    agent::agent_subscription(key, root.clone(), harness).map(tagged_agent),
+                    agent::agent_subscription(key, root.clone(), harness, oneshot_model)
+                        .map(tagged_agent),
                 );
             }
         };
@@ -5391,6 +5408,9 @@ fn subscription(state: &State) -> Subscription<Message> {
 
     // Global keyboard events.
     subs.push(event::listen_raw(handle_key_event));
+
+    // One-shot process model catalog refresh + UI wake when ready.
+    subs.push(model_catalog_ready_subscription());
 
     // Poll system dark/light mode.
     subs.push(theme_subscription());
@@ -5450,6 +5470,26 @@ fn any_session_streaming(state: &State) -> bool {
 
 fn theme_subscription() -> Subscription<Message> {
     Subscription::run(theme_detect_stream).map(Message::ThemeChanged)
+}
+
+/// Refresh the process model catalog once per process, then emit
+/// [`Message::ModelCatalogReady`] so views and agent subscriptions re-read it.
+fn model_catalog_ready_subscription() -> Subscription<Message> {
+    Subscription::run(model_catalog_ready_stream)
+}
+
+fn model_catalog_ready_stream() -> impl iced::futures::Stream<Item = Message> {
+    use iced::futures::stream::{self, StreamExt};
+    use std::sync::atomic::{AtomicBool, Ordering};
+    static STARTED: AtomicBool = AtomicBool::new(false);
+
+    stream::once(async {
+        if !STARTED.swap(true, Ordering::SeqCst) {
+            let _ = tokio::task::spawn_blocking(agent::refresh_model_catalog).await;
+        }
+        Message::ModelCatalogReady
+    })
+    .boxed()
 }
 
 fn theme_detect_stream() -> impl iced::futures::Stream<Item = theme::ColorMode> {
@@ -5520,6 +5560,8 @@ fn main() -> iced::Result {
     // Detect system dark/light mode before creating the window.
     theme::set_mode(theme::detect_mode());
     tracing::info!(mode = ?theme::mode(), "duckboard starting");
+    // Model catalog refresh runs once via subscription and wakes the UI with
+    // Message::ModelCatalogReady (see `model_catalog_ready_subscription`).
 
     iced::application(State::new, update_with_scroll_preservation, view)
         .subscription(subscription)

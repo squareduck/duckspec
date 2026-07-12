@@ -118,8 +118,8 @@ async fn shared_client_completes_turn_against_agent() {
     let init = turn.initialize().await.expect("initialize");
     assert!(init.load_session);
     assert!(
-        init.models.iter().any(|m| m.id == "sonnet"),
-        "curated models advertised: {:?}",
+        !init.models.is_empty(),
+        "initialize must advertise a non-empty model catalog (live or curated fallback): {:?}",
         init.models.iter().map(|m| &m.id).collect::<Vec<_>>()
     );
 

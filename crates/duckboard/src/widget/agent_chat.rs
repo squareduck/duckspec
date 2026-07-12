@@ -203,13 +203,10 @@ pub fn selected_model_choice(choices: &[ModelChoice], selected: Option<&ModelRef
 }
 
 /// The context window of a specific model, looked up by harness + id from the
-/// aggregated model list. `None` when the model is unknown or its harness
+/// process model catalog. `None` when the model is unknown or its harness
 /// reports no window — the usage meter then shows no fill.
 pub fn model_context_window(model: &ModelRef) -> Option<usize> {
-    crate::agent::available_models()
-        .into_iter()
-        .find(|m| m.harness == model.harness && m.id == model.model)
-        .and_then(|m| m.context_window)
+    crate::agent::model_context_window(model)
 }
 
 /// Fraction of the selected model's context window consumed by `tokens`. A

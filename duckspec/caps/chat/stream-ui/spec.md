@@ -176,7 +176,7 @@ still keep their editors.
 - **AND** that editor is not replaced by a newly constructed editor for the same lines
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:1538
+> - crates/duckboard/src/area/interaction.rs:1540
 
 ### Scenario: Suffix-growing live answer refreshes in place
 
@@ -190,7 +190,7 @@ still keep their editors.
 - **AND** the editor is not constructed as a brand-new editor from the full joined text
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:1578
+> - crates/duckboard/src/area/interaction.rs:1580
 
 ### Scenario: Block list reshape uses full rebuild for affected indices
 
@@ -205,7 +205,7 @@ still keep their editors.
 - **AND** any earlier block whose lines are unchanged keeps its existing editor
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:1618
+> - crates/duckboard/src/area/interaction.rs:1620
 
 ## Requirement: Hybrid layout reuse
 

@@ -42,7 +42,15 @@ pub trait Provider: Send + Sync {
     fn open_main_runtime(&self, working_dir: &Path) -> Box<dyn MainRuntime>;
 
     /// Open a oneshot (title / reply-suggest) runtime bound to `working_dir`.
-    fn open_oneshot_runtime(&self, working_dir: &Path) -> Box<dyn OneshotRuntime>;
+    ///
+    /// `preferred_model` is the host-resolved oneshot model id for this harness
+    /// (config / string-match default); the runtime falls back among advertised
+    /// models when that id is absent.
+    fn open_oneshot_runtime(
+        &self,
+        working_dir: &Path,
+        preferred_model: Option<String>,
+    ) -> Box<dyn OneshotRuntime>;
 
     /// Transitional: open a cold main runtime and run one turn.
     async fn run_turn(

@@ -21,7 +21,7 @@ allowed to spawn again and, when a prior session id is supplied, resume that id.
 - **THEN** the spawned agent process is that launch-supplied command
 
 > test: code
-> - crates/duckchat/src/acp/turn.rs:935
+> - crates/duckchat/src/acp/turn.rs:1001
 
 ### Scenario: A second turn on a hot main path reuses the agent process
 
@@ -35,7 +35,7 @@ allowed to spawn again and, when a prior session id is supplied, resume that id.
   session id
 
 > test: code
-> - crates/duckchat/src/acp/runtime.rs:749
+> - crates/duckchat/src/acp/runtime.rs:787
 
 ### Scenario: After cancel, a later turn may spawn again and resume a prior session id
 
@@ -46,7 +46,7 @@ allowed to spawn again and, when a prior session id is supplied, resume that id.
 - **AND** it opens the session by resuming that id
 
 > test: code
-> - crates/duckchat/src/acp/runtime.rs:785
+> - crates/duckchat/src/acp/runtime.rs:823
 
 ## Requirement: Session open and resume
 
@@ -68,7 +68,7 @@ session-not-found outcome so the caller can drop the id and retry.
 - **AND** it surfaces the session id the agent assigned
 
 > test: code
-> - crates/duckchat/src/acp/turn.rs:847
+> - crates/duckchat/src/acp/turn.rs:877
 
 ### Scenario: A turn with a prior session id resumes that id
 
@@ -77,7 +77,7 @@ session-not-found outcome so the caller can drop the id and retry.
 - **THEN** it opens the session by resuming that same id
 
 > test: code
-> - crates/duckchat/src/acp/turn.rs:887
+> - crates/duckchat/src/acp/turn.rs:953
 
 ### Scenario: When the agent rebinds the session id during a turn, the client surfaces the rebound id
 
@@ -87,7 +87,7 @@ session-not-found outcome so the caller can drop the id and retry.
 - **THEN** it surfaces the rebound session id for the caller to persist
 
 > test: code
-> - crates/duckchat/src/acp/runtime.rs:709
+> - crates/duckchat/src/acp/runtime.rs:747
 
 ### Scenario: A failed load of a missing session surfaces session-not-found
 
@@ -96,7 +96,7 @@ session-not-found outcome so the caller can drop the id and retry.
 - **THEN** the outcome is session-not-found rather than a successful resume
 
 > test: code
-> - crates/duckchat/src/acp/turn.rs:906
+> - crates/duckchat/src/acp/turn.rs:972
 
 ## Requirement: Profile event translation
 
@@ -160,7 +160,7 @@ after the auto-allow.
 - **AND** the client does not emit a host user-choice event for that request
 
 > test: code
-> - crates/duckchat/src/acp/turn.rs:1107
+> - crates/duckchat/src/acp/turn.rs:1173
 
 ## Requirement: Mid-turn user choice
 
@@ -185,7 +185,7 @@ cancelled outcome for that request.
 - **AND** the agent request remains open until answered or cancelled
 
 > test: code
-> - crates/duckchat/src/acp/turn.rs:1171
+> - crates/duckchat/src/acp/turn.rs:1237
 
 ### Scenario: Host selected answer completes the pending request
 
@@ -195,7 +195,7 @@ cancelled outcome for that request.
 - **AND** the turn may continue after the completion
 
 > test: code
-> - crates/duckchat/src/acp/turn.rs:1257
+> - crates/duckchat/src/acp/turn.rs:1323
 
 ### Scenario: Host custom freeform answer completes the pending request
 
@@ -209,7 +209,7 @@ cancelled outcome for that request.
 - **AND** the request is not completed as cancelled
 
 > test: code
-> - crates/duckchat/src/acp/turn.rs:1558
+> - crates/duckchat/src/acp/turn.rs:1624
 
 ### Scenario: Host cancel completes the pending request as cancelled
 
@@ -218,7 +218,7 @@ cancelled outcome for that request.
 - **THEN** the agent request is completed as cancelled
 
 > test: code
-> - crates/duckchat/src/acp/turn.rs:1323
+> - crates/duckchat/src/acp/turn.rs:1389
 
 ### Scenario: Turn cancel completes a pending choice as cancelled
 
@@ -227,7 +227,7 @@ cancelled outcome for that request.
 - **THEN** the agent request is completed as cancelled
 
 > test: code
-> - crates/duckchat/src/acp/turn.rs:1382
+> - crates/duckchat/src/acp/turn.rs:1448
 
 ## Requirement: Headless and oneshot safety
 
@@ -245,4 +245,4 @@ without parking on oneshot so headless oneshot work cannot deadlock.
 - **THEN** the call completes without waiting for a host UI answer
 
 > test: code
-> - crates/duckchat/src/acp/turn.rs:1454
+> - crates/duckchat/src/acp/turn.rs:1520

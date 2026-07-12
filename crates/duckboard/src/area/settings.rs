@@ -7,9 +7,11 @@ use iced::widget::{
 };
 use iced::{Center, Element, Length};
 
+use crate::agent;
 use crate::config::{self, Config};
 use crate::theme;
 use crate::widget::agent_chat::{self, ModelChoice};
+use duckchat::{ModelInfo, ModelRef};
 
 // ── State ────────────────────────────────────────────────────────────────────
 
@@ -30,7 +32,64 @@ pub enum Message {
     /// Project-level default model picked (`id == None` → no default).
     ModelDefaultSelected(ModelChoice),
     AgentInputHintsToggled(bool),
+    /// Global oneshot model for a harness (`choice.id` is the model id).
+    OneshotModelSelected { harness: String, choice: ModelChoice },
     ResetDefaults,
+}
+
+/// Harness ids that may show an oneshot picker, in display order.
+const ONESHOT_HARNESS_ORDER: &[&str] = &["claude-code", "grok"];
+
+/// Which harnesses should offer an oneshot model picker.
+///
+/// Empty when agent input hints are off, or when a harness has no catalog models.
+pub fn oneshot_picker_harnesses(
+    agent_input_hints: bool,
+    catalog: &[(impl AsRef<str>, &[ModelInfo])],
+) -> Vec<String> {
+    if !agent_input_hints {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    for (harness, models) in catalog {
+        if !models.is_empty() {
+            out.push(harness.as_ref().to_string());
+        }
+    }
+    out
+}
+
+fn harness_label(harness: &str) -> &str {
+    match harness {
+        "claude-code" => "Claude Code",
+        "grok" => "Grok",
+        other => other,
+    }
+}
+
+fn oneshot_choices_for(models: &[ModelInfo]) -> Vec<ModelChoice> {
+    models
+        .iter()
+        .map(|m| ModelChoice {
+            harness: Some(m.harness.clone()),
+            id: Some(m.id.clone()),
+            label: m.display.clone(),
+            closed_label: m.display.clone(),
+        })
+        .collect()
+}
+
+/// Selected oneshot picker choice for a harness: same ladder as the worker
+/// (`resolve_oneshot_model`), not the first catalog entry when config is unset.
+pub fn selected_oneshot_choice(
+    harness: &str,
+    configured: Option<&str>,
+    models: &[ModelInfo],
+) -> ModelChoice {
+    let choices = oneshot_choices_for(models);
+    let resolved = agent::resolve_oneshot_model(harness, configured, models);
+    let selected_ref = resolved.map(|id| ModelRef::new(harness, id));
+    agent_chat::selected_model_choice(&choices, selected_ref.as_ref())
 }
 
 // ── Update ───────────────────────────────────────────────────────────────────
@@ -74,6 +133,11 @@ pub fn update(
         }
         Message::AgentInputHintsToggled(on) => {
             config.chat.agent_input_hints = on;
+            let _ = config::save(config);
+        }
+        Message::OneshotModelSelected { harness, choice } => {
+            let model = choice.id;
+            config.chat.set_oneshot_model(&harness, model);
             let _ = config::save(config);
         }
         Message::ResetDefaults => {
@@ -176,15 +240,59 @@ fn chat_section<'a>(config: &Config) -> Element<'a, Message> {
     .size(theme::font_sm())
     .color(theme::text_muted());
 
-    column![
+    let mut col = column![
         label,
         desc,
         Space::new().height(theme::SPACING_SM),
         agent_row,
         agent_help,
     ]
-    .spacing(theme::SPACING_XS)
-    .into()
+    .spacing(theme::SPACING_XS);
+
+    if config.chat.agent_input_hints {
+        let oneshot_intro = text(
+            "Oneshot model (titles and reply chips) per agent backend. Global — not \
+             per project.",
+        )
+        .size(theme::font_sm())
+        .color(theme::text_muted());
+        col = col
+            .push(Space::new().height(theme::SPACING_SM))
+            .push(oneshot_intro);
+
+        for harness in ONESHOT_HARNESS_ORDER {
+            let models = agent::models_for_harness(harness);
+            if models.is_empty() {
+                continue;
+            }
+            let choices = oneshot_choices_for(&models);
+            let selected = selected_oneshot_choice(
+                harness,
+                config.chat.oneshot_model(harness),
+                &models,
+            );
+            let harness_owned = harness.to_string();
+            let picker = pick_list(choices, Some(selected), move |choice| {
+                Message::OneshotModelSelected {
+                    harness: harness_owned.clone(),
+                    choice,
+                }
+            })
+            .width(280)
+            .style(theme::pick_list_style)
+            .menu_style(theme::pick_list_menu);
+
+            let row_label = text(format!("Oneshot · {}", harness_label(harness)))
+                .size(theme::font_sm())
+                .color(theme::text_secondary());
+            col = col
+                .push(Space::new().height(theme::SPACING_SM))
+                .push(row_label)
+                .push(picker);
+        }
+    }
+
+    col.into()
 }
 
 fn model_section<'a>(config: &Config, root: &Path) -> Element<'a, Message> {
@@ -275,4 +383,91 @@ fn font_section<'a>(
 
 pub fn breadcrumbs() -> Vec<String> {
     vec!["Settings".into()]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn mi(harness: &str, id: &str) -> ModelInfo {
+        ModelInfo {
+            harness: harness.into(),
+            id: id.into(),
+            display: id.into(),
+            context_window: None,
+        }
+    }
+
+    /// @spec chat/oneshot-models Settings pickers when hints enabled: With agent input hints on, each harness with catalog models offers an oneshot model picker
+    #[test]
+    fn with_agent_input_hints_on_each_harness_with_catalog_models_offers_picker() {
+        // GIVEN agent input hints enabled
+        // AND at least one harness with a non-empty catalog slice
+        let claude = vec![mi("claude-code", "haiku")];
+        let grok = vec![mi("grok", "grok-4.5")];
+        let catalog: [(&str, &[ModelInfo]); 2] = [
+            ("claude-code", &claude),
+            ("grok", &grok),
+        ];
+
+        // WHEN the Chat settings section is shown
+        let harnesses = oneshot_picker_harnesses(true, &catalog);
+
+        // THEN an oneshot model picker is offered for each harness that has catalog models
+        assert_eq!(harnesses, vec!["claude-code", "grok"]);
+    }
+
+    /// @spec chat/oneshot-models Settings pickers when hints enabled: With agent input hints off, oneshot model pickers are not shown
+    #[test]
+    fn with_agent_input_hints_off_oneshot_model_pickers_are_not_shown() {
+        // GIVEN agent input hints disabled
+        // AND at least one harness with a non-empty catalog slice
+        let claude = vec![mi("claude-code", "haiku")];
+        let catalog: [(&str, &[ModelInfo]); 1] = [("claude-code", &claude)];
+
+        // WHEN the Chat settings section is shown
+        let harnesses = oneshot_picker_harnesses(false, &catalog);
+
+        // THEN no oneshot model picker is shown
+        assert!(harnesses.is_empty());
+    }
+
+    #[test]
+    fn unset_config_selects_string_match_default_not_first_catalog_entry() {
+        // Claude: first catalog is sonnet; string-match default is haiku.
+        let claude = vec![
+            mi("claude-code", "claude-sonnet-5"),
+            mi("claude-code", "claude-haiku-4-5"),
+            mi("claude-code", "claude-opus-4-8"),
+        ];
+        let selected = selected_oneshot_choice("claude-code", None, &claude);
+        assert_eq!(
+            selected.id.as_deref(),
+            Some("claude-haiku-4-5"),
+            "unset Claude oneshot must prefer haiku match, not first catalog entry"
+        );
+
+        // Grok: first is grok-4.5; string-match default is composer-fast.
+        let grok = vec![
+            mi("grok", "grok-4.5"),
+            mi("grok", "grok-composer-2.5-fast"),
+        ];
+        let selected = selected_oneshot_choice("grok", None, &grok);
+        assert_eq!(
+            selected.id.as_deref(),
+            Some("grok-composer-2.5-fast"),
+            "unset Grok oneshot must prefer composer-fast, not first catalog entry"
+        );
+    }
+
+    #[test]
+    fn configured_oneshot_id_in_catalog_is_selected() {
+        let claude = vec![
+            mi("claude-code", "claude-sonnet-5"),
+            mi("claude-code", "claude-haiku-4-5"),
+        ];
+        let selected =
+            selected_oneshot_choice("claude-code", Some("claude-sonnet-5"), &claude);
+        assert_eq!(selected.id.as_deref(), Some("claude-sonnet-5"));
+    }
 }

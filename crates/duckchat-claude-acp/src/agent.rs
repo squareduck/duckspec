@@ -126,24 +126,15 @@ impl Agent {
         Self::with_factory(crate::claude::counting_factory(factory, counter), true)
     }
 
-    /// ACP `initialize` result: protocol version, loadSession, curated models.
-    pub(crate) fn initialize(&self) -> Value {
-        json!({
-            "protocolVersion": 1,
-            "agentCapabilities": {
-                "loadSession": true,
-            },
-            "_meta": {
-                "modelState": {
-                    "availableModels": [
-                        { "modelId": "fable", "name": "Fable 5" },
-                        { "modelId": "opus", "name": "Opus 4.8" },
-                        { "modelId": "sonnet", "name": "Sonnet 4.6" },
-                        { "modelId": "haiku", "name": "Haiku 4.5" },
-                    ]
-                }
-            }
-        })
+    /// ACP `initialize` result: protocol version, loadSession, and models from
+    /// live discovery (Models API via Claude credentials) or curated fallback.
+    pub(crate) async fn initialize(&self) -> Value {
+        let live = crate::models::discover_live_models().await;
+        if let Err(ref e) = live {
+            tracing::warn!("claude model live discovery failed, using curated fallback: {e}");
+        }
+        let models = crate::models::resolve_advertised_models(live);
+        crate::models::initialize_result(&models)
     }
 
     /// Open a new ACP session without starting the official `claude` process.

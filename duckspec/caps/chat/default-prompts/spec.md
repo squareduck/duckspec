@@ -219,7 +219,7 @@ input hints setting.
 - **THEN** it is disabled
 
 > test: code
-> - crates/duckboard/src/config.rs:236
+> - crates/duckboard/src/config.rs:258
 
 ### Scenario: Oneshot launch requires agent input hints enabled
 
