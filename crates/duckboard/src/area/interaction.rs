@@ -4274,9 +4274,12 @@ pub fn view_column<'a, M: 'a + Clone>(
                     esc_count: ax.esc_count,
                     model_choices,
                     selected_model,
-                    // Continuation when a session id for this harness survives;
-                    // otherwise the next turn opens fresh and re-sends history.
-                    will_resume: ax.resumable_session_id().is_some(),
+                    // Foreign/stored-but-unresumable id (e.g. harness switch).
+                    // Unbound first bind and post-recovery clear stay false.
+                    unresumable_stored_session: agent_chat::unresumable_stored_session(
+                        ax.session.agent_session_id.is_some(),
+                        ax.resumable_session_id().is_some(),
+                    ),
                     context_tokens: ax.agent_input_tokens + ax.agent_output_tokens,
                     context_max: agent_chat::model_context_window(&effective_model),
                 };

@@ -6,18 +6,21 @@ is presentation detail; this capability owns the honest behavioral rules.
 
 ## Resend-history hint
 
-When the next send cannot resume the agent session, duckboard may re-send prior turns as a
-history preamble. The footer calls that case out only when it would actually happen:
+When a stored agent session id cannot resume on the effective harness (for example after a
+harness switch), the next send may re-feed prior turns as a history preamble. The footer
+calls that case out only when it is durable and user-relevant:
 
 ```
-| Next send resumes? | Transcript | Hint        |
-|--------------------|------------|-------------|
-| yes                | any        | hidden      |
-| no                 | empty      | hidden      |
-| no                 | non-empty  | shown       |
+| Transcript | Stored agent session id | Resumable for harness? | Hint   |
+|------------|-------------------------|------------------------|--------|
+| empty      | any                     | any                    | hidden |
+| non-empty  | none                    | —                      | hidden |
+| non-empty  | present                 | yes                    | hidden |
+| non-empty  | present                 | no                     | shown  |
 ```
 
-Empty chats that start fresh show no resend warning — there is nothing to resend.
+No stored id covers first bind and post-recovery clear — the footer stays silent even if a
+later send still re-feeds history.
 
 ## Progressive usage readout
 

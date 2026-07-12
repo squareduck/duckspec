@@ -226,10 +226,23 @@ pub fn context_fill(tokens: usize, window: Option<usize>) -> Option<f32> {
 /// full `used / max (%)`. Matches the existing warning color band.
 pub const USAGE_HOT_FILL: f32 = 0.75;
 
+/// Whether a stored agent session id is unresumable on the effective harness.
+///
+/// `has_stored_agent_id` / `will_resume` are pre-mapped booleans — the status
+/// builder owns reading `agent_session_id` and `resumable_session_id()`; this
+/// helper only combines them so the product rule stays unit-testable.
+pub fn unresumable_stored_session(has_stored_agent_id: bool, will_resume: bool) -> bool {
+    has_stored_agent_id && !will_resume
+}
+
 /// Whether the composer footer shows the resend-history hint. True only when
-/// the next send would open fresh *and* there is transcript to resend.
-pub fn show_resend_history_hint(will_resume: bool, has_messages: bool) -> bool {
-    !will_resume && has_messages
+/// the transcript is non-empty *and* a stored agent session is not resumable
+/// for the effective harness (typically after a harness switch).
+pub fn show_resend_history_hint(
+    has_messages: bool,
+    unresumable_stored_session: bool,
+) -> bool {
+    has_messages && unresumable_stored_session
 }
 
 /// Progressive context-usage string for a **known** window. Cool fill (< 75%)
@@ -263,10 +276,11 @@ pub struct StatusInfo {
     pub model_choices: Vec<ModelChoice>,
     /// The currently-selected picker entry (matched by `(harness, id)`).
     pub selected_model: ModelChoice,
-    /// Whether the next turn resumes the agent-side session. Combined with
-    /// transcript emptiness via `show_resend_history_hint` for the meta-row
-    /// resend indicator.
-    pub will_resume: bool,
+    /// Stored agent session id exists but is not resumable for the effective
+    /// harness (typically after a harness switch). False when unbound or when
+    /// resume works. Combined with transcript emptiness via
+    /// `show_resend_history_hint` for the meta-row resend indicator.
+    pub unresumable_stored_session: bool,
     pub context_tokens: usize,
     /// The selected model's context window. `None` when the model reports no
     /// window — the meter then shows the token count with no fill.
@@ -1469,9 +1483,11 @@ pub fn view<'a>(
         );
     }
     meta_inner = meta_inner.push(Space::new().width(Length::Fill));
-    // Resend-history hint: only when the next send would actually re-feed the
-    // transcript (no resumable session *and* non-empty messages).
-    if show_resend_history_hint(status.will_resume, !session.messages.is_empty()) {
+    // Resend-history hint: non-empty transcript + stored but unresumable session.
+    if show_resend_history_hint(
+        !session.messages.is_empty(),
+        status.unresumable_stored_session,
+    ) {
         meta_inner = meta_inner.push(
             text("⟳ resends full history")
                 .size(theme::font_sm())
@@ -2158,38 +2174,68 @@ mod tests {
         assert_eq!(fill, None);
     }
 
-    /// @spec chat/composer-footer Resend hint only when history would be resent: Hint shown when history would be resent
+    /// @spec chat/composer-footer Resend hint only for unresumable stored session: Hint shown when stored session is unresumable
     #[test]
-    fn hint_shown_when_history_would_be_resent() {
-        // GIVEN a chat with no resumable agent session AND a non-empty transcript.
-        let will_resume = false;
+    fn hint_shown_when_stored_session_is_unresumable() {
+        // GIVEN a non-empty transcript AND a stored agent session id that is
+        // not resumable for the effective harness.
         let has_messages = true;
+        let has_stored_agent_id = true;
+        let will_resume = false;
         // WHEN the composer footer is rendered (hint visibility is computed).
-        let show = show_resend_history_hint(will_resume, has_messages);
+        let show = show_resend_history_hint(
+            has_messages,
+            unresumable_stored_session(has_stored_agent_id, will_resume),
+        );
         // THEN the resend-history hint is shown.
         assert!(show);
     }
 
-    /// @spec chat/composer-footer Resend hint only when history would be resent: Hint hidden when next send would resume
+    /// @spec chat/composer-footer Resend hint only for unresumable stored session: Hint hidden when stored session is resumable
     #[test]
-    fn hint_hidden_when_next_send_would_resume() {
-        // GIVEN a chat with a resumable agent session AND a non-empty transcript.
-        let will_resume = true;
+    fn hint_hidden_when_stored_session_is_resumable() {
+        // GIVEN a non-empty transcript AND a stored agent session id that is
+        // resumable for the effective harness.
         let has_messages = true;
+        let has_stored_agent_id = true;
+        let will_resume = true;
         // WHEN the composer footer is rendered.
-        let show = show_resend_history_hint(will_resume, has_messages);
+        let show = show_resend_history_hint(
+            has_messages,
+            unresumable_stored_session(has_stored_agent_id, will_resume),
+        );
         // THEN the resend-history hint is not shown.
         assert!(!show);
     }
 
-    /// @spec chat/composer-footer Resend hint only when history would be resent: Hint hidden when transcript is empty
+    /// @spec chat/composer-footer Resend hint only for unresumable stored session: Hint hidden when transcript is empty
     #[test]
     fn hint_hidden_when_transcript_is_empty() {
-        // GIVEN a chat with no resumable agent session AND an empty transcript.
-        let will_resume = false;
+        // GIVEN an empty transcript.
         let has_messages = false;
+        let has_stored_agent_id = true;
+        let will_resume = false;
         // WHEN the composer footer is rendered.
-        let show = show_resend_history_hint(will_resume, has_messages);
+        let show = show_resend_history_hint(
+            has_messages,
+            unresumable_stored_session(has_stored_agent_id, will_resume),
+        );
+        // THEN the resend-history hint is not shown.
+        assert!(!show);
+    }
+
+    /// @spec chat/composer-footer Resend hint only for unresumable stored session: Hint hidden when no stored agent session id
+    #[test]
+    fn hint_hidden_when_no_stored_agent_session_id() {
+        // GIVEN a non-empty transcript AND no stored agent session id.
+        let has_messages = true;
+        let has_stored_agent_id = false;
+        let will_resume = false;
+        // WHEN the composer footer is rendered.
+        let show = show_resend_history_hint(
+            has_messages,
+            unresumable_stored_session(has_stored_agent_id, will_resume),
+        );
         // THEN the resend-history hint is not shown.
         assert!(!show);
     }
