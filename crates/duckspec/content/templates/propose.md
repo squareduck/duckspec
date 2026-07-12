@@ -53,7 +53,7 @@ Write gate and Handoff - do not restate their shapes here.
 
 ## Write gate
 
-**Confirm-then-write.** After confirmation:
+**Confirm-then-write.** After `confirm proposal`:
 
 - `ds create proposal --in <name>` if `proposal.md` is not present yet
 - Write the body, then `ds format` and `ds check` on the path
@@ -78,7 +78,7 @@ Write gate and Handoff - do not restate their shapes here.
 
 > **next**
 >
-> `confirm`  write this proposal
+> `confirm proposal`
 ```
 
 If there is no change folder, stop and point the user at `/ds-explore` (or

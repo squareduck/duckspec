@@ -88,13 +88,17 @@ One to three body lines; list order is rank (first is primary):
 ```markdown
 > **next**
 >
+> `<send>`
 > `<send>`  <optional reason>
 ```
 
-- Every send token is wrapped in backticks - slash commands and bare tokens
-  alike: `/ds-step`, `confirm`, `reject`, `revise`, `Create change`, …
-- Reason is a short UI label (a few words), e.g. `start review workflow` - not a
-  paragraph; optional (`reject` may stand alone)
+- Every send token is wrapped in backticks - slash commands and decision tokens
+  alike: `/ds-step`, `confirm proposal`, `reject design`, `create change <name>`, …
+- **Send tokens name the decision** (or the stage action). Bare `confirm` /
+  `reject` are not the stock pattern - use decision-named forms such as
+  `confirm proposal`, `confirm map`, `confirm <path>`
+- **Reasons:** omit on decision tokens (the token is enough). Keep a short UI
+  reason on slash-command handoffs only (a few words, e.g. `design the approach`)
 - Column alignment of reasons is cosmetic only
 - Omit the entire `next` meta card when there is nothing to offer
 
@@ -125,12 +129,13 @@ Agents keep change context across turns via orientation payload.
 
 > **next**
 >
-> `confirm`  write this proposal
-> `reject`
+> `confirm proposal`
+> `reject proposal`
 ```
 
-Always pair a `write` meta card with a `next` meta card that includes `confirm`
-and usually `reject` (or `revise` when the alternative is edit-in-place).
+Always pair a `write` meta card with a `next` meta card that includes a
+decision-named confirm token and usually a decision-named reject (or `revise`
+when the alternative is edit-in-place).
 
 ### Handoff only
 

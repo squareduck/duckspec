@@ -50,7 +50,7 @@ Write gate and Handoff - do not restate their shapes here.
 ## Write gate
 
 **Confirm-then-write** for the step set (or the subset being added/revised).
-After confirmation:
+After `confirm steps`:
 
 - `ds create step "<name>" --in <change>` per new step (numbers from `01`)
 - Write each body, then `ds format` and `ds check` on the steps paths
@@ -76,8 +76,8 @@ Scenario coverage: N/N `test: code` scenarios have `@spec` tasks
 
 > **next**
 >
-> `confirm`  write these steps
-> `reject`
+> `confirm steps`
+> `reject steps`
 ```
 
 Preview uses real step titles and coverage; expand a step’s task list in the

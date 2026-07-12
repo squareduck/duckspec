@@ -81,8 +81,8 @@ Handoff.
 
 > **next**
 >
-> `confirm`  create change
-> `reject`
+> `create change <name>`
+> `reject change`
 ```
 
 One `##` per capability; under it requirements as `###`, scenarios nested under

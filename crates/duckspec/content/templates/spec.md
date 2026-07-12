@@ -15,9 +15,8 @@ precise behavioral contracts - requirements, scenarios, and paired docs. Every
   place. Prefer delete over pad.
 - **Outcome over branch.** Not a transcription of implementation paths.
 - **Declarative.** What the system does, not click-through procedures.
-- **Collaborative.** Confirm the capability map together with the first cap's
-  outline, then each further outline, before writing - do not invent the tree
-  silently.
+- **Collaborative.** Confirm the capability map, then each cap's outline, before
+  writing - do not invent the tree silently.
 - **Sourced.** Spec only behavior that proposal, design, or review made
   behavioral - do not invent "complete" coverage of unstated edges. Module
   boundaries and dependency choices stay in `design.md`.
@@ -39,21 +38,20 @@ precise behavioral contracts - requirements, scenarios, and paired docs. Every
 
 ## Instructions
 
-1. **Map + first outline** - one turn. Terse list of every capability this
-   pass will create, update, or remove: one H1 per path, `# CREATE <path>`,
-   `# UPDATE <path>`, or - rarely, when behavior is genuinely retired -
-   `# REMOVE <path>`, plus a one-line ownership summary - no requirements,
-   scenarios, or doc bodies in the map. Then, in the same turn, the write gate
-   for the **first** capability at outline depth (not full GWT). One trailing
-   `next` meta card; `confirm` approves the map and the first outline
-   together. Raise path conflicts with existing caps; adjust with the user
-   before this gate. Wait.
-2. **Write + next outline** - after each `confirm`: expand the confirmed
-   outline to full files per schemas, create/write, `ds format`, `ds check`,
-   then present the **next** capability's outline write gate in the same
-   turn. Apply `ds schema spec` Quality before every gate - drop identity,
-   design-leak, and padded scenarios.
-3. Repeat until the map is done; after the last write, use Handoff.
+1. **Map** - terse list of every capability this pass will create, update, or
+   remove. One H1 per path: `# CREATE <path>`, `# UPDATE <path>`, or - rarely,
+   when behavior is genuinely retired - `# REMOVE <path>`, plus a one-line
+   ownership summary (or retirement reason for REMOVE). No requirements,
+   scenarios, or doc bodies in the map. Raise path conflicts with existing
+   caps; adjust with the user before the map gate.
+2. **Confirm map** - trailing `next` meta card with `confirm map` only. Wait.
+3. **Outline + write** - one capability at a time, in map order. Present a
+   write gate whose preview is **outline depth** (not full GWT). Apply
+   `ds schema spec` Quality before the gate - drop identity, design-leak, and
+   padded scenarios. After `confirm <path>` (or `confirm remove <path>`):
+   expand to full files per schemas, create/write, `ds format`, `ds check`.
+   Then the next cap.
+4. Repeat until the map is done; after the last write, use Handoff.
 
 **Closed outline.** The confirmed outline is the closed set of requirements and
 scenarios for that capability. Expansion fills norms and GWT for those names
@@ -75,17 +73,16 @@ something essential was missing, rework the outline with the user first.
 ## Chat
 
 Follow `style`. Map and outline discussion are freeform. Every decision that
-expects `confirm` uses a trailing `next` meta card - never prose such as
-"reply confirm". Gate and handoff use meta cards as in Write gate and Handoff
-- do not restate their shapes here. Disagreement is freeform chat (rework the
-last map or outline); do not offer `reject` or `revise` tokens.
+expects a confirm uses a trailing `next` meta card with a **decision-named**
+token (`confirm map`, `confirm <path>`, `confirm remove <path>`) - never prose
+such as "reply confirm" and never bare `confirm`. Gate and handoff use meta
+cards as in Write gate and Handoff - do not restate their shapes here.
+Disagreement is freeform chat (rework the last map or outline); do not offer
+`reject` or `revise` tokens.
 
 ## Write gate
 
-### Map + first outline (opening turn)
-
-The map itself is chat only - not a write. It ends with the first capability's
-outline write gate; a single trailing `next` meta card gates both:
+### Map (chat only - not a write)
 
 ```markdown
 # CREATE <path>
@@ -97,28 +94,21 @@ outline write gate; a single trailing `next` meta card gates both:
 # REMOVE <path>
 <one-line reason the capability is retired>
 
-> **write**
->
-> `<first path>` — create spec (+ doc when needed)
-
-# CREATE <first path>
-
-<outline per the CREATE / UPDATE shapes below>
-
 > **next**
 >
-> `confirm`  approve map, write this capability
+> `confirm map`
 ```
 
 ### Per capability (confirm-then-write)
 
-Preview stays at **outline depth**. After confirmation:
+Preview stays at **outline depth**. After `confirm <path>` (or
+`confirm remove <path>`):
 
 - `ds create spec <path> --in <name>` and/or `ds create doc <path> --in <name>`
   as needed (deltas: write the `.delta.md` paths the change uses)
 - Expand outline to full bodies per schemas, then `ds format` and `ds check`
-- Present the next capability's outline write gate in the same turn - or
-  Handoff when the map is done
+- Present the next capability's outline write gate - or Handoff when the map
+  is done
 
 **CREATE capability** - full outline of every requirement and scenario this cap
 will own:
@@ -142,7 +132,7 @@ will own:
 
 > **next**
 >
-> `confirm`  write this capability
+> `confirm <path>`
 ```
 
 **UPDATE capability** - **delta only**. List only requirements this change
@@ -172,7 +162,7 @@ restate untouched requirements or scenarios.
 
 > **next**
 >
-> `confirm`  write this capability
+> `confirm <path>`
 ```
 
 **REMOVE capability** - no outline; the preview states what is retired and
@@ -190,7 +180,7 @@ genuinely gone - moved or renamed behavior is an UPDATE on its new owner:
 
 > **next**
 >
-> `confirm`  remove this capability
+> `confirm remove <path>`
 ```
 
 Omit `## Doc` when there is no doc work for that path. On UPDATE, omit Doc when

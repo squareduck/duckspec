@@ -87,8 +87,8 @@ explicitly asks to fix something in place.
 
 > **next**
 >
-> `confirm`  write this followup
-> `reject`
+> `confirm followup`
+> `reject followup`
 ```
 
 After the triage table, summarize **each** issue (Where / Why / Action) so the

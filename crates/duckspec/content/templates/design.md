@@ -48,7 +48,7 @@ Write gate and Handoff - do not restate their shapes here.
 
 ## Write gate
 
-**Confirm-then-write.** After confirmation:
+**Confirm-then-write.** After `confirm design`:
 
 - `ds create design --in <name>` if `design.md` is not present yet
 - Write the body, then `ds format` and `ds check` on the path
@@ -82,8 +82,8 @@ Write gate and Handoff - do not restate their shapes here.
 
 > **next**
 >
-> `confirm`  write this design
-> `reject`
+> `confirm design`
+> `reject design`
 ```
 
 Abbreviate the preview freely; keep real headings. Omit empty optional sections

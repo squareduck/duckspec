@@ -90,8 +90,8 @@ explicitly asks to fix something in place.
 
 > **next**
 >
-> `confirm`  write this review
-> `reject`
+> `confirm review`
+> `reject review`
 ```
 
 After the triage table, summarize **each** finding (Where / Why / Action) so the

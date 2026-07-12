@@ -101,6 +101,11 @@ the stage:
 Gates present intent in chat using `style` meta cards when confirming a write. They do not
 restate the full artifact schema.
 
+**Send tokens name the decision.** Write-gate `next` cards use decision-named tokens
+(`confirm proposal`, `confirm map`, `create change <name>`), not bare `confirm` /
+`reject`. Omit reason text on decision tokens; keep short UI reasons only on slash-command
+handoffs (`/ds-step` - plan implementation). Full detail lives in `ds schema style`.
+
 ## Markdown and chat
 
 All markdown - in chat and in artifacts - should be **clean and consistent**, not

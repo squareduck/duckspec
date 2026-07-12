@@ -29,8 +29,8 @@ change into the archive. Mechanical - dry-run, confirm, apply, verify.
 2. **Fix or stop** - if the dry run fails validation, work with the user until
    clean; do not archive.
 3. **Gate** - `write` meta card + preview of the apply plan + `next` meta card
-   (`confirm` / `reject`).
-4. On confirm - `ds archive <name>`.
+   (`confirm archive` / `reject archive`).
+4. On `confirm archive` - `ds archive <name>`.
 5. **Check** - `ds check` on affected paths under `caps/`.
 6. **Sync** - `ds sync` so archived scenarios get `path:line` stamps on
    `test: code` markers (no-op when there are no code-linked scenarios).
@@ -43,7 +43,7 @@ use meta cards as in Write gate and Handoff.
 
 ## Write gate
 
-**Confirm-then-archive.** After confirmation only, run `ds archive <name>`.
+**Confirm-then-archive.** After `confirm archive` only, run `ds archive <name>`.
 
 ```markdown
 > **write**
@@ -62,8 +62,8 @@ Irreversible outside version control.
 
 > **next**
 >
-> `confirm`  run archive
-> `reject`
+> `confirm archive`
+> `reject archive`
 ```
 
 Preview from the dry-run; real paths and apply kinds.
@@ -81,7 +81,7 @@ After a successful archive (check + sync + audit reported):
 ```markdown
 > **next**
 >
-> `commit`  commit change
+> `commit`
 ```
 
 Never auto-commit; wait for the user to choose `commit` (or another action).

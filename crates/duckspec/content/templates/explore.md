@@ -61,8 +61,8 @@ the gate is mandatory chrome, not a verbal offer.
 ### Create change
 
 When new work does not fit an existing change and is ready to track, present
-the write gate, wait for `confirm`, then create an **empty** folder (no
-proposal/spec inside):
+the write gate, wait for `create change <name>`, then create an **empty**
+folder (no proposal/spec inside):
 
 ```markdown
 > **write**
@@ -75,7 +75,7 @@ proposal/spec inside):
 
 > **next**
 >
-> `confirm`  create change
+> `create change <name>`
 ```
 
 After confirmation: `ds create change <name>`.
@@ -95,7 +95,7 @@ When durable constitution-level facts emerge (new or live project):
 
 > **next**
 >
-> `confirm`  write project.md
+> `write project.md`
 ```
 
 After confirmation: write/format/check `project.md`.
@@ -115,7 +115,7 @@ apply:
   write specs)
 - Durable cross-cutting knowledge only: `/ds-codex` - capture codex entry
 
-Creating a change uses the Write gate (`confirm` create change), not a handoff
+Creating a change uses the Write gate (`create change <name>`), not a handoff
 slash command and not freeform "shall we create…". Do not auto-start stages.
 
 ## After write

@@ -13,12 +13,14 @@ blockquotes are ordinary prose quotes and are ignored by this capability.
 ```
 > **next**
 >
-> `confirm`  write this proposal
-> `reject`
+> `confirm proposal`
+> `/ds-spec`  write specs
+> `reject proposal`
 ```
 
 The kind line names the card. Body lines are consecutive blockquote lines until the first
-non-blockquote line ends the run.
+non-blockquote line ends the run. Decision tokens stand alone; slash-command lines may
+carry a short reason after the token (reason is not part of the send text).
 
 ## Recognition
 
@@ -53,4 +55,4 @@ mid-message, or a trailing `write` card alone, yields no actions.
 ```
 
 Actions keep source order. Send text is exactly the token inside the first pair of single
-backticks on the line (for example `confirm`, `/ds-propose`).
+backticks on the line (for example `confirm proposal`, `/ds-propose`).
