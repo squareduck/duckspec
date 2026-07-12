@@ -220,7 +220,7 @@ input hints setting.
 - **THEN** it is disabled
 
 > test: code
-> - crates/duckboard/src/config.rs:258
+> - crates/duckboard/src/config.rs:271
 
 ### Scenario: Oneshot launch requires agent input hints enabled
 
@@ -241,7 +241,7 @@ input hints setting.
 - **THEN** the list is exactly that single lifecycle option in empty-send form
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:962
+> - crates/duckboard/src/area/interaction.rs:975
 
 ### Scenario: Oneshot launch is skipped when the next-action list is non-empty
 
@@ -341,7 +341,7 @@ bootstrap.
 - **THEN** the list is exactly the explore stage command in empty-send form
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:839
+> - crates/duckboard/src/area/interaction.rs:852
 
 ### Scenario: Empty change session with unfinished steps seeds apply
 
@@ -351,7 +351,7 @@ bootstrap.
 - **THEN** the list is exactly the apply stage command in empty-send form
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:852
+> - crates/duckboard/src/area/interaction.rs:865
 
 ### Scenario: Empty session with inherited next actions uses inherited list
 
@@ -546,7 +546,7 @@ path.
 - **AND** the new session transcript is empty
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:873
+> - crates/duckboard/src/area/interaction.rs:886
 
 ### Scenario: New change session with empty donor keeps bootstrap behavior
 
@@ -557,7 +557,7 @@ path.
 - **THEN** the new session's next-action list is exactly that single lifecycle option
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:902
+> - crates/duckboard/src/area/interaction.rs:915
 
 ### Scenario: Inherited list starts at first action
 
@@ -568,4 +568,4 @@ path.
 - **THEN** empty submit on the new session sends the first inherited send token
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:928
+> - crates/duckboard/src/area/interaction.rs:941

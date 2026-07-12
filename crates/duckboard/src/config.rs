@@ -12,10 +12,12 @@ pub struct Config {
     pub ui: FontConfig,
     pub content: FontConfig,
     pub projects: ProjectsConfig,
-    /// Default model (harness-tagged `ModelRef`) per project, keyed by
-    /// `project_hash`. New chat sessions in a project inherit this default
-    /// when they haven't pinned a model of their own. Absent = fall through to
-    /// the built-in default. Legacy bare-string values load as the
+    /// Global main-chat default model (harness-tagged `ModelRef`). `None` until
+    /// seeded after catalog refresh (or when no catalog model is choosable).
+    /// Legacy configs omit the field and deserialize as `None`.
+    pub default_model: Option<ModelRef>,
+    /// Project override of the global default, keyed by `project_hash`. Absent
+    /// means use the global default. Legacy bare-string values load as the
     /// `claude-code` harness via `ModelRef`'s deserialize shim.
     pub model_defaults: HashMap<String, ModelRef>,
     /// Chat affordances: optional oneshot reply chips after a turn.
@@ -82,6 +84,7 @@ impl Default for Config {
                 font_size: 13.0,
             },
             projects: ProjectsConfig::default(),
+            default_model: None,
             model_defaults: HashMap::new(),
             chat: ChatConfig::default(),
         }
@@ -89,14 +92,24 @@ impl Default for Config {
 }
 
 impl Config {
-    /// The default model for `project_root`, if one is set.
+    /// The global main-chat default model, if set (or seeded).
+    pub fn global_model_default(&self) -> Option<&ModelRef> {
+        self.default_model.as_ref()
+    }
+
+    /// Set (or, with `None`, clear) the global main-chat default model.
+    pub fn set_global_model_default(&mut self, model: Option<ModelRef>) {
+        self.default_model = model;
+    }
+
+    /// The project override for `project_root`, if one is set.
     pub fn project_model_default(&self, project_root: &Path) -> Option<ModelRef> {
         self.model_defaults
             .get(&project_hash(project_root))
             .cloned()
     }
 
-    /// Set (or, with `None`, clear) the default model for `project_root`.
+    /// Set (or, with `None`, clear) the project override for `project_root`.
     pub fn set_project_model_default(&mut self, project_root: &Path, model: Option<ModelRef>) {
         let key = project_hash(project_root);
         match model {
@@ -322,5 +335,23 @@ auto_messages = true
             Some("grok-composer-2.5-fast")
         );
         assert_eq!(cfg.chat.oneshot_model("claude-code"), None);
+    }
+
+    /// @spec harness/selection Global default model setting: A configured global default is stored as an application setting
+    #[test]
+    fn configured_global_default_is_stored_as_an_application_setting() {
+        // GIVEN a harness-tagged model choice for the global main-chat default
+        let mut cfg = Config::default();
+        let choice = ModelRef::new("claude-code", "sonnet");
+
+        // WHEN the global default setting is saved
+        cfg.set_global_model_default(Some(choice.clone()));
+
+        // THEN that choice is stored as a global application setting
+        assert_eq!(cfg.global_model_default(), Some(&choice));
+        let toml = toml::to_string(&cfg).unwrap();
+        let loaded: Config = toml::from_str(&toml).unwrap();
+        assert_eq!(loaded.global_model_default(), Some(&choice));
+        assert!(loaded.model_defaults.is_empty());
     }
 }

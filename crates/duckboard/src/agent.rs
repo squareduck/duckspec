@@ -33,7 +33,7 @@ fn grok_provider() -> &'static GrokProvider {
 /// Process-local catalog of models discovered from each available provider.
 ///
 /// Refreshed once at app start. A successful non-empty rediscovery replaces that
-/// harness’s slice; empty/failed rediscovery keeps the prior non-empty list.
+/// harness’s slice; empty/failed rediscovery clears that harness’s slice.
 pub struct ModelCatalog {
     by_harness: RwLock<HashMap<String, Vec<ModelInfo>>>,
 }
@@ -47,16 +47,11 @@ impl ModelCatalog {
 
     /// Apply a discovery result for one harness.
     ///
-    /// Non-empty `discovered` replaces the slice. Empty keeps a prior non-empty
-    /// slice; if there was no prior success, the slice is empty.
+    /// Always writes `discovered`: non-empty replaces the slice; empty clears
+    /// any prior list for that harness.
     pub fn apply_harness(&self, harness: &str, discovered: Vec<ModelInfo>) {
         let mut map = self.by_harness.write().expect("model catalog lock");
-        if !discovered.is_empty() {
-            map.insert(harness.to_string(), discovered);
-        } else {
-            // Keep last good; cold miss leaves an empty entry.
-            map.entry(harness.to_string()).or_default();
-        }
+        map.insert(harness.to_string(), discovered);
     }
 
     /// Refresh from every registered provider’s `list_models` path.
@@ -129,9 +124,9 @@ fn process_catalog() -> &'static ModelCatalog {
 
 /// Refresh the process catalog from every registered provider (blocking).
 ///
-/// Safe to call more than once: providers memoize discovery; empty results keep
-/// last-good slices in the catalog. Prefer the iced subscription that calls
-/// this and then emits `ModelCatalogReady` so the UI re-reads the catalog.
+/// Safe to call more than once: providers memoize discovery; empty results clear
+/// that harness’s catalog slice. Prefer the iced subscription that calls this
+/// and then emits `ModelCatalogReady` so the UI re-reads the catalog.
 pub fn refresh_model_catalog() {
     process_catalog().refresh_registered();
 }
@@ -139,6 +134,46 @@ pub fn refresh_model_catalog() {
 /// Models offered for pickers / meters: contents of the process model catalog.
 pub fn available_models() -> Vec<ModelInfo> {
     process_catalog().all()
+}
+
+/// Former compile-time cascade floor — preferred seed when still in the catalog.
+pub const FORMER_BUILTIN_HARNESS: &str = "grok";
+pub const FORMER_BUILTIN_MODEL: &str = "grok-4.5";
+
+/// Choose a seed for an unset global default from catalog contents.
+///
+/// Prefer the former built-in when present; otherwise the first model in catalog
+/// order. Empty catalog → `None`.
+pub fn seed_global_default_model(catalog: &[ModelInfo]) -> Option<ModelRef> {
+    if catalog.is_empty() {
+        return None;
+    }
+    if let Some(m) = catalog.iter().find(|m| {
+        m.harness == FORMER_BUILTIN_HARNESS && m.id == FORMER_BUILTIN_MODEL
+    }) {
+        return Some(ModelRef::new(&m.harness, &m.id));
+    }
+    catalog
+        .first()
+        .map(|m| ModelRef::new(&m.harness, &m.id))
+}
+
+/// If `config.default_model` is unset, seed it from `catalog` and return whether
+/// a value was written. Caller persists when this returns `true`.
+pub fn seed_global_default_if_unset(
+    config: &mut crate::config::Config,
+    catalog: &[ModelInfo],
+) -> bool {
+    if config.default_model.is_some() {
+        return false;
+    }
+    match seed_global_default_model(catalog) {
+        Some(m) => {
+            config.set_global_model_default(Some(m));
+            true
+        }
+        None => false,
+    }
 }
 
 /// Lookup helper used by the usage meter (catalog entry for the selected model).
@@ -500,9 +535,9 @@ mod tests {
         assert_eq!(slice[1].id, "haiku");
     }
 
-    /// @spec harness/model-catalog Keep last good on empty rediscovery: Empty rediscovery leaves the prior harness list intact
+    /// @spec harness/model-catalog Clear slice on empty rediscovery: Empty rediscovery clears the prior harness list
     #[test]
-    fn empty_rediscovery_leaves_the_prior_harness_list_intact() {
+    fn empty_rediscovery_clears_the_prior_harness_list() {
         // GIVEN a harness whose catalog slice is non-empty
         let cat = ModelCatalog::new();
         cat.apply_harness(
@@ -514,13 +549,11 @@ mod tests {
         // WHEN the catalog is refreshed for that harness
         cat.apply_harness("grok", Vec::new());
 
-        // THEN the harness’s catalog slice remains the prior non-empty set
-        let slice = cat.for_harness("grok");
-        assert_eq!(slice.len(), 1);
-        assert_eq!(slice[0].id, "grok-4.5");
+        // THEN the harness’s catalog slice is empty
+        assert!(cat.for_harness("grok").is_empty());
     }
 
-    /// @spec harness/model-catalog Keep last good on empty rediscovery: Cold failure leaves that harness empty without panic
+    /// @spec harness/model-catalog Clear slice on empty rediscovery: Cold failure leaves that harness empty without panic
     #[test]
     fn cold_failure_leaves_that_harness_empty_without_panic() {
         // GIVEN a harness with no prior successful discovery
@@ -664,5 +697,52 @@ mod tests {
         // App-start path (subscription) calls this then emits ModelCatalogReady.
         refresh_model_catalog();
         let _ = available_models();
+    }
+
+    /// @spec harness/selection Global default model setting: An unset global default is seeded from the former built-in when that model is in the catalog
+    #[test]
+    fn unset_global_default_is_seeded_from_the_former_built_in_when_that_model_is_in_the_catalog() {
+        // GIVEN no configured global default
+        let mut cfg = crate::config::Config::default();
+        assert!(cfg.global_model_default().is_none());
+
+        // AND a non-empty process model catalog that includes grok / grok-4.5
+        let catalog = vec![
+            mi("claude-code", "sonnet", None),
+            mi("grok", "grok-4.5", Some(256_000)),
+        ];
+
+        // WHEN the global default is seeded
+        assert!(seed_global_default_if_unset(&mut cfg, &catalog));
+
+        // THEN the global default is grok / grok-4.5
+        assert_eq!(
+            cfg.global_model_default(),
+            Some(&ModelRef::new("grok", "grok-4.5"))
+        );
+    }
+
+    /// @spec harness/selection Global default model setting: An unset global default is seeded from the first catalog model when the former built-in is absent
+    #[test]
+    fn unset_global_default_is_seeded_from_the_first_catalog_model_when_the_former_built_in_is_absent()
+    {
+        // GIVEN no configured global default
+        let mut cfg = crate::config::Config::default();
+        assert!(cfg.global_model_default().is_none());
+
+        // AND a non-empty process model catalog that does not include grok / grok-4.5
+        let catalog = vec![
+            mi("claude-code", "opus", None),
+            mi("claude-code", "sonnet", None),
+        ];
+
+        // WHEN the global default is seeded
+        assert!(seed_global_default_if_unset(&mut cfg, &catalog));
+
+        // THEN the global default is the first model in catalog order
+        assert_eq!(
+            cfg.global_model_default(),
+            Some(&ModelRef::new("claude-code", "opus"))
+        );
     }
 }

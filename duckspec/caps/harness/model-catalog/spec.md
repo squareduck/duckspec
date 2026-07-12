@@ -4,6 +4,10 @@ Process-local catalog of models from each available provider: refreshed once at 
 kept across empty rediscovery failures, and used as the source for selectable models and
 context-window lookup.
 
+Process-local catalog of models from each available provider: refreshed once at app start,
+cleared for a harness when rediscovery is empty or fails, and used as the source for
+selectable models and context-window lookup.
+
 ## Requirement: Startup catalog refresh
 
 At app start the process SHALL refresh the model catalog for each available provider from
@@ -22,7 +26,7 @@ harness’s catalog slice with the discovered models.
   catalog slice
 
 > test: code
-> - crates/duckboard/src/agent.rs:457
+> - crates/duckboard/src/agent.rs:492
 
 ### Scenario: Successful refresh replaces that harness’s catalog slice
 
@@ -32,37 +36,7 @@ harness’s catalog slice with the discovered models.
 - **THEN** the harness’s catalog slice is the newly discovered set
 
 > test: code
-> - crates/duckboard/src/agent.rs:479
-
-## Requirement: Keep last good on empty rediscovery
-
-When rediscovery for a harness yields an empty set or fails, the catalog SHALL keep that
-harness’s previous non-empty slice when one exists. When a harness has never had a
-successful discovery, an empty or failed rediscovery SHALL leave that harness’s slice
-empty without panicking.
-
-> test: code
-
-### Scenario: Empty rediscovery leaves the prior harness list intact
-
-- **GIVEN** a harness whose catalog slice is non-empty
-- **AND** a rediscovery for that harness that yields an empty set
-- **WHEN** the catalog is refreshed for that harness
-- **THEN** the harness’s catalog slice remains the prior non-empty set
-
-> test: code
-> - crates/duckboard/src/agent.rs:503
-
-### Scenario: Cold failure leaves that harness empty without panic
-
-- **GIVEN** a harness with no prior successful discovery
-- **AND** discovery for that harness failing or yielding an empty set
-- **WHEN** the catalog is refreshed for that harness
-- **THEN** the harness’s catalog slice is empty
-- **AND** the refresh completes without panicking
-
-> test: code
-> - crates/duckboard/src/agent.rs:523
+> - crates/duckboard/src/agent.rs:514
 
 ## Requirement: Catalog is the selection source
 
@@ -79,7 +53,7 @@ model’s harness and id when present.
 - **THEN** the listed models are exactly the catalog contents
 
 > test: code
-> - crates/duckboard/src/agent.rs:538
+> - crates/duckboard/src/agent.rs:571
 
 ### Scenario: Context window lookup uses the catalog entry for the selected model
 
@@ -89,4 +63,34 @@ model’s harness and id when present.
 - **THEN** the resolved window is the window from that catalog entry
 
 > test: code
-> - crates/duckboard/src/agent.rs:559
+> - crates/duckboard/src/agent.rs:592
+
+## Requirement: Clear slice on empty rediscovery
+
+When rediscovery for a harness yields an empty set or fails, the catalog SHALL clear that
+harness’s catalog slice (including any previous non-empty list). When a harness has never
+had a successful discovery, an empty or failed rediscovery SHALL leave that harness’s
+slice empty without panicking.
+
+> test: code
+
+### Scenario: Empty rediscovery clears the prior harness list
+
+- **GIVEN** a harness whose catalog slice is non-empty
+- **AND** a rediscovery for that harness that yields an empty set
+- **WHEN** the catalog is refreshed for that harness
+- **THEN** the harness’s catalog slice is empty
+
+> test: code
+> - crates/duckboard/src/agent.rs:538
+
+### Scenario: Cold failure leaves that harness empty without panic
+
+- **GIVEN** a harness with no prior successful discovery
+- **AND** discovery for that harness failing or yielding an empty set
+- **WHEN** the catalog is refreshed for that harness
+- **THEN** the harness’s catalog slice is empty
+- **AND** the refresh completes without panicking
+
+> test: code
+> - crates/duckboard/src/agent.rs:556

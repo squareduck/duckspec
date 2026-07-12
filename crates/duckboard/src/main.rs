@@ -418,21 +418,31 @@ enum Message {
 
 // ── Update ───────────────────────────────────────────────────────────────────
 
-/// Stamp every chat session with the current project's default model
-/// (`ModelRef`). Cheap (a handful of sessions) and run once per update tick so
-/// a freshly-created session or a default just changed in Settings is reflected
-/// before the next send. `Config` and `project_root` live here on the global
-/// state; the interaction layer can't reach them, so it reads the stamped
-/// value off `AgentSession::project_model_default` instead.
+/// Stamp every chat session with the project override and global default.
+/// Cheap (a handful of sessions) and run once per update tick so a freshly
+/// created session or a default just changed in Settings is reflected before
+/// the next send. `Config` lives here on the global state; the interaction
+/// layer reads the stamped values off `AgentSession`.
+///
+/// Also re-seeds an unset global default when the process catalog has models
+/// (e.g. after Reset cleared config and ModelCatalogReady already fired).
 fn refresh_model_defaults(state: &mut State) {
-    let default = state
+    let catalog = agent::available_models();
+    if agent::seed_global_default_if_unset(&mut state.config, &catalog)
+        && let Err(e) = config::save(&state.config)
+    {
+        tracing::warn!("failed to persist re-seeded global default model: {e}");
+    }
+    let project = state
         .project
         .project_root
         .as_deref()
         .and_then(|root| state.config.project_model_default(root));
+    let global = state.config.default_model.clone();
     for ix in state.interactions.values_mut() {
         for ax in ix.sessions.iter_mut() {
-            ax.project_model_default = default.clone();
+            ax.project_model_default = project.clone();
+            ax.global_model_default = global.clone();
         }
     }
 }
@@ -475,8 +485,15 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
             // Catalog was filled on a background task; this message forces a
             // re-render and subscription rebuild so model/oneshot pickers and
             // worker oneshot preferred ids re-resolve from the live catalog.
+            // Seed a concrete global default once when still unset.
+            let catalog = agent::available_models();
+            if agent::seed_global_default_if_unset(&mut state.config, &catalog)
+                && let Err(e) = config::save(&state.config)
+            {
+                tracing::warn!("failed to persist seeded global default model: {e}");
+            }
             tracing::info!(
-                models = agent::available_models().len(),
+                models = catalog.len(),
                 "model catalog ready"
             );
             return Task::none();
@@ -5695,14 +5712,10 @@ fn subscription(state: &State) -> Subscription<Message> {
             for session in &ix.sessions {
                 let key = format!("agent:ix:{}/{}", ix.instance_id, session.session.id);
                 // The worker runs on the provider named by the session's
-                // resolved model harness (per-chat pin → project default →
-                // built-in default). Folding it into the subscription respawns
-                // the worker on the new backend when the harness changes.
-                let harness = interaction::resolve_turn_model(
-                    session.session.selected_model.as_ref(),
-                    session.project_model_default.as_ref(),
-                )
-                .harness;
+                // preferred model harness (pin → project → global). Folding it
+                // into the subscription respawns the worker when the harness
+                // changes.
+                let harness = session.effective_harness();
                 let oneshot_model = agent::resolved_oneshot_model_for(
                     &harness,
                     state.config.chat.oneshot_model(&harness),

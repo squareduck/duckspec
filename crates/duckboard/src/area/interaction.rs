@@ -343,12 +343,12 @@ pub struct AgentSession {
     /// Segment-index-aligned collapse state (user override + auto-collapse).
     pub chat_collapse: Vec<agent_chat::CollapseState>,
     pub esc_count: u8,
-    /// Resolved project-level default model (harness-tagged `ModelRef`) for
-    /// this session's project. Transient (not persisted) — refreshed from
-    /// `Config` by the main loop. Used to render the picker's "Default (…)"
-    /// label and to resolve the effective model when `session.selected_model`
-    /// is `None`.
+    /// Project override of the global default for this session's project.
+    /// Transient (not persisted) — refreshed from `Config` by the main loop.
     pub project_model_default: Option<ModelRef>,
+    /// Global main-chat default. Transient — refreshed from `Config` by the
+    /// main loop. Used when pin and project override are unset.
+    pub global_model_default: Option<ModelRef>,
     /// Set when the user changes the per-chat model via the picker; consumed
     /// by `update_with_side_effects` to persist the session. Transient.
     pub model_dirty: bool,
@@ -482,6 +482,7 @@ impl AgentSession {
             chat_collapse: Vec::new(),
             esc_count: 0,
             project_model_default: None,
+            global_model_default: None,
             model_dirty: false,
             agent_input_tokens: context_tokens,
             agent_output_tokens: 0,
@@ -598,14 +599,26 @@ impl AgentSession {
         )
     }
 
-    /// The harness this session's next turn dispatches to, resolved through the
-    /// model cascade (per-chat pin → project default → built-in default).
-    pub(crate) fn effective_harness(&self) -> String {
-        resolve_turn_model(
+    /// Preferred model from the cascade (pin → project override → global).
+    pub(crate) fn preferred_model(&self) -> Option<ModelRef> {
+        preferred_turn_model(
             self.session.selected_model.as_ref(),
             self.project_model_default.as_ref(),
+            self.global_model_default.as_ref(),
         )
-        .harness
+    }
+
+    /// Effective model: preferred + process-catalog availability.
+    pub(crate) fn effective_model(&self) -> EffectiveModel {
+        resolve_effective_model(self.preferred_model().as_ref(), model_in_process_catalog)
+    }
+
+    /// The harness this session's next turn dispatches to, from the preferred
+    /// model when set. Unconfigured falls back to Claude for worker keying.
+    pub(crate) fn effective_harness(&self) -> String {
+        self.preferred_model()
+            .map(|m| m.harness)
+            .unwrap_or_else(|| "claude-code".into())
     }
 
     /// The stored agent session id, but only when it belongs to the harness the
@@ -976,27 +989,97 @@ mod tests {
         assert_eq!(ax.next_actions[0].send, "/ds-explore");
     }
 
-    /// @spec harness/selection Default model resolution: An empty cascade resolves to grok-4.5
-    #[test]
-    fn empty_cascade_resolves_to_grok_4_5() {
-        // GIVEN neither a per-chat pin nor a project default.
-        // WHEN the model for a turn is resolved.
-        let resolved = resolve_turn_model(None, None);
-        // THEN the resolved model is grok-4.5 on the grok harness.
-        assert_eq!(resolved.harness, "grok");
-        assert_eq!(resolved.model, "grok-4.5");
-    }
-
     /// @spec harness/selection Default model resolution: A per-chat pin overrides a project default
     #[test]
     fn per_chat_pin_overrides_project_default() {
-        // GIVEN a per-chat pin and a different project default.
+        // GIVEN a per-chat pin
+        // AND a different project override
+        // AND a different global default
         let pin = ModelRef::new("claude-code", "opus");
-        let project_default = ModelRef::new("grok", "grok-4.5");
-        // WHEN the model for a turn is resolved.
-        let resolved = resolve_turn_model(Some(&pin), Some(&project_default));
-        // THEN the resolved model is the per-chat pin.
-        assert_eq!(resolved, pin);
+        let project = ModelRef::new("grok", "grok-4.5");
+        let global = ModelRef::new("claude-code", "sonnet");
+        // WHEN the preferred model for a turn is resolved
+        let resolved = preferred_turn_model(Some(&pin), Some(&project), Some(&global));
+        // THEN the preferred model is the per-chat pin
+        assert_eq!(resolved, Some(pin));
+    }
+
+    /// @spec harness/selection Default model resolution: A project override is preferred over the global default
+    #[test]
+    fn project_override_is_preferred_over_the_global_default() {
+        // GIVEN no per-chat pin
+        // AND a project override
+        // AND a different global default
+        let project = ModelRef::new("claude-code", "opus");
+        let global = ModelRef::new("grok", "grok-4.5");
+        // WHEN the preferred model for a turn is resolved
+        let resolved = preferred_turn_model(None, Some(&project), Some(&global));
+        // THEN the preferred model is the project override
+        assert_eq!(resolved, Some(project));
+    }
+
+    /// @spec harness/selection Default model resolution: The global default is preferred when pin and project override are unset
+    #[test]
+    fn global_default_is_preferred_when_pin_and_project_override_are_unset() {
+        // GIVEN no per-chat pin
+        // AND no project override
+        // AND a global default
+        let global = ModelRef::new("claude-code", "sonnet");
+        // WHEN the preferred model for a turn is resolved
+        let resolved = preferred_turn_model(None, None, Some(&global));
+        // THEN the preferred model is the global default
+        assert_eq!(resolved, Some(global));
+    }
+
+    /// @spec harness/selection Default model resolution: A preferred model absent from the catalog is not available
+    #[test]
+    fn preferred_model_absent_from_the_catalog_is_not_available() {
+        // GIVEN a preferred model from the cascade
+        let preferred = ModelRef::new("grok", "grok-4.5");
+        // AND that model absent from the process model catalog
+        let in_catalog = |_: &ModelRef| false;
+        // WHEN the effective model for a turn is resolved
+        let effective = resolve_effective_model(Some(&preferred), in_catalog);
+        // THEN the model for the turn is not available
+        assert!(!effective.is_available());
+        assert_eq!(
+            effective,
+            EffectiveModel::Missing {
+                preferred: preferred.clone()
+            }
+        );
+    }
+
+    /// @spec harness/selection Default model resolution: With no preferred model at any cascade level, the model is not available
+    #[test]
+    fn with_no_preferred_model_at_any_cascade_level_the_model_is_not_available() {
+        // GIVEN no per-chat pin
+        // AND no project override
+        // AND no global default
+        // WHEN the effective model for a turn is resolved
+        let preferred = preferred_turn_model(None, None, None);
+        let effective = resolve_effective_model(preferred.as_ref(), |_| true);
+        // THEN the model for the turn is not available
+        assert!(preferred.is_none());
+        assert!(!effective.is_available());
+        assert_eq!(effective, EffectiveModel::Unconfigured);
+    }
+
+    /// @spec harness/selection Send requires an available model: A turn does not start when the preferred model is not available
+    #[test]
+    fn turn_does_not_start_when_the_preferred_model_is_not_available() {
+        // GIVEN an effective model that is not available
+        let preferred = ModelRef::new("grok", "grok-4.5");
+        let missing = EffectiveModel::Missing {
+            preferred: preferred.clone(),
+        };
+        let unconfigured = EffectiveModel::Unconfigured;
+        // WHEN the user attempts to send a main-chat turn
+        // THEN no new turn is started
+        // AND no substitute model is chosen for the turn
+        assert!(!main_chat_turn_allowed(&missing));
+        assert!(!main_chat_turn_allowed(&unconfigured));
+        assert!(main_chat_turn_allowed(&EffectiveModel::Available(preferred)));
     }
 
     /// @spec session/scope Reliable first-turn delivery: The first turn's message body carries the scope orientation
@@ -2958,6 +3041,13 @@ pub fn recover_from_lost_session(ax: &mut AgentSession, highlighter: &SyntaxHigh
     use crate::chat_store::{ContentBlock, Role};
     use duckchat::{ContextHook, TurnRequest};
 
+    // Same gate as send: do not re-dispatch with a missing model.
+    if !main_chat_turn_allowed(&ax.effective_model()) {
+        ax.session.is_streaming = false;
+        materialize_chat_ui(ax, highlighter);
+        return;
+    }
+
     ax.session.agent_session_id = None;
     ax.session.session_harness = None;
     ax.priming_in_flight = false;
@@ -3030,13 +3120,8 @@ pub fn recover_from_lost_session(ax: &mut AgentSession, highlighter: &SyntaxHigh
 
     let mut req = TurnRequest::new(prompt, handle.working_dir().to_path_buf());
     req.system_additions = system_additions;
-    req.model = Some(
-        resolve_turn_model(
-            ax.session.selected_model.as_ref(),
-            ax.project_model_default.as_ref(),
-        )
-        .model,
-    );
+    // Preferred cascade model id (send gate blocks when not available).
+    req.model = ax.preferred_model().map(|m| m.model);
     // Attachments already went out with the failed attempt (or were empty).
     // Don't re-take from input — leave as empty for the recovery turn.
     handle.send_turn(req);
@@ -3180,6 +3265,11 @@ pub fn apply_user_choice_request(
 pub fn send_prompt_text(ax: &mut AgentSession, text: String, highlighter: &SyntaxHighlighter) {
     use duckchat::{ContextHook, TurnRequest};
 
+    // No substitute model: Missing / Unconfigured block main-chat send.
+    if !main_chat_turn_allowed(&ax.effective_model()) {
+        return;
+    }
+
     // Stale agent defaults must not outlive a new turn.
     ax.clear_agent_default_prompts();
 
@@ -3240,16 +3330,8 @@ pub fn send_prompt_text(ax: &mut AgentSession, text: String, highlighter: &Synta
         // All orientation now rides the message body above; `system_additions`
         // (the dropped `--append-system-prompt` channel) stays at its empty
         // default.
-        // Per-chat pin wins; otherwise the project default, otherwise the
-        // built-in default (grok-4.5). Prime on the same model so the resumed
-        // session stays consistent.
-        req.model = Some(
-            resolve_turn_model(
-                ax.session.selected_model.as_ref(),
-                ax.project_model_default.as_ref(),
-            )
-            .model,
-        );
+        // Same cascade as main send so priming stays on the preferred model.
+        req.model = ax.preferred_model().map(|m| m.model);
         // Selection / image attachments and idea-description blurb all
         // belong to the user's intended turn — leave them on `ax` so the
         // follow-up dispatch picks them up.
@@ -3370,16 +3452,8 @@ pub fn send_prompt_text(ax: &mut AgentSession, text: String, highlighter: &Synta
 
     let mut req = TurnRequest::new(prompt, handle.working_dir().to_path_buf());
     req.system_additions = system_additions;
-    // Per-chat pin wins; otherwise the project default, otherwise the built-in
-    // default (grok-4.5). On a resumed session this model overrides the
-    // session's baked-in model for this turn.
-    req.model = Some(
-        resolve_turn_model(
-            ax.session.selected_model.as_ref(),
-            ax.project_model_default.as_ref(),
-        )
-        .model,
-    );
+    // Preferred cascade model id (send gate blocks when not available).
+    req.model = ax.preferred_model().map(|m| m.model);
     req.attachments = std::mem::take(&mut ax.input_attachments);
     handle.send_turn(req);
 
@@ -3398,22 +3472,64 @@ fn rehighlight_input(input: &mut EditorState, highlighter: &SyntaxHighlighter) {
     input.highlight_spans = Some(highlighter.highlight_lines(&input.lines, syntax));
 }
 
-/// The built-in default model — used when neither a per-chat pin nor a project
-/// default is set. See the `harness/selection` capability.
-pub(crate) fn builtin_default_model() -> ModelRef {
-    ModelRef::new("grok", "grok-4.5")
+/// Outcome of resolving the model for a turn: preferred cascade + catalog check.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum EffectiveModel {
+    Available(ModelRef),
+    /// Cascade produced a preferred choice that is not in the process catalog.
+    Missing { preferred: ModelRef },
+    /// No pin, no project override, no global.
+    Unconfigured,
 }
 
-/// Resolve the model for a turn from the three-step cascade, most specific
-/// first: a per-chat `pin`, then the `project_default`, then the built-in
-/// default (grok-4.5). The first level that is set wins.
-pub(crate) fn resolve_turn_model(
+impl EffectiveModel {
+    pub(crate) fn is_available(&self) -> bool {
+        matches!(self, Self::Available(_))
+    }
+
+    /// Model ref to use when starting a turn, if available.
+    pub(crate) fn available_ref(&self) -> Option<&ModelRef> {
+        match self {
+            Self::Available(m) => Some(m),
+            _ => None,
+        }
+    }
+}
+
+/// Whether a new main-chat turn may start. Missing / Unconfigured must not
+/// invent a substitute model.
+pub(crate) fn main_chat_turn_allowed(effective: &EffectiveModel) -> bool {
+    effective.is_available()
+}
+
+/// Preferred model from the three-step cascade, most specific first.
+pub(crate) fn preferred_turn_model(
     pin: Option<&ModelRef>,
     project_default: Option<&ModelRef>,
-) -> ModelRef {
-    pin.or(project_default)
-        .cloned()
-        .unwrap_or_else(builtin_default_model)
+    global_default: Option<&ModelRef>,
+) -> Option<ModelRef> {
+    pin.or(project_default).or(global_default).cloned()
+}
+
+/// Whether `model` is present in the process model catalog.
+pub(crate) fn model_in_process_catalog(model: &ModelRef) -> bool {
+    crate::agent::available_models()
+        .iter()
+        .any(|m| m.harness == model.harness && m.id == model.model)
+}
+
+/// Resolve availability of a preferred model against the process catalog.
+pub(crate) fn resolve_effective_model(
+    preferred: Option<&ModelRef>,
+    in_catalog: impl Fn(&ModelRef) -> bool,
+) -> EffectiveModel {
+    match preferred {
+        Some(m) if in_catalog(m) => EffectiveModel::Available(m.clone()),
+        Some(m) => EffectiveModel::Missing {
+            preferred: m.clone(),
+        },
+        None => EffectiveModel::Unconfigured,
+    }
 }
 
 /// Render prior chat history as a text preamble for the agent. Used when we
@@ -4325,16 +4441,24 @@ pub fn view_column<'a, M: 'a + Clone>(
         ActiveTab::Chat => {
             if let Some(ax) = state.active() {
                 let model_choices = agent_chat::chat_model_choices();
-                // The selector always reflects the concrete model the next turn
-                // will run (pin → project default → built-in), never a "Default"
-                // placeholder. The same effective model drives the meter's
-                // denominator (its own context window, not a stream value).
-                let effective_model = resolve_turn_model(
-                    ax.session.selected_model.as_ref(),
-                    ax.project_model_default.as_ref(),
-                );
-                let selected_model =
-                    agent_chat::selected_model_choice(&model_choices, Some(&effective_model));
+                // Selector shows the available preferred model, or Missing when
+                // the cascade has no catalog match. Meter uses the available
+                // model's window only.
+                let effective = ax.effective_model();
+                let selected_model = match &effective {
+                    EffectiveModel::Available(m) => {
+                        agent_chat::selected_model_choice(&model_choices, Some(m))
+                    }
+                    EffectiveModel::Missing { preferred } => {
+                        agent_chat::missing_closed_model_choice(Some(preferred))
+                    }
+                    EffectiveModel::Unconfigured => {
+                        agent_chat::missing_closed_model_choice(None)
+                    }
+                };
+                let context_max = effective
+                    .available_ref()
+                    .and_then(agent_chat::model_context_window);
                 let status = agent_chat::StatusInfo {
                     is_streaming: ax.session.is_streaming,
                     is_awaiting_user: ax.is_awaiting_user,
@@ -4348,7 +4472,7 @@ pub fn view_column<'a, M: 'a + Clone>(
                         ax.resumable_session_id().is_some(),
                     ),
                     context_tokens: ax.agent_input_tokens + ax.agent_output_tokens,
-                    context_max: agent_chat::model_context_window(&effective_model),
+                    context_max,
                 };
                 let w = wrap.clone();
                 let next_action_idx = crate::default_prompts::clamp_active_index(

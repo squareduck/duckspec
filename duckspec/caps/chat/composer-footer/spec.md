@@ -3,6 +3,10 @@
 Rules for the meta strip under the chat prompt: when the resend hint appears, how context
 usage is shown by fill heat, and the short closed model label.
 
+Rules for the meta strip under the chat prompt: when the resend hint appears, how context
+usage is shown by fill heat, the short closed model label, and the Missing closed label
+when the effective model is not available.
+
 ## Requirement: Resend hint only for unresumable stored session
 
 The resend-history hint SHALL appear only when the transcript is non-empty **and** a
@@ -20,7 +24,7 @@ the effective harness, or when no agent session id is stored.
 - **THEN** the resend-history hint is shown
 
 > test: code
-> - crates/duckboard/src/widget/agent_chat.rs:2177
+> - crates/duckboard/src/widget/agent_chat.rs:2202
 
 ### Scenario: Hint hidden when stored session is resumable
 
@@ -30,7 +34,7 @@ the effective harness, or when no agent session id is stored.
 - **THEN** the resend-history hint is not shown
 
 > test: code
-> - crates/duckboard/src/widget/agent_chat.rs:2194
+> - crates/duckboard/src/widget/agent_chat.rs:2219
 
 ### Scenario: Hint hidden when transcript is empty
 
@@ -39,7 +43,7 @@ the effective harness, or when no agent session id is stored.
 - **THEN** the resend-history hint is not shown
 
 > test: code
-> - crates/duckboard/src/widget/agent_chat.rs:2211
+> - crates/duckboard/src/widget/agent_chat.rs:2236
 
 ### Scenario: Hint hidden when no stored agent session id
 
@@ -49,7 +53,7 @@ the effective harness, or when no agent session id is stored.
 - **THEN** the resend-history hint is not shown
 
 > test: code
-> - crates/duckboard/src/widget/agent_chat.rs:2227
+> - crates/duckboard/src/widget/agent_chat.rs:2252
 
 ## Requirement: Progressive usage readout
 
@@ -68,7 +72,7 @@ least 75%, the readout SHALL include used tokens, the window max, and the percen
 - **AND** the readout does not include absolute used or max token counts
 
 > test: code
-> - crates/duckboard/src/widget/agent_chat.rs:2243
+> - crates/duckboard/src/widget/agent_chat.rs:2268
 
 ### Scenario: Hot fill shows used, max, and percentage
 
@@ -78,7 +82,7 @@ least 75%, the readout SHALL include used tokens, the window max, and the percen
 - **THEN** the readout includes used tokens, the window max, and the fill percentage
 
 > test: code
-> - crates/duckboard/src/widget/agent_chat.rs:2257
+> - crates/duckboard/src/widget/agent_chat.rs:2282
 
 ## Requirement: Short closed model label
 
@@ -95,4 +99,20 @@ prefix.
 - **AND** the label does not include a harness prefix
 
 > test: code
-> - crates/duckboard/src/widget/agent_chat.rs:2269
+> - crates/duckboard/src/widget/agent_chat.rs:2294
+
+## Requirement: Missing closed model label
+
+When the effective model for the chat is not available, the closed model control SHALL
+show the label `Missing` instead of a model display name.
+
+> test: code
+
+### Scenario: Closed label is Missing when the effective model is not available
+
+- **GIVEN** an effective model that is not available
+- **WHEN** the closed model control label is built
+- **THEN** the label is `Missing`
+
+> test: code
+> - crates/duckboard/src/widget/agent_chat.rs:2314

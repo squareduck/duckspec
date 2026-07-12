@@ -1,4 +1,4 @@
-//! Settings area — font, chat affordances, and per-project model configuration UI.
+//! Settings area — fonts, global default model, chat affordances, and per-project override.
 
 use std::path::Path;
 
@@ -29,7 +29,9 @@ pub enum Message {
     UiFontSizeChanged(f32),
     ContentFontSelected(String),
     ContentFontSizeChanged(f32),
-    /// Project-level default model picked (`id == None` → no default).
+    /// Global main-chat default (concrete choice only).
+    GlobalModelSelected(ModelChoice),
+    /// Project override (`id == None` → use global default).
     ModelDefaultSelected(ModelChoice),
     AgentInputHintsToggled(bool),
     /// Global oneshot model for a harness (`choice.id` is the model id).
@@ -37,12 +39,10 @@ pub enum Message {
     ResetDefaults,
 }
 
-/// Harness ids that may show an oneshot picker, in display order.
-const ONESHOT_HARNESS_ORDER: &[&str] = &["claude-code", "grok"];
-
 /// Which harnesses should offer an oneshot model picker.
 ///
 /// Empty when agent input hints are off, or when a harness has no catalog models.
+/// Order follows the catalog harness order of the provided slices.
 #[cfg(test)]
 pub fn oneshot_picker_harnesses(
     agent_input_hints: bool,
@@ -55,6 +55,18 @@ pub fn oneshot_picker_harnesses(
     for (harness, models) in catalog {
         if !models.is_empty() {
             out.push(harness.as_ref().to_string());
+        }
+    }
+    out
+}
+
+/// Harness ids with non-empty process-catalog slices, in catalog order.
+fn oneshot_harnesses_from_process_catalog() -> Vec<String> {
+    let models = agent::available_models();
+    let mut out = Vec::new();
+    for m in &models {
+        if !out.iter().any(|h| h == &m.harness) {
+            out.push(m.harness.clone());
         }
     }
     out
@@ -123,10 +135,16 @@ pub fn update(
             config.content.font_size = size;
             let _ = config::save(config);
         }
+        Message::GlobalModelSelected(choice) => {
+            if let Some(model) = choice.to_ref() {
+                config.set_global_model_default(Some(model));
+                let _ = config::save(config);
+            }
+        }
         Message::ModelDefaultSelected(choice) => {
             if let Some(root) = project_root {
-                // A real choice carries its own harness, so a grok default
-                // persists under the grok harness; the sentinel maps to `None`.
+                // A real choice carries its own harness; the sentinel maps to `None`
+                // (use global default).
                 let model = choice.to_ref();
                 config.set_project_model_default(root, model);
                 let _ = config::save(config);
@@ -143,8 +161,29 @@ pub fn update(
         }
         Message::ResetDefaults => {
             *config = Config::default();
+            // Re-seed a concrete global default when the process catalog has
+            // models — ModelCatalogReady is one-shot and will not re-seed.
+            let catalog = agent::available_models();
+            let _ = agent::seed_global_default_if_unset(config, &catalog);
             let _ = config::save(config);
         }
+    }
+}
+
+/// Closed selection for the global default picker: a real catalog choice when
+/// set and available; **Missing** when unset or absent from the catalog.
+fn global_default_picker_selected(config: &Config, choices: &[ModelChoice]) -> ModelChoice {
+    match config.global_model_default() {
+        Some(m)
+            if choices.iter().any(|c| {
+                c.harness.as_deref() == Some(m.harness.as_str())
+                    && c.id.as_deref() == Some(m.model.as_str())
+            }) =>
+        {
+            agent_chat::selected_model_choice(choices, Some(m))
+        }
+        Some(m) => agent_chat::missing_closed_model_choice(Some(m)),
+        None => agent_chat::missing_closed_model_choice(None),
     }
 }
 
@@ -156,6 +195,10 @@ pub fn view<'a>(
     project_root: Option<&Path>,
 ) -> Element<'a, Message> {
     let heading = text("Settings").size(22.0).color(theme::text_primary());
+
+    let global_heading = text("Global")
+        .size(theme::font_lg())
+        .color(theme::text_primary());
 
     let ui_section = font_section(
         "UI Font",
@@ -177,6 +220,36 @@ pub fn view<'a>(
         Message::ContentFontSizeChanged,
     );
 
+    let global_model = global_model_section(config);
+    let chat_section = chat_section(config);
+
+    let mut body = column![
+        heading,
+        Space::new().height(theme::SPACING_XL),
+        global_heading,
+        Space::new().height(theme::SPACING_MD),
+        ui_section,
+        Space::new().height(theme::SPACING_XL),
+        content_section,
+        Space::new().height(theme::SPACING_XL),
+        global_model,
+        Space::new().height(theme::SPACING_XL),
+        chat_section,
+    ];
+
+    if let Some(root) = project_root {
+        let project_heading = text("This project")
+            .size(theme::font_lg())
+            .color(theme::text_primary());
+        // Extra gap so Global and This project read as peer top-level sections.
+        body = body
+            .push(Space::new().height(theme::SPACING_XL))
+            .push(Space::new().height(theme::SPACING_LG))
+            .push(project_heading)
+            .push(Space::new().height(theme::SPACING_MD))
+            .push(project_model_section(config, root));
+    }
+
     let reset = button(
         text("Reset to defaults")
             .size(theme::font_sm())
@@ -185,23 +258,6 @@ pub fn view<'a>(
     .on_press(Message::ResetDefaults)
     .style(theme::dashboard_action);
 
-    let chat_section = chat_section(config);
-
-    let mut body = column![
-        heading,
-        Space::new().height(theme::SPACING_XL),
-        ui_section,
-        Space::new().height(theme::SPACING_XL),
-        content_section,
-        Space::new().height(theme::SPACING_XL),
-        chat_section,
-    ];
-    // Per-project model default — only meaningful with a project open.
-    if let Some(root) = project_root {
-        body = body
-            .push(Space::new().height(theme::SPACING_XL))
-            .push(model_section(config, root));
-    }
     let body = body
         .push(Space::new().height(theme::SPACING_XL))
         .push(reset)
@@ -217,6 +273,29 @@ pub fn view<'a>(
     .height(Length::Fill)
     .style(theme::surface)
     .into()
+}
+
+fn global_model_section<'a>(config: &Config) -> Element<'a, Message> {
+    let label = text("Default Model")
+        .size(theme::font_md())
+        .color(theme::text_primary());
+    let desc = text(
+        "Model new chats use by default in every project. A project override or \
+         per-chat selection can narrow it.",
+    )
+    .size(theme::font_sm())
+    .color(theme::text_muted());
+
+    let choices = agent_chat::global_model_choices();
+    let selected = global_default_picker_selected(config, &choices);
+    let picker = pick_list(choices, Some(selected), Message::GlobalModelSelected)
+        .width(280)
+        .style(theme::pick_list_style)
+        .menu_style(theme::pick_list_menu);
+
+    column![label, desc, Space::new().height(theme::SPACING_SM), picker]
+        .spacing(theme::SPACING_XS)
+        .into()
 }
 
 fn chat_section<'a>(config: &Config) -> Element<'a, Message> {
@@ -253,7 +332,7 @@ fn chat_section<'a>(config: &Config) -> Element<'a, Message> {
     if config.chat.agent_input_hints {
         let oneshot_intro = text(
             "Oneshot model (titles and reply chips) per agent backend. Global — not \
-             per project.",
+             per project. Only backends with models available on this machine.",
         )
         .size(theme::font_sm())
         .color(theme::text_muted());
@@ -261,18 +340,18 @@ fn chat_section<'a>(config: &Config) -> Element<'a, Message> {
             .push(Space::new().height(theme::SPACING_SM))
             .push(oneshot_intro);
 
-        for harness in ONESHOT_HARNESS_ORDER {
-            let models = agent::models_for_harness(harness);
+        for harness in oneshot_harnesses_from_process_catalog() {
+            let models = agent::models_for_harness(&harness);
             if models.is_empty() {
                 continue;
             }
             let choices = oneshot_choices_for(&models);
             let selected = selected_oneshot_choice(
-                harness,
-                config.chat.oneshot_model(harness),
+                &harness,
+                config.chat.oneshot_model(&harness),
                 &models,
             );
-            let harness_owned = harness.to_string();
+            let harness_owned = harness.clone();
             let picker = pick_list(choices, Some(selected), move |choice| {
                 Message::OneshotModelSelected {
                     harness: harness_owned.clone(),
@@ -283,7 +362,7 @@ fn chat_section<'a>(config: &Config) -> Element<'a, Message> {
             .style(theme::pick_list_style)
             .menu_style(theme::pick_list_menu);
 
-            let row_label = text(format!("Oneshot · {}", harness_label(harness)))
+            let row_label = text(format!("Oneshot · {}", harness_label(&harness)))
                 .size(theme::font_sm())
                 .color(theme::text_secondary());
             col = col
@@ -296,18 +375,18 @@ fn chat_section<'a>(config: &Config) -> Element<'a, Message> {
     col.into()
 }
 
-fn model_section<'a>(config: &Config, root: &Path) -> Element<'a, Message> {
+fn project_model_section<'a>(config: &Config, root: &Path) -> Element<'a, Message> {
     let label = text("Default Model")
         .size(theme::font_md())
         .color(theme::text_primary());
     let desc = text(
-        "Model new chats in this project use by default. A per-chat selection \
-         overrides it.",
+        "Override the global default for new chats in this project. A per-chat \
+         selection still wins. “Use global default” clears the override.",
     )
     .size(theme::font_sm())
     .color(theme::text_muted());
 
-    let choices = agent_chat::project_model_choices();
+    let choices = agent_chat::project_override_model_choices();
     let current = config.project_model_default(root);
     let selected = agent_chat::selected_model_choice(&choices, current.as_ref());
     let picker = pick_list(choices, Some(selected), Message::ModelDefaultSelected)
@@ -315,7 +394,7 @@ fn model_section<'a>(config: &Config, root: &Path) -> Element<'a, Message> {
         .style(theme::pick_list_style)
         .menu_style(theme::pick_list_menu);
 
-    column![label, desc, Space::new().height(theme::SPACING_SM), picker,]
+    column![label, desc, Space::new().height(theme::SPACING_SM), picker]
         .spacing(theme::SPACING_XS)
         .into()
 }
@@ -470,5 +549,78 @@ mod tests {
         let selected =
             selected_oneshot_choice("claude-code", Some("claude-sonnet-5"), &claude);
         assert_eq!(selected.id.as_deref(), Some("claude-sonnet-5"));
+    }
+
+    #[test]
+    fn empty_catalog_harness_is_skipped_by_oneshot_picker_helper() {
+        let claude = vec![mi("claude-code", "haiku")];
+        let empty: Vec<ModelInfo> = Vec::new();
+        let catalog: [(&str, &[ModelInfo]); 2] = [
+            ("claude-code", &claude),
+            ("grok", &empty),
+        ];
+        let harnesses = oneshot_picker_harnesses(true, &catalog);
+        assert_eq!(harnesses, vec!["claude-code"]);
+    }
+
+    #[test]
+    fn global_picker_shows_missing_when_unset() {
+        let cfg = Config::default();
+        let choices = vec![ModelChoice {
+            harness: Some("grok".into()),
+            id: Some("grok-4.5".into()),
+            label: "Grok · Grok 4.5".into(),
+            closed_label: "Grok 4.5".into(),
+        }];
+        let selected = global_default_picker_selected(&cfg, &choices);
+        assert_eq!(selected.closed_label, "Missing");
+        assert_eq!(selected.label, "Missing");
+    }
+
+    #[test]
+    fn global_picker_shows_missing_when_configured_model_not_in_choices() {
+        let mut cfg = Config::default();
+        cfg.set_global_model_default(Some(ModelRef::new("grok", "gone")));
+        let choices = vec![ModelChoice {
+            harness: Some("claude-code".into()),
+            id: Some("sonnet".into()),
+            label: "Claude Code · Sonnet".into(),
+            closed_label: "Sonnet".into(),
+        }];
+        let selected = global_default_picker_selected(&cfg, &choices);
+        assert_eq!(selected.closed_label, "Missing");
+        assert_eq!(selected.id.as_deref(), Some("gone"));
+    }
+
+    #[test]
+    fn global_picker_shows_catalog_choice_when_set_and_available() {
+        let mut cfg = Config::default();
+        cfg.set_global_model_default(Some(ModelRef::new("grok", "grok-4.5")));
+        let choices = vec![ModelChoice {
+            harness: Some("grok".into()),
+            id: Some("grok-4.5".into()),
+            label: "Grok · Grok 4.5".into(),
+            closed_label: "Grok 4.5".into(),
+        }];
+        let selected = global_default_picker_selected(&cfg, &choices);
+        assert_eq!(selected.closed_label, "Grok 4.5");
+        assert_eq!(selected.id.as_deref(), Some("grok-4.5"));
+    }
+
+    #[test]
+    fn reset_reseeds_global_default_from_catalog() {
+        let mut cfg = Config::default();
+        cfg.set_global_model_default(Some(ModelRef::new("claude-code", "opus")));
+        // Simulate ResetDefaults body without process catalog dependency:
+        cfg = Config::default();
+        let catalog = vec![
+            mi("claude-code", "sonnet"),
+            mi("grok", "grok-4.5"),
+        ];
+        assert!(agent::seed_global_default_if_unset(&mut cfg, &catalog));
+        assert_eq!(
+            cfg.global_model_default(),
+            Some(&ModelRef::new("grok", "grok-4.5"))
+        );
     }
 }

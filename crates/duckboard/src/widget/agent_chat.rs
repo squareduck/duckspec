@@ -121,14 +121,20 @@ pub fn chat_model_choices() -> Vec<ModelChoice> {
     model_entries()
 }
 
-/// Picker options for the project-level default selector in settings. The
-/// first entry (`id: None`) means "no default — let the CLI pick".
-pub fn project_model_choices() -> Vec<ModelChoice> {
+/// Picker options for the global main-chat default in Settings. Catalog models
+/// only — no sentinel (the global default is always a concrete choice when set).
+pub fn global_model_choices() -> Vec<ModelChoice> {
+    model_entries()
+}
+
+/// Picker options for the project override in Settings. First entry clears the
+/// override (`id: None` → use global default).
+pub fn project_override_model_choices() -> Vec<ModelChoice> {
     let mut out = vec![ModelChoice {
         harness: None,
         id: None,
-        label: "No default".to_string(),
-        closed_label: "No default".to_string(),
+        label: "Use global default".to_string(),
+        closed_label: "Use global default".to_string(),
     }];
     out.extend(model_entries());
     out
@@ -170,6 +176,26 @@ fn harness_display(harness: &str) -> &str {
         "claude-code" => "Claude Code",
         "grok" => "Grok",
         other => other,
+    }
+}
+
+/// Closed model control when the effective model is not available in the
+/// process catalog. Optional `preferred` keeps harness/id for equality when a
+/// cascade choice exists but is missing from the catalog.
+pub fn missing_closed_model_choice(preferred: Option<&ModelRef>) -> ModelChoice {
+    match preferred {
+        Some(m) => ModelChoice {
+            harness: Some(m.harness.clone()),
+            id: Some(m.model.clone()),
+            label: "Missing".to_string(),
+            closed_label: "Missing".to_string(),
+        },
+        None => ModelChoice {
+            harness: None,
+            id: None,
+            label: "Missing".to_string(),
+            closed_label: "Missing".to_string(),
+        },
     }
 }
 
@@ -1138,12 +1164,11 @@ pub fn target_answer_for_reply_jump(
     offset_y: f32,
 ) -> Option<usize> {
     if go_prev {
-        if let Some(cur) = current {
-            if let Some(&(_, top)) = answer_tops.iter().find(|(i, _)| *i == cur) {
-                if offset_y > top + VIEWPORT_TOP_EPS {
-                    return Some(cur);
-                }
-            }
+        if let Some(cur) = current
+            && let Some(&(_, top)) = answer_tops.iter().find(|(i, _)| *i == cur)
+            && offset_y > top + VIEWPORT_TOP_EPS
+        {
+            return Some(cur);
         }
         return prev_answer_idx(anchors, current);
     }
@@ -2284,6 +2309,21 @@ mod tests {
         assert!(!choice.closed_label.contains('·'));
         // Menu label remains harness-prefixed for grouped choices.
         assert!(choice.label.starts_with("Grok · "));
+    }
+
+    /// @spec chat/composer-footer Missing closed model label: Closed label is Missing when the effective model is not available
+    #[test]
+    fn closed_label_is_missing_when_the_effective_model_is_not_available() {
+        // GIVEN an effective model that is not available
+        let preferred = ModelRef::new("grok", "grok-4.5");
+        // WHEN the closed model control label is built
+        let with_preferred = missing_closed_model_choice(Some(&preferred));
+        let unconfigured = missing_closed_model_choice(None);
+        // THEN the label is Missing
+        assert_eq!(with_preferred.closed_label, "Missing");
+        assert_eq!(with_preferred.label, "Missing");
+        assert_eq!(unconfigured.closed_label, "Missing");
+        assert_eq!(unconfigured.label, "Missing");
     }
 
     #[test]

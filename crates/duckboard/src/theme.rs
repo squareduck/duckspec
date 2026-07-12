@@ -427,6 +427,10 @@ pub fn font_md() -> f32 {
     ui_size()
 }
 
+pub fn font_lg() -> f32 {
+    ui_size() + 2.0
+}
+
 // ── Spacing ────────────────────────────────────────────────────────────────
 
 pub const SPACING_XS: f32 = 4.0;
