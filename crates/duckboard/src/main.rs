@@ -1680,6 +1680,12 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                         if output_tokens > 0 {
                             ax.agent_output_tokens = output_tokens;
                         }
+                        // Write-through so the next turn-boundary / eager save
+                        // persists last-known fill. Do not set needs_flush for
+                        // usage alone (avoid rewriting the session on every
+                        // telemetry tick when messages are unchanged).
+                        ax.session.context_tokens =
+                            ax.agent_input_tokens + ax.agent_output_tokens;
                     }
                     AgentEvent::ProcessExited => {
                         tracing::info!(key, "agent process exited");

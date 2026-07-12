@@ -240,7 +240,7 @@ input hints setting.
 - **THEN** the list is exactly that single lifecycle option in empty-send form
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:750
+> - crates/duckboard/src/area/interaction.rs:753
 
 ### Scenario: Oneshot launch is skipped when the next-action list is non-empty
 
@@ -336,7 +336,7 @@ bootstrap.
 - **THEN** the list is exactly the explore stage command in empty-send form
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:716
+> - crates/duckboard/src/area/interaction.rs:719
 
 ### Scenario: Empty change session with unfinished steps seeds apply
 
@@ -346,7 +346,7 @@ bootstrap.
 - **THEN** the list is exactly the apply stage command in empty-send form
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:729
+> - crates/duckboard/src/area/interaction.rs:732
 
 ## Requirement: Next-action empty-input send and cycle
 

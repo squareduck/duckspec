@@ -457,6 +457,9 @@ impl AgentSession {
 
     /// Wrap a loaded ChatSession with fresh UI state.
     pub fn from_session(session: ChatSession, scope_kind: ScopeKind) -> Self {
+        // Seed the live meter from last-known usage so restart shows fill
+        // without waiting for a new UsageUpdate.
+        let context_tokens = session.context_tokens;
         Self {
             session,
             scope_kind,
@@ -471,7 +474,7 @@ impl AgentSession {
             esc_count: 0,
             project_model_default: None,
             model_dirty: false,
-            agent_input_tokens: 0,
+            agent_input_tokens: context_tokens,
             agent_output_tokens: 0,
             fast_response: crate::fast_response::FastResponse::default(),
             is_awaiting_user: false,

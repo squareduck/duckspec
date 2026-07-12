@@ -94,6 +94,10 @@ pub struct ChatSession {
     /// resume; a legacy bare-string value loads as the `claude-code` harness
     /// via `ModelRef`'s deserialize shim.
     pub selected_model: Option<ModelRef>,
+    /// Last known context fill numerator (input+output tokens). Persisted so
+    /// the composer meter can show correct-ish fill after app restart.
+    /// Zero when never observed or on legacy files without the field.
+    pub context_tokens: usize,
 }
 
 impl ChatSession {
@@ -122,6 +126,7 @@ impl ChatSession {
             title: None,
             last_seeded_description: None,
             selected_model: None,
+            context_tokens: 0,
         }
     }
 }
@@ -144,6 +149,8 @@ struct PersistedSession {
     last_seeded_description: Option<String>,
     #[serde(default)]
     selected_model: Option<ModelRef>,
+    #[serde(default)]
+    context_tokens: usize,
 }
 
 /// What the title summariser should summarise. A "bare slash command" turn
@@ -338,6 +345,7 @@ pub fn load_sessions_for(scope: &str, project_root: Option<&Path>) -> Vec<ChatSe
             title: persisted.title,
             last_seeded_description: persisted.last_seeded_description,
             selected_model: persisted.selected_model,
+            context_tokens: persisted.context_tokens,
         });
     }
     sessions.sort_by(|a, b| b.created_at_nanos.cmp(&a.created_at_nanos));
@@ -382,6 +390,7 @@ pub fn save_session(session: &ChatSession, project_root: Option<&Path>) -> anyho
         title: session.title.clone(),
         last_seeded_description: session.last_seeded_description.clone(),
         selected_model: session.selected_model.clone(),
+        context_tokens: session.context_tokens,
     };
     let data = serde_json::to_string_pretty(&persisted)?;
     write_atomic(&path, data.as_bytes())?;
@@ -979,6 +988,68 @@ mod tests {
                 }
                 other => panic!("expected single Reasoning block, got {other:?}"),
             }
+        });
+    }
+
+    /// @spec chat/persistence Last-known context usage: Context usage round-trips through persist and load
+    #[test]
+    fn context_usage_round_trips_through_persist_and_load() {
+        let tmp = FsTmp::new();
+        with_home(tmp.path(), || {
+            let root = tmp.path().join("project-context-rt");
+            std::fs::create_dir_all(&root).unwrap();
+
+            // GIVEN a session whose last-known context usage total is non-zero.
+            let mut session = ChatSession::new("context-scope".into());
+            session.id = "sess-context".into();
+            session.context_tokens = 42_000;
+
+            // WHEN the session is persisted and loaded again.
+            save_session(&session, Some(&root)).unwrap();
+            let loaded = load_sessions_for("context-scope", Some(&root));
+
+            // THEN the loaded session has the same context usage total.
+            let sess = loaded.iter().find(|s| s.id == "sess-context").unwrap();
+            assert_eq!(sess.context_tokens, 42_000);
+        });
+    }
+
+    /// @spec chat/persistence Last-known context usage: A legacy session without context usage still loads
+    #[test]
+    fn legacy_session_without_context_usage_still_loads() {
+        let tmp = FsTmp::new();
+        with_home(tmp.path(), || {
+            let root = tmp.path().join("project-legacy-context");
+            std::fs::create_dir_all(&root).unwrap();
+
+            // GIVEN a session file that does not include a context usage field.
+            let dir = scope_dir("legacy-ctx-scope", Some(&root));
+            std::fs::create_dir_all(&dir).unwrap();
+            let path = dir.join("sess-legacy-ctx.json");
+            let raw = r#"{
+  "id": "sess-legacy-ctx",
+  "created_at_nanos": 1,
+  "messages": [
+    {
+      "role": "User",
+      "content": [{ "Text": "hello" }],
+      "timestamp": ""
+    }
+  ]
+}"#;
+            std::fs::write(&path, raw).unwrap();
+            assert!(
+                !raw.contains("context_tokens"),
+                "fixture must omit context_tokens"
+            );
+
+            // WHEN the session is loaded.
+            let loaded = load_sessions_for("legacy-ctx-scope", Some(&root));
+
+            // THEN the load succeeds AND the loaded session's context usage total is zero.
+            let sess = loaded.iter().find(|s| s.id == "sess-legacy-ctx").unwrap();
+            assert_eq!(sess.context_tokens, 0);
+            assert_eq!(sess.messages.len(), 1);
         });
     }
 
