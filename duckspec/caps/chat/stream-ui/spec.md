@@ -287,21 +287,22 @@ answer draft into the session’s messages before the tool is recorded.
 
 ## Requirement: Answer thrash budget
 
-Within one streaming turn, after two answer-after-thought draft replacements, a third
-answer-after-thought replacement SHALL cancel the in-flight turn, keep the last live
-answer draft as the turn’s answer, and surface a short stop notice that is not an answer
-rewrite. The replacement count SHALL reset when a tool use is applied so answer spans
-separated by tools do not share a budget.
+Within one streaming turn, answer-after-thought draft replacements share a small fixed
+client budget. A further answer-after-thought replacement that would exceed that budget
+SHALL cancel the in-flight turn, keep the last live answer draft as the turn’s answer, and
+surface a short stop notice that is not an answer rewrite. The replacement count SHALL
+reset when a tool use is applied so answer spans separated by tools do not share a budget.
+The concrete budget size is an implementation constant, not part of this contract.
 
 > test: code
 
-### Scenario: Third answer-after-thought cancels and keeps the last draft
+### Scenario: Exceeding the budget cancels and keeps the last draft
 
-- **GIVEN** a streaming turn that has already replaced the live answer draft twice after
-  reasoning (two answer-after-thought replacements)
+- **GIVEN** a streaming turn that has already used its full thrash replacement budget
+  (answer-after-thought draft replacements)
 
-- **WHEN** a third answer-after-thought replacement begins (answer content after reasoning
-  with a non-empty draft)
+- **WHEN** a further answer-after-thought replacement begins (answer content after
+  reasoning with a non-empty draft)
 
 - **THEN** the in-flight turn is cancelled
 
@@ -314,15 +315,14 @@ separated by tools do not share a budget.
 
 ### Scenario: Tool use resets the thrash budget
 
-- **GIVEN** a streaming turn that has already performed two answer-after-thought draft
-  replacements
+- **GIVEN** a streaming turn that has already used its full thrash replacement budget
 
 - **AND** a tool use has since been applied (budget reset)
 
 - **WHEN** answer content is applied after further reasoning with a non-empty draft
-  (another answer-after-thought replacement)
+  (another answer-after-thought replacement within a fresh budget)
 
 - **THEN** the in-flight turn is not cancelled solely for exceeding the thrash budget
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:1480
+> - crates/duckboard/src/area/interaction.rs:1481

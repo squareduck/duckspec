@@ -1436,29 +1436,30 @@ mod tests {
         }
     }
 
-    // @spec chat/stream-ui Answer thrash budget: Third answer-after-thought cancels and keeps the last draft
+    // @spec chat/stream-ui Answer thrash budget: Exceeding the budget cancels and keeps the last draft
     #[test]
-    fn third_answer_after_thought_trips_thrash_keeps_last_draft() {
+    fn exceeding_budget_trips_thrash_keeps_last_draft() {
         let mut ax = streaming_session();
-        // Two allowed replacements → draft is body-2.
-        thrash_replaces(&mut ax.session, 2);
-        assert_eq!(ax.session.pending_text, "body-2");
+        // Use the full allowed replacement budget → draft is body-{budget}.
+        thrash_replaces(&mut ax.session, ANSWER_REPLACE_BUDGET);
+        let last_allowed = format!("body-{ANSWER_REPLACE_BUDGET}");
+        assert_eq!(ax.session.pending_text, last_allowed);
         assert!(!ax.session.answer_thrash_tripped);
-        assert_eq!(ax.session.answer_replace_count, 2);
+        assert_eq!(ax.session.answer_replace_count, ANSWER_REPLACE_BUDGET);
 
-        // Third replace attempt: trip without replacing the last complete draft.
+        // Next replace attempt: trip without replacing the last complete draft.
         apply_reasoning_content_delta(&mut ax.session, "think again");
-        let ks = apply_answer_content_delta(&mut ax.session, "body-3-should-not-apply");
+        let ks = apply_answer_content_delta(&mut ax.session, "body-should-not-apply");
         assert!(ks);
         assert!(ax.session.answer_thrash_tripped);
-        assert_eq!(ax.session.pending_text, "body-2");
+        assert_eq!(ax.session.pending_text, last_allowed);
 
         // Caller settles: flush draft + stop notice (mirrors main thrash path).
         on_answer_thrash_trip(&mut ax.session);
         assert!(ax.session.pending_text.is_empty());
         assert_eq!(
             committed_answer_texts(&ax.session),
-            vec!["body-2".to_string()]
+            vec![last_allowed]
         );
         assert!(
             ax.session.messages.iter().any(|m| {
@@ -1481,8 +1482,8 @@ mod tests {
     #[test]
     fn tool_use_resets_thrash_budget() {
         let mut ax = streaming_session();
-        thrash_replaces(&mut ax.session, 2);
-        assert_eq!(ax.session.answer_replace_count, 2);
+        thrash_replaces(&mut ax.session, ANSWER_REPLACE_BUDGET);
+        assert_eq!(ax.session.answer_replace_count, ANSWER_REPLACE_BUDGET);
 
         // Tool boundary: commit draft and reset thrash (mirrors ToolUse handling).
         flush_all_pending(&mut ax.session);
@@ -1502,13 +1503,14 @@ mod tests {
         assert!(!ax.session.answer_thrash_tripped);
 
         // A new answer-after-thought replace after tools must not trip solely
-        // from the pre-tool thrash count.
+        // from the pre-tool thrash count (still within a fresh budget).
         apply_answer_content_delta(&mut ax.session, "after-tool-1");
         apply_reasoning_content_delta(&mut ax.session, "think");
         apply_answer_content_delta(&mut ax.session, "after-tool-2");
         assert!(!ax.session.answer_thrash_tripped);
         assert_eq!(ax.session.pending_text, "after-tool-2");
         assert_eq!(ax.session.answer_replace_count, 1);
+        assert!(ax.session.answer_replace_count <= ANSWER_REPLACE_BUDGET);
     }
 
     // ── chat/stream-ui: settled + live editor refresh ─────────────────────
@@ -3017,8 +3019,8 @@ pub fn flush_all_pending(session: &mut ChatSession) {
 }
 
 /// Max answer-after-thought replacements allowed before thrash cancel.
-/// Trip when `answer_replace_count` exceeds this (third replace).
-pub const ANSWER_REPLACE_BUDGET: u32 = 2;
+/// Trip when `answer_replace_count` would exceed this (first disallowed replace).
+pub const ANSWER_REPLACE_BUDGET: u32 = 1;
 
 /// User-visible stop notice when the thrash budget trips (not a second answer).
 pub const ANSWER_THRASH_STOP_NOTICE: &str =

@@ -511,14 +511,44 @@ impl AcpTurn {
     }
 
     async fn read_message(&mut self) -> Result<Value, Error> {
-        let mut line = String::new();
-        let n = self.reader.read_line(&mut line).await?;
-        if n == 0 {
-            return Err(Error::Protocol("agent closed the connection".into()));
+        loop {
+            let mut line = String::new();
+            let n = self.reader.read_line(&mut line).await?;
+            if n == 0 {
+                return Err(Error::Protocol("agent closed the connection".into()));
+            }
+            let trimmed = line.trim_end();
+            // Blank lines and non-object noise on the agent stdout pipe
+            // (progress, leaked tool chatter, shell banner) are not JSON-RPC.
+            // Skip them rather than failing the turn — agents occasionally
+            // pollute NDJSON. Real messages are always a single `{…}` object.
+            if trimmed.is_empty() || !trimmed.starts_with('{') {
+                continue;
+            }
+            return serde_json::from_str(trimmed).map_err(|e| {
+                let preview = truncate_for_error(trimmed, 120);
+                Error::Protocol(format!("malformed json-rpc line: {e}; line={preview}"))
+            });
         }
-        serde_json::from_str(line.trim_end())
-            .map_err(|e| Error::Protocol(format!("malformed json-rpc line: {e}")))
     }
+}
+
+/// Shorten a bad stdout line for inclusion in a protocol error message.
+fn truncate_for_error(s: &str, max_chars: usize) -> String {
+    let mut out = String::new();
+    for (i, ch) in s.chars().enumerate() {
+        if i >= max_chars {
+            out.push('…');
+            break;
+        }
+        // Keep the preview single-line and readable in system error toasts.
+        if ch == '\n' || ch == '\r' {
+            out.push(' ');
+        } else {
+            out.push(ch);
+        }
+    }
+    out
 }
 
 /// No-op notification sink for requests whose updates are discarded
@@ -858,6 +888,42 @@ mod tests {
         let req = last_request(&written);
         assert_eq!(req["method"], "session/new");
         assert_eq!(req["params"]["cwd"], "/proj");
+    }
+
+    /// Non-object stdout lines (noise that matches the observed grok
+    /// "trailing characters at column 4" / "expected value at column 1"
+    /// failures) must not fail the turn — only the following JSON-RPC object
+    /// is consumed.
+    #[tokio::test]
+    async fn read_message_skips_non_object_stdout_noise() {
+        // Lines that previously hard-failed the turn in production:
+        // - `2.0}` → trailing characters at column 4
+        // - bare text → expected value at column 1
+        // - blank lines
+        let noise_then_ok = "\n\
+            2.0}\n\
+            cargo test noise\n\
+            123x\n\
+            {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"sessionId\":\"after-noise\"}}\n";
+        let (mut turn, _written) = scripted(noise_then_ok);
+
+        let sid = turn.open(None, Path::new("/proj")).await.unwrap();
+        assert_eq!(sid, "after-noise");
+    }
+
+    #[tokio::test]
+    async fn read_message_rejects_malformed_object_with_line_preview() {
+        let (mut turn, _written) = scripted("{\"jsonrpc\":\"2.0\" NOT-JSON\n");
+        let err = turn.open(None, Path::new("/proj")).await.unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("malformed json-rpc line"),
+            "expected protocol error, got {msg}"
+        );
+        assert!(
+            msg.contains("line="),
+            "error should include a line preview: {msg}"
+        );
     }
 
     #[tokio::test]

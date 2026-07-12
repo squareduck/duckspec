@@ -132,10 +132,6 @@ Agents keep change context across turns via orientation payload.
 Always pair a `write` meta card with a `next` meta card that includes `confirm`
 and usually `reject` (or `revise` when the alternative is edit-in-place).
 
-After emitting a write gate whose trailing `next` meta card awaits confirmation
-(`confirm` / `reject` / `revise`), **end the turn**. Do not re-emit or polish
-that gate in the same turn.
-
 ### Handoff only
 
 ```markdown

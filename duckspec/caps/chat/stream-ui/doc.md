@@ -120,13 +120,14 @@ answer draft ──reasoning──► draft stays uncommitted
              ──turn end──► draft committed
 ```
 
-Each answer-after-thought replacement increments a per-turn counter. The budget is **two**
-replacements; a third trips the client:
+Each answer-after-thought replacement increments a per-turn counter against a small fixed
+client budget (implementation constant). Replacements within budget keep streaming; the
+first replacement that would exceed the budget cancels the turn, keeps the last draft, and
+shows a short stop notice.
 
 ```
-replace #1  →  keep streaming
-replace #2  →  keep streaming
-replace #3  →  cancel turn · keep last draft · short stop notice
+within budget  →  keep streaming (draft replaced)
+over budget    →  cancel turn · keep last draft · short stop notice
 ```
 
 Tool use resets the counter so a new answer span after tools starts fresh. The stop notice

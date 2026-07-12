@@ -44,19 +44,29 @@ precise behavioral contracts - requirements, scenarios, and paired docs. Every
    Raise path conflicts with existing caps; adjust with the user before the
    map gate.
 2. **Confirm map** - trailing `next` meta card with `confirm` only. Wait.
-3. **Outline + write** - one capability at a time, in map order. Present a
-   write gate whose preview is **outline depth** (not full GWT). Apply
-   `ds schema spec` Quality before the gate - drop identity, design-leak, and
-   padded scenarios. After `confirm`: expand to full files per schemas,
-   create/write, `ds format`, `ds check`. Then the next cap.
-4. Repeat until the map is done.
+3. **One terminal action per turn** after the map. In map order, alternate:
+
+   - **Outline turn** - present a write gate whose preview is **outline depth**
+     (not full GWT). Apply `ds schema spec` Quality before the gate - drop
+     identity, design-leak, and padded scenarios. Stop after the gate. Do not
+     write files on this turn.
+   - **Write turn** (after the user confirms that outline) - expand the
+     confirmed outline to full files per schemas, create/write, `ds format`,
+     `ds check`. Brief status only. Do **not** present the next outline write
+     gate on this turn. End with a `next` meta card: `confirm` to outline the
+     next capability, or handoff when the map is done.
+
+4. Repeat outline → write until the map is done.
+
+Never combine an outline write gate and disk writes for a capability in the
+same turn. Never open the next cap's outline in the same turn as a write.
 
 **Closed outline.** The confirmed outline is the closed set of requirements and
 scenarios for that capability. Expansion fills norms and GWT for those names
 only - do not invent new scenarios or requirements while writing files. If
 something essential was missing, rework the outline with the user first.
 
-**On disk after each confirm** (not in the gate preview):
+**On disk after each write confirm** (not in the gate preview):
 
 - New: full `spec.md` per `ds schema spec`; `doc.md` per `ds schema doc` when
   the outline has a Doc section
@@ -90,13 +100,10 @@ last map or outline); do not offer `reject` or `revise` tokens.
 > `confirm`  spec these capabilities
 ```
 
-### Per capability (confirm-then-write)
+### Outline turn (confirm-then-write next turn)
 
-Preview stays at **outline depth**. After confirmation:
-
-- `ds create spec <path> --in <name>` and/or `ds create doc <path> --in <name>`
-  as needed (deltas: write the `.delta.md` paths the change uses)
-- Expand outline to full bodies per schemas, then `ds format` and `ds check`
+Preview stays at **outline depth**. After confirmation, the **next** turn is a
+write turn - do not write on the outline turn.
 
 **CREATE capability** - full outline of every requirement and scenario this cap
 will own:
@@ -158,6 +165,24 @@ the doc is unchanged. Scenario lines carry the test marker; leave GWT and
 normative prose for the on-disk expansion. Before the gate and again before
 writing: run `ds schema spec` Quality (falsifiability, outcome-not-branch,
 refactor/stranger tests) - cut anything that fails.
+
+### Write turn (after outline confirm)
+
+On the user's `confirm` of an outline:
+
+- `ds create spec <path> --in <name>` and/or `ds create doc <path> --in <name>`
+  as needed (deltas: write the `.delta.md` paths the change uses)
+- Expand outline to full bodies per schemas, then `ds format` and `ds check`
+- Short status that the path is written and clean
+- Trailing `next` meta card only - no outline body, no second write gate:
+
+```markdown
+> **next**
+>
+> `confirm`  outline next capability
+```
+
+When that was the last map item, use Handoff instead of outline-next.
 
 ## Handoff
 
