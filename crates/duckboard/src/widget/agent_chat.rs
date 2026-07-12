@@ -1111,10 +1111,37 @@ pub fn current_answer_for_reply_jumps(
     current.or_else(|| anchors.first().copied())
 }
 
+/// Prev jump: re-align to `current` when the viewport is below its top; else prior Answer.
+/// Next jump: adjacent next only (no re-align-first).
+///
+/// `answer_tops` is `(block_idx, content_y)` relative to the scrollable content origin.
+/// Alignment slack matches `current_answer_for_reply_jumps` (`VIEWPORT_TOP_EPS`).
+pub fn target_answer_for_reply_jump(
+    anchors: &[usize],
+    answer_tops: &[(usize, f32)],
+    current: Option<usize>,
+    go_prev: bool,
+    offset_y: f32,
+) -> Option<usize> {
+    if go_prev {
+        if let Some(cur) = current {
+            if let Some(&(_, top)) = answer_tops.iter().find(|(i, _)| *i == cur) {
+                if offset_y > top + VIEWPORT_TOP_EPS {
+                    return Some(cur);
+                }
+            }
+        }
+        return prev_answer_idx(anchors, current);
+    }
+    next_answer_idx(anchors, current)
+}
+
 /// Measure Answer block tops, resolve prev/next from viewport, scroll target
 /// to the top of the chat scrollable. No-op when there is no target.
 ///
 /// `offset_y` / `stick_to_bottom` describe the viewport *before* the jump.
+/// When the layout Operation measures the scrollable translation, that measured
+/// offset is preferred over the passed `offset_y`.
 pub fn scroll_to_adjacent_answer<M: Send + 'static>(
     anchors: &[usize],
     go_prev: bool,
@@ -1135,6 +1162,7 @@ pub fn scroll_to_adjacent_answer<M: Send + 'static>(
         offset_y,
         stick_to_bottom,
         scrollable_y: None,
+        measured_offset_y: None,
         collected_ys: Vec::new(),
     };
     iced::advanced::widget::operate(op).discard()
@@ -1147,6 +1175,8 @@ struct ScrollToAdjacentAnswer {
     offset_y: f32,
     stick_to_bottom: bool,
     scrollable_y: Option<f32>,
+    /// Layout translation.y of the chat scrollable, when measured.
+    measured_offset_y: Option<f32>,
     /// Absolute layout `bounds.y` per answer block idx.
     collected_ys: Vec<(usize, f32)>,
 }
@@ -1172,11 +1202,12 @@ impl Operation<()> for ScrollToAdjacentAnswer {
         id: Option<&Id>,
         bounds: Rectangle,
         _content_bounds: Rectangle,
-        _translation: Vector,
+        translation: Vector,
         _state: &mut dyn operation::Scrollable,
     ) {
         if id == Some(&self.scrollable_id) {
             self.scrollable_y = Some(bounds.y);
+            self.measured_offset_y = Some(translation.y);
         }
     }
 
@@ -1190,13 +1221,16 @@ impl Operation<()> for ScrollToAdjacentAnswer {
             .iter()
             .map(|(i, y)| (*i, (y - sy).max(0.0)))
             .collect();
+        let offset_y = self.measured_offset_y.unwrap_or(self.offset_y);
         let current =
-            current_answer_for_reply_jumps(&anchors, &tops, self.offset_y, self.stick_to_bottom);
-        let target = if self.go_prev {
-            prev_answer_idx(&anchors, current)
-        } else {
-            next_answer_idx(&anchors, current)
-        };
+            current_answer_for_reply_jumps(&anchors, &tops, offset_y, self.stick_to_bottom);
+        let target = target_answer_for_reply_jump(
+            &anchors,
+            &tops,
+            current,
+            self.go_prev,
+            offset_y,
+        );
         let Some(target_idx) = target else {
             return operation::Outcome::None;
         };
@@ -2904,6 +2938,62 @@ mod tests {
 
         // THEN the current Answer is the last Answer whose top is at or above the viewport top
         assert_eq!(current, Some(2));
+    }
+
+    // ── Previous reply re-align ─────────────────────────────────────────
+
+    /// @spec chat/answer-landmarks Previous reply re-align: Viewport below current top targets current Answer
+    #[test]
+    fn viewport_below_current_top_targets_current_answer() {
+        // GIVEN a transcript with more than one Answer anchor with known tops
+        // AND a resolved current Answer
+        // AND the viewport top is strictly below that Answer's top
+        let anchors = vec![0, 2, 4];
+        let tops = [(0, 0.0), (2, 100.0), (4, 200.0)];
+        let current = Some(2);
+        let offset_y = 150.0; // below Answer 2's top (100)
+
+        // WHEN the previous reply target is resolved
+        let target = target_answer_for_reply_jump(&anchors, &tops, current, true, offset_y);
+
+        // THEN the target is the current Answer
+        assert_eq!(target, Some(2));
+    }
+
+    /// @spec chat/answer-landmarks Previous reply re-align: At current top previous targets prior Answer
+    #[test]
+    fn at_current_top_previous_targets_prior_answer() {
+        // GIVEN a transcript with more than one Answer anchor with known tops
+        // AND a resolved current Answer that is not the first
+        // AND the viewport top is at that Answer's top
+        let anchors = vec![0, 2, 4];
+        let tops = [(0, 0.0), (2, 100.0), (4, 200.0)];
+        let current = Some(2);
+        let offset_y = 100.0; // at Answer 2's top
+
+        // WHEN the previous reply target is resolved
+        let target = target_answer_for_reply_jump(&anchors, &tops, current, true, offset_y);
+
+        // THEN the target is the Answer immediately before the current one
+        assert_eq!(target, Some(0));
+    }
+
+    /// @spec chat/answer-landmarks Previous reply re-align: Next ignores re-align when below current top
+    #[test]
+    fn next_ignores_re_align_when_below_current_top() {
+        // GIVEN a transcript with more than one Answer anchor with known tops
+        // AND a resolved current Answer that is not the last
+        // AND the viewport top is strictly below that Answer's top
+        let anchors = vec![0, 2, 4];
+        let tops = [(0, 0.0), (2, 100.0), (4, 200.0)];
+        let current = Some(2);
+        let offset_y = 150.0; // below Answer 2's top
+
+        // WHEN the next reply target is resolved
+        let target = target_answer_for_reply_jump(&anchors, &tops, current, false, offset_y);
+
+        // THEN the target is the Answer immediately after the current one
+        assert_eq!(target, Some(4));
     }
 
     #[test]

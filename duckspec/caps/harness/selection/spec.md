@@ -70,7 +70,7 @@ of models offered for selection SHALL include the models of every registered har
 - **THEN** the provider that runs the turn is the one identified by that harness
 
 > test: code
-> - crates/duckboard/src/agent.rs:417
+> - crates/duckboard/src/agent.rs:418
 
 ### Scenario: The offered models span every registered harness
 
@@ -79,4 +79,4 @@ of models offered for selection SHALL include the models of every registered har
 - **THEN** the list includes models from every registered harness
 
 > test: code
-> - crates/duckboard/src/agent.rs:434
+> - crates/duckboard/src/agent.rs:435

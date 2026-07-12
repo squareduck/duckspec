@@ -120,7 +120,7 @@ with the active model's context window when known.
 - **AND** the reasoning text is emitted as a separate reasoning event
 
 > test: code
-> - crates/duckchat/src/acp/event.rs:123
+> - crates/duckchat/src/acp/event.rs:122
 
 ### Scenario: A tool call surfaces as a use then a matching result
 
@@ -130,7 +130,7 @@ with the active model's context window when known.
 - **AND** a tool-result event is emitted carrying the same call id and the tool output
 
 > test: code
-> - crates/duckchat/src/acp/event.rs:153
+> - crates/duckchat/src/acp/event.rs:152
 
 ### Scenario: A usage update carries used tokens and the model's context window
 
@@ -140,7 +140,7 @@ with the active model's context window when known.
 - **THEN** a usage event is emitted with that used-token count and that context window
 
 > test: code
-> - crates/duckchat/src/acp/event.rs:196
+> - crates/duckchat/src/acp/event.rs:195
 
 ## Requirement: Mid-turn tool permission auto-allow
 

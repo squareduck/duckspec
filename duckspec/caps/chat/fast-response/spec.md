@@ -215,7 +215,7 @@ SHALL NOT replace the shell while the session is awaiting a user choice.
 - **THEN** the options list remains non-empty
 
 > test: code
-> - crates/duckboard/src/area/change.rs:2278
+> - crates/duckboard/src/area/change.rs:2279
 > - crates/duckboard/src/fast_response.rs:340
 
 ### Scenario: Ordinary refresh leaves options empty when oneshot is ineligible
@@ -226,7 +226,7 @@ SHALL NOT replace the shell while the session is awaiting a user choice.
 - **THEN** the options list is empty
 
 > test: code
-> - crates/duckboard/src/area/change.rs:2238
+> - crates/duckboard/src/area/change.rs:2239
 
 ### Scenario: Refresh preserves oneshot fill when still eligible
 
@@ -238,7 +238,7 @@ SHALL NOT replace the shell while the session is awaiting a user choice.
 - **AND** the options match the settled oneshot list in order
 
 > test: code
-> - crates/duckboard/src/area/change.rs:2317
+> - crates/duckboard/src/area/change.rs:2318
 
 ### Scenario: Settled eligible oneshot fills the option shell
 
@@ -248,7 +248,7 @@ SHALL NOT replace the shell while the session is awaiting a user choice.
 - **THEN** the options list contains those settled replies in order
 
 > test: code
-> - crates/duckboard/src/area/change.rs:2357
+> - crates/duckboard/src/area/change.rs:2358
 
 ### Scenario: Live user choice overwrites oneshot fill
 
@@ -259,7 +259,7 @@ SHALL NOT replace the shell while the session is awaiting a user choice.
 - **AND** the shell is no longer filled from oneshot hints
 
 > test: code
-> - crates/duckboard/src/area/change.rs:2385
+> - crates/duckboard/src/area/change.rs:2386
 
 ### Scenario: Oneshot settle does not replace a live user-choice fill
 
@@ -269,7 +269,7 @@ SHALL NOT replace the shell while the session is awaiting a user choice.
 - **THEN** the options list remains the user-choice options
 
 > test: code
-> - crates/duckboard/src/area/change.rs:2417
+> - crates/duckboard/src/area/change.rs:2418
 
 ## Requirement: Question activation
 

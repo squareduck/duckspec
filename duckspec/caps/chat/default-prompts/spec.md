@@ -157,7 +157,7 @@ oneshot suggestions.
 - **THEN** the sent text is that active next-action entry
 
 > test: code
-> - crates/duckboard/src/default_prompts.rs:495
+> - crates/duckboard/src/default_prompts.rs:494
 
 ### Scenario: Superseded generation does not arm oneshot
 
@@ -166,7 +166,7 @@ oneshot suggestions.
 - **THEN** the session's ready oneshot suggestion is unchanged
 
 > test: code
-> - crates/duckboard/src/default_prompts.rs:543
+> - crates/duckboard/src/default_prompts.rs:542
 
 ### Scenario: Failed or timed-out oneshot settles without presenting suggestions
 
@@ -177,7 +177,7 @@ oneshot suggestions.
 - **AND** the settled list is empty when the failure produced no parse
 
 > test: code
-> - crates/duckboard/src/default_prompts.rs:550
+> - crates/duckboard/src/default_prompts.rs:549
 
 ### Scenario: Agent handle end while pending leaves suggestions ready empty
 
@@ -188,7 +188,7 @@ oneshot suggestions.
 - **AND** no oneshot loading chrome is shown
 
 > test: code
-> - crates/duckboard/src/default_prompts.rs:565
+> - crates/duckboard/src/default_prompts.rs:564
 
 ### Scenario: Pending oneshot presents no loading chrome
 
@@ -199,7 +199,7 @@ oneshot suggestions.
 - **AND** no oneshot suggestion row is shown under the input
 
 > test: code
-> - crates/duckboard/src/default_prompts.rs:580
+> - crates/duckboard/src/default_prompts.rs:579
 
 ## Requirement: Agent input hints gate
 
@@ -230,7 +230,7 @@ input hints setting.
 - **THEN** a reply-suggestion oneshot is not started
 
 > test: code
-> - crates/duckboard/src/default_prompts.rs:522
+> - crates/duckboard/src/default_prompts.rs:521
 
 ### Scenario: Empty-session next actions remain when agent input hints disabled
 
@@ -252,7 +252,7 @@ input hints setting.
 - **THEN** a reply-suggestion oneshot is not started
 
 > test: code
-> - crates/duckboard/src/default_prompts.rs:534
+> - crates/duckboard/src/default_prompts.rs:533
 
 ## Requirement: Next-action list
 
@@ -284,7 +284,7 @@ bootstrap.
 - **THEN** the list is exactly that single lifecycle option
 
 > test: code
-> - crates/duckboard/src/default_prompts.rs:258
+> - crates/duckboard/src/default_prompts.rs:257
 
 ### Scenario: Empty session without lifecycle yields empty
 
@@ -294,7 +294,7 @@ bootstrap.
 - **THEN** the list is empty
 
 > test: code
-> - crates/duckboard/src/default_prompts.rs:271
+> - crates/duckboard/src/default_prompts.rs:270
 
 ### Scenario: Non-empty session uses trailing next actions only
 
@@ -310,7 +310,7 @@ bootstrap.
 - **THEN** the list is exactly those two trailing next send tokens in order
 
 > test: code
-> - crates/duckboard/src/default_prompts.rs:281
+> - crates/duckboard/src/default_prompts.rs:280
 
 ### Scenario: Non-empty session without trailing next yields empty
 
@@ -321,7 +321,7 @@ bootstrap.
 - **THEN** the list is empty
 
 > test: code
-> - crates/duckboard/src/default_prompts.rs:301
+> - crates/duckboard/src/default_prompts.rs:300
 
 ### Scenario: Oneshot results do not enter the next-action list
 
@@ -332,7 +332,7 @@ bootstrap.
 - **THEN** the list is empty
 
 > test: code
-> - crates/duckboard/src/default_prompts.rs:310
+> - crates/duckboard/src/default_prompts.rs:309
 
 ### Scenario: Empty exploration session seeds explore
 
@@ -362,7 +362,7 @@ bootstrap.
 - **THEN** the list is exactly those two inherited send tokens in order
 
 > test: code
-> - crates/duckboard/src/default_prompts.rs:325
+> - crates/duckboard/src/default_prompts.rs:324
 
 ### Scenario: Empty session without inherited falls back to lifecycle
 
@@ -373,7 +373,7 @@ bootstrap.
 - **THEN** the list is exactly that single lifecycle option
 
 > test: code
-> - crates/duckboard/src/default_prompts.rs:352
+> - crates/duckboard/src/default_prompts.rs:351
 
 ### Scenario: Non-empty session drops inheritance
 
@@ -391,7 +391,7 @@ bootstrap.
 - **AND** the inherited list is not used
 
 > test: code
-> - crates/duckboard/src/default_prompts.rs:366
+> - crates/duckboard/src/default_prompts.rs:365
 
 ## Requirement: Next-action empty-input send and cycle
 
@@ -417,7 +417,7 @@ list is non-empty (and the main turn is not streaming).
 - **THEN** the sent text is the send text of the entry at the active index
 
 > test: code
-> - crates/duckboard/src/default_prompts.rs:393
+> - crates/duckboard/src/default_prompts.rs:392
 
 ### Scenario: Empty submit is a no-op when the next-action list is empty
 
@@ -427,7 +427,7 @@ list is non-empty (and the main turn is not streaming).
 - **THEN** no next-action message is sent
 
 > test: code
-> - crates/duckboard/src/default_prompts.rs:416
+> - crates/duckboard/src/default_prompts.rs:415
 
 ### Scenario: Tab cycles next actions with wrap
 
@@ -439,7 +439,7 @@ list is non-empty (and the main turn is not streaming).
 - **AND** the composer input remains empty
 
 > test: code
-> - crates/duckboard/src/default_prompts.rs:442
+> - crates/duckboard/src/default_prompts.rs:441
 
 ### Scenario: Multi next shows a tab-available marker
 
@@ -449,7 +449,7 @@ list is non-empty (and the main turn is not streaming).
 - **THEN** a tab-available marker is shown before the ghost text
 
 > test: code
-> - crates/duckboard/src/default_prompts.rs:468
+> - crates/duckboard/src/default_prompts.rs:467
 
 ## Requirement: Oneshot chip eligibility
 
@@ -472,7 +472,7 @@ fill chips.
 - **THEN** oneshot replies are eligible to fill chips
 
 > test: code
-> - crates/duckboard/src/default_prompts.rs:590
+> - crates/duckboard/src/default_prompts.rs:589
 
 ### Scenario: Ineligible when next-action list is non-empty
 
@@ -485,7 +485,7 @@ fill chips.
 - **THEN** oneshot replies are not eligible to fill chips
 
 > test: code
-> - crates/duckboard/src/default_prompts.rs:596
+> - crates/duckboard/src/default_prompts.rs:595
 
 ### Scenario: Ineligible while awaiting a user choice
 
@@ -497,7 +497,7 @@ fill chips.
 - **THEN** oneshot replies are not eligible to fill chips
 
 > test: code
-> - crates/duckboard/src/default_prompts.rs:602
+> - crates/duckboard/src/default_prompts.rs:601
 
 ### Scenario: Ineligible while streaming
 
@@ -510,7 +510,7 @@ fill chips.
 - **THEN** oneshot replies are not eligible to fill chips
 
 > test: code
-> - crates/duckboard/src/default_prompts.rs:608
+> - crates/duckboard/src/default_prompts.rs:607
 
 ### Scenario: Ineligible when the settled list is empty
 
@@ -523,7 +523,7 @@ fill chips.
 - **THEN** oneshot replies are not eligible to fill chips
 
 > test: code
-> - crates/duckboard/src/default_prompts.rs:614
+> - crates/duckboard/src/default_prompts.rs:613
 
 ## Requirement: New-session next-action inheritance
 

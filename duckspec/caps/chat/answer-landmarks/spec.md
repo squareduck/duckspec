@@ -22,7 +22,7 @@ Thinking, Activity, User, and System segments SHALL NOT receive this band.
 - **AND** every earlier Answer is not a band target
 
 > test: code
-> - crates/duckboard/src/widget/agent_chat.rs:2753
+> - crates/duckboard/src/widget/agent_chat.rs:2787
 
 ### Scenario: Empty latest Answer is not a band target
 
@@ -33,16 +33,17 @@ Thinking, Activity, User, and System segments SHALL NOT receive this band.
 - **AND** the latest non-empty Answer is the band target
 
 > test: code
-> - crates/duckboard/src/widget/agent_chat.rs:2773
+> - crates/duckboard/src/widget/agent_chat.rs:2807
 
 ## Requirement: Answer reply anchors
 
 Reply navigation anchors SHALL be the Answer segments of the transcript in order.
 Thinking, Activity, User, and System segments SHALL NOT be reply anchors. From a current
-Answer anchor, previous SHALL resolve to the immediately preceding Answer anchor when one
-exists, and next SHALL resolve to the immediately following Answer anchor when one exists.
-At the first Answer, previous SHALL yield no target. At the last Answer, next SHALL yield
-no target. Navigation SHALL NOT wrap.
+Answer anchor, next SHALL resolve to the immediately following Answer anchor when one
+exists. When the viewport is already at the top of the current Answer, previous SHALL
+resolve to the immediately preceding Answer anchor when one exists. At the first Answer
+with the viewport at its top, previous SHALL yield no target. At the last Answer, next
+SHALL yield no target. Navigation SHALL NOT wrap.
 
 > test: code
 
@@ -58,7 +59,7 @@ no target. Navigation SHALL NOT wrap.
 - **AND** no Thinking, Activity, or User segment is an anchor
 
 > test: code
-> - crates/duckboard/src/widget/agent_chat.rs:2810
+> - crates/duckboard/src/widget/agent_chat.rs:2844
 
 ### Scenario: Prev and next step to adjacent Answer anchors
 
@@ -69,7 +70,7 @@ no target. Navigation SHALL NOT wrap.
 - **AND** next is the Answer immediately after the current one
 
 > test: code
-> - crates/duckboard/src/widget/agent_chat.rs:2831
+> - crates/duckboard/src/widget/agent_chat.rs:2865
 
 ### Scenario: Prev at first and next at last yield no target
 
@@ -83,7 +84,7 @@ no target. Navigation SHALL NOT wrap.
 - **AND** there is no next target
 
 > test: code
-> - crates/duckboard/src/widget/agent_chat.rs:2856
+> - crates/duckboard/src/widget/agent_chat.rs:2890
 
 ## Requirement: Viewport current for reply jumps
 
@@ -103,7 +104,7 @@ SHALL be no current Answer.
 - **THEN** the current Answer is the last Answer anchor
 
 > test: code
-> - crates/duckboard/src/widget/agent_chat.rs:2877
+> - crates/duckboard/src/widget/agent_chat.rs:2911
 
 ### Scenario: Scroll offset selects the Answer at or above the viewport top
 
@@ -114,7 +115,7 @@ SHALL be no current Answer.
 - **THEN** the current Answer is the last Answer whose top is at or above the viewport top
 
 > test: code
-> - crates/duckboard/src/widget/agent_chat.rs:2892
+> - crates/duckboard/src/widget/agent_chat.rs:2926
 
 ## Requirement: History end jumps
 
@@ -131,3 +132,46 @@ the chat tab is the active interaction with a session, including while the compo
 focused. Bare arrow keys SHALL remain available to the focused composer for caret
 movement. When a modal that owns navigation keys is open, landmark shortcuts SHALL NOT
 claim those keys.
+
+## Requirement: Previous reply re-align
+
+When resolving the previous reply navigation target, if the viewport top is strictly below
+the top of the current Answer (beyond the same alignment slack used to select the current
+Answer from scroll offset), the target SHALL be that current Answer. Otherwise previous
+SHALL follow the prior-Answer rule from Answer reply anchors. Next reply navigation SHALL
+NOT re-align to the current Answer; it SHALL always use the next Answer anchor rule.
+
+> test: code
+
+### Scenario: Viewport below current top targets current Answer
+
+- **GIVEN** a transcript with more than one Answer anchor with known tops
+- **AND** a resolved current Answer
+- **AND** the viewport top is strictly below that Answer's top
+- **WHEN** the previous reply target is resolved
+- **THEN** the target is the current Answer
+
+> test: code
+> - crates/duckboard/src/widget/agent_chat.rs:2945
+
+### Scenario: At current top previous targets prior Answer
+
+- **GIVEN** a transcript with more than one Answer anchor with known tops
+- **AND** a resolved current Answer that is not the first
+- **AND** the viewport top is at that Answer's top
+- **WHEN** the previous reply target is resolved
+- **THEN** the target is the Answer immediately before the current one
+
+> test: code
+> - crates/duckboard/src/widget/agent_chat.rs:2963
+
+### Scenario: Next ignores re-align when below current top
+
+- **GIVEN** a transcript with more than one Answer anchor with known tops
+- **AND** a resolved current Answer that is not the last
+- **AND** the viewport top is strictly below that Answer's top
+- **WHEN** the next reply target is resolved
+- **THEN** the target is the Answer immediately after the current one
+
+> test: code
+> - crates/duckboard/src/widget/agent_chat.rs:2981

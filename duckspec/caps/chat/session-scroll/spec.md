@@ -28,7 +28,7 @@ re-select.
 - **THEN** the chat transcript viewport shows the latest content
 
 > test: code
-> - crates/duckboard/src/main.rs:6376
+> - crates/duckboard/src/main.rs:6377
 
 ### Scenario: Stick-to-bottom engages on open or switch
 
@@ -37,7 +37,7 @@ re-select.
 - **THEN** stick-to-bottom is engaged for the newly active session
 
 > test: code
-> - crates/duckboard/src/main.rs:6407
+> - crates/duckboard/src/main.rs:6408
 
 ## Requirement: Area navigation restores viewport
 
@@ -64,7 +64,7 @@ mid-history.
 - **AND** stick-to-bottom remains disengaged
 
 > test: code
-> - crates/duckboard/src/main.rs:6438
+> - crates/duckboard/src/main.rs:6439
 
 ### Scenario: Area change keeps stick-to-bottom when that was the prior intent
 
@@ -78,7 +78,7 @@ mid-history.
 - **AND** the chat transcript viewport shows the latest content
 
 > test: code
-> - crates/duckboard/src/main.rs:6477
+> - crates/duckboard/src/main.rs:6478
 
 ## Requirement: Layout preserve stays within session identity
 
@@ -101,7 +101,7 @@ session.
 - **THEN** that session’s scroll intent is preserved after the update
 
 > test: code
-> - crates/duckboard/src/main.rs:6514
+> - crates/duckboard/src/main.rs:6515
 
 ### Scenario: Session identity change does not apply prior session offset
 
@@ -113,4 +113,4 @@ session.
   layout-preserved viewport
 
 > test: code
-> - crates/duckboard/src/main.rs:6544
+> - crates/duckboard/src/main.rs:6545
