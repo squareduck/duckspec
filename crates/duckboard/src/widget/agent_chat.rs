@@ -1,8 +1,11 @@
 //! Agent chat widget — per-message text editors in a scrollable column.
 
+use iced::Task;
+use iced::advanced::widget::{Id, Operation, operation};
 use iced::widget::{
     Space, button, column, container, pick_list, row, rule, scrollable, stack, text,
 };
+use iced::{Element, Length, Rectangle, Vector};
 
 pub const CHAT_SCROLLABLE_ID: &str = "agent-chat-scroll";
 pub const CHAT_INPUT_ID: &str = "agent-chat-input";
@@ -14,7 +17,6 @@ const CHAT_INPUT_MAX_ROWS: usize = 20;
 /// Small enough that one wheel notch unsticks the view, large enough to
 /// absorb sub-pixel layout rounding during streaming rebuilds.
 pub const STICK_TO_BOTTOM_THRESHOLD: f32 = 16.0;
-use iced::{Element, Length};
 
 use duckchat::{ModelInfo, ModelRef};
 
@@ -23,6 +25,7 @@ use crate::area::interaction::{self, SelectionContext};
 use crate::chat_store::{ChatSession, ContentBlock, Role};
 use crate::theme;
 use crate::widget::collapsible;
+use crate::widget::find;
 use crate::widget::streaming_indicator;
 use crate::widget::text_edit::{self, Block, BlockKind, EditorState};
 
@@ -1040,6 +1043,182 @@ fn truncate_chars(s: &str, max: usize) -> &str {
     }
 }
 
+// ── Last-Answer band ────────────────────────────────────────────────────────
+
+/// Index of the latest non-empty Answer (`BlockKind::Assistant`) block, if any.
+/// Empty Answer bodies are not band targets.
+pub fn last_answer_band_target(blocks: &[Block]) -> Option<usize> {
+    blocks.iter().rposition(|b| {
+        b.kind == BlockKind::Assistant && b.lines.iter().any(|l| !l.is_empty())
+    })
+}
+
+// ── Answer reply landmarks ──────────────────────────────────────────────────
+
+/// Block indices of every Answer (`BlockKind::Assistant`) in transcript order.
+pub fn answer_block_indices(blocks: &[Block]) -> Vec<usize> {
+    blocks
+        .iter()
+        .enumerate()
+        .filter(|(_, b)| b.kind == BlockKind::Assistant)
+        .map(|(i, _)| i)
+        .collect()
+}
+
+/// Previous Answer anchor before `from` (a block index). No wrap.
+pub fn prev_answer_idx(anchors: &[usize], from: Option<usize>) -> Option<usize> {
+    let from = from?;
+    let pos = anchors.iter().position(|&i| i == from)?;
+    pos.checked_sub(1).map(|p| anchors[p])
+}
+
+/// Next Answer anchor after `from` (a block index). No wrap.
+pub fn next_answer_idx(anchors: &[usize], from: Option<usize>) -> Option<usize> {
+    let from = from?;
+    let pos = anchors.iter().position(|&i| i == from)?;
+    anchors.get(pos + 1).copied()
+}
+
+/// Float slack when comparing Answer tops to the viewport scroll offset.
+const VIEWPORT_TOP_EPS: f32 = 1.0;
+
+/// Resolve the current Answer for ⌘←/→ from stick-to-bottom or scroll position.
+///
+/// `answer_tops` is `(block_idx, content_y)` for Answer blocks (layout coords
+/// relative to the scrollable content origin). When not stuck: last Answer
+/// whose top ≤ `offset_y`; if none, the first Answer.
+pub fn current_answer_for_reply_jumps(
+    anchors: &[usize],
+    answer_tops: &[(usize, f32)],
+    offset_y: f32,
+    stick_to_bottom: bool,
+) -> Option<usize> {
+    if anchors.is_empty() {
+        return None;
+    }
+    if stick_to_bottom {
+        return anchors.last().copied();
+    }
+    let mut current = None;
+    for &idx in anchors {
+        let Some(&(_, top)) = answer_tops.iter().find(|(i, _)| *i == idx) else {
+            continue;
+        };
+        if top <= offset_y + VIEWPORT_TOP_EPS {
+            current = Some(idx);
+        }
+    }
+    current.or_else(|| anchors.first().copied())
+}
+
+/// Measure Answer block tops, resolve prev/next from viewport, scroll target
+/// to the top of the chat scrollable. No-op when there is no target.
+///
+/// `offset_y` / `stick_to_bottom` describe the viewport *before* the jump.
+pub fn scroll_to_adjacent_answer<M: Send + 'static>(
+    anchors: &[usize],
+    go_prev: bool,
+    offset_y: f32,
+    stick_to_bottom: bool,
+) -> Task<M> {
+    if anchors.is_empty() {
+        return Task::none();
+    }
+    let answer_blocks: Vec<(usize, Id)> = anchors
+        .iter()
+        .map(|&i| (i, find::chat_block_widget_id(i)))
+        .collect();
+    let op = ScrollToAdjacentAnswer {
+        scrollable_id: Id::from(CHAT_SCROLLABLE_ID),
+        answer_blocks,
+        go_prev,
+        offset_y,
+        stick_to_bottom,
+        scrollable_y: None,
+        collected_ys: Vec::new(),
+    };
+    iced::advanced::widget::operate(op).discard()
+}
+
+struct ScrollToAdjacentAnswer {
+    scrollable_id: Id,
+    answer_blocks: Vec<(usize, Id)>,
+    go_prev: bool,
+    offset_y: f32,
+    stick_to_bottom: bool,
+    scrollable_y: Option<f32>,
+    /// Absolute layout `bounds.y` per answer block idx.
+    collected_ys: Vec<(usize, f32)>,
+}
+
+impl Operation<()> for ScrollToAdjacentAnswer {
+    fn traverse(&mut self, operate: &mut dyn FnMut(&mut dyn Operation<()>)) {
+        operate(self);
+    }
+
+    fn container(&mut self, id: Option<&Id>, bounds: Rectangle) {
+        let Some(id) = id else {
+            return;
+        };
+        for (idx, block_id) in &self.answer_blocks {
+            if id == block_id {
+                self.collected_ys.push((*idx, bounds.y));
+            }
+        }
+    }
+
+    fn scrollable(
+        &mut self,
+        id: Option<&Id>,
+        bounds: Rectangle,
+        _content_bounds: Rectangle,
+        _translation: Vector,
+        _state: &mut dyn operation::Scrollable,
+    ) {
+        if id == Some(&self.scrollable_id) {
+            self.scrollable_y = Some(bounds.y);
+        }
+    }
+
+    fn finish(&self) -> operation::Outcome<()> {
+        let Some(sy) = self.scrollable_y else {
+            return operation::Outcome::None;
+        };
+        let anchors: Vec<usize> = self.answer_blocks.iter().map(|(i, _)| *i).collect();
+        let tops: Vec<(usize, f32)> = self
+            .collected_ys
+            .iter()
+            .map(|(i, y)| (*i, (y - sy).max(0.0)))
+            .collect();
+        let current =
+            current_answer_for_reply_jumps(&anchors, &tops, self.offset_y, self.stick_to_bottom);
+        let target = if self.go_prev {
+            prev_answer_idx(&anchors, current)
+        } else {
+            next_answer_idx(&anchors, current)
+        };
+        let Some(target_idx) = target else {
+            return operation::Outcome::None;
+        };
+        let Some(&(_, by)) = self
+            .collected_ys
+            .iter()
+            .find(|(i, _)| *i == target_idx)
+        else {
+            return operation::Outcome::None;
+        };
+        let target_y = (by - sy).max(0.0);
+        operation::Outcome::Chain(Box::new(operation::scrollable::scroll_to(
+            self.scrollable_id.clone(),
+            operation::scrollable::AbsoluteOffset {
+                x: 0.0,
+                y: target_y,
+            }
+            .into(),
+        )))
+    }
+}
+
 // ── View ────────────────────────────────────────────────────────────────────
 
 #[allow(clippy::too_many_arguments)]
@@ -1072,6 +1251,7 @@ pub fn view<'a>(
         .padding([theme::SPACING_SM, 0.0]);
 
     let mut block_highlights = block_highlights;
+    let last_answer_band = last_answer_band_target(blocks);
     for (i, block) in blocks.iter().enumerate() {
         let is_collapsed = collapse.get(i).map(|s| s.collapsed).unwrap_or(false);
         let (ranges, current) = if i < block_highlights.len() {
@@ -1079,7 +1259,16 @@ pub fn view<'a>(
         } else {
             (Vec::new(), None)
         };
-        let block_el = view_block(i, block, editors.get(i), is_collapsed, ranges, current);
+        let is_last_answer = last_answer_band == Some(i);
+        let block_el = view_block(
+            i,
+            block,
+            editors.get(i),
+            is_collapsed,
+            ranges,
+            current,
+            is_last_answer,
+        );
         // Tag each block with a stable widget id so `widget::find` can read
         // the laid-out bounds during an Operation pass and scroll the
         // matching block to the top of the viewport — bypasses all the
@@ -1455,6 +1644,7 @@ fn view_block<'a>(
     collapsed: bool,
     hl_ranges: Vec<text_edit::HighlightRange>,
     hl_current: Option<text_edit::HighlightRange>,
+    is_last_answer: bool,
 ) -> Element<'a, Msg> {
     match block.kind {
         BlockKind::Reasoning => {
@@ -1464,7 +1654,7 @@ fn view_block<'a>(
             view_activity_block(idx, block, editor, collapsed, hl_ranges, hl_current)
         }
         BlockKind::User | BlockKind::Assistant | BlockKind::System => {
-            view_prose_block(idx, block, editor, hl_ranges, hl_current)
+            view_prose_block(idx, block, editor, hl_ranges, hl_current, is_last_answer)
         }
     }
 }
@@ -1476,6 +1666,7 @@ fn view_prose_block<'a>(
     editor: Option<&'a EditorState>,
     hl_ranges: Vec<text_edit::HighlightRange>,
     hl_current: Option<text_edit::HighlightRange>,
+    is_last_answer: bool,
 ) -> Element<'a, Msg> {
     let has_content = !block.lines.is_empty();
     if !has_content {
@@ -1501,6 +1692,10 @@ fn view_prose_block<'a>(
     match block.kind {
         BlockKind::User => container(padded.style(theme::chat_user_card))
             .padding([0.0, theme::SPACING_SM])
+            .width(Length::Fill)
+            .into(),
+        BlockKind::Assistant if is_last_answer => padded
+            .style(theme::chat_last_answer_band)
             .width(Length::Fill)
             .into(),
         _ => padded.into(),
@@ -2532,6 +2727,184 @@ mod tests {
     }
 
     // ── Segment → editor blocks ─────────────────────────────────────────
+
+    fn answer_block(text: &str) -> Block {
+        Block {
+            kind: BlockKind::Assistant,
+            label: "Answer".into(),
+            lines: if text.is_empty() {
+                vec![]
+            } else {
+                vec![text.into()]
+            },
+        }
+    }
+
+    fn user_block(text: &str) -> Block {
+        Block {
+            kind: BlockKind::User,
+            label: "User".into(),
+            lines: vec![text.into()],
+        }
+    }
+
+    // ── Last Answer band target ─────────────────────────────────────────
+
+    /// @spec chat/answer-landmarks Last Answer contrast band: Sole latest non-empty Answer is the band target
+    #[test]
+    fn sole_latest_non_empty_answer_is_the_band_target() {
+        // GIVEN a transcript with more than one Answer segment that has non-empty body text
+        let blocks = vec![
+            user_block("q1"),
+            answer_block("first reply"),
+            user_block("q2"),
+            answer_block("second reply"),
+        ];
+
+        // WHEN the last-Answer band target is resolved
+        let target = last_answer_band_target(&blocks);
+
+        // THEN only the latest non-empty Answer is the band target
+        // AND every earlier Answer is not a band target
+        assert_eq!(target, Some(3));
+        assert_ne!(target, Some(1));
+    }
+
+    /// @spec chat/answer-landmarks Last Answer contrast band: Empty latest Answer is not a band target
+    #[test]
+    fn empty_latest_answer_is_not_a_band_target() {
+        // GIVEN a transcript whose latest Answer segment has empty body text
+        // AND an earlier Answer segment has non-empty body text
+        let blocks = vec![
+            answer_block("settled reply"),
+            answer_block(""), // empty latest
+        ];
+
+        // WHEN the last-Answer band target is resolved
+        let target = last_answer_band_target(&blocks);
+
+        // THEN the empty latest Answer is not the band target
+        // AND the latest non-empty Answer is the band target
+        assert_eq!(target, Some(0));
+        assert_ne!(target, Some(1));
+    }
+
+    fn thinking_block(text: &str) -> Block {
+        Block {
+            kind: BlockKind::Reasoning,
+            label: "Thinking".into(),
+            lines: vec![text.into()],
+        }
+    }
+
+    fn activity_block() -> Block {
+        Block {
+            kind: BlockKind::Activity,
+            label: "1 tool".into(),
+            lines: vec!["· Read a.rs".into()],
+        }
+    }
+
+    // ── Answer reply anchors ────────────────────────────────────────────
+
+    /// @spec chat/answer-landmarks Answer reply anchors: Only Answer blocks are reply anchors
+    #[test]
+    fn only_answer_blocks_are_reply_anchors() {
+        // GIVEN a transcript that mixes Answer segments with Thinking, Activity, or User
+        let blocks = vec![
+            user_block("q"),
+            thinking_block("why"),
+            activity_block(),
+            answer_block("a1"),
+            thinking_block("more"),
+            answer_block("a2"),
+        ];
+
+        // WHEN the reply-anchor list is built
+        let anchors = answer_block_indices(&blocks);
+
+        // THEN the anchors are exactly the Answer segments in transcript order
+        // AND no Thinking, Activity, or User segment is an anchor
+        assert_eq!(anchors, vec![3, 5]);
+    }
+
+    /// @spec chat/answer-landmarks Answer reply anchors: Prev and next step to adjacent Answer anchors
+    #[test]
+    fn prev_and_next_step_to_adjacent_answer_anchors() {
+        // GIVEN a transcript with at least three Answer anchors
+        // AND the current Answer is the middle of those three
+        let blocks = vec![
+            answer_block("a0"),
+            thinking_block("t"),
+            answer_block("a1"),
+            answer_block("a2"),
+        ];
+        let anchors = answer_block_indices(&blocks);
+        assert_eq!(anchors, vec![0, 2, 3]);
+        let current = Some(2); // middle Answer block index
+
+        // WHEN previous and next reply targets are resolved
+        let prev = prev_answer_idx(&anchors, current);
+        let next = next_answer_idx(&anchors, current);
+
+        // THEN previous is the Answer immediately before the current one
+        // AND next is the Answer immediately after the current one
+        assert_eq!(prev, Some(0));
+        assert_eq!(next, Some(3));
+    }
+
+    /// @spec chat/answer-landmarks Answer reply anchors: Prev at first and next at last yield no target
+    #[test]
+    fn prev_at_first_and_next_at_last_yield_no_target() {
+        // GIVEN a transcript with at least one Answer anchor
+        let blocks = vec![answer_block("only"), answer_block("last")];
+        let anchors = answer_block_indices(&blocks);
+        let first = anchors.first().copied();
+        let last = anchors.last().copied();
+
+        // WHEN previous is resolved from the first Answer and next is resolved from the last Answer
+        let prev = prev_answer_idx(&anchors, first);
+        let next = next_answer_idx(&anchors, last);
+
+        // THEN there is no previous target
+        // AND there is no next target
+        assert_eq!(prev, None);
+        assert_eq!(next, None);
+    }
+
+    // ── Viewport current for reply jumps ────────────────────────────────
+
+    /// @spec chat/answer-landmarks Viewport current for reply jumps: Stick-to-bottom treats the last Answer as current
+    #[test]
+    fn stick_to_bottom_treats_the_last_answer_as_current() {
+        // GIVEN a transcript with more than one Answer anchor
+        // AND the chat is stuck to the bottom
+        let anchors = vec![0, 2, 4];
+        let tops = [(0, 0.0), (2, 100.0), (4, 200.0)];
+
+        // WHEN the current Answer for reply jumps is resolved
+        let current = current_answer_for_reply_jumps(&anchors, &tops, 0.0, true);
+
+        // THEN the current Answer is the last Answer anchor
+        assert_eq!(current, Some(4));
+    }
+
+    /// @spec chat/answer-landmarks Viewport current for reply jumps: Scroll offset selects the Answer at or above the viewport top
+    #[test]
+    fn scroll_offset_selects_the_answer_at_or_above_the_viewport_top() {
+        // GIVEN a transcript with more than one Answer anchor with known tops
+        // AND the chat is not stuck to the bottom
+        // AND the viewport top lies at or below one Answer top and above the next
+        let anchors = vec![0, 2, 4];
+        let tops = [(0, 0.0), (2, 100.0), (4, 200.0)];
+        let offset_y = 150.0; // past Answer 2's top, before Answer 4's top
+
+        // WHEN the current Answer for reply jumps is resolved
+        let current = current_answer_for_reply_jumps(&anchors, &tops, offset_y, false);
+
+        // THEN the current Answer is the last Answer whose top is at or above the viewport top
+        assert_eq!(current, Some(2));
+    }
 
     #[test]
     fn blocks_from_segments_maps_calm_transcript_not_adjacency() {

@@ -2337,6 +2337,29 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                 return Task::none();
             }
 
+            // ⌘↑/↓/←/→ chat landmarks — after modal handlers so open modals
+            // keep arrow ownership. Bare arrows still go to the composer.
+            if mods.command()
+                && !mods.shift()
+                && !mods.alt()
+                && keybinds::keybind_chat_landmarks(state)
+            {
+                use keyboard::key::Named;
+                use keybinds::ChatLandmarkAction;
+                let action = match &key {
+                    keyboard::Key::Named(Named::ArrowUp) => Some(ChatLandmarkAction::HistoryTop),
+                    keyboard::Key::Named(Named::ArrowDown) => {
+                        Some(ChatLandmarkAction::HistoryBottom)
+                    }
+                    keyboard::Key::Named(Named::ArrowLeft) => Some(ChatLandmarkAction::PrevAnswer),
+                    keyboard::Key::Named(Named::ArrowRight) => Some(ChatLandmarkAction::NextAnswer),
+                    _ => None,
+                };
+                if let Some(action) = action {
+                    return apply_chat_landmark(state, action);
+                }
+            }
+
             // Cmd-K — pin the active session's tentative selection.
             // `keybinds::keybind_pin_selection` decides whether the focus
             // is right; the live runtime check (was there actually a
@@ -4372,6 +4395,84 @@ fn navigate_find(
     jump_to_current(state, target)
 }
 
+/// ⌘↑/↓/←/→ chat landmarks — history ends and Answer-to-Answer jumps.
+///
+/// Every arm sets `chat_scroll_overridden` so `update_with_scroll_preservation`
+/// does not replay a pre-key snapshot over the jump. Leave-bottom jumps clear
+/// stick so StreamTick auto-snap cannot undo them while streaming.
+fn apply_chat_landmark(
+    state: &mut State,
+    action: keybinds::ChatLandmarkAction,
+) -> Task<Message> {
+    use keybinds::ChatLandmarkAction;
+    use widget::agent_chat;
+
+    // Always win against scroll-preservation replay for this tick.
+    state.chat_scroll_overridden = true;
+
+    match action {
+        ChatLandmarkAction::HistoryTop => {
+            if let Some(scope) = state.active_scope()
+                && let Some(ix) = state.interactions.get_mut(&scope)
+                && let Some(ax) = ix.active_mut()
+            {
+                ax.stick_to_bottom = false;
+                ax.pending_snap_to_bottom = false;
+                ax.last_chat_offset_y = Some(0.0);
+            }
+            iced::widget::operation::scroll_to(
+                agent_chat::CHAT_SCROLLABLE_ID,
+                iced::widget::scrollable::AbsoluteOffset { x: 0.0, y: 0.0 },
+            )
+        }
+        ChatLandmarkAction::HistoryBottom => {
+            if let Some(scope) = state.active_scope()
+                && let Some(ix) = state.interactions.get_mut(&scope)
+                && let Some(ax) = ix.active_mut()
+            {
+                ax.stick_to_bottom = true;
+                ax.pending_snap_to_bottom = false;
+            }
+            iced::widget::operation::snap_to_end(agent_chat::CHAT_SCROLLABLE_ID)
+        }
+        ChatLandmarkAction::PrevAnswer | ChatLandmarkAction::NextAnswer => {
+            let go_prev = matches!(action, ChatLandmarkAction::PrevAnswer);
+            let Some(scope) = state.active_scope() else {
+                return Task::none();
+            };
+            let (anchors, offset_y, stick) = {
+                let State {
+                    interactions,
+                    highlighter,
+                    ..
+                } = state;
+                let Some(ix) = interactions.get_mut(&scope) else {
+                    return Task::none();
+                };
+                let Some(ax) = ix.active_mut() else {
+                    return Task::none();
+                };
+                // Mid-stream with stick off defers materialize — paint blocks so
+                // Answer anchors and widget ids exist before the layout Operation.
+                if ax.chat_ui_dirty {
+                    interaction::materialize_chat_ui(ax, highlighter);
+                }
+                let anchors = agent_chat::answer_block_indices(&ax.chat_blocks);
+                if anchors.is_empty() {
+                    return Task::none();
+                }
+                let offset_y = ax.last_chat_offset_y.unwrap_or(0.0);
+                let stick = ax.stick_to_bottom;
+                // Leave-bottom jump: unstick so StreamTick auto-snap does not fight us.
+                ax.stick_to_bottom = false;
+                ax.pending_snap_to_bottom = false;
+                (anchors, offset_y, stick)
+            };
+            agent_chat::scroll_to_adjacent_answer(&anchors, go_prev, offset_y, stick)
+        }
+    }
+}
+
 /// Move the cursor / scroll position so the current match is visible.
 /// Editor: set cursor at the match end, scroll to bring the line into
 /// view, and focus the editor so the cursor paints. Chat: estimate the
@@ -5646,8 +5747,30 @@ fn handle_key_event(
             // react to them. Escape is exempt: iced's `text_input` captures it to
             // clear focus, so without the exemption the file finder would need
             // two Escape presses to close.
+            //
+            // ⌘↑/↓/←/→ are also exempt: TextEdit captures them for caret /
+            // document motion, but chat landmarks must still run with the
+            // composer focused (and while a turn streams).
             let is_escape = matches!(&key, keyboard::Key::Named(keyboard::key::Named::Escape));
-            if !is_escape && matches!(status, event::Status::Captured) {
+            let is_cmd_arrow_landmark = {
+                use keyboard::key::Named;
+                modifiers.command()
+                    && !modifiers.shift()
+                    && !modifiers.alt()
+                    && matches!(
+                        &key,
+                        keyboard::Key::Named(
+                            Named::ArrowUp
+                                | Named::ArrowDown
+                                | Named::ArrowLeft
+                                | Named::ArrowRight
+                        )
+                    )
+            };
+            if !is_escape
+                && !is_cmd_arrow_landmark
+                && matches!(status, event::Status::Captured)
+            {
                 return None;
             }
             Some(Message::KeyPress(

@@ -173,3 +173,28 @@ pub fn keybind_find(state: &State) -> Option<FindTarget> {
         }
     }
 }
+
+/// ⌘↑/↓/←/→ chat landmark jumps when eligible.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChatLandmarkAction {
+    HistoryTop,
+    HistoryBottom,
+    PrevAnswer,
+    NextAnswer,
+}
+
+/// True when chat landmark shortcuts may run: chat tab visible with an
+/// active session, terminal not focused. Modal ownership is enforced by
+/// the caller's early-returns (find, file finder, …).
+pub fn keybind_chat_landmarks(state: &State) -> bool {
+    let Some(scope) = state.active_scope() else {
+        return false;
+    };
+    let Some(ix) = state.interactions.get(&scope) else {
+        return false;
+    };
+    if ix.terminal_focused {
+        return false;
+    }
+    ix.visible && ix.active_tab == ActiveTab::Chat && ix.active().is_some()
+}

@@ -212,6 +212,13 @@ pub fn bg_chat_area() -> Color {
     }
 }
 
+/// Full-width last-Answer band — lifts the latest reply off the recessed
+/// chat area (`bg_chat_area` is halfway base→surface). Full `bg_surface`
+/// is the mid contrast: clearer than a half-step, quieter than elevated.
+pub fn bg_chat_last_answer() -> Color {
+    bg_surface()
+}
+
 // ── Chat message backgrounds ───────────────────────────────────────────────
 // All sit in a narrow brightness band, distinguished by subtle colour tints.
 
@@ -645,6 +652,15 @@ pub fn chat_user_card(_theme: &Theme) -> container::Style {
             width: 1.0,
             radius: BORDER_RADIUS.into(),
         },
+        ..Default::default()
+    }
+}
+
+/// Full-width band for the latest non-empty Answer — edge-to-edge surface
+/// lift with no border or radius (not a card/bubble).
+pub fn chat_last_answer_band(_theme: &Theme) -> container::Style {
+    container::Style {
+        background: Some(bg_chat_last_answer().into()),
         ..Default::default()
     }
 }
