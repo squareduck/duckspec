@@ -53,12 +53,13 @@ rules close that window.
   in-memory state first persists that scope's sessions. An in-flight turn is therefore
   written to disk before, for example, a promotion moves the scope.
 
-- **Eager persistence.** While a turn streams, its session is persisted periodically — not
-  only at turn completion — so an abrupt termination loses at most a bounded tail of the
-  turn rather than the whole turn. Writes are coalesced so a long turn does not rewrite
-  the growing session file on every message. In-flight answer text and in-flight reasoning
-  are both folded into the snapshot: pending answer text as Text content, pending
-  reasoning as Reasoning content (never as Text).
+- **Eager persistence.** While a session has unpersisted stream updates from an open turn,
+  it is persisted periodically — not only at turn completion — so an abrupt termination
+  loses at most a bounded tail of the turn rather than the whole turn. A turn that is open
+  but already fully flushed does not keep that periodic wake. Writes are coalesced so a
+  long turn does not rewrite the growing session file on every message. In-flight answer
+  text and in-flight reasoning are both folded into the snapshot: pending answer text as
+  Text content, pending reasoning as Reasoning content (never as Text).
 
 Together with turn-boundary saves, these bound the loss window to a short tail in the
 worst case and to nothing in the ordinary migrate/promote paths.

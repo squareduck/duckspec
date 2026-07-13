@@ -5742,20 +5742,23 @@ fn subscription(state: &State) -> Subscription<Message> {
     // Poll system dark/light mode.
     subs.push(theme_subscription());
 
-    // Animation tick for the streaming indicator. Only subscribed when at
-    // least one session is actively streaming, so idle chats don't wake
-    // the render loop. Uses iced's built-in `time::every` so the timer runs
-    // on iced's tokio runtime — the earlier handcrafted `tokio::time::sleep`
-    // stream panicked silently under the default thread-pool backend.
-    if any_session_streaming(state) {
+    // Animation / pure-content materialize tick. Only while a session needs
+    // the stream UI tick (active agent work, or deferred materialize while
+    // stick-to-bottom) — idle mid-turn await does not keep a 10 Hz pump.
+    // Uses iced's built-in `time::every` so the timer runs on iced's tokio
+    // runtime — the earlier handcrafted `tokio::time::sleep` stream panicked
+    // silently under the default thread-pool backend.
+    if any_session_needs_stream_tick(state) {
         subs.push(
             iced::time::every(std::time::Duration::from_millis(
                 widget::streaming_indicator::TICK_MS,
             ))
             .map(|_instant| Message::StreamTick),
         );
-        // Coalesced ~1s eager-persist tick, active only while streaming so idle
-        // chats don't wake the runtime. Bounds mid-turn crash loss to ~1s.
+    }
+    // Coalesced ~1s eager-persist tick while any session has unpersisted
+    // stream updates — not merely while a turn is open and clean.
+    if any_session_needs_flush_tick(state) {
         subs.push(
             iced::time::every(std::time::Duration::from_secs(1)).map(|_instant| Message::FlushTick),
         );
@@ -5792,12 +5795,27 @@ fn any_terminal_autoscrolling(state: &State) -> bool {
         .any(|ix| ix.terminals.iter().any(|tt| tt.state.is_drag_autoscrolling()))
 }
 
-/// True if any session across all interaction panels is actively streaming.
-fn any_session_streaming(state: &State) -> bool {
+/// True if any session needs the 10 Hz stream UI tick (see
+/// [`interaction::session_needs_stream_tick`]).
+fn any_session_needs_stream_tick(state: &State) -> bool {
+    state.interactions.values().any(|ix| {
+        ix.sessions.iter().any(|ax| {
+            interaction::session_needs_stream_tick(
+                ax.session.is_streaming,
+                ax.is_awaiting_user,
+                ax.chat_ui_dirty,
+                ax.stick_to_bottom,
+            )
+        })
+    })
+}
+
+/// True if any session has unpersisted stream updates for the eager flush tick.
+fn any_session_needs_flush_tick(state: &State) -> bool {
     state
         .interactions
         .values()
-        .any(|ix| ix.sessions.iter().any(|s| s.session.is_streaming))
+        .any(|ix| ix.sessions.iter().any(|ax| ax.needs_flush))
 }
 
 fn theme_subscription() -> Subscription<Message> {

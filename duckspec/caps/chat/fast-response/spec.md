@@ -222,7 +222,7 @@ SHALL NOT replace the shell while the session is awaiting a user choice.
 - **THEN** the options list remains non-empty
 
 > test: code
-> - crates/duckboard/src/area/change.rs:2283
+> - crates/duckboard/src/area/change.rs:2317
 > - crates/duckboard/src/fast_response.rs:440
 
 ### Scenario: Ordinary refresh leaves options empty when oneshot is ineligible
@@ -233,7 +233,7 @@ SHALL NOT replace the shell while the session is awaiting a user choice.
 - **THEN** the options list is empty
 
 > test: code
-> - crates/duckboard/src/area/change.rs:2243
+> - crates/duckboard/src/area/change.rs:2277
 
 ### Scenario: Refresh preserves oneshot fill when still eligible
 
@@ -245,7 +245,7 @@ SHALL NOT replace the shell while the session is awaiting a user choice.
 - **AND** the options match the settled oneshot list in order
 
 > test: code
-> - crates/duckboard/src/area/change.rs:2325
+> - crates/duckboard/src/area/change.rs:2359
 
 ### Scenario: Settled eligible oneshot fills the option shell
 
@@ -255,7 +255,7 @@ SHALL NOT replace the shell while the session is awaiting a user choice.
 - **THEN** the options list contains those settled replies in order
 
 > test: code
-> - crates/duckboard/src/area/change.rs:2365
+> - crates/duckboard/src/area/change.rs:2399
 
 ### Scenario: Live user choice overwrites oneshot fill
 
@@ -266,7 +266,7 @@ SHALL NOT replace the shell while the session is awaiting a user choice.
 - **AND** the shell is no longer filled from oneshot hints
 
 > test: code
-> - crates/duckboard/src/area/change.rs:2393
+> - crates/duckboard/src/area/change.rs:2427
 
 ### Scenario: Oneshot settle does not replace a live user-choice fill
 
@@ -276,7 +276,7 @@ SHALL NOT replace the shell while the session is awaiting a user choice.
 - **THEN** the options list remains the user-choice options
 
 > test: code
-> - crates/duckboard/src/area/change.rs:2428
+> - crates/duckboard/src/area/change.rs:2462
 
 ## Requirement: Question activation
 
@@ -305,7 +305,7 @@ the host settled choice transcript for that answer (question when present, then 
   activation
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:2195
+> - crates/duckboard/src/area/interaction.rs:2240
 
 ## Requirement: Freeform while awaiting
 
@@ -341,7 +341,7 @@ answer (question when present, then answer with the freeform text).
 - **AND** the text is not left only staged in the interrupt queue
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:2136
+> - crates/duckboard/src/area/interaction.rs:2181
 
 ## Requirement: Awaiting composer chrome
 
@@ -493,7 +493,7 @@ commit question or answer host entries for that choice.
 - **AND** the question entry appears before the answer entry
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:2240
+> - crates/duckboard/src/area/interaction.rs:2285
 
 ### Scenario: Settle without a prompt commits answer only
 
@@ -504,7 +504,7 @@ commit question or answer host entries for that choice.
 - **AND** the session transcript does not include a host question entry for that choice
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:2269
+> - crates/duckboard/src/area/interaction.rs:2314
 
 ### Scenario: Cancel commits no choice blocks
 
@@ -514,4 +514,4 @@ commit question or answer host entries for that choice.
 - **AND** the session transcript does not gain a host answer entry for that choice
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:2295
+> - crates/duckboard/src/area/interaction.rs:2340

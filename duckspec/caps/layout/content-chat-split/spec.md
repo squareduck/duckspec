@@ -33,7 +33,7 @@ default window size). Force-showing a panel SHALL NOT mark it customized.
 - **THEN** the width equals half of free space for that window
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:2376
+> - crates/duckboard/src/area/interaction.rs:2421
 
 ### Scenario: Resize rebalances to half free space
 
@@ -47,7 +47,7 @@ default window size). Force-showing a panel SHALL NOT mark it customized.
 - **THEN** the interaction column width equals half of free space for the new window
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:2395
+> - crates/duckboard/src/area/interaction.rs:2440
 
 ### Scenario: Half floors at minimum panel width
 
@@ -57,7 +57,7 @@ default window size). Force-showing a panel SHALL NOT mark it customized.
 - **THEN** the width equals the minimum panel width
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:2409
+> - crates/duckboard/src/area/interaction.rs:2454
 
 ### Scenario: Half may exceed the old fixed max width
 
@@ -68,7 +68,7 @@ default window size). Force-showing a panel SHALL NOT mark it customized.
 - **AND** the width is greater than 800 logical pixels
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:2427
+> - crates/duckboard/src/area/interaction.rs:2472
 
 ### Scenario: Programmatic open rebalances to half free space
 
@@ -87,7 +87,7 @@ default window size). Force-showing a panel SHALL NOT mark it customized.
 - **AND** the panel remains uncustomized
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:2610
+> - crates/duckboard/src/area/interaction.rs:2655
 
 ### Scenario: Panel created for a known window starts at half free space
 
@@ -101,7 +101,7 @@ default window size). Force-showing a panel SHALL NOT mark it customized.
 - **THEN** the interaction column width equals half of free space for that window
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:2585
+> - crates/duckboard/src/area/interaction.rs:2630
 
 ## Requirement: Grip customization
 
@@ -124,7 +124,7 @@ collapsing/restoring the content column SHALL NOT mark the panel customized by i
   is shown
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:2445
+> - crates/duckboard/src/area/interaction.rs:2490
 
 ### Scenario: Resize after lock keeps absolute width
 
@@ -134,7 +134,7 @@ collapsing/restoring the content column SHALL NOT mark the panel customized by i
 - **THEN** the interaction column width remains that absolute width
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:2466
+> - crates/duckboard/src/area/interaction.rs:2511
 
 ### Scenario: Open/close and content collapse do not lock
 
@@ -150,7 +150,7 @@ collapsing/restoring the content column SHALL NOT mark the panel customized by i
   window while the content column is shown
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:2535
+> - crates/duckboard/src/area/interaction.rs:2580
 
 ## Requirement: Content-hidden fill
 
@@ -177,7 +177,7 @@ content is visible).
   than a fixed equal-split width
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:2486
+> - crates/duckboard/src/area/interaction.rs:2531
 
 ### Scenario: No open tabs hides content column
 
@@ -189,7 +189,7 @@ content is visible).
 - **AND** the interaction column fills the remaining width after fixed left chrome
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:2503
+> - crates/duckboard/src/area/interaction.rs:2548
 
 ### Scenario: Opening a tab restores content column
 
@@ -205,4 +205,4 @@ content is visible).
 - **AND** the interaction column uses its equal or customized fixed width rather than fill
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:2519
+> - crates/duckboard/src/area/interaction.rs:2564

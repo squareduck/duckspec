@@ -123,7 +123,7 @@ tick and regardless of stick-to-bottom.
 - **AND** the chat UI includes an Activity row for that tool
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:1541
+> - crates/duckboard/src/area/interaction.rs:1586
 
 ### Scenario: Turn complete materializes the final answer immediately
 
@@ -137,7 +137,7 @@ tick and regardless of stick-to-bottom.
   UI tick
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:1583
+> - crates/duckboard/src/area/interaction.rs:1628
 
 ### Scenario: Answer-to-reasoning channel switch materializes without committing the answer
 
@@ -147,7 +147,7 @@ tick and regardless of stick-to-bottom.
 - **AND** the open answer draft remains uncommitted on the session
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:1703
+> - crates/duckboard/src/area/interaction.rs:1748
 
 ## Requirement: Settled and live editor refresh
 
@@ -176,7 +176,7 @@ still keep their editors.
 - **AND** that editor is not replaced by a newly constructed editor for the same lines
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:1989
+> - crates/duckboard/src/area/interaction.rs:2034
 
 ### Scenario: Suffix-growing live answer refreshes in place
 
@@ -190,7 +190,7 @@ still keep their editors.
 - **AND** the editor is not constructed as a brand-new editor from the full joined text
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:2029
+> - crates/duckboard/src/area/interaction.rs:2074
 
 ### Scenario: Block list reshape uses full rebuild for affected indices
 
@@ -205,7 +205,7 @@ still keep their editors.
 - **AND** any earlier block whose lines are unchanged keeps its existing editor
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:2069
+> - crates/duckboard/src/area/interaction.rs:2114
 
 ## Requirement: Hybrid layout reuse
 
@@ -262,7 +262,7 @@ answer draft into the session’s messages before the tool is recorded.
   draft
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:1631
+> - crates/duckboard/src/area/interaction.rs:1676
 
 ### Scenario: Answer after reasoning replaces the live draft
 
@@ -273,7 +273,7 @@ answer draft into the session’s messages before the tool is recorded.
 - **AND** the live answer draft does not retain the first body
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:1649
+> - crates/duckboard/src/area/interaction.rs:1694
 
 ### Scenario: Tool use commits the open answer draft
 
@@ -283,7 +283,7 @@ answer draft into the session’s messages before the tool is recorded.
 - **AND** the live answer draft is empty
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:1677
+> - crates/duckboard/src/area/interaction.rs:1722
 
 ## Requirement: Answer thrash budget
 
@@ -311,7 +311,7 @@ The concrete budget size is an implementation constant, not part of this contrac
 - **AND** a short stop notice is shown that is not a second full answer rewrite
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:1734
+> - crates/duckboard/src/area/interaction.rs:1779
 
 ### Scenario: Tool use resets the thrash budget
 
@@ -325,4 +325,45 @@ The concrete budget size is an implementation constant, not part of this contrac
 - **THEN** the in-flight turn is not cancelled solely for exceeding the thrash budget
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:1776
+> - crates/duckboard/src/area/interaction.rs:1821
+
+## Requirement: Stream UI tick need
+
+A session SHALL need the stream UI tick while a turn is streaming and the agent is not
+awaiting a mid-turn user choice (so animation and pure-content materialize can run on the
+tick cadence). A session that is only streaming while awaiting a user choice SHALL need
+the stream UI tick only when pure-content dirtiness is owed on the tick under
+stick-to-bottom (deferred materialize). Idle mid-turn await with no such deferred
+materialize SHALL NOT need the stream UI tick.
+
+> test: code
+
+### Scenario: Active streaming without awaiting needs the stream UI tick
+
+- **GIVEN** a streaming turn
+- **AND** the session is not awaiting a mid-turn user choice
+- **WHEN** stream UI tick need is evaluated for that session
+- **THEN** the session needs the stream UI tick
+
+> test: code
+> - crates/duckboard/src/area/interaction.rs:1541
+
+### Scenario: Idle awaiting without deferred materialize does not need the stream UI tick
+
+- **GIVEN** a streaming turn that is awaiting a mid-turn user choice
+- **AND** pure-content dirtiness is not owed for stick-to-bottom materialize on the tick
+- **WHEN** stream UI tick need is evaluated for that session
+- **THEN** the session does not need the stream UI tick
+
+> test: code
+> - crates/duckboard/src/area/interaction.rs:1556
+
+### Scenario: Awaiting with deferred pure content on stick-to-bottom needs the stream UI tick
+
+- **GIVEN** a streaming turn that is awaiting a mid-turn user choice
+- **AND** pure-content dirtiness is owed for stick-to-bottom materialize on the tick
+- **WHEN** stream UI tick need is evaluated for that session
+- **THEN** the session needs the stream UI tick
+
+> test: code
+> - crates/duckboard/src/area/interaction.rs:1571

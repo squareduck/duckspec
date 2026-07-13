@@ -1538,6 +1538,51 @@ mod tests {
         );
     }
 
+    // @spec chat/stream-ui Stream UI tick need: Active streaming without awaiting needs the stream UI tick
+    #[test]
+    fn active_streaming_without_awaiting_needs_stream_ui_tick() {
+        let mut ax = streaming_session();
+        ax.is_awaiting_user = false;
+        ax.chat_ui_dirty = false;
+        ax.stick_to_bottom = true;
+        assert!(session_needs_stream_tick(
+            ax.session.is_streaming,
+            ax.is_awaiting_user,
+            ax.chat_ui_dirty,
+            ax.stick_to_bottom,
+        ));
+    }
+
+    // @spec chat/stream-ui Stream UI tick need: Idle awaiting without deferred materialize does not need the stream UI tick
+    #[test]
+    fn idle_awaiting_without_deferred_materialize_does_not_need_stream_ui_tick() {
+        let mut ax = streaming_session();
+        ax.is_awaiting_user = true;
+        ax.chat_ui_dirty = false;
+        ax.stick_to_bottom = true;
+        assert!(!session_needs_stream_tick(
+            ax.session.is_streaming,
+            ax.is_awaiting_user,
+            ax.chat_ui_dirty,
+            ax.stick_to_bottom,
+        ));
+    }
+
+    // @spec chat/stream-ui Stream UI tick need: Awaiting with deferred pure content on stick-to-bottom needs the stream UI tick
+    #[test]
+    fn awaiting_with_deferred_pure_content_on_stick_needs_stream_ui_tick() {
+        let mut ax = streaming_session();
+        ax.is_awaiting_user = true;
+        ax.chat_ui_dirty = true;
+        ax.stick_to_bottom = true;
+        assert!(session_needs_stream_tick(
+            ax.session.is_streaming,
+            ax.is_awaiting_user,
+            ax.chat_ui_dirty,
+            ax.stick_to_bottom,
+        ));
+    }
+
     // @spec chat/stream-ui Bounded materialization while streaming: Tool use materializes the chat UI immediately with an Activity row
     #[test]
     fn tool_use_materializes_immediately_with_activity_row() {
@@ -4171,6 +4216,27 @@ pub fn should_materialize_on_stream_tick(
     stick_to_bottom: bool,
 ) -> bool {
     is_streaming && chat_ui_dirty && stick_to_bottom
+}
+
+/// Whether this session needs the 10 Hz stream UI tick subscription.
+///
+/// Active agent work (`is_streaming` and not awaiting a user choice) needs
+/// the tick for the streaming indicator and pure-content materialize.
+/// Mid-turn await only needs the tick when deferred pure-content materialize
+/// is still owed on stick-to-bottom — idle await does not keep the pump.
+pub fn session_needs_stream_tick(
+    is_streaming: bool,
+    is_awaiting_user: bool,
+    chat_ui_dirty: bool,
+    stick_to_bottom: bool,
+) -> bool {
+    if !is_streaming {
+        return false;
+    }
+    if !is_awaiting_user {
+        return true;
+    }
+    should_materialize_on_stream_tick(is_streaming, chat_ui_dirty, stick_to_bottom)
 }
 
 fn handle_chat_action_on(editor: &mut EditorState, action: crate::widget::text_edit::EditorAction) {

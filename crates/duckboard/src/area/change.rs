@@ -56,6 +56,9 @@ pub struct State {
     /// don't keep re-opening folders the user explicitly collapsed.
     known_file_dirs: HashSet<String>,
     pub changed_files: Vec<ChangedFile>,
+    /// Precomputed flat rows for the Changed Files section. Rebuilt when
+    /// `changed_files` or `expanded_file_dirs` change — not in `view()`.
+    changed_file_rows: Vec<ChangedFileRow>,
     /// Full project file tree (gitignore-respecting, hidden files excluded)
     /// shown in the Files explorer section. Dir node ids are root-relative
     /// paths; file node ids are `file:<rel-path>` so they match file tab ids
@@ -105,6 +108,7 @@ impl State {
             expanded_file_dirs: HashSet::new(),
             known_file_dirs: HashSet::new(),
             changed_files: vec![],
+            changed_file_rows: vec![],
             explorer_tree: vec![],
             expanded_explorer_dirs: HashSet::new(),
             explorations,
@@ -148,6 +152,13 @@ impl State {
         self.known_file_dirs = current_dirs;
 
         self.changed_files = files;
+        self.refresh_changed_file_rows();
+    }
+
+    /// Rebuild [`Self::changed_file_rows`] from `changed_files` + expand set.
+    fn refresh_changed_file_rows(&mut self) {
+        self.changed_file_rows =
+            rebuild_changed_file_rows(&self.changed_files, &self.expanded_file_dirs);
     }
 
     /// Replace the Files explorer contents from a fresh project walk.
@@ -540,6 +551,7 @@ pub fn update(
             if !state.expanded_file_dirs.remove(&id) {
                 state.expanded_file_dirs.insert(id);
             }
+            state.refresh_changed_file_rows();
         }
         Message::ToggleExplorerDir(id) => {
             if !state.expanded_explorer_dirs.remove(&id) {
@@ -1518,7 +1530,9 @@ fn aggregate_status(node: &FileTree) -> Option<FileStatus> {
     if visit(node, &mut seen) { seen } else { None }
 }
 
-enum FileTreeRow<'a> {
+/// Owned flat row for the Changed Files section (view maps this; no tree rebuild).
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ChangedFileRow {
     Dir {
         key: String,
         name: String,
@@ -1527,22 +1541,40 @@ enum FileTreeRow<'a> {
         agg: Option<FileStatus>,
     },
     File {
-        file: &'a ChangedFile,
+        path: PathBuf,
+        status: FileStatus,
+        name: String,
         depth: usize,
     },
 }
 
-fn flatten_file_tree<'a>(
-    node: &'a FileTree,
+fn rebuild_changed_file_rows(
+    files: &[ChangedFile],
+    expanded: &HashSet<String>,
+) -> Vec<ChangedFileRow> {
+    if files.is_empty() {
+        return vec![];
+    }
+    let mut tree = FileTree::new(PathBuf::new());
+    for cf in files {
+        tree.insert(cf.clone());
+    }
+    let mut flat = Vec::new();
+    flatten_file_tree(&tree, 0, expanded, &mut flat);
+    flat
+}
+
+fn flatten_file_tree(
+    node: &FileTree,
     depth: usize,
     expanded: &HashSet<String>,
-    out: &mut Vec<FileTreeRow<'a>>,
+    out: &mut Vec<ChangedFileRow>,
 ) {
     for (name, sub) in &node.dirs {
         let key = sub.path.display().to_string();
         let is_expanded = expanded.contains(&key);
         let agg = aggregate_status(sub);
-        out.push(FileTreeRow::Dir {
+        out.push(ChangedFileRow::Dir {
             key,
             name: name.clone(),
             depth,
@@ -1561,7 +1593,17 @@ fn flatten_file_tree<'a>(
             .unwrap_or_default()
     });
     for file in files {
-        out.push(FileTreeRow::File { file, depth });
+        let name = file
+            .path
+            .file_name()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_else(|| file.path.display().to_string());
+        out.push(ChangedFileRow::File {
+            path: file.path.clone(),
+            status: file.status,
+            name,
+            depth,
+        });
     }
 }
 
@@ -1577,77 +1619,67 @@ fn view_changed_files_section<'a>(
     tabs: &'a tab_bar::TabState,
     state: &'a State,
 ) -> Element<'a, Message> {
-    let rows: Vec<ListRow<'a, Message>> = if state.changed_files.is_empty() {
-        vec![]
-    } else {
-        let mut tree = FileTree::new(PathBuf::new());
-        for cf in &state.changed_files {
-            tree.insert(cf.clone());
-        }
-        let mut flat = Vec::new();
-        flatten_file_tree(&tree, 0, &state.expanded_file_dirs, &mut flat);
-
-        let active_tab_id = tabs.active_tab().map(|t| t.id.as_str());
-
-        flat.into_iter()
-            .map(|row_data| match row_data {
-                FileTreeRow::Dir {
-                    key,
-                    name,
-                    depth,
-                    is_expanded,
-                    agg,
-                } => {
-                    let (sc, color) = match agg {
-                        Some(s) => (status_char(s), theme::vcs_status_color(&s)),
-                        None => ("~", theme::text_muted()),
-                    };
-                    let leading: Element<'a, Message> = row![
-                        collapsible::chevron(is_expanded),
-                        text(sc)
-                            .size(theme::font_md())
-                            .font(theme::content_font())
-                            .color(color),
-                    ]
+    let active_tab_id = tabs.active_tab().map(|t| t.id.as_str());
+    let rows: Vec<ListRow<'a, Message>> = state
+        .changed_file_rows
+        .iter()
+        .map(|row_data| match row_data {
+            ChangedFileRow::Dir {
+                key,
+                name,
+                depth,
+                is_expanded,
+                agg,
+            } => {
+                let (sc, color) = match agg {
+                    Some(s) => (status_char(*s), theme::vcs_status_color(s)),
+                    None => ("~", theme::text_muted()),
+                };
+                let leading: Element<'a, Message> = row![
+                    collapsible::chevron(*is_expanded),
+                    text(sc)
+                        .size(theme::font_md())
+                        .font(theme::content_font())
+                        .color(color),
+                ]
+                .spacing(theme::SPACING_SM)
+                .align_y(iced::Center)
+                .into();
+                ListRow::new(format!("{}/", name))
+                    .leading(leading)
+                    .indent(*depth)
                     .spacing(theme::SPACING_SM)
-                    .align_y(iced::Center)
-                    .into();
-                    ListRow::new(format!("{}/", name))
-                        .leading(leading)
-                        .indent(depth)
-                        .spacing(theme::SPACING_SM)
-                        .on_press(Message::ToggleFileDir(key))
-                }
-                FileTreeRow::File { file, depth } => {
-                    let sc = status_char(file.status);
-                    let color = theme::vcs_status_color(&file.status);
-                    let tab_id = format!("vcs:{}", file.path.display());
-                    let is_active = active_tab_id == Some(tab_id.as_str());
-                    let name = file
-                        .path
-                        .file_name()
-                        .map(|s| s.to_string_lossy().to_string())
-                        .unwrap_or_else(|| file.path.display().to_string());
-                    let leading: Element<'a, Message> = row![
-                        Space::new().width(theme::font_sm()),
-                        text(sc)
-                            .size(theme::font_md())
-                            .font(theme::content_font())
-                            .color(color),
-                    ]
+                    .on_press(Message::ToggleFileDir(key.clone()))
+            }
+            ChangedFileRow::File {
+                path,
+                status,
+                name,
+                depth,
+            } => {
+                let sc = status_char(*status);
+                let color = theme::vcs_status_color(status);
+                let tab_id = format!("vcs:{}", path.display());
+                let is_active = active_tab_id == Some(tab_id.as_str());
+                let leading: Element<'a, Message> = row![
+                    Space::new().width(theme::font_sm()),
+                    text(sc)
+                        .size(theme::font_md())
+                        .font(theme::content_font())
+                        .color(color),
+                ]
+                .spacing(theme::SPACING_SM)
+                .align_y(iced::Center)
+                .into();
+                ListRow::new(name.clone())
+                    .leading(leading)
+                    .indent(*depth)
                     .spacing(theme::SPACING_SM)
-                    .align_y(iced::Center)
-                    .into();
-                    ListRow::new(name)
-                        .leading(leading)
-                        .indent(depth)
-                        .spacing(theme::SPACING_SM)
-                        .selected(is_active)
-                        .on_press(Message::SelectChangedFile(file.path.clone()))
-                }
-            })
-            .collect()
-    };
+                    .selected(is_active)
+                    .on_press(Message::SelectChangedFile(path.clone()))
+            }
+        })
+        .collect();
 
     collapsible::view_with_add(
         "Changed Files",
@@ -1933,6 +1965,7 @@ mod breadcrumb_tests {
             expanded_nodes: HashSet::new(),
             expanded_file_dirs: HashSet::new(),
             changed_files: vec![],
+            changed_file_rows: vec![],
             explorer_tree: vec![],
             expanded_explorer_dirs: HashSet::new(),
             explorations: explorations
@@ -2041,6 +2074,7 @@ mod breadcrumb_tests {
             expanded_nodes: HashSet::new(),
             expanded_file_dirs: HashSet::new(),
             changed_files: vec![],
+            changed_file_rows: vec![],
             explorer_tree: vec![],
             expanded_explorer_dirs: HashSet::new(),
             explorations: vec![],
@@ -3098,8 +3132,8 @@ mod file_tree_tests {
         let mut rows = Vec::new();
         flatten_file_tree(&t, 0, &expanded, &mut rows);
         assert_eq!(rows.len(), 2);
-        assert!(matches!(rows[0], FileTreeRow::Dir { .. }));
-        assert!(matches!(rows[1], FileTreeRow::File { .. }));
+        assert!(matches!(rows[0], ChangedFileRow::Dir { .. }));
+        assert!(matches!(rows[1], ChangedFileRow::File { .. }));
     }
 
     #[test]
@@ -3114,8 +3148,68 @@ mod file_tree_tests {
         flatten_file_tree(&t, 0, &expanded, &mut rows);
         assert_eq!(rows.len(), 3);
         match &rows[1] {
-            FileTreeRow::File { depth, .. } => assert_eq!(*depth, 1),
+            ChangedFileRow::File { depth, .. } => assert_eq!(*depth, 1),
             _ => panic!("expected file row"),
         }
+    }
+
+    #[test]
+    fn set_changed_files_rebuilds_row_cache() {
+        let mut state = State::new(None);
+        state.set_changed_files(vec![
+            cf("src/a.rs", FileStatus::Modified),
+            cf("src/b.rs", FileStatus::Modified),
+        ]);
+        // Auto-expand "src" → dir + two files.
+        assert_eq!(state.changed_file_rows.len(), 3);
+        assert!(matches!(
+            &state.changed_file_rows[0],
+            ChangedFileRow::Dir {
+                key,
+                is_expanded: true,
+                ..
+            } if key == "src"
+        ));
+        assert!(matches!(
+            &state.changed_file_rows[1],
+            ChangedFileRow::File { name, .. } if name == "a.rs"
+        ));
+        assert!(matches!(
+            &state.changed_file_rows[2],
+            ChangedFileRow::File { name, .. } if name == "b.rs"
+        ));
+    }
+
+    #[test]
+    fn toggle_file_dir_rebuilds_row_cache() {
+        let mut state = State::new(None);
+        state.set_changed_files(vec![
+            cf("src/a.rs", FileStatus::Modified),
+            cf("src/b.rs", FileStatus::Modified),
+        ]);
+        assert_eq!(state.changed_file_rows.len(), 3);
+
+        // Collapse "src" via the same expand-set mutation path as ToggleFileDir.
+        assert!(state.expanded_file_dirs.remove("src"));
+        state.refresh_changed_file_rows();
+        assert_eq!(state.changed_file_rows.len(), 1);
+        assert!(matches!(
+            &state.changed_file_rows[0],
+            ChangedFileRow::Dir {
+                key,
+                is_expanded: false,
+                ..
+            } if key == "src"
+        ));
+
+        // Expand again.
+        state.expanded_file_dirs.insert("src".into());
+        state.refresh_changed_file_rows();
+        assert_eq!(state.changed_file_rows.len(), 3);
+    }
+
+    #[test]
+    fn rebuild_changed_file_rows_empty_when_no_files() {
+        assert!(rebuild_changed_file_rows(&[], &HashSet::new()).is_empty());
     }
 }
