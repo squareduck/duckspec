@@ -60,64 +60,25 @@ do not hand-edit those paths).
 
 ## Quality
 
-**Requirements**
+Cold-reader shape of a finished file - not which scenarios to invent (that is
+the `/ds-spec` stage template).
 
-- Use normative language precisely. SHALL means mandatory, SHOULD means
-  recommended, MAY means optional. Do not write SHALL when you mean SHOULD.
-- Each requirement covers one coherent behavioral concern. If its scenarios
-  test unrelated things, split it.
-- Normative prose stands on its own - scenarios illustrate, they do not replace
-  the prose.
-- Requirements describe **system behavior observers can care about**, not
-  module placement, dependency graphs, or "does not call X." Those stay in
-  `design.md` unless the public contract *is* a stability surface.
-
-**Scenarios**
-
-- **Falsifiability.** A scenario's THEN must be something a realistic-but-broken
-  implementation could get wrong. If you cannot picture an implementation that
-  would fail it - other than complete nonsense - the scenario is not encoding a
-  contract; it is restating an identity. A getter returning what was set, a
-  default value equaling the default, a method named toggle toggling - all pass
-  "observable" but fail falsifiability. Drop them.
-- **Outcome, not branch.** Scenarios are derived from the requirement, not the
-  implementation. If you could not list them without first reading the code,
-  they are mirroring it. A pure refactor that preserves observable behavior must
-  not change the scenario list. Group by outcomes callers can observe; if two
-  code paths converge on the same observable outcome, they are one scenario
-  (parameterize GIVEN if the entry conditions differ).
-- **Declarative, not procedural.** Describe what the system does, not how a user
-  clicks through it. "WHEN the user submits the form" not "WHEN the user types
-  their email, then tabs to password, then clicks submit."
-- **GIVEN establishes state, not actions.** "GIVEN an authenticated user" not
-  "GIVEN the user has logged in."
-- **WHEN is a single trigger.** If you need multiple independent WHENs, you
-  probably have two scenarios.
-- **THEN is an observable outcome.** Not implementation details, internal state,
-  private fields, enum variants, function names, or which branch ran. Restate in
-  caller-observable terms - return value, side effect, persisted state, emitted
-  event, response code. Prefer the **caller-meaningful** outcome; name storage
-  only when durability or location *is* the contract. "THEN the session is
-  invalidated" not "THEN the expire_session branch is taken" - and not "THEN the
-  sessions table row is deleted" unless the table itself is the public contract.
-- **Fewer, better.** Each scenario covers a distinct observable outcome, not a
-  distinct code path. If two scenarios differ only trivially, merge them.
-  Redundant scenarios are maintenance debt.
-- **Every `test: code` is a commitment.** Only mark scenarios that genuinely need
-  automated verification. Visual checks, deployment concerns, and
-  documentation-only behaviors should use `manual:` or `skip:`.
-- **Name scenarios by what is distinctive.** "Valid credentials" and "Invalid
-  password" are good. "Test case 1" and "Happy path" are not.
-
-**Two self-tests before committing a scenario list**
-
-- **Refactor test.** If the implementation were rewritten - lookup table instead
-  of if/else, polymorphism instead of switch, early returns instead of nesting -
-  would these scenarios still describe the same behavior? If no, they are
-  mirroring the code, not the contract.
-- **Stranger test.** Could someone who has never seen the code write this
-  scenario list from the requirement prose alone? If no, the scenarios are
-  leaking the implementation.
+- **Normative precision.** SHALL / MUST / SHOULD / MAY mean what they say. Do
+  not write SHALL when you mean SHOULD.
+- **One concern per requirement.** If scenarios under one requirement test
+  unrelated things, split the requirement.
+- **Prose stands alone.** Normative text carries the contract; scenarios
+  illustrate it. A requirement may be prose-only when there is no scenario.
+- **Observer-facing.** Requirements describe system behavior observers care
+  about - not module placement, dependency graphs, or "does not call X" (those
+  belong in `design.md` unless the public contract *is* that surface).
+- **Clean GWT.** Declarative outcomes, not click-through scripts. GIVEN is
+  state ("an authenticated user"), not a prior action story. WHEN is one
+  trigger. THEN is caller-observable (return, side effect, persistence, event,
+  response) - not private fields, enum variants, function names, or which
+  branch ran.
+- **Distinctive names.** "Valid credentials" and "Invalid password" are good.
+  "Test case 1" and "Happy path" are not.
 
 Body markdown follows `style` (load only if not already in context).
 

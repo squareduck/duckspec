@@ -52,13 +52,15 @@ still satisfy the full **spec** schema.
 ## Quality
 
 - **Lightest touch.** Prefer `@` + `+` children over rewriting whole requirements
-- **Rename then edit.** Rename with `=`, then `@` (or `~`) under the **new** name
-  for body changes
+- **Stable titles.** Prefer body-only `@` / `~` over rename (`=`) when the
+  contract outcome is unchanged - renames break `@spec` backlinks
+- **Rename then edit.** When a rename is required: `=`, then `@` (or `~`) under
+  the **new** name for body changes
 - **Merged result is a cold-reader spec.** Bodies are present-tense contract
   text, not change narration
-- **New and rewritten bodies** follow `ds schema spec` Quality (falsifiability,
-  outcome-not-branch, no design-leak requirements) - do not `@`/`~` a requirement
-  only to restate it in new words
+- **New and rewritten bodies** satisfy `ds schema spec` Structure, Rules, and
+  Quality. Do not `@`/`~` a requirement only to restate it in new words. Which
+  scenarios to add is stage process (default omit) - not this schema
 - Body markdown follows `style` (load only if not already in context)
 
 ## Formatting
