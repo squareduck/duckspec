@@ -49,7 +49,10 @@ proposal --> design --> caps (spec/doc) --> code
 ```
 
 May cover any layer the user cares about. Number Summary rows and Issues
-headings the same. Column `→ next` is a stage or path - not "already fixed".
+headings the same. Empty Summary is valid when discussion produced no lasting
+issues - Outcome still states agreement and readiness. Column `→ next` is a
+real stage or path (`/ds-spec`, `/ds-step`, `/ds-archive`, or a short approach
+that implies one) - not "already fixed" and not `ignore`.
 
 ## Lenses and severity
 
@@ -66,12 +69,17 @@ major / minor by lasting harm if frozen as-is.
 
 ## Quality
 
+Cold-reader shape of a finished file - not which issues to invent (that is the
+`/ds-followup` stage template).
+
 - **Scannable first.** Triage from Summary; depth under Where / Why / Action
-- **User-led.** Record what the human raised and agreed - not a performative
-  solo re-review of settled choices
+- **User-led content.** Records what the human raised and agreed - not a solo
+  re-review of settled choices
+- **Actionable rows only.** Each Summary row has a concrete Action and real
+  `→ next`. Observations without a path are Outcome prose, not rows
+- **No noop next.** `→ next` is never `ignore` or equivalent
+- **Empty Summary is valid.** Outcome can stand alone when there are no issues
 - **Recommend, don't apply.** Action is next path, not a log of in-session edits
-- **Don't re-verify** what check/audit already prove
-- **Issues are actionable.** Observations without a path are prose, not rows
 - Body markdown follows `style` (load only if not already in context)
 
 ## Formatting

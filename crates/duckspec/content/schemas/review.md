@@ -47,8 +47,10 @@ proposal --> design --> caps (spec/doc) --> code
 ```
 
 Read down the chain as far as artifacts exist. Number Summary rows and Findings
-headings the same. Column `→ next` is a stage or path (`/ds-spec`, `/ds-step`,
-`/ds-archive`, `ignore`) - not "already fixed".
+headings the same. Empty Summary (header row only, no data rows) is valid when
+there are no lasting findings - Verdict still states readiness. Column
+`→ next` is a real stage or path (`/ds-spec`, `/ds-step`, `/ds-archive`, or a
+short approach that implies one) - not "already fixed" and not `ignore`.
 
 ## Lenses
 
@@ -67,7 +69,7 @@ run today."
 | --- | --- |
 | critical | Lasting structural harm; address before accepting as done |
 | major | Real durable drag if frozen (duplication, wrong layer, multi-job units) |
-| minor | Low-cost polish that does not compound |
+| minor | Low-cost polish that still compounds if ignored - not "file and forget" |
 
 Do not inflate severity (teaches readers to ignore you). Do not discount quality
 findings as "just craft" when they erode maintainability.
@@ -82,15 +84,17 @@ findings as "just craft" when they erode maintainability.
 
 ## Quality
 
+Cold-reader shape of a finished file - not which findings to invent (that is
+the `/ds-review` stage template).
+
 - **Scannable first.** Triage from Summary; depth under Where / Why / Action
-- **Judge, don't re-verify.** Skip what check/audit already prove
-- **Resolve before you file.** Grep/read/check yourself; file only what survives
-- **Actionable findings.** Name location, lasting cost, concrete Action. Praise
-  and correct divergences are prose, not findings
-- **Don't flag** pre-existing noise outside the change, pure taste without
-  convention, or linter/type-checker territory
+- **Actionable rows only.** Each Summary row has location, lasting cost, and a
+  concrete Action with a real `→ next`. Observations without a path, praise, and
+  improving divergences are prose (Verdict), not rows
+- **No noop next.** `→ next` is never `ignore` or equivalent
+- **Empty Summary is valid.** Clean freeze-ready Verdict with Scope showing what
+  was examined is a complete review
 - **Verdict is aggregate.** Gestalt readiness, not the single worst row
-- **Reason, then rate.** Critique first; lens and severity after
 - Body markdown follows `style` (load only if not already in context)
 
 ## Formatting
@@ -117,7 +121,6 @@ Post-implementation: full chain to code.
 | --- | --- | --- | --- | --- |
 | 1 | critical | soundness | State comparison inverted on callback | /ds-spec |
 | 2 | major | quality | Token exchange reimplements retry helper | /ds-step |
-| 3 | minor | fidelity | Callback splits auth logic across modules | /ds-step |
 
 ## Findings
 
@@ -127,7 +130,8 @@ Post-implementation: full chain to code.
 
 **Why:** Forged-state check always passes; contradicts the rejection scenario.
 
-**Action:** Compare to authorize-time value; tighten the test.
+**Action:** Compare to authorize-time value; tighten the test via `/ds-spec`
+then `/ds-step` if the rejection scenario is missing.
 
 ### 2. Token exchange reimplements retry helper - quality/major
 
@@ -137,16 +141,8 @@ Post-implementation: full chain to code.
 
 **Action:** Call `http::retry`.
 
-### 3. Callback splits auth logic across modules - fidelity/minor
-
-**Where:** error mapping in `mod.rs` vs design boundary on `callback`
-
-**Why:** Erodes the single-module boundary the design chose.
-
-**Action:** Fold error mapping into `callback`.
-
 ## Verdict
 
 Not ready to freeze: fix the inverted state check and drop the hand-rolled
-retry. Boundary nit is optional.
+retry.
 ```
