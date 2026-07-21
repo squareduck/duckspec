@@ -58,6 +58,10 @@ test. `ds audit` resolves them; wrapped comments are invisible. `ds sync`
 stamps resolved `path:line` onto markers under top-level `caps/` (bookkeeping -
 do not hand-edit those paths).
 
+**Deltas and merges.** Bodies authored under a delta and the merged result after
+apply still must satisfy this schema. Delta shape (markers, ops) is
+`ds schema spec-delta` — not restated here.
+
 ## Quality
 
 Cold-reader shape of a finished file - not which scenarios to invent (that is

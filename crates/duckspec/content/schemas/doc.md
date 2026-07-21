@@ -24,6 +24,9 @@ Body is freeform markdown (headings, prose, lists, tables, diagrams, code).
 - H1 title required and **identical** to the paired spec's H1
 - Non-empty summary paragraph follows the H1 directly
 - No further structural rules on the body
+- Bodies authored under a delta and the merged result after apply still must
+  satisfy this schema. Delta shape (markers, ops) is `ds schema doc-delta` —
+  not restated here.
 
 ## Quality
 

@@ -62,9 +62,9 @@ something essential was missing, rework the outline with the user first.
 
 - New: full `spec.md` per `ds schema spec`; `doc.md` per `ds schema doc` when
   the outline has a Doc section
-- Update: lightest-touch `spec.delta.md` per `ds schema spec-delta` (prefer
-  `@` + `+` over rewrites; prefer body edit over rename so `@spec` titles stay
-  stable); `doc.delta.md` when readers need to relearn something
+- Update: `spec.delta.md` / `doc.delta.md` per `ds schema spec-delta` /
+  `doc-delta` (marker choice and lightest touch live in those schemas); write
+  `doc.delta.md` when readers need to relearn something
 - Remove: `spec.delta.md` whose H1 carries the `-` marker (removes the whole
   spec); a matching `doc.delta.md` with a `-` H1 when the capability has a doc
 - Doc bodies follow `ds schema doc` Quality on expansion - never as labels in
