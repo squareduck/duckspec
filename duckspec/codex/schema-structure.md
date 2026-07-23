@@ -43,8 +43,8 @@ template concerns.
 
 Judgment principles for a *good* instance of this artifact: focus, taste, lightest touch,
 cold-reader clarity, and similar. Short bullets. Not a second Structure section and not a
-process script for the agent. Presentation taste (tables, diagrams, prose) defers to
-`style` with a single pointer - do not restate the style guide here.
+process script for the agent. Presentation taste (named patterns in `style`, prose) defers
+to `style` with a single pointer - do not restate the style guide here.
 
 ## Formatting
 

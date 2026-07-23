@@ -51,10 +51,11 @@ the proposal or write behavioral contracts.
 
 ## Chat
 
-Follow `style`. Lead with a compact design-area map, then keep the active area
-clear as the conversation progresses. Discussion checkpoints are ordinary
-conversation, not meta cards. Gate and handoff use meta cards only as described
-below.
+Follow `style`. Lead with a **scan table** of design areas (question, depends
+on). Walk areas with **focus + status**. Inside an area use **compare** for
+trade-offs, **figure** for flow or ownership, and **evidence** when grounding
+in code. Discussion checkpoints are ordinary conversation, not meta cards. Gate
+and handoff use meta cards only as described below.
 
 ## Write gate
 

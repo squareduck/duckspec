@@ -45,8 +45,8 @@ Body is freeform markdown (headings, lists, tables, diagrams, prose).
   the conversation. Preserve rationale when readers need it to apply the
   guidance correctly.
 - **Grounded and navigable.** Terminology agrees with project orientation,
-  capabilities, source, and tests. Use headings, tables, diagrams, examples,
-  and code when they make the knowledge easier to use.
+  capabilities, source, and tests. Use headings, `style` patterns (scan tables,
+  figures, …), examples, and code when they make the knowledge easier to use.
 - **Settled by default.** Do not preserve unresolved chat unless the entry is
   explicitly a research record whose purpose includes known unknowns.
 - Body markdown follows `style` (load only if not already in context).

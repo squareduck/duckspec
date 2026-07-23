@@ -41,7 +41,9 @@ scenarios, which is expected.
 
 ## Chat
 
-Follow `style`. Present ordering, dependencies, and coverage clearly; discuss
+Follow `style`. Present the planned step set with a **scan table** (order,
+depends on, coverage) or a compact **section map** when task lists are long.
+Use **figure** only when dependency topology is hard to see as a list. Discuss
 step boundaries when they are ambiguous. Gate and handoff use meta cards as
 described below.
 

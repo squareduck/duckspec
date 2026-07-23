@@ -51,11 +51,11 @@ specs, steps, source, or tests in this stage.
 
 ## Chat
 
-Follow `style`. Follow the user's concerns during investigation, then present a
-clear finding map and keep one finding active at a time. Use tables, diagrams,
-excerpts, and comparisons when they help assess evidence and options.
-Discussion checkpoints are ordinary conversation; only final document
-confirmation uses meta cards.
+Follow `style`. Follow the user's concerns during investigation, then present
+findings as a **scan table** or **focus + status** strip and keep one finding
+active. Expand the active finding with **evidence**; use **compare** for
+options and **figure** when structure clarifies impact. Discussion checkpoints
+are ordinary conversation; only final document confirmation uses meta cards.
 
 ## Write gate
 

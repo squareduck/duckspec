@@ -31,17 +31,11 @@ after the report.
 
 ## Chat
 
-Follow `style`. Findings are **information** (tables), not meta cards.
+Follow `style`. Findings are **information** (**scan table**), not meta cards.
 
-Lead with a short overall line (clean / N issues). Then a GFM table of issues
-when any exist, for example:
-
-| Check | Path | Issue |
-| --- | --- | --- |
-| check | `caps/…/spec.md` | missing summary |
-| audit | `auth/Session` | no resolving backlink |
-
-When clean, one or two sentences is enough - no empty tables.
+Lead with a short overall line (clean / N issues). Then a **scan table** of
+issues when any exist (e.g. Check / Path / Issue). When clean, one or two
+sentences is enough - no empty tables.
 
 Emit a `next` meta card only when offering a real choice after the report (fix
 path, continue a change). No `write` meta card in this stage.

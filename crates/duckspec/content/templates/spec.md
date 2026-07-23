@@ -70,11 +70,14 @@ merged capability for clarity and cohesion, not for the smallest textual delta.
 
 ## Chat
 
-Follow `style`. Present the grounded map before any artifact gate, then keep one
-capability active at a time. Use tables and diagrams when they make ownership,
-coverage, or behavior easier to judge. Discussion is ordinary conversation.
-Every confirmation uses a trailing `next` meta card with a decision-named token
-(`confirm map`, `confirm <path>`, `confirm remove <path>`).
+Follow `style`. Present the grounded capability map as a **section map** before
+any artifact gate, then walk capabilities with **focus + status**. Use **figure**
+or a short **scan table** only when ownership or coverage is easier that way.
+Doc discussion follows the same patterns as capability docs in `style` (figures
+and scan tables for the reader model). Spec contract bodies stay under
+`ds schema spec`. Discussion is ordinary conversation. Every confirmation uses
+a trailing `next` meta card with a decision-named token (`confirm map`,
+`confirm <path>`, `confirm remove <path>`).
 
 ## Write gate
 

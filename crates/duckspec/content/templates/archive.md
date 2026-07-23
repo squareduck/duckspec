@@ -33,8 +33,9 @@ confirmation, apply it, then verify the result.
 
 ## Chat
 
-Follow `style`. Dry-run and results are information (tables). Gate and handoff
-use meta cards as in Write gate and Handoff.
+Follow `style`. Dry-run previews and post-archive results are **scan tables**
+(paths, apply kind, outcomes). Gate and handoff use meta cards as in Write gate
+and Handoff.
 
 ## Write gate
 

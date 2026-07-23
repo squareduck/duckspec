@@ -35,10 +35,10 @@ inventory capabilities or map files here.
 
 ## Chat
 
-Follow `style`. Talk naturally: summarize, reframe, compare, or ask a focused
-question according to what the exploration needs. Use rich ordinary markdown
-when it makes the discussion clearer. Gate and handoff use meta cards as in
-Write gate and Handoff.
+Follow `style`. Talk naturally: summarize, reframe, or ask a focused question.
+When structure helps, use the named patterns - **compare** for consequential
+options, **evidence** for settled vs open claims, **scan table** for short
+parallel points. Gate and handoff use meta cards as in Write gate and Handoff.
 
 ## Write gate
 

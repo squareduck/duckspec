@@ -41,11 +41,12 @@ Body is freeform markdown (headings, prose, lists, tables, diagrams, code).
   `Concurrency`, `Rate limits` - whatever shape it has. Avoid generic shells
   (`Overview`, `Design decisions`, `Open questions`, `Rationale`). Those either
   belong under the H1 as prose or in a proposal or codex entry.
-- **Structure when it helps.** Table for parallel items with shared attributes
-  (states, modes, errors, config). Diagram for flow, state machine, or structure
-  that is easier to see than to read. Prose when prose is enough. Presentation
-  (including plain fences for tables/diagrams) follows `style` - load only if
-  not already in context.
+- **Same visual identity as chat.** Body presentation follows `style` (load only
+  if not already in context): **scan table** for parallel short fields (states,
+  modes, errors, config), **figure** for flow, state machine, or structure,
+  **section map** only when multi-field blocks need room, prose when prose is
+  enough. Plain fences for tables and figures so formatters do not reflow them.
+  Do not invent a layout family that chat would not use for the same facts.
 - **Cold reader.** Someone who walks up to this file with no knowledge of the
   change, proposal, design, or prior versions. Present tense. Do not reference
   `proposal.md`, `design.md`, or anything under `changes/` or `archive/` - those

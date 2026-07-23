@@ -61,10 +61,12 @@ deserves a new test.
 
 ## Chat
 
-Follow `style`. Backfill is a grounded discovery conversation. Use tables to
-compare candidate slices, ownership, evidence, and treatment; use diagrams when
-architectural boundaries are easier to see than describe. Clearly distinguish
-observed behavior, likely intent, settled contract candidates, and exclusions.
+Follow `style`. Backfill is a grounded discovery conversation. Candidate slices
+use a **scan table** (owner, evidence, treatment) or a **section map** when
+bodies run long. Deepen the chosen slice with **evidence**; use **figure** for
+ownership boundaries and **compare** when capture vs exclude is contested.
+Clearly distinguish observed behavior, likely intent, settled contract
+candidates, and exclusions.
 
 Only empty change creation uses meta cards.
 

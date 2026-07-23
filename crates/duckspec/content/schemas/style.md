@@ -11,44 +11,152 @@ Same taste in a message and in a file. Form follows data:
 
 | Situation | Prefer |
 | --- | --- |
-| Parallel items with shared fields (states, findings, scope rows, checks) | GFM table |
-| Architecture, flow, state machine | ASCII diagram in a fenced block |
-| Trees (caps, modules, files) | Indented tree in a fenced block |
+| Parallel items with shared short fields | **Scan table** |
+| Parallel items with long multi-field bodies | **Section map** |
+| Walking a multi-item list one at a time | **Focus + status** |
+| Options / trade-offs with shared criteria | **Compare** |
+| Grounding a single claim | **Evidence** |
+| Architecture, flow, state machine, tree | **Figure** |
 | Single outcome or short path | Prose or a tight list |
 | Paths and identifiers | Concrete `path` or `path:line` |
 | Real code | Fenced block with a language tag |
 
 **Craft:**
 
-- Lead with structure when it helps (table or diagram before explanation)
+- Lead with structure when it helps (pattern before explanation)
 - Depth is fine when it clarifies; skip ceremonial recap of known context
 - Clean is not the same as brief - cut noise, not necessary detail
 - In artifacts, put tables and diagrams in plain fenced blocks so formatters
   do not reflow them; language-tag only fences that hold real code
 - Prefer one clear structure over mixed half-tables and half-prose for the same
   facts
+- Use the named patterns below; adapt columns and field labels to the situation -
+  do not invent a new layout family for each stage
 
-## Diagrams
+## Patterns
 
-When a flow, state machine, or structure is easier to *see* than to read, draw
-it. Prefer diagrams that look intentional, not hurried:
+A small set of generic, adaptable patterns - the shared visual identity for
+mid-conversation chat and for freeform artifact bodies (capability docs, design
+prose, codex entries, and similar). Write-gate previews keep their
+stage-specific shapes; meta cards stay chrome only.
+
+Templates name *when* a stage uses a pattern. They do not restate these
+skeletons.
+
+### Scan table
+
+Parallel items with the **same short fields**. Choose columns for the
+situation (issues, candidates, status rows, dry-run paths).
+
+```markdown
+| <field> | <field> | <field> |
+| --- | --- | --- |
+| … | … | … |
+```
+
+Lead with a one-line verdict when reporting a set (clean / N issues). Omit the
+table when there is nothing to list - no empty tables.
+
+### Section map
+
+Parallel items whose bodies are **too long for a readable table** (ownership,
+contract, grounding, multi-line effects). One section per item; stable field
+labels within a map.
+
+```markdown
+## <ACTION> - `<id>`
+
+<field>:
+…
+
+<field>:
+- …
+```
+
+Prefer this over a scan table when cells would wrap into multi-paragraph blobs.
+Spec capability maps are the canonical case; use the same idea for any long-body
+index.
+
+### Focus + status
+
+Walking a multi-item map **one item at a time**. Show the full set, mark the
+active row, then expand only the active item.
+
+```markdown
+| # | Item | Status |
+| --- | --- | --- |
+| 1 | … | settled |
+| 2 | … | **active** |
+| 3 | … | open |
+
+### Active: <title>
+
+…
+```
+
+Adapt columns (layer, path, action) to the stage. Keep discussion on the active
+item until it is settled; then advance the status strip.
+
+### Compare
+
+Consequential choices with **shared criteria**. Short cells; recommendation
+after the table.
+
+```markdown
+| Option | <criterion> | <criterion> | Fit |
+| --- | --- | --- | --- |
+| A | … | … | … |
+| B | … | … | … |
+
+**Recommendation:** …
+```
+
+Use for design trade-offs, review resolutions, and apply blockers - not for
+every minor local detail.
+
+### Evidence
+
+Ground a **single claim** (finding, contract candidate, blocker).
+
+```markdown
+**Where:** …
+**Evidence:** …
+**Impact:** …
+```
+
+Swap or add labels when the situation is not a defect (`Intent`, `Implication`,
+`Resolution`, `Next`). Keep the block tight; long alternatives belong in
+**Compare**.
+
+### Figure
+
+Flow, state machine, tree, or structure that is easier to *see* than to read.
+ASCII only, in a plain fenced block; short caption after when needed.
+
+```text
+         ┌──────────┐
+    ───► │  state   │ ───►
+         └──────────┘
+```
+
+Craft:
 
 - Use box-drawing where it helps (`┌ ┐ └ ┘ │ ─ ► ▼`) and keep edges aligned
 - Label edges with short conditions; label nodes with stable names from the prose
-- One idea per diagram; split rather than overcrowding
+- One idea per figure; split rather than overcrowding
 - Symmetric spacing and columns scan better than freehand zigzags
-- ASCII only (portable in plain fences); no decorative noise
-- Follow with a short prose caption when the picture needs one beat of wording
+- No decorative noise
+- Ugly `A --> B --> C` lines are a last resort when the graph is trivial
 
-Ugly `A --> B --> C` lines are a last resort when the graph is trivial. Prefer a
-small, balanced figure when the relationship matters.
+Trees (caps, modules, files) use the same pattern as an indented listing in a
+plain fence.
 
 ## Meta cards (chat only)
 
 Blockquote cards are **chat chrome** for confirmations and choices. They never
 appear in on-disk artifacts. Use them rarely and only when the user or client
-must act. Findings, triage, verify results, and scopes stay ordinary markdown
-(usually tables).
+must act. Findings, triage, verify results, maps, and scopes use the patterns
+above - never meta cards.
 
 **Names:** always say **`write` meta card** and **`next` meta card** (kind in
 backticks + the words “meta card”). Do not call them “next actions lists”,

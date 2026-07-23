@@ -53,8 +53,9 @@ the requested filename or minimizing edits to existing entries.
 ## Chat
 
 Follow `style`. Use ordinary conversation to settle knowledge and placement.
-Present the codex map clearly, then keep one entry active at a time. Tables,
-diagrams, examples, and excerpts are welcome when they clarify the subject.
+Present the codex map as a **scan table** when rows are short, or a **section
+map** when subjects and effects need room; walk entries with **focus + status**.
+Use **figure**, **compare**, and **evidence** when they clarify the subject.
 Only map and artifact confirmations use meta cards.
 
 ## Write gate

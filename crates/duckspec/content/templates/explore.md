@@ -50,10 +50,11 @@ the conversation.
 
 ## Chat
 
-Follow `style`. Exploration is freeform, active, and grounded. Use a compact
-thread map, diagram, comparison, or evidence table when it materially helps;
-do not force the same presentation on every idea. Questions should emerge from
-what the project and conversation reveal.
+Follow `style`. Exploration is freeform, active, and grounded. Prefer the named
+patterns when structure helps: **scan table** or **section map** for threads and
+boundaries, **compare** for options, **evidence** for grounded claims, **figure**
+for architecture or flow. Do not force a pattern on every message. Questions
+should emerge from what the project and conversation reveal.
 
 Only change creation uses meta cards. Durable cross-cutting knowledge is handed
 to `/ds-codex`; `project.md` is not edited from explore.

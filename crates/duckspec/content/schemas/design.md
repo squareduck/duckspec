@@ -43,7 +43,9 @@ signature-level code sketches as the material requires.
 - Resolve every design question before writing. Do not preserve uncertainty for
   specs or implementation to discover.
 - Do not repeat the proposal or turn the design into a behavioral spec.
-- Body markdown follows `style` (load only if not already in context).
+- Body markdown follows `style` (load only if not already in context) - same
+  named patterns as chat (figures, scan tables, compare blocks) shaped to the
+  design.
 
 ## Formatting
 

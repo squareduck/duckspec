@@ -61,9 +61,10 @@ mechanical artifact rules stay in schemas; markdown presentation stays in `style
 ## Chat
 
 How this stage uses chat and markdown presentation. Points at `ds schema style` (load only
-if not already loaded). States when this stage emits ordinary information display and when
-it emits a `write` meta card or a `next` meta card. Always use those full names (see
-`style`). Stage-specific notes only - no second copy of the style guide.
+if not already loaded). States when this stage emits ordinary information (which named
+`style` patterns fit) and when it emits a `write` meta card or a `next` meta card. Always
+use those full names (see `style`). Stage-specific notes only - name patterns, do not paste
+skeletons or a second copy of the style guide.
 
 ## Write gate
 

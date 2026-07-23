@@ -114,19 +114,23 @@ necessarily brief. Depth is fine when it clarifies; noise is not.
 
 Two layers (full detail in `ds schema style`):
 
-1. **Information** (almost everything) - normal GFM shaped by the data: tables, diagrams,
-   lists, prose. Same taste in a file as in a message.
+1. **Information** (almost everything) - normal GFM shaped by the data, using the
+   named patterns in `style` (scan table, section map, focus + status, compare,
+   evidence, figure) plus lists and prose. Same taste in a file as in a message.
+   Mid-conversation chat and freeform artifact bodies (docs, design, codex)
+   share that identity; write-gate previews keep stage-specific shapes.
 
 2. **Meta cards** (chat only, rare) - the `write` meta card and the `next` meta card only.
    Not used in artifacts. Not used for findings, triage, or reports.
 
-If it can be a good table or ordinary prose, it is not a meta card. Always name them
+If it can be a good pattern or ordinary prose, it is not a meta card. Always name them
 **`write` meta card** and **`next` meta card** in templates so the agent is never confused
 with prose “next steps.”
 
-Templates state *when* this stage uses meta cards or particular information shapes.
-Schemas state *what* the file must contain and point at `style` for how body markdown
-should read. Neither restates the style guide.
+Templates state *when* this stage uses meta cards or which patterns fit. They name
+patterns; they do not restate skeletons. Schemas state *what* the file must contain
+and point at `style` for how body markdown should read. Neither restates the style
+guide.
 
 Clients may parse a trailing `next` meta card as quick actions. The agent chooses which
 actions fit the conversation - not a fixed disk-phase tree.

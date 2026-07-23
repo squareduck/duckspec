@@ -82,10 +82,11 @@ Work the current step’s `## Tasks` in order:
 
 ## Chat
 
-Follow `style`. Progress and blockers are freeform (tables when comparing
-failures, options, or validation help). Report concrete changes and evidence,
-not an implementation monologue. Handoff uses a `next` meta card as in
-Handoff. No `write` meta card for routine task execution.
+Follow `style`. Progress is short prose or a **scan table** of tasks and
+results. Blockers use **evidence** plus **compare** for viable options and the
+earliest stage to route to. Report concrete changes and evidence, not an
+implementation monologue. Handoff uses a `next` meta card as in Handoff. No
+`write` meta card for routine task execution.
 
 ## Write gate
 
