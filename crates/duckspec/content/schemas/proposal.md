@@ -1,52 +1,49 @@
 # Proposal schema
 
-A proposal is the **decision record** for a change: **what** we want and **why**
-- distilled from exploration - before design and before capability layout. It is
-not architecture, not a caps list, not an impact analysis, and not a sales
-narrative. Those come later (design, then specs) or not at all.
+A proposal is the durable synthesis of an exploration: the clearest compact
+record of what was learned and settled before the chat disappears. Its body is
+freeform so the subject, not a ceremonial outline, determines the shape.
 
 ## Structure
 
 ```markdown
 # <Change Title>
 
-<1-2 sentence summary>
+<compact summary>
 
-## Motivation
+<freeform body shaped to the subject>
 
-<why this change, why now>
+## Open questions
 
-## Intent
-
-<what should be true when this change succeeds - outcomes, behaviors, constraints
-on the problem. User/system language, not module or capability paths.>
-
-## Non-goals
-
-<what this change deliberately does not try to solve>
+<optional; only when genuine uncertainty is part of the decision context>
 ```
 
-Recommended sections, not enforced by `ds check` beyond H1 + summary.
+The body may use prose, headings, tables, lists, or ASCII diagrams in any
+combination that communicates the exploration clearly. `Open questions` is
+optional, not part of the default shape.
 
 ## Rules
 
 - H1 title is required
 - A non-empty summary paragraph follows the H1 directly
-- Body is freeform markdown; the Structure skeleton is the expected shape
+- Body after the summary is freeform markdown
+- If present, `## Open questions` contains only uncertainty that remains
+  material to the direction of the change
 - Path: `duckspec/changes/<change-name>/proposal.md`
 
 ## Quality
 
-- **Motivation** states the problem and why now from agreed exploration - not a
-  solution design and not a pitch for traction, adoption, or internal buy-in.
-- **Intent** is the success picture: what becomes true, for whom, under what
-  constraints. Stay above capabilities and code. Naming exact `caps/` paths or
-  listing files is premature here; design and spec discover structure.
-- **Non-goals** bound the problem so later stages do not silently expand it.
-  Feature-level, not "we will not touch crate X" unless that *is* the product
-  boundary.
-- **Short and scannable.** Faithful summary of the decision, not a mini-design
-  and not marketing copy.
+- Preserve the conclusions and context a future reader cannot recover once the
+  exploration chat disappears.
+- Explain the problem and intended improvement without replaying the
+  conversation or repeating the same point under several headings.
+- Include boundaries, constraints, rejected directions, or open questions only
+  when they were material to the exploration.
+- Prefer concrete project language and visual structure over padded rationale,
+  generic benefits, or a sales narrative.
+- Stay above implementation planning, capability layout, and file impact;
+  design and spec discover those later.
+- Keep the record compact, clear, and informative rather than merely brief.
 - Body markdown follows `style` (load only if not already in context).
 
 ## Formatting
@@ -56,37 +53,30 @@ if not already in context.
 
 ## Example
 
-```markdown
-# Next-card composer hints
+````markdown
+# Calm chat transcript
 
-Align empty-composer next actions with trailing agent `next` meta cards so the
-UI and templates share one authority for "what you can do next."
+Make agent turns easy to scan by separating thinking, tool activity, and the
+answer instead of flattening everything into one noisy stream.
 
-## Motivation
+Today, reasoning is mixed into answer text while every tool call becomes its
+own card. The actual answer gets buried, and the transcript feels busier as
+harnesses expose richer event streams.
 
-Templates already emit ranked `next` meta cards. Duckboard still offers a
-separate disk-phase chip ladder and optional under-input suggestions, so
-empty-composer authority is split and users see two systems.
-
-Why now: meta-card syntax is stable; aligning the composer before more stages
-depend on chips avoids dual brains becoming load-bearing.
-
-## Intent
-
-- After the first turn, empty-composer next actions come only from a trailing
-  `next` meta card (ranked, capped)
-- The active action appears as ghost text; empty Enter sends it; Tab cycles when
-  there is more than one
-- No trailing `next` after the first turn means no next-action ghost (missing
-  offers are a template fix, not a UI fallback)
-- Empty sessions may still seed one bootstrap action; that path ends after the
-  first turn
-- Optional oneshot suggestions stay under-input only - never empty Enter
-
-## Non-goals
-
-- End-to-end structured question-tool support
-- Changing meta-card syntax or inventing new card kinds
-- Redesigning the composer footer
-- Auto-fixing missing `next` cards from disk phase after the first turn
 ```
+agent events             transcript
+────────────             ──────────
+reasoning deltas   ───►  Thinking   (collapsible)
+tool calls/results ───►  Activity   (grouped)
+answer deltas      ───►  Answer     (primary)
+```
+
+The transcript should remain harness-neutral: providers emit common events,
+and one shared presentation turns them into calm, contiguous segments.
+Thinking collapses once the answer begins; consecutive tools form one activity
+group; the answer remains visually primary.
+
+This direction does not require harness-specific views or a redesign of stored
+chat history. Compatibility with existing sessions remains a constraint for
+the later design.
+````

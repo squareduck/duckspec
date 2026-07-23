@@ -1,8 +1,8 @@
 # Spec schema
 
-A capability spec is the **behavior contract**: requirements and scenarios for
-what the system must do. Scenarios marked `test: code` are a standing commitment
-to automated verification.
+A capability spec is concise technical documentation backed by tests: cohesive
+normative requirements completely describe the important behavior, while a
+minimal set of scenarios provides executable proof of its distinct outcomes.
 
 ## Structure
 
@@ -64,25 +64,34 @@ apply still must satisfy this schema. Delta shape (markers, ops) is
 
 ## Quality
 
-Cold-reader shape of a finished file - not which scenarios to invent (that is
-the `/ds-spec` stage template).
-
-- **Normative precision.** SHALL / MUST / SHOULD / MAY mean what they say. Do
-  not write SHALL when you mean SHOULD.
-- **One concern per requirement.** If scenarios under one requirement test
-  unrelated things, split the requirement.
-- **Prose stands alone.** Normative text carries the contract; scenarios
-  illustrate it. A requirement may be prose-only when there is no scenario.
-- **Observer-facing.** Requirements describe system behavior observers care
-  about - not module placement, dependency graphs, or "does not call X" (those
-  belong in `design.md` unless the public contract *is* that surface).
-- **Clean GWT.** Declarative outcomes, not click-through scripts. GIVEN is
-  state ("an authenticated user"), not a prior action story. WHEN is one
-  trigger. THEN is caller-observable (return, side effect, persistence, event,
-  response) - not private fields, enum variants, function names, or which
-  branch ran.
-- **Distinctive names.** "Valid credentials" and "Invalid password" are good.
-  "Test case 1" and "Happy path" are not.
+- **Complete, not exhaustive.** Normative prose describes every important
+  behavior the capability owns. Important means a stable observable rule whose
+  violation materially changes correctness, safety, data, interoperability, or
+  user experience - not every input, branch, or implementation detail.
+- **Cohesive whole.** Requirements form the shortest clear contract for the
+  capability. Merge overlap, remove stale or misplaced behavior, and reorganize
+  existing content when that improves the complete file.
+- **Normative precision.** SHALL / MUST / SHOULD / MAY mean what they say. Put
+  the full policy in requirement prose; do not repeat it in every scenario.
+- **One concern per requirement.** Split unrelated behavior, but do not invent
+  requirements merely to hold scenarios.
+- **Scenarios earn tests.** Each scenario pins a distinct important outcome,
+  boundary, policy, state transition, compatibility promise, or integration
+  seam. Variations with the same meaningful outcome belong in one parameterized
+  test, not duplicate scenarios.
+- **Tests inform the contract.** Existing tests may reveal stable intentional
+  behavior missing from the spec. Helper and implementation tests need not
+  become scenarios; important behavioral tests should have a natural spec
+  owner.
+- **Lean GWT.** Use only the state needed to understand the trigger and only
+  independently important observable outcomes. GIVEN is state, WHEN is one
+  trigger, and THEN is the result. Omit setup narration, SHALL in clauses, and
+  restatements of the requirement.
+- **Observer-facing.** Returns, persisted state, events, responses, and visible
+  recovery are contract material. Private fields, module placement, function
+  names, and branches belong to implementation or design.
+- **Distinctive names.** Name the outcome that differentiates the scenario;
+  avoid "Happy path", "Test 1", and sentence-length restatements.
 
 Body markdown follows `style` (load only if not already in context).
 
@@ -105,17 +114,17 @@ measured from the last request (not from login time).
 
 > test: code
 
-### Scenario: Session expires after inactivity
+### Scenario: Idle session expires
 
 - **GIVEN** an authenticated user
-- **AND** their last request was more than 30 minutes ago
+- **AND** 30 minutes have passed without activity
 - **WHEN** the user makes a new request
-- **THEN** the response is 401
-- **AND** the session token is invalidated server-side
+- **THEN** the request is rejected as unauthenticated
+- **AND** the session is invalidated
 
 ### Scenario: Activity resets the timer
 
 - **GIVEN** an authenticated user
-- **WHEN** the user makes a request at minute 29
+- **WHEN** the user makes a request before the idle timeout
 - **THEN** the session remains valid for another 30 minutes
 ```

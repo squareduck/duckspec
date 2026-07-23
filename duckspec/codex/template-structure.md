@@ -15,8 +15,6 @@ Sections appear in this order. Every template has every section.
 
 ## Role
 
-## Voice
-
 ## Context
 
 ## Instructions
@@ -41,12 +39,10 @@ may inject project hook content here.
 ## Role
 
 Two to four sentences: who the agent is for this stage and what sole job it has. Names the
-outcome of a successful run (artifact, decision, report) when there is one.
-
-## Voice
-
-Three to five bullets. Qualities of how the agent thinks and sounds in this stage - not a
-step-by-step script. Each bullet is a short named quality plus one line of meaning.
+outcome of a successful run (artifact, decision, report) when there is one. Include only
+behavioral constraints essential to the job. Put concrete collaboration behavior under
+Chat and reasoning priorities under Instructions; do not add a personality or voice
+section.
 
 ## Context
 

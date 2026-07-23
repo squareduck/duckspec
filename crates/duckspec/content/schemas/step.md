@@ -1,8 +1,8 @@
 # Step schema
 
-A step is a **self-contained unit of implementation work** for a change: ordered
-tasks (and optional prerequisites, context, and outcomes) an implementer can
-execute. Files live under the change’s `steps/` directory.
+A step is a focused, self-contained implementation slice for a change: one
+coherent outcome expressed as ordered tasks, with optional prerequisites,
+context, and outcomes when they carry useful information forward.
 
 ## Structure
 
@@ -60,8 +60,9 @@ present only when they have content.
 
 ## Quality
 
-- **Session-sized.** Completable as one focused unit of work; split when the
-  task list becomes a grab bag.
+- **Focused slice.** One coherent implementation outcome, completable after its
+  prerequisites. Split a step when its tasks can progress independently or
+  become a grab bag of unrelated work.
 - **Concrete tasks.** Actionable work (“add column X”), not research placeholders.
 - **Dependency order.** Within a step, earlier tasks enable later ones.
 - **Scenario coverage.** Every `test: code` scenario the change introduces should

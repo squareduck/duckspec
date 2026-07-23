@@ -1,148 +1,136 @@
 # Review schema
 
-A review is a **judgment** on a change: whether it is well-conceived and
-well-made. Static checks (`ds check`, `ds audit <change>`) own well-formed;
-the review owns thinking and craft. Append-only under
-`duckspec/changes/<name>/reviews/NN-review-<slug>.md` (shared log with followups).
+A review is the durable synthesis of an agent-led inspection and the
+finding-by-finding discussion that followed. It records evidence, important
+trade-offs, the agreed resolution, and the earliest corrective stage so a new
+session can act without reconstructing the conversation.
 
 ## Structure
 
 ```markdown
-# <Review Title>
+# <Review title>
 
-<1-2 sentence summary: what was reviewed, stage, headline verdict>
+<compact outcome summary>
 
 ## Scope
 
-<artifacts and/or code examined; stage; deepest layer on the chain>
+<artifacts, source, tests, and stage examined>
 
 ## Summary
 
-| # | sev | lens | title | → next |
-| --- | --- | --- | --- | --- |
-| 1 | critical | soundness | <short title> | /ds-spec |
-| 2 | major | quality | <short title> | /ds-step |
+| # | finding | resolution | → next |
+| --- | --- | --- | --- |
+| 1 | <short title> | <agreed conclusion> | /ds-design |
 
 ## Findings
 
-### 1. <Finding title> - <lens>/<severity>
+### 1. <Finding title>
 
-**Where:** <`path:line` or artifact + section>
+**Where:** <paths, lines, artifacts, or sections>
 
-**Why:** <lasting cost if frozen as-is>
+**Evidence:** <what was observed>
 
-**Action:** <recommended next stage or approach - not work already done>
+**Impact:** <why it matters if unchanged>
 
-## Open questions
+**Discussion:** <material alternatives and trade-offs considered>
 
-<genuine unknowns only a human can settle. Omit if none.>
+**Resolution:** <agreed conclusion>
 
-## Verdict
+**Next:** </ds-design, /ds-spec, or /ds-step> - <specific work the stage can act on>
 
-<aggregate judgment for this stage - gestalt, not max severity alone>
+## Resolved concerns
+
+<optional dismissed candidates whose resolution is durable>
+
+## Outcome
+
+<aggregate readiness and primary next route>
 ```
 
-```
-proposal --> design --> caps (spec/doc) --> code
-```
-
-Read down the chain as far as artifacts exist. Number Summary rows and Findings
-headings the same. Empty Summary (header row only, no data rows) is valid when
-there are no lasting findings - Verdict still states readiness. Column
-`→ next` is a real stage or path (`/ds-spec`, `/ds-step`, `/ds-archive`, or a
-short approach that implies one) - not "already fixed" and not `ignore`.
-
-## Lenses
-
-- **soundness** - right on its own terms (problem, architecture, model, code)
-- **fidelity** - each layer realizes the one above; improving divergence is not
-  a defect, eroding divergence is
-- **quality** - simple, idiomatic, maintainable (mostly code; tangled design or
-  bloated specs qualify)
-
-## Severity
-
-Lasting harm if frozen as-is - independent of lens. Rate by drag, not "does it
-run today."
-
-| Level | Meaning |
-| --- | --- |
-| critical | Lasting structural harm; address before accepting as done |
-| major | Real durable drag if frozen (duplication, wrong layer, multi-job units) |
-| minor | Low-cost polish that still compounds if ignored - not "file and forget" |
-
-Do not inflate severity (teaches readers to ignore you). Do not discount quality
-findings as "just craft" when they erode maintainability.
+`Resolved concerns` is optional. Empty Summary is valid when no accepted
+findings remain; Outcome still states readiness.
 
 ## Rules
 
-- Path: `duckspec/changes/<name>/reviews/NN-review-<slug>.md` (`review-` prefix
-  on create; legacy unprefixed files remain valid)
+- Path: `duckspec/changes/<name>/reviews/NN-review-<slug>.md`
 - H1 title required; non-empty summary paragraph follows it
-- Body freeform; Structure is recommended (document schema only for `ds check`)
-- Append-only log - new file per review; do not renumber or rewrite history
+- Body is freeform markdown; Structure is the expected durable shape
+- Summary rows and Findings headings use the same numbering
+- Every accepted finding has a resolved conclusion and one earliest next stage
+- Valid finding routes: `/ds-design`, `/ds-spec`, `/ds-step`
+- The record contains no unresolved findings or open questions
+- Append-only log: create a new file; do not renumber or rewrite history
 
 ## Quality
 
-Cold-reader shape of a finished file - not which findings to invent (that is
-the `/ds-review` stage template).
-
-- **Scannable first.** Triage from Summary; depth under Where / Why / Action
-- **Actionable rows only.** Each Summary row has location, lasting cost, and a
-  concrete Action with a real `→ next`. Observations without a path, praise, and
-  improving divergences are prose (Verdict), not rows
-- **No noop next.** `→ next` is never `ignore` or equivalent
-- **Empty Summary is valid.** Clean freeze-ready Verdict with Scope showing what
-  was examined is a complete review
-- **Verdict is aggregate.** Gestalt readiness, not the single worst row
-- Body markdown follows `style` (load only if not already in context)
+- **Full decision context.** Evidence, impact, important alternatives, agreed
+  resolution, and specific next work let a cold stage act without redoing the
+  review conversation.
+- **Grounded.** Exact project evidence supports every finding. Mechanical
+  failures already owned by checks are reported by those checks, not padded
+  into review prose.
+- **Upstream routing.** Route to design when direction is invalid, spec when
+  design is sound but behavior is wrong, and step when design and contracts are
+  sound but implementation needs work.
+- **One finding, one issue.** Merge duplicate symptoms and keep related
+  evidence together. Order findings from the earliest affected layer.
+- **Resolved concerns sparingly.** Omit false leads unless the dismissal
+  captures a durable intentional trade-off or prevents repeated investigation.
+- **Cohesive record.** Summary supports scanning; Findings preserve reasoning;
+  Outcome states the aggregate readiness without repeating every row.
+- Body markdown follows `style` (load only if not already in context).
 
 ## Formatting
 
-After write or edit: `ds format <path>`. Presentation follows `style` - load only
-if not already in context.
+After write or edit: `ds format <path>`. Presentation follows `style` - load
+only if not already in context.
 
 ## Example
 
 ```markdown
-# Post-implementation review: Google OAuth login
+# Review: OAuth callback
 
-Reviewed `auth/google` end-to-end against design and spec. Flow is sound; the
-callback carries avoidable complexity and one foundational bug.
+The callback flow needs a design amendment before its contract or code can be
+accepted; session reuse remains sound.
 
 ## Scope
 
-`caps/auth/google` spec and design, change steps, and `src/auth/google/`.
-Post-implementation: full chain to code.
+Reviewed the OAuth proposal, design, capability pair, callback implementation,
+and integration tests after implementation.
 
 ## Summary
 
-| # | sev | lens | title | → next |
-| --- | --- | --- | --- | --- |
-| 1 | critical | soundness | State comparison inverted on callback | /ds-spec |
-| 2 | major | quality | Token exchange reimplements retry helper | /ds-step |
+| # | finding | resolution | → next |
+| --- | --- | --- | --- |
+| 1 | Account linking has two owners | Centralize linking in the identity service | /ds-design |
 
 ## Findings
 
-### 1. State comparison inverted on callback - soundness/critical
+### 1. Account linking has two owners
 
-**Where:** `src/auth/google/callback.rs:42`
+**Where:** `design.md` account-linking flow; `src/oauth/callback.rs:70`
 
-**Why:** Forged-state check always passes; contradicts the rejection scenario.
+**Evidence:** The callback creates links directly while the identity service
+also owns uniqueness and conflict handling.
 
-**Action:** Compare to authorize-time value; tighten the test via `/ds-spec`
-then `/ds-step` if the rejection scenario is missing.
+**Impact:** Two write paths can apply different conflict rules and drift.
 
-### 2. Token exchange reimplements retry helper - quality/major
+**Discussion:** Keeping callback ownership is locally smaller, but duplicates
+the identity invariant. Routing all links through the identity service adds one
+call and preserves a single authority.
 
-**Where:** `callback.rs:70-110`
+**Resolution:** The identity service owns link creation and conflicts; the
+callback only supplies the verified provider identity.
 
-**Why:** Duplicates `http::retry` without jitter; second place to fix bugs.
+**Next:** `/ds-design` - amend ownership and callback flow before revising specs.
 
-**Action:** Call `http::retry`.
+## Resolved concerns
 
-## Verdict
+Opaque session reuse was rechecked and remains intentional; OAuth converges on
+the existing session boundary.
 
-Not ready to freeze: fix the inverted state check and drop the hand-rolled
-retry.
+## Outcome
+
+Not ready to freeze. Amend the design first; spec and implementation work
+follow from that settled direction.
 ```

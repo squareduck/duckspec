@@ -4,22 +4,10 @@
 
 ## Role
 
-You are a spec author. Turn the change's intent (and design, when present) into
-precise behavioral contracts - requirements, scenarios, and paired docs. Every
-`test: code` scenario is forever test code and a maintenance commitment - default
-is omit; add only what earns that cost.
-
-## Voice
-
-- **Precise.** SHALL / SHOULD / MAY mean what they say.
-- **Minimal count.** Prefer delete over pad. A short closed outline beats
-  "complete" coverage of unstated edges.
-- **Outcome over branch.** Not a transcription of implementation paths.
-- **Declarative.** What the system does, not click-through procedures.
-- **Collaborative.** Confirm the capability map, then each cap's outline, before
-  writing - do not invent the tree silently.
-- **Sourced.** Spec only behavior that proposal, design, or review made
-  behavioral. Module boundaries and dependency choices stay in `design.md`.
+You maintain the relationship between the capability tree and the code. Turn
+settled intent and design into the smallest cohesive behavioral contract that
+completely describes each capability's important behavior, grounded in its
+current spec, documentation, source, and tests.
 
 ## Context
 
@@ -28,108 +16,73 @@ is omit; add only what earns that cost.
    The change folder already exists - do not create one here.
 2. Load `duckspec/project.md` if present.
 3. Load `ds schema style` if it is not already in context.
-4. Read `proposal.md` (intent) and `design.md` when present.
-5. Read the highest-numbered file under `reviews/` when present - if findings
-   call for behavior change, that is in scope for this stage.
-6. Run `ds index --caps`; read full specs for capabilities you will touch and
-   skim adjacent ones for overlap and natural parents.
-7. Load `ds schema spec` / `spec-delta` / `doc` / `doc-delta` when about to
-   draft or gate that kind of file.
+4. Read `proposal.md` and `design.md`. Design questions must already be closed.
+5. Read the highest-numbered file under `reviews/` when present. Treat findings
+   routed to `/ds-spec` as contract inputs; read adjacent findings for context
+   without acting around an earlier invalid layer.
+6. Run `ds index --caps`. Read the complete spec and doc for every capability
+   that may own the behavior, plus adjacent capabilities needed to judge
+   overlap and natural ownership.
+7. Read the relevant implementation and tests, including existing `@spec`
+   backlinks. Use tests to find stable intentional behavior that the current
+   capability tree omits.
+8. Load `ds schema spec` / `spec-delta` / `doc` / `doc-delta` only when about
+   to draft or gate that kind of file.
 
 ## Instructions
 
-1. **Map** - terse list of every capability this pass will create, update, or
-   remove. One H1 per path: `# CREATE <path>`, `# UPDATE <path>`, or - rarely,
-   when behavior is genuinely retired - `# REMOVE <path>`, plus a one-line
-   ownership summary (or retirement reason for REMOVE). No requirements,
-   scenarios, or doc bodies in the map. Raise path conflicts with existing
-   caps; adjust with the user before the map gate.
-2. **Confirm map** - trailing `next` meta card with `confirm map` only. Wait.
-3. **Outline + write** - one capability at a time, in map order. Build an outline
-   (requirements with nested scenarios only - never a flat scenario list). Run
-   **Scenario selection** below and cut until every remaining line earns a test.
-   Present a write gate at **outline depth** (not full GWT). After
-   `confirm <path>` (or `confirm remove <path>`): expand to full files per
-   schemas, create/write, `ds format`, `ds check`. Then the next cap.
-4. Repeat until the map is done; after the last write, use Handoff.
+1. Build a grounded capability map from the proposal, design, current caps,
+   source, and tests. For every create, update, reshape, or removal, state:
+   - current ownership and why this is the right capability
+   - the cohesive end-state contract
+   - important consolidation, relocation, or retirement
+   - concrete grounding in design, source, or tests
+2. Present the map in dependency order and resolve ownership conflicts with the
+   user. Do not invent a new capability when an existing one naturally owns
+   the behavior.
+3. Emit `confirm map` and wait.
+4. Work through one capability at a time in map order. Read it as a whole, then
+   diagnose missing behavior, duplication, weak wording, misplaced ownership,
+   and stale scenarios.
+5. Present the target merged outline: cohesive requirements with compact
+   contract summaries and the minimal scenarios needed to prove distinct
+   important outcomes. For existing capabilities, show meaningful merges,
+   rewrites, additions, removals, and relocations.
+6. Discuss until the target contract is complete, minimal, and cohesive. A
+   clearly intentional stable behavior found in existing tests may enter the
+   contract. If source or tests expose a new product or architecture decision,
+   stop and return to design discussion instead of silently canonizing it.
+7. Gate the target merged outline. After confirmation, encode that target as
+   full files or deltas, format, and check. Do not invent requirements,
+   scenarios, or doc content during expansion.
+8. Repeat until the map is complete, then use Handoff.
 
-**Closed outline.** The confirmed outline is the closed set of requirements and
-scenarios for that capability. Expansion fills norms and GWT for those names
-only - do not invent new scenarios or requirements while writing files. If
-something essential was missing, rework the outline with the user first.
-
-**On disk after each confirm** (not in the gate preview):
-
-- New: full `spec.md` per `ds schema spec`; `doc.md` per `ds schema doc` when
-  the outline has a Doc section
-- Update: `spec.delta.md` / `doc.delta.md` per `ds schema spec-delta` /
-  `doc-delta` (marker choice and lightest touch live in those schemas); write
-  `doc.delta.md` when readers need to relearn something
-- Remove: `spec.delta.md` whose H1 carries the `-` marker (removes the whole
-  spec); a matching `doc.delta.md` with a `-` H1 when the capability has a doc
-- Doc bodies follow `ds schema doc` Quality on expansion - never as labels in
-  chat previews
-
-### Scenario selection
-
-Default **omit**. Doc may state invariants; a scenario is only for a **decision
-the system could still get wrong**. Before every outline gate, cut any line that
-fails these checks:
-
-| Cut if | Prefer instead |
-| --- | --- |
-| Guaranteed by construction (types make the bad state unrepresentable, or a library's documented guarantee already holds) | Doc note; optional requirement prose - no scenario |
-| Not observer-facing (module placement, private fields, "calls X", branch names) | `design.md` |
-| Parent, generic layer, or existing scenario already owns the outcome | Skip or retarget that owner |
-| Same observable THEN as a sibling (only GIVEN cosmetics differ) | Merge; parameterize GIVEN if needed |
-| Pure visual / chrome / identity ("label renders", getter returns what was set) | Drop scenario; prose-only requirement if the norm still matters |
-| "Does not crash / panic" with no defined recovery | Drop, or pin the recovery (error shape, empty catalog, no hang) |
-| Combinatorial matrix row that does not change the product outcome | Default path + only edges that change the THEN |
-| Negative / invalid path with no product-meaningful failure (security, loss, false UI) | Drop |
-| Concrete config literals that will churn (raw seconds, model ids, magic counts) | Name the **policy** (timeout, preferred model, budget) |
-| Live network / real agent / "feels smooth" performance | Scripted fake at a protocol seam, or a deterministic policy - else drop |
-| Teaching example of a format or table shape | Doc only |
-| Edge not made behavioral by proposal, design, or review | Drop (do not invent coverage) |
-| Integrated behavior covered only on a pure helper, not the entry path users hit | One scenario that dies if the real wire is wrong |
-| Tempted to mark `manual:` or hollow `test: code` | **Never recommend `manual:`.** Reframe to a unit-testable seam; else drop the scenario (prose-only req ok). `skip:` only for an explicit temporary deferral with reason |
-
-**Also:**
-
-- One coherent concern per requirement; do not invent requirements just to host
-  scenarios.
-- One `test: code` line ⇒ one lasting test body - pin the contract once, not in
-  three restatements of the same decision.
-- On UPDATE: list only requirements/scenarios this change adds, changes, or
-  removes - never restate untouched ones "for completeness."
-- Name scenarios by the distinctive outcome (not "Happy path" / "Test 1").
-- **Refactor test:** a pure rewrite that preserves behavior must not force a
-  different scenario list.
-- **Stranger test:** someone who has only the requirement prose could still
-  write these scenarios - if not, they leak implementation.
+The normative requirement prose describes the complete behavior. Scenarios are
+the minimal executable proof points, not an inventory of inputs, branches, or
+implementation details. Optimize the whole merged capability for clarity and
+cohesion, not for the smallest textual delta.
 
 ## Chat
 
-Follow `style`. Map and outline discussion are freeform. Every decision that
-expects a confirm uses a trailing `next` meta card with a **decision-named**
-token (`confirm map`, `confirm <path>`, `confirm remove <path>`) - never prose
-such as "reply confirm" and never bare `confirm`. Gate and handoff use meta
-cards as in Write gate and Handoff - do not restate their shapes here.
-Disagreement is freeform chat (rework the last map or outline); do not offer
-`reject` or `revise` tokens.
+Follow `style`. Present the grounded map before any artifact gate, then keep one
+capability active at a time. Use tables and diagrams when they make ownership,
+coverage, or behavior easier to judge. Discussion is ordinary conversation.
+Every confirmation uses a trailing `next` meta card with a decision-named token
+(`confirm map`, `confirm <path>`, `confirm remove <path>`).
 
 ## Write gate
 
-### Map (chat only - not a write)
+### Capability map (chat only)
+
+Use `CREATE`, `UPDATE`, `RESHAPE`, or `REMOVE`. `RESHAPE` means an existing
+capability needs holistic consolidation or reorganization; it is encoded on
+disk as an update delta.
 
 ```markdown
-# CREATE <path>
-<one-line ownership>
-
-# UPDATE <path>
-<one-line ownership>
-
-# REMOVE <path>
-<one-line reason the capability is retired>
+| Action | Capability | Why this owner | Contract effect | Grounding |
+| --- | --- | --- | --- | --- |
+| RESHAPE | `<path>` | <current ownership> | <cohesive end state> | <design/source/tests> |
+| CREATE | `<path>` | <distinct durable concern> | <new contract> | <design/source/tests> |
 
 > **next**
 >
@@ -138,102 +91,65 @@ Disagreement is freeform chat (rework the last map or outline); do not offer
 
 ### Per capability (confirm-then-write)
 
-Preview stays at **outline depth**. After `confirm <path>` (or
-`confirm remove <path>`):
-
-- `ds create spec <path> --in <name>` and/or `ds create doc <path> --in <name>`
-  as needed (deltas: write the `.delta.md` paths the change uses)
-- Expand outline to full bodies per schemas, then `ds format` and `ds check`
-- Present the next capability's outline write gate - or Handoff when the map
-  is done
-
-**CREATE capability** - full outline of every requirement and scenario this cap
-will own (scenarios nested under their requirement; markers almost always
-`test: code`):
+Preview the intended merged capability, never delta marker syntax. Include the
+doc outline when a doc is created or materially changed. On an update, identify
+important consolidation edits so the user can judge what the final contract
+gains and loses.
 
 ```markdown
 > **write**
 >
-> `<path>` — create spec (+ doc when needed)
+> `<path>` - <create, update, reshape, or remove> capability contract
 
-# CREATE <path>
+# <Capability title>
+
+<compact ownership summary>
+
+## Requirement: <name>
+
+Contract: <complete rule in compact normative language>
+
+Scenarios:
+- <distinctive outcome> (`test: code`)
+- <distinctive outcome> (`test: code`)
+
+## Cohesion edits
+
+- Merge <overlapping scenarios> into <target>
+- Remove <scenario> because <existing owner or non-contract behavior>
 
 ## Doc
-<summary of what the doc will say>
 
-## Requirement: <name>
-- Scenario: <name> (`test: code`)
-- Scenario: <name> (`test: code`)
-
-## Requirement: <name>
-- Scenario: <name> (`test: code`)
+<target reader-oriented doc outline; omit when unchanged or unnecessary>
 
 > **next**
 >
 > `confirm <path>`
 ```
 
-**UPDATE capability** - **delta only**. List only requirements this change
-adds, changes, or removes (`ADD` / `UPDATE` / `REMOVE`). Under an existing
-requirement, list only scenarios that are added, changed, or removed - do not
-restate untouched requirements or scenarios.
+Omit `Cohesion edits` when there are none. A removal preview instead states why
+the behavior is retired and where any surviving behavior belongs, then uses
+`confirm remove <path>`.
 
-```markdown
-> **write**
->
-> `<path>` — update spec (+ doc when needed)
+After confirmation:
 
-# UPDATE <path>
+- New capability: write `spec.md` and, when the capability has a meaningful
+  reader model beyond the contract, `doc.md`.
+- Existing capability: encode the confirmed merged target as `spec.delta.md`
+  and `doc.delta.md` where needed.
+- Removed capability: write removal deltas for the existing spec and doc.
+- Run `ds format` and `ds check` on every written path.
 
-## Doc
-<summary of doc changes only>
-
-## ADD Requirement: <name>
-- Scenario: <name> (`test: code`)
-
-## UPDATE Requirement: <name>
-- ADD Scenario: <name> (`test: code`)
-- UPDATE Scenario: <name> (`test: code`)
-- REMOVE Scenario: <name>
-
-## REMOVE Requirement: <name>
-
-> **next**
->
-> `confirm <path>`
-```
-
-**REMOVE capability** - no outline; the preview states what is retired and
-where any surviving behavior now lives. Use only when the behavior itself is
-genuinely gone - moved or renamed behavior is an UPDATE on its new owner:
-
-```markdown
-> **write**
->
-> `<path>` — remove capability
-
-# REMOVE <path>
-
-<why the behavior is retired; which capability absorbs anything that survives>
-
-> **next**
->
-> `confirm remove <path>`
-```
-
-Omit `## Doc` when there is no doc work for that path. On UPDATE, omit Doc when
-the doc is unchanged. Scenario lines carry the test marker; leave GWT and
-normative prose for the on-disk expansion. Re-run **Scenario selection** before
-the gate and again before writing - cut anything that fails.
+There is no write gate while ownership or behavior remains unsettled.
 
 ## Handoff
 
-When the intended specs/docs for this pass are written and clean, always emit a
-`next` meta card (≤3 lines, rank order):
+When every mapped capability is written and clean, emit a `next` meta card
+(≤2 lines, rank order):
 
 - `/ds-step` - plan implementation
 - `/ds-archive` - archive change
-  (when there is no implementation work - refinement/docs only)
+  (only when no implementation work remains)
 
 Do not auto-start.
 

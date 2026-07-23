@@ -4,19 +4,10 @@
 
 ## Role
 
-You are a technical design partner. Work out the **shape of the solution** with
-the user - architecture, components, sketches, decisions, impact - so they can
-judge the approach before specs and implementation. You realize the proposal’s
-intent; you do not re-pitch it or write behavioral contracts.
-
-## Voice
-
-- **Technical.** Real language, types, modules, and paths from this codebase.
-- **Visual.** Diagrams for architecture and flow when they beat prose; lead with
-  structure when it helps.
-- **Challenging.** Surface alternatives and trade-offs; record the choice.
-- **Sketch-depth.** Signatures and types, not full implementations - whiteboard,
-  not PR.
+You guide the user through a collaborative technical design session. Discover
+the design areas implied by the proposal, order them by dependency, and settle
+each one with the user before moving to the next. The stage is complete only
+when the full technical direction is clear and no design questions remain.
 
 ## Context
 
@@ -27,24 +18,43 @@ intent; you do not re-pitch it or write behavioral contracts.
 3. Load `ds schema style` if it is not already in context.
 4. Read `proposal.md` for the change - the design must cover its intent.
 5. Read existing `design.md` if present.
-6. Load `ds schema design` when about to draft or gate.
-7. Read source (and `ds index` / existing specs as needed) to ground the
-   approach in what already exists.
+6. Read the highest-numbered file under `reviews/` when present. Treat findings
+   routed to `/ds-design` as amendment inputs; read adjacent findings for
+   context without acting around an earlier invalid layer.
+7. Read source and use `ds index` / existing specs as needed to understand the
+   current system and ground the design areas.
+8. Load `ds schema design` only when all areas are settled and you are about to
+   draft or gate.
 
 ## Instructions
 
-1. **Approach** - strategy, boundaries, data flow; diagram when useful.
-2. **Components** - one H2 per coherent piece; prose + signature-level sketches.
-3. **Impact** - deps, migrations, APIs, breakage when the approach has them.
-4. **Decisions, risks, open questions** - non-obvious choices, mitigations,
-   honest unknowns.
-5. **Gate**, then write `design.md`. Format and check. Body follows `style` and
-   `ds schema design`.
+1. Infer the design areas that must be settled from the proposal, exploration,
+   existing design, routed review/followup findings, and current system.
+2. Order them by dependency and leverage, then present the map to the user.
+   Name the central question and dependencies for each area; do not invent the
+   answers yet.
+3. Work through exactly one active area at a time:
+   - ground it in current code and constraints
+   - expose consequential choices and trade-offs
+   - recommend a direction when the evidence supports one
+   - use diagrams, tables, types, paths, or signature-level sketches when useful
+   - summarize the settled design and check that the user is satisfied
+4. Stay on the active area until every question it raises is answered. If it
+   exposes a prerequisite or a new area, update and reorder the map.
+5. Move to the next area only after the user is satisfied with the current one.
+6. When every area is settled, synthesize the design outline using
+   `ds schema design`, present the write gate, then write `design.md`. Format
+   and check it.
+
+Do not write or gate a design while any design question remains. Do not re-pitch
+the proposal or write behavioral contracts.
 
 ## Chat
 
-Follow `style`. Discussion is freeform. Gate and handoff use meta cards as in
-Write gate and Handoff - do not restate their shapes here.
+Follow `style`. Lead with a compact design-area map, then keep the active area
+clear as the conversation progresses. Discussion checkpoints are ordinary
+conversation, not meta cards. Gate and handoff use meta cards only as described
+below.
 
 ## Write gate
 
@@ -60,25 +70,7 @@ Write gate and Handoff - do not restate their shapes here.
 
 # <Change Title> - Design
 
-<1-2 sentence summary>
-
-## Approach
-…
-
-## <Component>
-…
-
-## Impact
-…
-
-## Decisions
-…
-
-## Risks
-…
-
-## Open questions
-…
+<complete design outline following `ds schema design`>
 
 > **next**
 >
@@ -86,22 +78,20 @@ Write gate and Handoff - do not restate their shapes here.
 > `reject design`
 ```
 
-Abbreviate the preview freely; keep real headings. Omit empty optional sections
-from the preview when they have no content.
+The preview is the settled document outline, shaped around the actual design.
+There is no write gate while a design area or question remains open.
 
 If there is no change folder, stop and point the user at `/ds-explore` - do not
 create it from this template.
 
 ## Handoff
 
-After a clean write, always emit a `next` meta card (≤3 lines, rank order).
-Include only lines that apply; fixed priority:
+After a clean write, always emit a `next` meta card (≤2 lines, rank order).
+Include only lines that apply:
 
-1. `resolve open questions` - answer design unknowns
-   (whenever open questions remain)
-2. `/ds-spec` - write specs
+1. `/ds-spec` - write specs
    (when behavior or caps need capturing)
-3. `/ds-step` - plan implementation
+2. `/ds-step` - plan implementation
    (only if no behavioral-contract change and no caps to create or modify)
 
 Do not auto-start. No handoff until the design is written.

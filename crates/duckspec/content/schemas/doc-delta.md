@@ -1,9 +1,9 @@
 # Doc delta schema
 
-A doc delta describes **modifications** to an existing capability doc. Same
-marker system as **spec delta**; bodies are freeform (no GWT). Merged result
-must still satisfy the **doc** schema (including H1 match with the paired
-spec after merge).
+A doc delta is the mechanical encoding of a confirmed target capability doc.
+It uses the same marker system as **spec delta**; bodies are freeform (no GWT).
+The cohesive merged result must satisfy the **doc** schema, including its H1
+match with the paired spec.
 
 ## Structure
 
@@ -60,7 +60,10 @@ when present.
   ("previously", "now also"); no links into `changes/` or `archive/`
 - **Keep pace with the spec.** Spec deltas that add modes, errors, or states
   usually need matching doc updates (tables, diagrams, prose)
-- **Choose the lightest op that fits:**
+- **Merged result is the artifact.** Read and judge the complete post-merge doc.
+  Consolidate or reorganize existing material when needed; do not preserve a
+  catalogue merely to minimize the delta.
+- **Choose the lightest op that cleanly expresses the confirmed target:**
 
 ```
 | Situation | Prefer |

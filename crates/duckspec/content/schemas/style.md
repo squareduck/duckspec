@@ -118,14 +118,9 @@ tight subset) - not a one-line pseudo-syntax.
 
 Agents keep change context across turns via orientation payload.
 
-## Motivation
-…
-
-## Intent
-- …
-
-## Non-goals
-- …
+The session begins with a compact orientation payload derived from the active
+duckspec scope. It identifies the current change, progress, and likely next
+stage without dumping project discovery into every conversation.
 
 > **next**
 >

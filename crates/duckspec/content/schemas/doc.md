@@ -1,9 +1,9 @@
 # Doc schema
 
-A capability doc is the **human-readable counterpart** to its paired spec: what
-the capability is, how pieces fit, and how to reason about it. The spec is the
-exact contract; the doc is orientation. Shared vocabulary with the spec; no
-rationale, alternatives, or open questions (those belong in proposals or codex).
+A capability doc is cohesive technical documentation for understanding the
+system the paired spec contracts and tests. It explains the capability's mental
+model, flows, states, relationships, policies, and failure behavior without
+repeating the spec as a catalogue.
 
 ## Structure
 
@@ -30,11 +30,12 @@ Body is freeform markdown (headings, prose, lists, tables, diagrams, code).
 
 ## Quality
 
-- **Scaffold vs ship.** H1 + summary is the structural minimum for pairing
-  during early work - not a finished capability doc. A shipped doc covers what
-  a reader needs to understand the capability. Do not pad by restating the
-  spec line-for-line; do not stop at the summary when the capability has real
-  shape (lifecycle, modes, errors, interactions, …).
+- **Cohesive technical model.** Explain the capability as one system: how its
+  pieces relate, what states and flows matter, and how important policies and
+  failures fit together. A title and summary are only a scaffold.
+- **Paired, not duplicated.** Share vocabulary and boundaries with the spec,
+  but do not paraphrase requirements and scenarios line by line. The spec owns
+  exact normative behavior; the doc makes the complete system understandable.
 - **Domain H2s.** Name sections after what the capability actually has -
   `Session lifecycle`, `Token format`, `Retry behavior`, `Error handling`,
   `Concurrency`, `Rate limits` - whatever shape it has. Avoid generic shells
@@ -50,6 +51,8 @@ Body is freeform markdown (headings, prose, lists, tables, diagrams, code).
   `proposal.md`, `design.md`, or anything under `changes/` or `archive/` - those
   paths will not exist beside the merged doc. Do not narrate the change
   ("previously", "before the fix", "now also supports").
+- **Code-grounded.** Names, flows, states, and seams agree with the implemented
+  system and its tests without turning the doc into a file or symbol inventory.
 
 ## Formatting
 

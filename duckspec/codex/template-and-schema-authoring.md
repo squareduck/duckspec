@@ -11,7 +11,7 @@ neither - it lives once in `style`.
 ```
 | Concern                         | Lives in   |
 |---------------------------------|------------|
-| Role, voice, process            | template   |
+| Role, conversation, process     | template   |
 | Progressive load order          | template   |
 | When to emit `write` / `next` meta cards | template |
 | Write gate and handoff *when*   | template   |
@@ -21,11 +21,12 @@ neither - it lives once in `style`.
 | How markdown should look        | style      |
 ```
 
-- **Template** - who the agent is for this stage, what to load, what to do, when to gate
-  or hand off. It does not restate artifact grammar or the style guide.
+- **Template** - who the agent is for this stage, what to load, what to do, how to
+  collaborate in chat, and when to gate or hand off. It does not restate artifact grammar
+  or the style guide.
 
 - **Schema** - what a valid on-disk artifact looks like and what “good” means for it. It
-  does not restate CLI workflow, voice, or handoff. Artifact schemas follow
+  does not restate CLI workflow, conversation behavior, or handoff. Artifact schemas follow
   `schema-structure`. They point at `style` for prose, tables, and diagrams rather than
   duplicating presentation rules.
 
@@ -47,8 +48,8 @@ schemas only). This entry is principles only.
 Write at the **right altitude**: specific enough to steer, loose enough to let the model
 think.
 
-- Prefer short role text, a handful of voice qualities, and a short instruction spine -
-  not branch-by-branch scripts.
+- Prefer short role text, concrete collaboration guidance, and a short instruction spine -
+  not personality adjectives or branch-by-branch scripts.
 
 - State judgment heuristics (“prefer deltas”, “economical scenarios”) as brief principles.
 

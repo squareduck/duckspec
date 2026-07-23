@@ -1,8 +1,9 @@
 # Spec delta schema
 
-A spec delta describes **modifications** to an existing capability spec. Every
-heading carries a marker for the operation on the source. Merged bodies must
-still satisfy the full **spec** schema.
+A spec delta is the mechanical encoding of a confirmed target capability
+contract. Every operation heading carries a marker; the merged result, not the
+smallness of the patch, is the quality target and must satisfy the full
+**spec** schema.
 
 ## Structure
 
@@ -61,7 +62,9 @@ headings are plain content (no markers) — e.g. `### Scenario: …`.
 
 ## Quality
 
-- **Choose the lightest op that fits:**
+- **Encode the target cleanly.** Choose the lightest operation that expresses
+  the confirmed cohesive result without preserving duplication or awkward
+  structure:
 
 ```
 | Situation | Prefer |
@@ -74,11 +77,13 @@ headings are plain content (no markers) — e.g. `### Scenario: …`.
 
 - **Stable titles.** Prefer body-only `@` / `~` over rename (`=`) when the
   contract outcome is unchanged — renames break `@spec` backlinks
-- **Merged result is a cold-reader spec.** Bodies are present-tense contract
-  text, not change narration
+- **Merged result is the artifact.** Read and judge the complete post-merge
+  spec. Consolidate, relocate, or remove existing scenarios when needed; do not
+  optimize for an append-only or cosmetically small delta.
+- **Cold-reader contract.** Bodies are present-tense technical documentation,
+  not change narration.
 - **New and rewritten bodies** satisfy `ds schema spec` Structure, Rules, and
-  Quality. Do not `@`/`~` a requirement only to restate it in new words. Which
-  scenarios to add is stage process (default omit) — not this schema
+  Quality. Do not `@`/`~` a requirement only to restate it in new words.
 - Body markdown follows `style` (load only if not already in context)
 
 ## Formatting

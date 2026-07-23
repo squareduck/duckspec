@@ -1,8 +1,10 @@
 # Codex schema
 
-A codex entry is **cross-cutting project knowledge** no single capability owns:
-architecture, glossaries, design philosophy, engineering conventions. Edited
-directly under `duckspec/codex/` - no change, delta, or archive lifecycle.
+A codex entry is durable project knowledge no single capability owns and that
+is more detailed than the short high-level orientation in `project.md`.
+Architecture, testing strategy, UI language, engineering conventions,
+glossaries, and research records belong here when they remain useful across
+the project.
 
 ## Structure
 
@@ -23,17 +25,30 @@ Body is freeform markdown (headings, lists, tables, diagrams, prose).
 - No structural rules on the body beyond parseable markdown
 - Path under `duckspec/codex/`: kebab-case segments, no whitespace; may nest
   (`codex/domain/billing.md`)
-- One topic per entry file
+- One cohesive durable subject and reader purpose per entry
 
 ## Quality
 
-- **Placement.** If one capability owns it, put it in that capability’s doc
-  instead. If it is always-true project constitution, prefer `project.md`.
-- **Focus.** One entry per topic - glossary, architecture, and conventions are
-  separate entries, not one dump.
+- **Placement.** `project.md` stays a short high-level description of what the
+  project is. A capability doc owns knowledge scoped to that capability. Codex
+  owns all other durable project knowledge.
+- **Cohesive ownership.** Each entry has one durable subject and reader purpose.
+  Prefer one authoritative entry over fragments that must always be read
+  together. Split when subjects evolve independently or serve different
+  readers.
+- **Tree quality.** Consolidate overlapping entries, reconcile contradictions,
+  relocate misplaced material, and remove superseded guidance. Judge the
+  complete codex tree, not only the file currently being edited.
 - **Index-ready summary.** `ds index` shows the summary; make it orient a
   scanner without opening the file.
-- **Durable.** Strip session-specific context; write for a reader months later.
+- **Current durable truth.** Synthesize the useful result, not the history of
+  the conversation. Preserve rationale when readers need it to apply the
+  guidance correctly.
+- **Grounded and navigable.** Terminology agrees with project orientation,
+  capabilities, source, and tests. Use headings, tables, diagrams, examples,
+  and code when they make the knowledge easier to use.
+- **Settled by default.** Do not preserve unresolved chat unless the entry is
+  explicitly a research record whose purpose includes known unknowns.
 - Body markdown follows `style` (load only if not already in context).
 
 ## Formatting

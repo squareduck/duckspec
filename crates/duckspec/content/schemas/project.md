@@ -1,8 +1,8 @@
 # Project schema
 
-`duckspec/project.md` is the **project constitution**: what the project is and
-durable high-level facts agents should always consider. Optional - omit when
-unused. Edited directly; not carried through a change.
+`duckspec/project.md` is the short high-level orientation to what the project
+is: its purpose, identity, and major shape. It should be quick for a user or
+agent to absorb at the start of a session.
 
 ## Structure
 
@@ -26,15 +26,18 @@ Body is freeform markdown (headings, lists, tables, diagrams, prose).
 
 ## Quality
 
-- **What the project is.** Identity, purpose, and durable high-level facts -
-  stack, shape, standing principles - not a change log and not a backlog of
-  what is out of scope for some future effort.
-- **Always true.** Content should still hold next year; session and feature
-  narratives belong elsewhere.
+- **Immediate orientation.** Explain what the project does, its domain, and the
+  major components or surfaces a newcomer needs to recognize.
+- **High-level shape only.** Mention technologies when they materially orient
+  the reader. Detailed architecture, testing strategy, UI guidance,
+  engineering conventions, glossaries, and operating procedures belong in
+  codex.
+- **No capability detail.** Capability behavior and reader documentation belong
+  in paired specs and docs.
 - **Not agent config.** Do not duplicate `AGENTS.md` / harness instructions;
-  this is project knowledge agents should *consider*, not runtime prompt wiring.
-- **Lean.** Prefer a short constitution. Past about two screens, split lasting
-  topics into codex entries.
+  this describes the project, not how the agent should operate.
+- **Stable and short.** Exclude current work, history, backlog, and session
+  narrative. Keep it compact enough to absorb during routine orientation.
 - Body markdown follows `style` (load only if not already in context).
 
 ## Formatting
@@ -47,15 +50,12 @@ if not already in context.
 ```markdown
 # acme-api
 
-REST API for the Acme suite - Rust, explicit errors, small crates.
+REST API and worker system for the Acme billing suite.
 
 ## Shape
 
-- Library-first crates; thin CLI and HTTP adapters
-- Filesystem is the source of truth - no frontmatter or sidecar metadata
-
-## Principles
-
-- Typed errors in libraries; `anyhow` only at binary boundaries
-- Spec-backed behavior for user-visible contracts
+- `acme-api` accepts account, invoice, and payment requests
+- `acme-worker` processes asynchronous billing and notification jobs
+- PostgreSQL is the shared durable store
+- The web dashboard and public API use the same application services
 ```
