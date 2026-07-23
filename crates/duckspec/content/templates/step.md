@@ -30,8 +30,8 @@ not implement.
    components, vertical behavior slices, and spec requirements as starting
    points; avoid steps that mix unrelated outcomes.
 2. **Order** by dependency across and within steps.
-3. **Cover** every `test: code` scenario with an `@spec` task (single unbroken
-   line per reference). Optional one-level subtasks when they help.
+3. **Reference** every `test: code` scenario with an exact `@spec` task (single
+   unbroken line per reference). Optional one-level subtasks when they help.
 4. **Context / Prerequisites** only when needed (gaps vs design; `@step` links).
 5. **Gate**, then create and write step files. Format and check. Body follows
    `style` and `ds schema step`.
@@ -64,11 +64,17 @@ After `confirm steps`:
 
 Tasks: N
 
+- <implementation task>
+- `@spec <capability-path> <Requirement>: <Scenario>`
+
 ## 02 - <Step name>
 
 <one-line summary>
 
 Tasks: N
+
+- <implementation task>
+- `@spec <capability-path> <Requirement>: <Scenario>`
 
 Scenario coverage: N/N `test: code` scenarios have `@spec` tasks
 
@@ -78,8 +84,10 @@ Scenario coverage: N/N `test: code` scenarios have `@spec` tasks
 > `reject steps`
 ```
 
-Preview uses real step titles and coverage; expand a step’s task list in the
-preview when the user needs to judge a busy step before write.
+Preview uses real step titles and lists its planned tasks. Render scenario tasks
+as their exact `@spec` references so coverage is recognizable at a glance;
+render other work as ordinary task bullets. Keep the coverage total as a
+cross-check.
 
 If there is no change folder, stop and point the user at `/ds-explore`.
 

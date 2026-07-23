@@ -57,10 +57,11 @@ current spec, documentation, source, and tests.
    scenarios, or doc content during expansion.
 8. Repeat until the map is complete, then use Handoff.
 
-The normative requirement prose describes the complete behavior. Scenarios are
-the minimal executable proof points, not an inventory of inputs, branches, or
-implementation details. Optimize the whole merged capability for clarity and
-cohesion, not for the smallest textual delta.
+Every requirement has a short normative prose summary of its high-level
+contract. Keep it minimal and never restate the scenarios beneath it. Scenarios
+own the concrete cases and are the minimal executable proof points, not an
+inventory of inputs, branches, or implementation details. Optimize the whole
+merged capability for clarity and cohesion, not for the smallest textual delta.
 
 ## Chat
 
@@ -78,11 +79,32 @@ Use `CREATE`, `UPDATE`, `RESHAPE`, or `REMOVE`. `RESHAPE` means an existing
 capability needs holistic consolidation or reorganization; it is encoded on
 disk as an update delta.
 
+Present each capability as a section rather than a table so long ownership,
+contract, and grounding details remain legible.
+
 ```markdown
-| Action | Capability | Why this owner | Contract effect | Grounding |
-| --- | --- | --- | --- | --- |
-| RESHAPE | `<path>` | <current ownership> | <cohesive end state> | <design/source/tests> |
-| CREATE | `<path>` | <distinct durable concern> | <new contract> | <design/source/tests> |
+## RESHAPE - `<path>`
+
+Owner:
+<current ownership and why this is the right capability>
+
+Contract:
+- <cohesive end-state rule>
+- <important consolidation, relocation, or retirement>
+
+Grounding:
+- `<design/source/test path>`
+
+## CREATE - `<path>`
+
+Owner:
+<distinct durable concern>
+
+Contract:
+- <new contract rule>
+
+Grounding:
+- `<design/source/test path>`
 
 > **next**
 >
@@ -107,7 +129,7 @@ gains and loses.
 
 ## Requirement: <name>
 
-Contract: <complete rule in compact normative language>
+Contract: <minimal high-level normative summary; do not restate scenarios>
 
 Scenarios:
 - <distinctive outcome> (`test: code`)

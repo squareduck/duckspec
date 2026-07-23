@@ -71,8 +71,13 @@ apply still must satisfy this schema. Delta shape (markers, ops) is
 - **Cohesive whole.** Requirements form the shortest clear contract for the
   capability. Merge overlap, remove stale or misplaced behavior, and reorganize
   existing content when that improves the complete file.
-- **Normative precision.** SHALL / MUST / SHOULD / MAY mean what they say. Put
-  the full policy in requirement prose; do not repeat it in every scenario.
+- **Minimal requirement prose.** Every requirement has a concise normative
+  summary of the high-level contract. It provides the umbrella rule or
+  relationship that makes the scenarios cohesive; it never previews,
+  enumerates, or paraphrases the scenarios beneath it.
+- **Normative precision.** SHALL / MUST / SHOULD / MAY mean what they say.
+  Concrete cases and distinct outcomes belong in scenarios rather than being
+  repeated in requirement prose.
 - **One concern per requirement.** Split unrelated behavior, but do not invent
   requirements merely to hold scenarios.
 - **Scenarios earn tests.** Each scenario pins a distinct important outcome,
