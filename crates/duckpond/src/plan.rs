@@ -76,15 +76,15 @@ impl CritiqueKind {
 /// Position of a hook relative to the stage.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HookPosition {
-    Pre,
-    Post,
+    Before,
+    After,
 }
 
 impl HookPosition {
     pub fn as_str(&self) -> &'static str {
         match self {
-            HookPosition::Pre => "pre",
-            HookPosition::Post => "post",
+            HookPosition::Before => "before",
+            HookPosition::After => "after",
         }
     }
 }
@@ -374,7 +374,7 @@ pub fn create_review(
 /// Plan the creation of a hook file.
 ///
 /// `stage` — the stage name (e.g. "explore", "spec").
-/// `position` — pre or post.
+/// `position` — before or after.
 /// `existing_hooks` — filenames in `hooks/`.
 pub fn create_hook(
     stage: &str,
@@ -849,26 +849,32 @@ mod tests {
     // -- create_hook ----------------------------------------------------------
 
     #[test]
-    fn hook_pre_ok() {
-        let plan = create_hook("explore", HookPosition::Pre, &[]).unwrap();
-        assert_eq!(plan.creates, vec![PathBuf::from("hooks/explore-pre.md")]);
+    fn hook_before_ok() {
+        let plan = create_hook("explore", HookPosition::Before, &[]).unwrap();
+        assert_eq!(
+            plan.creates,
+            vec![PathBuf::from("hooks/explore-before.md")]
+        );
     }
 
     #[test]
-    fn hook_post_ok() {
-        let plan = create_hook("spec", HookPosition::Post, &[]).unwrap();
-        assert_eq!(plan.creates, vec![PathBuf::from("hooks/spec-post.md")]);
+    fn hook_after_ok() {
+        let plan = create_hook("spec", HookPosition::After, &[]).unwrap();
+        assert_eq!(plan.creates, vec![PathBuf::from("hooks/spec-after.md")]);
     }
 
+    // @spec cli/hooks Known stages: Unknown stage is rejected
     #[test]
     fn hook_unknown_stage() {
-        let err = create_hook("bogus", HookPosition::Pre, &[]).unwrap_err();
+        let err = create_hook("bogus", HookPosition::Before, &[]).unwrap_err();
         assert!(matches!(err, PlanError::UnknownStage { .. }));
     }
 
+    // @spec cli/hooks Create hook: Refuse when the hook file already exists
     #[test]
     fn hook_already_exists() {
-        let err = create_hook("explore", HookPosition::Pre, &[s("explore-pre.md")]).unwrap_err();
+        let err =
+            create_hook("explore", HookPosition::Before, &[s("explore-before.md")]).unwrap_err();
         assert!(matches!(err, PlanError::HookExists { .. }));
     }
 

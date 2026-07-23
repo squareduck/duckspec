@@ -81,9 +81,7 @@ fn skip_section(lines: &mut std::iter::Peekable<std::str::Lines<'_>>) {
 mod tests {
     use super::*;
 
-    #[test]
-    fn hooks_removed_when_absent() {
-        let template = "\
+    const TEMPLATE_WITH_HOOK_PLACEHOLDERS: &str = "\
 # Template
 
 ## Before write
@@ -94,37 +92,14 @@ Do stuff.
 
 ## After write
 ";
-        let result = apply_hooks(template, None, None);
-        assert_eq!(
-            result,
-            "\
-# Template
 
-## Instructions
-
-Do stuff.
-
-"
-        );
-    }
-
+    // @spec cli/hooks Template injection: Non-empty hooks inject under section headers
     #[test]
-    fn hooks_inserted_with_headers_when_present() {
-        let template = "\
-# Template
-
-## Before write
-
-## Instructions
-
-Do stuff.
-
-## After write
-";
+    fn non_empty_hooks_inject_under_section_headers() {
         let result = apply_hooks(
-            template,
-            Some("Pre content here."),
-            Some("Post content here."),
+            TEMPLATE_WITH_HOOK_PLACEHOLDERS,
+            Some("Before content here."),
+            Some("After content here."),
         );
         assert_eq!(
             result,
@@ -133,7 +108,7 @@ Do stuff.
 
 ## Before write
 
-Pre content here.
+Before content here.
 
 ## Instructions
 
@@ -141,13 +116,50 @@ Do stuff.
 
 ## After write
 
-Post content here.
+After content here.
 "
         );
     }
 
+    // @spec cli/hooks Template injection: Missing or empty hooks drop the placeholders
     #[test]
-    fn hook_without_h1_is_rendered_verbatim() {
+    fn missing_or_empty_hooks_drop_the_placeholders() {
+        let missing = apply_hooks(TEMPLATE_WITH_HOOK_PLACEHOLDERS, None, None);
+        assert!(
+            !missing.contains("## Before write"),
+            "missing before hook must drop the section"
+        );
+        assert!(
+            !missing.contains("## After write"),
+            "missing after hook must drop the section"
+        );
+        assert_eq!(
+            missing,
+            "\
+# Template
+
+## Instructions
+
+Do stuff.
+
+"
+        );
+
+        let tmp = tempfile::tempdir().unwrap();
+        let hooks_dir = tmp.path().join("hooks");
+        fs::create_dir(&hooks_dir).unwrap();
+        fs::write(hooks_dir.join("step-before.md"), "   \n\n  \t\n").unwrap();
+
+        let empty_before = read_hook_content(tmp.path(), "step", "before");
+        assert!(empty_before.is_none(), "whitespace-only file is absent");
+        let empty = apply_hooks(TEMPLATE_WITH_HOOK_PLACEHOLDERS, empty_before.as_deref(), None);
+        assert!(!empty.contains("## Before write"));
+        assert!(!empty.contains("## After write"));
+    }
+
+    // @spec cli/hooks Template injection: Body without H1 is rendered verbatim
+    #[test]
+    fn body_without_h1_is_rendered_verbatim() {
         let template = "\
 # Template
 
@@ -168,17 +180,6 @@ Just text, no heading.
 ## Body
 "
         );
-    }
-
-    #[test]
-    fn empty_hook_file_treated_as_absent() {
-        let tmp = tempfile::tempdir().unwrap();
-        let hooks_dir = tmp.path().join("hooks");
-        fs::create_dir(&hooks_dir).unwrap();
-        fs::write(hooks_dir.join("step-before.md"), "   \n\n  \t\n").unwrap();
-
-        let result = read_hook_content(tmp.path(), "step", "before");
-        assert!(result.is_none());
     }
 
     #[test]

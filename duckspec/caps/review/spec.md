@@ -131,7 +131,7 @@ empty title slug.
 - **THEN** the new review file's slug is `review-post-impl-soundness-fidelity`
 
 > test: code
-> - crates/duckpond/src/plan.rs:901
+> - crates/duckpond/src/plan.rs:907
 
 ### Scenario: A title with no alphanumeric characters is rejected
 
@@ -141,7 +141,7 @@ empty title slug.
 - **AND** no review file is written
 
 > test: code
-> - crates/duckpond/src/plan.rs:919
+> - crates/duckpond/src/plan.rs:925
 
 ### Scenario: A followup create prefixes the slug with followup-
 

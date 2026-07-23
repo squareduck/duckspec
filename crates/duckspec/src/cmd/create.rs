@@ -70,14 +70,14 @@ pub enum CreateCommand {
     },
     /// Create a hook file for a stage.
     Hook {
-        /// Stage name (explore, propose, design, spec, step, apply, archive, verify, review, followup, codex).
+        /// Stage name (explore, backfill, propose, design, spec, step, apply, archive, verify, review, followup, codex).
         stage: String,
-        /// Create a pre-stage hook.
+        /// Create a before-stage hook.
         #[arg(long, group = "position")]
-        pre: bool,
-        /// Create a post-stage hook.
+        before: bool,
+        /// Create an after-stage hook.
         #[arg(long, group = "position")]
-        post: bool,
+        after: bool,
     },
 }
 
@@ -89,8 +89,8 @@ pub fn run(cmd: CreateCommand) -> anyhow::Result<()> {
     // skeleton; reviews/followups share the `NN-<slug>.md` shape with steps, so
     // their H1 title must be threaded from the command rather than sniffed.
     let forced_content = match &cmd {
-        CreateCommand::Hook { stage, pre, .. } => {
-            let pos = if *pre { "Pre" } else { "Post" };
+        CreateCommand::Hook { stage, before, .. } => {
+            let pos = if *before { "Before" } else { "After" };
             let title = capitalize(stage);
             Some(format!("# {title} - {pos}\n"))
         }
@@ -183,13 +183,17 @@ pub fn run(cmd: CreateCommand) -> anyhow::Result<()> {
                 &existing_reviews,
             )?
         }
-        CreateCommand::Hook { stage, pre, post } => {
-            let position = if pre {
-                duckpond::plan::HookPosition::Pre
-            } else if post {
-                duckpond::plan::HookPosition::Post
+        CreateCommand::Hook {
+            stage,
+            before,
+            after,
+        } => {
+            let position = if before {
+                duckpond::plan::HookPosition::Before
+            } else if after {
+                duckpond::plan::HookPosition::After
             } else {
-                anyhow::bail!("exactly one of --pre or --post must be provided");
+                anyhow::bail!("exactly one of --before or --after must be provided");
             };
             let existing_hooks = list_files(&duckspec_root.join("hooks"))?;
             duckpond::plan::create_hook(&stage, position, &existing_hooks)?
