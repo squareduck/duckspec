@@ -43,24 +43,29 @@ current spec, documentation, source, and tests.
 3. Emit `confirm map` and wait.
 4. Work through one capability at a time in map order. Read it as a whole, then
    diagnose missing behavior, duplication, weak wording, misplaced ownership,
-   and stale scenarios.
+   stale scenarios, and padded proof (boolean mirrors, per-surface restatements,
+   non-goals, assertion-per-scenario).
 5. Present the target merged outline: cohesive requirements with compact
-   contract summaries and the minimal scenarios needed to prove distinct
-   important outcomes. For existing capabilities, show meaningful merges,
-   rewrites, additions, removals, and relocations.
-6. Discuss until the target contract is complete, minimal, and cohesive. A
-   clearly intentional stable behavior found in existing tests may enter the
-   contract. If source or tests expose a new product or architecture decision,
-   stop and return to design discussion instead of silently canonizing it.
+   contract summaries and only the scenarios that are independent units of
+   proof. Prefer one lifecycle/multi-assert scenario over several checks of the
+   same control. For existing capabilities, show meaningful merges, rewrites,
+   additions, removals, and relocations.
+6. Discuss until the target contract is complete, minimal, and cohesive. Drop
+   or merge any scenario that does not fail for a reason independent of the
+   others. A clearly intentional stable behavior found in existing tests may
+   enter the contract. If source or tests expose a new product or architecture
+   decision, stop and return to design discussion instead of silently
+   canonizing it.
 7. Gate the target merged outline. After confirmation, encode that target as
    full files or deltas, format, and check. Do not invent requirements,
    scenarios, or doc content during expansion.
 8. Repeat until the map is complete, then use Handoff.
 
 Every requirement has a short normative prose summary of its high-level
-contract. Keep it minimal and never restate the scenarios beneath it. Scenarios
-own the concrete cases and are the minimal executable proof points, not an
-inventory of inputs, branches, or implementation details. Optimize the whole
+contract. Keep it minimal and never restate the scenarios beneath it. Each
+scenario is an independent proof unit that earns a test - not a checklist of
+asserts, true/false twins, multi-surface echoes of one fact, or non-goals.
+One test may walk several states under a single scenario. Optimize the whole
 merged capability for clarity and cohesion, not for the smallest textual delta.
 
 ## Chat
@@ -116,7 +121,9 @@ Grounding:
 Preview the intended merged capability, never delta marker syntax. Include the
 doc outline when a doc is created or materially changed. On an update, identify
 important consolidation edits so the user can judge what the final contract
-gains and loses.
+gains and loses. List only independent proof units under Scenarios - often one
+per requirement. Do not pad the list with default/on/off, read-vs-write mirrors,
+or non-goals.
 
 ```markdown
 > **write**
@@ -132,13 +139,12 @@ gains and loses.
 Contract: <minimal high-level normative summary; do not restate scenarios>
 
 Scenarios:
-- <distinctive outcome> (`test: code`)
-- <distinctive outcome> (`test: code`)
+- <independent proof unit> (`test: code`)
 
 ## Cohesion edits
 
-- Merge <overlapping scenarios> into <target>
-- Remove <scenario> because <existing owner or non-contract behavior>
+- Merge <overlapping or assertion-level scenarios> into <target>
+- Remove <scenario> because <not an independent failure mode / non-goal>
 
 ## Doc
 

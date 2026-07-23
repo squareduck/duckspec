@@ -1,8 +1,8 @@
 # Spec schema
 
 A capability spec is concise technical documentation backed by tests: cohesive
-normative requirements completely describe the important behavior, while a
-minimal set of scenarios provides executable proof of its distinct outcomes.
+normative requirements completely describe the important behavior, and each
+scenario is an independent unit of proof — not a checklist of assertions.
 
 ## Structure
 
@@ -79,24 +79,33 @@ apply still must satisfy this schema. Delta shape (markers, ops) is
   Concrete cases and distinct outcomes belong in scenarios rather than being
   repeated in requirement prose.
 - **One concern per requirement.** Split unrelated behavior, but do not invent
-  requirements merely to hold scenarios.
-- **Scenarios earn tests.** Each scenario pins a distinct important outcome,
-  boundary, policy, state transition, compatibility promise, or integration
-  seam. Variations with the same meaningful outcome belong in one parameterized
-  test, not duplicate scenarios.
+  requirements merely to hold scenarios or to mirror API surfaces (write path,
+  read path, default) of the same rule.
+- **Independent proof, not assertion inventory.** Each scenario is a unit of
+  independent proof - a contract slice that can fail for a different reason than
+  its siblings. Prefer one scenario whose test walks the full relevant path
+  (e.g. unset → enable → disable) over a scenario per check. Opposite inputs,
+  true/false mirrors, and the same fact observed on two surfaces are one
+  scenario, not many. Parameterize inputs only when they still prove one story.
+- **Do not mint fluff.** Reject non-goals, negative architecture notes, storage
+  column names, and UI chrome as requirements or scenarios unless they are the
+  behavior under contract. "Not a feature flag", "docs say X", and setup
+  preconditions are not scenarios.
 - **Tests inform the contract.** Existing tests may reveal stable intentional
   behavior missing from the spec. Helper and implementation tests need not
   become scenarios; important behavioral tests should have a natural spec
   owner.
-- **Lean GWT.** Use only the state needed to understand the trigger and only
-  independently important observable outcomes. GIVEN is state, WHEN is one
-  trigger, and THEN is the result. Omit setup narration, SHALL in clauses, and
-  restatements of the requirement.
+- **Lean GWT.** Use only the state needed to understand the action and only
+  independently important observable outcomes. GIVEN is state, WHEN is the
+  action under test, THEN is the result. A multi-assert test may cover several
+  states under one scenario without restating each assert as GWT. Omit setup
+  narration, SHALL in clauses, and restatements of the requirement.
 - **Observer-facing.** Returns, persisted state, events, responses, and visible
   recovery are contract material. Private fields, module placement, function
   names, and branches belong to implementation or design.
-- **Distinctive names.** Name the outcome that differentiates the scenario;
-  avoid "Happy path", "Test 1", and sentence-length restatements.
+- **Distinctive names.** Name the independent proof (e.g. the control or failure
+  mode), not a single assert. Avoid "Happy path", "Test 1", true/false twins,
+  and sentence-length restatements.
 
 Body markdown follows `style` (load only if not already in context).
 
@@ -106,6 +115,10 @@ After write or edit: `ds format <path>`. Presentation follows `style` - load onl
 if not already in context.
 
 ## Example
+
+Two scenarios only because they are independent failure modes (expire vs reset),
+not opposite steps of one toggle. A single control's lifecycle stays one
+scenario with one multi-assert test.
 
 ```markdown
 # Session expiration
