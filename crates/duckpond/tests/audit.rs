@@ -46,8 +46,7 @@ Wire up the bar behavior.
 // Written inline with `\n` escapes (rather than a `"\` block) so the marker is
 // not on its own physical line in this source file — otherwise the project's
 // own backlink scan would treat this fixture as a real, unresolved backlink.
-const BACKLINK_SOURCE: &str =
-    "// @spec foo/bar Bar behavior: Happy path\nfn test_bar_happy_path() {\n    assert_eq!(1, 1);\n}\n";
+const BACKLINK_SOURCE: &str = "// @spec foo/bar Bar behavior: Happy path\nfn test_bar_happy_path() {\n    assert_eq!(1, 1);\n}\n";
 
 /// When a step's backlink points to a scenario that is defined in an
 /// active (not-yet-archived) change, audit should treat it as resolved.
@@ -67,8 +66,8 @@ fn backlink_to_in_flight_change_scenario_resolves() {
     write(&project.path().join("tests/bar_test.rs"), BACKLINK_SOURCE);
 
     let config = Config::load(&duckspec).unwrap();
-    let report = audit::run_audit(&duckspec, project.path(), &config, AuditScope::Full)
-        .expect("audit runs");
+    let report =
+        audit::run_audit(&duckspec, project.path(), &config, AuditScope::Full).expect("audit runs");
 
     assert!(
         report.unresolved_backlinks.is_empty(),
@@ -116,8 +115,8 @@ Wire up the missing behavior.
     );
 
     let config = Config::load(&duckspec).unwrap();
-    let report = audit::run_audit(&duckspec, project.path(), &config, AuditScope::Full)
-        .expect("audit runs");
+    let report =
+        audit::run_audit(&duckspec, project.path(), &config, AuditScope::Full).expect("audit runs");
 
     assert_eq!(
         report.unresolved_step_refs.len(),
@@ -216,7 +215,11 @@ fn archiving_removed_scenario_flags_backlink() {
     let orphans =
         audit::would_be_orphaned(project.path(), &duckspec, &config, &projected).expect("guard");
 
-    assert_eq!(orphans.len(), 1, "the removed scenario's backlink is flagged");
+    assert_eq!(
+        orphans.len(),
+        1,
+        "the removed scenario's backlink is flagged"
+    );
     assert!(orphans[0].source_file.ends_with("tests/foo_test.rs"));
     assert_eq!(orphans[0].key.scenario, "Baz");
 }
@@ -296,8 +299,8 @@ fn backlink_to_unknown_scenario_still_fails() {
     );
 
     let config = Config::load(&duckspec).unwrap();
-    let report = audit::run_audit(&duckspec, project.path(), &config, AuditScope::Full)
-        .expect("audit runs");
+    let report =
+        audit::run_audit(&duckspec, project.path(), &config, AuditScope::Full).expect("audit runs");
 
     assert_eq!(
         report.unresolved_backlinks.len(),
@@ -480,8 +483,8 @@ fn full_audit_reports_unlinked_caps_scenario_as_error_not_pending() {
     write(&duckspec.join("caps/foo/spec.md"), &change_spec(&["Alpha"]));
 
     let config = Config::load(&duckspec).unwrap();
-    let report = audit::run_audit(&duckspec, project.path(), &config, AuditScope::Full)
-        .expect("audit runs");
+    let report =
+        audit::run_audit(&duckspec, project.path(), &config, AuditScope::Full).expect("audit runs");
 
     assert!(
         contains(&report.missing_backlink_scenarios, "Alpha"),

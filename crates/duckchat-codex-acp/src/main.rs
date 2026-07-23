@@ -89,7 +89,8 @@ async fn run() -> anyhow::Result<()> {
                     }
                 };
                 let mut write_parent = |msg: Value| -> Result<(), AgentError> {
-                    write_acp(&msg).map_err(|e| AgentError::Process(format!("write parent acp: {e}")))
+                    write_acp(&msg)
+                        .map_err(|e| AgentError::Process(format!("write parent acp: {e}")))
                 };
                 match agent
                     .run_prompt(&params, &mut on_update, &mut reader, &mut write_parent)

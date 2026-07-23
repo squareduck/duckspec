@@ -9,9 +9,7 @@
 mod agent_bin;
 mod discover;
 
-pub use agent_bin::{
-    CLAUDE_ACP_BIN, CLAUDE_ACP_ENV, claude_acp_launch, resolve_claude_acp_binary,
-};
+pub use agent_bin::{CLAUDE_ACP_BIN, CLAUDE_ACP_ENV, claude_acp_launch, resolve_claude_acp_binary};
 
 /// Project/plugin slash-command discovery. Re-exported for the grok harness,
 /// which loads the same `.claude` skills and commands.
@@ -167,9 +165,7 @@ impl Provider for ClaudeCodeProvider {
     }
 
     fn list_models(&self) -> Vec<ModelInfo> {
-        self.models
-            .get_or_init(|| self.discover_models())
-            .clone()
+        self.models.get_or_init(|| self.discover_models()).clone()
     }
 
     fn list_commands(&self, project_root: &Path) -> Vec<SlashCommand> {
@@ -250,10 +246,7 @@ mod tests {
 
     /// Minimal ACP agent peer that answers initialize / session/new / prompt.
     fn install_fake_acp_agent(dir: &TempDir) -> PathBuf {
-        install_fake_acp_agent_with_models(
-            dir,
-            r#"[{"modelId": "haiku", "name": "Haiku 4.5"}]"#,
-        )
+        install_fake_acp_agent_with_models(dir, r#"[{"modelId": "haiku", "name": "Haiku 4.5"}]"#)
     }
 
     /// Fake ACP agent whose initialize advertises the given `availableModels` JSON array.
@@ -336,8 +329,7 @@ for line in sys.stdin:
                 .collect();
             // Default launch targets the owned agent name (resolved or PATH fallthrough).
             assert!(
-                program.contains(CLAUDE_ACP_BIN)
-                    || args.iter().any(|a| a.contains(CLAUDE_ACP_BIN)),
+                program.contains(CLAUDE_ACP_BIN) || args.iter().any(|a| a.contains(CLAUDE_ACP_BIN)),
                 "default Claude launch must target {CLAUDE_ACP_BIN}, got program={program} args={args:?}"
             );
             assert!(
@@ -352,7 +344,12 @@ for line in sys.stdin:
         let (tx, mut rx) = mpsc::channel(16);
         let req = TurnRequest::new("hello", tmp.path().to_path_buf());
         let outcome = rt
-            .run_turn(req, tx, CancelToken::new(), crate::event::PendingUserChoices::shared())
+            .run_turn(
+                req,
+                tx,
+                CancelToken::new(),
+                crate::event::PendingUserChoices::shared(),
+            )
             .await
             .expect("turn through owned ACP agent");
         assert_eq!(outcome.session_id, "claude-native-sess-1");

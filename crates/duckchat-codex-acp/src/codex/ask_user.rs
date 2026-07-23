@@ -358,10 +358,8 @@ mod tests {
         let merged = merge_answers([a1, a2]);
         assert_eq!(merged["q1"]["answers"][0], "One");
         assert_eq!(merged["q2"]["answers"][0], "Two");
-        let rpc = encode_user_input_rpc(
-            &json!(1),
-            &UserInputDecision::Accepted { answers: merged },
-        );
+        let rpc =
+            encode_user_input_rpc(&json!(1), &UserInputDecision::Accepted { answers: merged });
         assert_eq!(rpc["result"]["answers"]["q1"]["answers"][0], "One");
         assert_eq!(rpc["result"]["answers"]["q2"]["answers"][0], "Two");
     }
@@ -430,8 +428,7 @@ mod tests {
             "item/commandExecution/requestApproval"
         ));
         let empty = json!({});
-        let result =
-            auto_allow_approval_result("item/commandExecution/requestApproval", &empty);
+        let result = auto_allow_approval_result("item/commandExecution/requestApproval", &empty);
         assert_eq!(result["decision"], "accept");
         assert!(result.get("permissions").is_none());
 

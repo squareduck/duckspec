@@ -23,7 +23,7 @@ foreign runtime to run Codex turns.
 - **AND** the host does not drive Codex via an in-host App Server client
 
 > test: code
-> - crates/duckchat/src/openai_codex.rs:302
+> - crates/duckchat/src/openai_codex.rs:298
 
 ### Scenario: The agent uses official codex app-server as its backend
 
@@ -60,7 +60,7 @@ session-not-found so the host can drop the id and retry.
 - **AND** it surfaces a Codex thread id
 
 > test: code
-> - crates/duckchat-codex-acp/src/agent.rs:706
+> - crates/duckchat-codex-acp/src/agent.rs:782
 
 ### Scenario: A turn with a prior session id resumes that id
 
@@ -69,7 +69,7 @@ session-not-found so the host can drop the id and retry.
 - **THEN** it opens the session by resuming that same id
 
 > test: code
-> - crates/duckchat-codex-acp/src/agent.rs:726
+> - crates/duckchat-codex-acp/src/agent.rs:802
 
 ### Scenario: A failed load of a missing session surfaces session-not-found
 
@@ -78,7 +78,7 @@ session-not-found so the host can drop the id and retry.
 - **THEN** the outcome is session-not-found rather than a successful resume
 
 > test: code
-> - crates/duckchat-codex-acp/src/agent.rs:750
+> - crates/duckchat-codex-acp/src/agent.rs:826
 
 ## Requirement: App-server process heat
 
@@ -101,7 +101,7 @@ a prior session id is supplied, resume that id.
   session id
 
 > test: code
-> - crates/duckchat-codex-acp/src/agent.rs:770
+> - crates/duckchat-codex-acp/src/agent.rs:965
 
 ### Scenario: After cancel, a later turn may spawn again and resume a prior session id
 
@@ -112,18 +112,18 @@ a prior session id is supplied, resume that id.
 - **AND** it opens the session by resuming that id
 
 > test: code
-> - crates/duckchat-codex-acp/src/agent.rs:792
+> - crates/duckchat-codex-acp/src/agent.rs:987
 
 ## Requirement: Profile-compatible event emission
 
 The Codex ACP agent SHALL emit profile `session/update` notifications so the shared ACP
 client can map them to neutral agent events: assistant text as content updates, a tool
 invocation as a tool-use update followed by a completed result update sharing the same
-call id, and token telemetry as a usage update carrying total tokens used. While a turn is
-in progress, the agent SHALL deliver those profile updates to the host as they become
-available, rather than only after the turn has completed.
-
-> test: code
+call id, and token telemetry as a usage update. Token telemetry SHALL carry the latest
+turn's total-token count when present, SHALL use cumulative thread total only when
+latest-turn usage is unavailable, and SHALL emit no usage update when neither total
+exists. While a turn is in progress, the agent SHALL deliver those profile updates to the
+host as they become available, rather than only after the turn has completed.
 
 ### Scenario: Assistant text surfaces as profile content updates
 
@@ -132,7 +132,7 @@ available, rather than only after the turn has completed.
 - **THEN** it emits profile assistant message chunks for that text
 
 > test: code
-> - crates/duckchat-codex-acp/src/codex/map.rs:246
+> - crates/duckchat-codex-acp/src/codex/map.rs:242
 
 ### Scenario: A tool call surfaces as profile tool use then completed result
 
@@ -146,16 +146,38 @@ available, rather than only after the turn has completed.
   tool output
 
 > test: code
-> - crates/duckchat-codex-acp/src/codex/map.rs:268
+> - crates/duckchat-codex-acp/src/codex/map.rs:261
 
 ### Scenario: Token telemetry surfaces as usage with total tokens
 
-- **GIVEN** Codex reporting token usage during a turn
+- **GIVEN** Codex reporting both latest-turn and cumulative token usage
+- **AND** the cumulative total is larger than the latest-turn total
 - **WHEN** the agent translates that telemetry for the ACP client
-- **THEN** it emits a usage update carrying the total tokens used
+- **THEN** it emits a usage update carrying the latest-turn total
 
 > test: code
-> - crates/duckchat-codex-acp/src/codex/map.rs:321
+> - crates/duckchat-codex-acp/src/codex/map.rs:314
+
+### Scenario: Cumulative token telemetry is used when latest-turn usage is absent
+
+- **GIVEN** Codex reporting cumulative token usage without latest-turn usage
+- **WHEN** the agent translates that telemetry for the ACP client
+- **THEN** it emits a usage update carrying the cumulative total
+
+> test: code
+> - crates/duckchat-codex-acp/src/codex/map.rs:346
+
+### Scenario: Missing token totals emit no usage update
+
+- **GIVEN** a Codex token-usage notification with neither a latest-turn nor cumulative
+  total
+
+- **WHEN** the agent translates that telemetry for the ACP client
+
+- **THEN** it emits no usage update
+
+> test: code
+> - crates/duckchat-codex-acp/src/codex/map.rs:366
 
 ## Requirement: Agent binary discovery
 
@@ -224,7 +246,7 @@ the questionnaire.
 - **AND** the response carries the chosen answer for the question
 
 > test: code
-> - crates/duckchat-codex-acp/src/codex/ask_user.rs:380
+> - crates/duckchat-codex-acp/src/codex/ask_user.rs:378
 
 ### Scenario: Host custom freeform completes with accepted free-text answers
 
@@ -242,7 +264,7 @@ the questionnaire.
 - **AND** the response is not a skip or cancel outcome
 
 > test: code
-> - crates/duckchat-codex-acp/src/codex/ask_user.rs:400
+> - crates/duckchat-codex-acp/src/codex/ask_user.rs:398
 
 ### Scenario: Host cancel completes without accepting the questionnaire
 
@@ -251,7 +273,7 @@ the questionnaire.
 - **THEN** the backend request is completed without accepting the questionnaire
 
 > test: code
-> - crates/duckchat-codex-acp/src/codex/ask_user.rs:411
+> - crates/duckchat-codex-acp/src/codex/ask_user.rs:409
 
 ## Requirement: Ordinary tools stay auto-approved
 
@@ -268,7 +290,7 @@ user-input requests remain the structured-choice path for clarifying questions.
 - **THEN** the tool is allowed without emitting a host user-choice event
 
 > test: code
-> - crates/duckchat-codex-acp/src/codex/ask_user.rs:423
+> - crates/duckchat-codex-acp/src/codex/ask_user.rs:421
 
 ## Requirement: Model discovery and oneshot preference
 
@@ -289,7 +311,7 @@ is absent.
 
 > test: code
 > - crates/duckchat-codex-acp/src/models.rs:136
-> - crates/duckchat/src/openai_codex.rs:365
+> - crates/duckchat/src/openai_codex.rs:362
 
 ### Scenario: Each listed model carries a display name
 
@@ -298,7 +320,7 @@ is absent.
 - **THEN** each returned model carries a non-empty display name
 
 > test: code
-> - crates/duckchat/src/openai_codex.rs:388
+> - crates/duckchat/src/openai_codex.rs:385
 
 ### Scenario: Preferred oneshot model is selected when advertised
 
@@ -310,7 +332,7 @@ is absent.
 - **THEN** it selects the preferred oneshot model
 
 > test: code
-> - crates/duckchat/src/openai_codex.rs:409
+> - crates/duckchat/src/openai_codex.rs:406
 
 ### Scenario: Oneshot model falls back when preferred is absent
 
@@ -322,7 +344,7 @@ is absent.
 - **THEN** it selects another advertised model rather than failing
 
 > test: code
-> - crates/duckchat/src/openai_codex.rs:421
+> - crates/duckchat/src/openai_codex.rs:418
 
 ## Requirement: Prompt attachments
 
@@ -363,7 +385,7 @@ SHALL be left as its original literal markdown text.
 - **THEN** the original markdown link remains as text input
 
 > test: code
-> - crates/duckchat-codex-acp/src/codex/content.rs:175
+> - crates/duckchat-codex-acp/src/codex/content.rs:178
 
 ## Requirement: Graceful unavailability
 
@@ -385,8 +407,8 @@ a typed error rather than panicking.
 - **AND** the turn fails with a typed error rather than panicking
 
 > test: code
-> - crates/duckchat-codex-acp/src/agent.rs:676
-> - crates/duckchat/src/openai_codex.rs:434
+> - crates/duckchat-codex-acp/src/agent.rs:752
+> - crates/duckchat/src/openai_codex.rs:431
 
 ## Requirement: Stage skill discovery
 
@@ -407,7 +429,7 @@ SHALL be empty without failing.
 - **THEN** each skill is present in the command list with its skill name
 
 > test: code
-> - crates/duckchat/src/openai_codex/discover.rs:105
+> - crates/duckchat/src/openai_codex/discover.rs:102
 
 ### Scenario: A project without .agents/skills yields an empty command list
 
@@ -416,4 +438,67 @@ SHALL be empty without failing.
 - **THEN** the command list is empty
 
 > test: code
-> - crates/duckchat/src/openai_codex/discover.rs:131
+> - crates/duckchat/src/openai_codex/discover.rs:128
+
+## Requirement: Repository-scoped VCS access
+
+Every Codex turn SHALL use a workspace-write sandbox policy whose additional writable
+roots are the existing `.git` and `.jj` directories directly beneath the normalized
+repository root supplied by ACP session open or load. The agent SHALL refresh that
+repository context on session open or load, retain it independently of app-server process
+heat, and apply it to every turn. It SHALL NOT add absent metadata, file indirections,
+ancestor metadata, or external stores. If the backend rejects the policy, the turn SHALL
+fail through the app-server error path without retrying under a weaker or broader policy.
+
+> test: code
+
+### Scenario: Direct repository metadata is writable on every turn
+
+- **GIVEN** a normalized repository root with direct `.git` and `.jj` directories
+- **WHEN** the Codex agent starts a turn for that repository
+- **THEN** the turn uses workspace-write
+- **AND** its additional writable roots contain those direct metadata directories
+- **AND** the policy is supplied on every turn
+
+> test: code
+> - crates/duckchat-codex-acp/src/agent.rs:846
+
+### Scenario: External metadata indirection is not granted
+
+- **GIVEN** a repository root whose `.git` entry is a file that points to an external
+  store
+
+- **WHEN** the Codex agent derives the turn's additional writable roots
+
+- **THEN** it does not follow or grant access to that external store
+
+- **AND** it grants no writable root for the `.git` file
+
+> test: code
+> - crates/duckchat-codex-acp/src/agent.rs:876
+
+### Scenario: Resumed and restarted sessions reapply refreshed repository access
+
+- **GIVEN** a persisted Codex thread whose repository metadata has changed since its
+  previous turn
+
+- **AND** the app-server process has restarted
+
+- **WHEN** the ACP client loads the session and starts its next turn
+
+- **THEN** the agent refreshes repository access from the load working directory
+
+- **AND** the resumed turn receives the refreshed workspace-write policy
+
+> test: code
+> - crates/duckchat-codex-acp/src/agent.rs:896
+
+### Scenario: A rejected repository policy does not trigger a weaker retry
+
+- **GIVEN** the app-server rejects a turn's repository workspace-write policy
+- **WHEN** the Codex agent handles that rejection
+- **THEN** the turn fails through the app-server error path
+- **AND** the agent does not retry the turn with missing, weaker, or broader permissions
+
+> test: code
+> - crates/duckchat-codex-acp/src/agent.rs:942

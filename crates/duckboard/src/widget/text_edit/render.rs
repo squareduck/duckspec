@@ -202,10 +202,7 @@ fn cursor_visual_pos_hybrid(state: &EditorState, ed: &EditorLayout) -> (usize, u
     let line = state.cursor.line.min(ed.line_kind.len().saturating_sub(1));
     match ed.line_kind.get(line) {
         Some(LineLayoutKind::TableRow { region, row }) => {
-            if let Some(tv) = md_table::source_to_visual(
-                &ed.tables,
-                state.cursor,
-            ) {
+            if let Some(tv) = md_table::source_to_visual(&ed.tables, state.cursor) {
                 // Map region-local visual row to editor-global via the row's
                 // first source line cum_rows.
                 let row_line = ed.tables.regions[*region].rows[*row].source_line;
@@ -226,7 +223,11 @@ fn cursor_visual_pos_hybrid(state: &EditorState, ed: &EditorLayout) -> (usize, u
             let line_str = &state.lines[line];
             let byte_col = state.cursor.col.min(line_str.len());
             let char_col = line_str[..byte_col].chars().count();
-            let starts = ed.prose_row_starts.get(line).map(|s| s.as_slice()).unwrap_or(&[0]);
+            let starts = ed
+                .prose_row_starts
+                .get(line)
+                .map(|s| s.as_slice())
+                .unwrap_or(&[0]);
             let sub_row = starts.iter().rposition(|&s| char_col >= s).unwrap_or(0);
             let row_start = starts.get(sub_row).copied().unwrap_or(0);
             let visual_row = ed.cum_rows.get(line).copied().unwrap_or(0) + sub_row;
@@ -495,7 +496,6 @@ fn cached_hybrid_layout(
 
 // Keep `EditorLayout` methods in a second impl block below.
 impl EditorLayout {
-
     /// Convert a visual row index to (logical_line, sub_row within that line).
     fn visual_to_logical(&self, visual_row: usize) -> (usize, usize) {
         if self.cum_rows.is_empty() {
@@ -763,8 +763,9 @@ impl<'a, M> TextEdit<'a, M> {
         let content_height = if let Some(ed) = hybrid {
             ed.total_visual_rows as f32 * LINE_HEIGHT + CONTENT_PAD_Y * 2.0
         } else {
-            wrap.map_or(self.state.lines.len() as f32, |w| w.total_visual_rows as f32)
-                * LINE_HEIGHT
+            wrap.map_or(self.state.lines.len() as f32, |w| {
+                w.total_visual_rows as f32
+            }) * LINE_HEIGHT
                 + CONTENT_PAD_Y * 2.0
         };
 
@@ -1274,7 +1275,9 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for TextEdit<'a, M> {
                         // Shift+Enter always inserts a newline (never oneshot).
                         let buffer_empty = self.state.lines.len() <= 1
                             && self.state.lines.first().is_none_or(|l| l.is_empty());
-                        if cmd && buffer_empty && let Some(msg) = self.on_empty_cmd_submit.as_ref()
+                        if cmd
+                            && buffer_empty
+                            && let Some(msg) = self.on_empty_cmd_submit.as_ref()
                         {
                             shell.publish(msg.clone());
                         } else if cmd {
@@ -1575,7 +1578,11 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for TextEdit<'a, M> {
                                 let ce = if sr + 1 < starts.len() {
                                     starts[sr + 1]
                                 } else {
-                                    self.state.lines.get(li).map(|l| l.chars().count()).unwrap_or(0)
+                                    self.state
+                                        .lines
+                                        .get(li)
+                                        .map(|l| l.chars().count())
+                                        .unwrap_or(0)
                                 };
                                 (li, sr, cs, ce, None)
                             }
@@ -1601,8 +1608,7 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for TextEdit<'a, M> {
                     if let Some(region) = ed.tables.regions.get(region_i)
                         && let Some(trow) = region.rows.get(row_i)
                     {
-                        let table_w =
-                            region.total_width_chars as f32 * cell_w;
+                        let table_w = region.total_width_chars as f32 * cell_w;
                         let table_x = content_x + CONTENT_PAD - scroll_x;
 
                         // 1. Row background from role (header / zebra).
@@ -1640,16 +1646,8 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for TextEdit<'a, M> {
                         // 3. Fragment-clipped selection quads.
                         if let Some((sel_start, sel_end)) = selection {
                             paint_table_selection(
-                                renderer,
-                                trow,
-                                region,
-                                sub_row,
-                                line_idx,
-                                sel_start,
-                                sel_end,
-                                table_x,
-                                y,
-                                cell_w,
+                                renderer, trow, region, sub_row, line_idx, sel_start, sel_end,
+                                table_x, y, cell_w,
                             );
                         }
 
@@ -1701,15 +1699,7 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for TextEdit<'a, M> {
 
                         // 5. Column and row rules at cell edges.
                         paint_table_rules(
-                            renderer,
-                            region,
-                            trow,
-                            row_i,
-                            sub_row,
-                            table_x,
-                            y,
-                            cell_w,
-                            table_w,
+                            renderer, region, trow, row_i, sub_row, table_x, y, cell_w, table_w,
                         );
 
                         // 6. Cmd-hover link underline (same segments as prose).
@@ -2351,14 +2341,9 @@ fn table_byte_range_spans(
 
         // Map overlapping bytes back to char offsets within the fragment.
         let cell_text = &cell.text;
-        let lo_byte = snap_byte_boundary(
-            cell_text,
-            ov_start.saturating_sub(cell.source_byte.start),
-        );
-        let hi_byte = snap_byte_boundary(
-            cell_text,
-            ov_end.saturating_sub(cell.source_byte.start),
-        );
+        let lo_byte =
+            snap_byte_boundary(cell_text, ov_start.saturating_sub(cell.source_byte.start));
+        let hi_byte = snap_byte_boundary(cell_text, ov_end.saturating_sub(cell.source_byte.start));
         let char_lo = cell_text[..lo_byte]
             .chars()
             .count()
@@ -2541,8 +2526,7 @@ fn paint_table_link_underline(
     }
 
     let uy = y + LINE_HEIGHT - 2.0;
-    for (x_chars, w_chars) in table_byte_range_spans(trow, region, sub_row, byte_start, byte_end)
-    {
+    for (x_chars, w_chars) in table_byte_range_spans(trow, region, sub_row, byte_start, byte_end) {
         let ux = table_x + x_chars as f32 * cell_w;
         let uw = w_chars as f32 * cell_w;
         // Solid underline = direct open (URL or resolved path);
@@ -2748,7 +2732,11 @@ fn pixel_to_pos_wrapped(
                 let char_end = if sub_row + 1 < starts.len() {
                     starts[sub_row + 1]
                 } else {
-                    state.lines.get(line_idx).map(|l| l.chars().count()).unwrap_or(0)
+                    state
+                        .lines
+                        .get(line_idx)
+                        .map(|l| l.chars().count())
+                        .unwrap_or(0)
                 };
                 let col = (char_start + col_in_row).min(char_end);
                 // Convert char index to byte col when possible.
@@ -2938,13 +2926,7 @@ mod hybrid_layout_tests {
 
     #[test]
     fn separator_contributes_zero_visual_rows() {
-        let src = lines(&[
-            "before",
-            "| A | B |",
-            "| - | - |",
-            "| 1 | 2 |",
-            "after",
-        ]);
+        let src = lines(&["before", "| A | B |", "| - | - |", "| 1 | 2 |", "after"]);
         let ed = EditorLayout::compute(&src, 80, true);
         assert_eq!(ed.tables.regions.len(), 1);
         // Line 2 is the separator.
@@ -2987,13 +2969,7 @@ mod hybrid_layout_tests {
     #[test]
     fn hybrid_visual_up_from_body_lands_on_header() {
         let text = "intro\n| A | B |\n| - | - |\n| 1 | 2 |\noutra";
-        let src = lines(&[
-            "intro",
-            "| A | B |",
-            "| - | - |",
-            "| 1 | 2 |",
-            "outra",
-        ]);
+        let src = lines(&["intro", "| A | B |", "| - | - |", "| 1 | 2 |", "outra"]);
         let ed = EditorLayout::compute(&src, 80, true);
         // Body row is logical line 3; put cursor at start of first cell.
         let body = &ed.tables.regions[0].rows[1];
@@ -3032,11 +3008,7 @@ mod hybrid_layout_tests {
 
     #[test]
     fn hybrid_pixel_to_pos_in_table_band_maps_to_cell() {
-        let src = lines(&[
-            "| Name | Value |",
-            "| ---- | ----- |",
-            "| alpha | beta |",
-        ]);
+        let src = lines(&["| Name | Value |", "| ---- | ----- |", "| alpha | beta |"]);
         let ed = EditorLayout::compute(&src, 80, true);
         let region = &ed.tables.regions[0];
         let body = &region.rows[1];
@@ -3048,8 +3020,7 @@ mod hybrid_layout_tests {
             .expect("visual_to_source");
         assert_eq!(pos.line, body.source_line);
         assert!(
-            pos.col >= body.cells[0].source_byte.start
-                && pos.col <= body.cells[0].source_byte.end
+            pos.col >= body.cells[0].source_byte.start && pos.col <= body.cells[0].source_byte.end
         );
     }
 
@@ -3057,11 +3028,7 @@ mod hybrid_layout_tests {
     fn table_byte_range_spans_clip_to_cell_fragment() {
         // Body cell "alpha" should produce a non-empty span for a match
         // covering those source bytes; a range on another line yields none.
-        let src = lines(&[
-            "| Name | Value |",
-            "| ---- | ----- |",
-            "| alpha | beta |",
-        ]);
+        let src = lines(&["| Name | Value |", "| ---- | ----- |", "| alpha | beta |"]);
         let ed = EditorLayout::compute(&src, 80, true);
         let region = &ed.tables.regions[0];
         let body = &region.rows[1];
@@ -3080,11 +3047,7 @@ mod hybrid_layout_tests {
         assert_eq!(w_chars, 5); // "alpha"
         // Span starts at the cell's padded origin.
         let origin = md_table::col_origin(&region.col_widths, 0);
-        let pad = md_table::align_pad(
-            region.aligns[0],
-            region.col_widths[0],
-            5,
-        );
+        let pad = md_table::align_pad(region.aligns[0], region.col_widths[0], 5);
         assert_eq!(x_chars, origin + pad);
 
         // Partial: only last 2 chars of "alpha".
@@ -3101,11 +3064,7 @@ mod hybrid_layout_tests {
 
     #[test]
     fn table_byte_range_spans_ignore_non_overlapping_line() {
-        let src = lines(&[
-            "| A | B |",
-            "| - | - |",
-            "| 1 | 2 |",
-        ]);
+        let src = lines(&["| A | B |", "| - | - |", "| 1 | 2 |"]);
         let ed = EditorLayout::compute(&src, 80, true);
         let region = &ed.tables.regions[0];
         let body = &region.rows[1];
@@ -3118,11 +3077,7 @@ mod hybrid_layout_tests {
 
     #[test]
     fn cached_hybrid_layout_reuses_until_key_changes() {
-        let src = Arc::new(lines(&[
-            "| A | B |",
-            "| - | - |",
-            "| 1 | 2 |",
-        ]));
+        let src = Arc::new(lines(&["| A | B |", "| - | - |", "| 1 | 2 |"]));
         let internal = InternalState::default();
         let a = cached_hybrid_layout(&internal, &src, 0, 80, true);
         let b = cached_hybrid_layout(&internal, &src, 0, 80, true);
@@ -3146,10 +3101,7 @@ mod hybrid_layout_tests {
         let direct = EditorLayout::compute(&src, 80, true);
         let via_cache = cached_hybrid_layout(&internal, &src, 0, 80, true);
         assert_eq!(via_cache.total_visual_rows, direct.total_visual_rows);
-        assert_eq!(
-            via_cache.content_width_chars,
-            direct.content_width_chars
-        );
+        assert_eq!(via_cache.content_width_chars, direct.content_width_chars);
     }
 
     // @spec chat/stream-ui Hybrid layout reuse: Second hybrid layout request with the same key does not recompute tables
@@ -3173,7 +3125,10 @@ mod hybrid_layout_tests {
             "same key must reuse cached layout without recomputing"
         );
         assert_eq!(Arc::as_ptr(&second), first_ptr);
-        assert_eq!(second.tables.regions[0].rows.len(), first.tables.regions[0].rows.len());
+        assert_eq!(
+            second.tables.regions[0].rows.len(),
+            first.tables.regions[0].rows.len()
+        );
     }
 
     // @spec chat/stream-ui Hybrid layout reuse: Cache hit shares layout geometry without deep-cloning the tree

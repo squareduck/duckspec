@@ -226,8 +226,15 @@ impl Agent {
         let content = acp_prompt_to_claude_content(params);
 
         let open_id = request_id.clone();
-        self.ensure_hot_and_prompt(&request_id, params, content, on_update, parent_reader, write_acp)
-            .await?;
+        self.ensure_hot_and_prompt(
+            &request_id,
+            params,
+            content,
+            on_update,
+            parent_reader,
+            write_acp,
+        )
+        .await?;
 
         let live_id = self
             .hot
@@ -270,14 +277,8 @@ impl Agent {
 
         if self.hot.is_some() {
             // Reuse process-hot duplex.
-            self.prompt_with_parent_bridge(
-                content,
-                on_update,
-                parent_reader,
-                write_acp,
-                &resolved,
-            )
-            .await?;
+            self.prompt_with_parent_bridge(content, on_update, parent_reader, write_acp, &resolved)
+                .await?;
             return Ok(());
         }
 

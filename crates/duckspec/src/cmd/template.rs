@@ -5,8 +5,8 @@ use super::common::find_duckspec_root;
 use crate::content;
 
 pub fn run(name: String) -> anyhow::Result<()> {
-    let template = content::template(&name)
-        .ok_or_else(|| anyhow::anyhow!("unknown template: {name}"))?;
+    let template =
+        content::template(&name).ok_or_else(|| anyhow::anyhow!("unknown template: {name}"))?;
 
     let duckspec_root = find_duckspec_root().ok();
     let before = duckspec_root

@@ -37,10 +37,7 @@ pub fn discover_commands(project_root: &Path) -> Vec<SlashCommand> {
             continue;
         }
         let front = parse_skill_frontmatter(&skill_file);
-        let name = front
-            .name
-            .filter(|n| !n.is_empty())
-            .unwrap_or(dir_name);
+        let name = front.name.filter(|n| !n.is_empty()).unwrap_or(dir_name);
         let description = front.description.unwrap_or_default();
         commands.push(SlashCommand { name, description });
     }

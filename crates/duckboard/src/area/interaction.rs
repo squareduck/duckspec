@@ -565,11 +565,9 @@ impl AgentSession {
         let last_assistant = if session_empty {
             None
         } else {
-            crate::default_prompts::last_assistant_and_user(&self.session)
-                .map(|(a, _)| a)
+            crate::default_prompts::last_assistant_and_user(&self.session).map(|(a, _)| a)
         };
-        let prev_sends: Vec<String> =
-            self.next_actions.iter().map(|a| a.send.clone()).collect();
+        let prev_sends: Vec<String> = self.next_actions.iter().map(|a| a.send.clone()).collect();
         let prev_idx = self.next_action_idx;
         // Clone so list rebuild can take owned slices without fighting other
         // borrows of `self` (bootstrap points into scope_facts).
@@ -583,10 +581,7 @@ impl AgentSession {
         let prev_refs: Vec<&str> = prev_sends.iter().map(String::as_str).collect();
         let new_refs: Vec<&str> = self.next_actions.iter().map(|a| a.send.as_str()).collect();
         self.next_action_idx = crate::default_prompts::next_action_idx_after_refresh(
-            after_turn,
-            &prev_refs,
-            &new_refs,
-            prev_idx,
+            after_turn, &prev_refs, &new_refs, prev_idx,
         );
     }
 
@@ -773,9 +768,7 @@ pub fn new_session_with_inherited_next_actions(
 ) -> AgentSession {
     let donor = ix.active();
     let donor_actions = match (scope_kind, donor) {
-        (ScopeKind::Change, Some(d)) if !d.next_actions.is_empty() => {
-            Some(d.next_actions.clone())
-        }
+        (ScopeKind::Change, Some(d)) if !d.next_actions.is_empty() => Some(d.next_actions.clone()),
         _ => None,
     };
     let mut fresh = AgentSession::new(scope_key, scope_kind);
@@ -1079,7 +1072,9 @@ mod tests {
         // AND no substitute model is chosen for the turn
         assert!(!main_chat_turn_allowed(&missing));
         assert!(!main_chat_turn_allowed(&unconfigured));
-        assert!(main_chat_turn_allowed(&EffectiveModel::Available(preferred)));
+        assert!(main_chat_turn_allowed(&EffectiveModel::Available(
+            preferred
+        )));
     }
 
     /// @spec session/scope Reliable first-turn delivery: The first turn's message body carries the scope orientation
@@ -1426,33 +1421,29 @@ mod tests {
     #[test]
     fn pure_content_deltas_alone_do_not_materialize() {
         assert!(!should_materialize_chat_ui(
-            &crate::agent::AgentEvent::ContentDelta {
-                text: "x".into()
-            },
+            &crate::agent::AgentEvent::ContentDelta { text: "x".into() },
             true,
             false,
         ));
         assert!(!should_materialize_chat_ui(
-            &crate::agent::AgentEvent::ReasoningDelta {
-                text: "y".into()
-            },
+            &crate::agent::AgentEvent::ReasoningDelta { text: "y".into() },
             true,
             false,
         ));
         // Kind switch is structural even for content deltas.
         assert!(should_materialize_chat_ui(
-            &crate::agent::AgentEvent::ContentDelta {
-                text: "x".into()
-            },
+            &crate::agent::AgentEvent::ContentDelta { text: "x".into() },
             true,
             true,
         ));
         // Structural events always materialize.
-        assert!(is_structural_chat_event(&crate::agent::AgentEvent::ToolUse {
-            id: "1".into(),
-            name: "Bash".into(),
-            input: "ls".into(),
-        }));
+        assert!(is_structural_chat_event(
+            &crate::agent::AgentEvent::ToolUse {
+                id: "1".into(),
+                name: "Bash".into(),
+                input: "ls".into(),
+            }
+        ));
         assert!(is_structural_chat_event(
             &crate::agent::AgentEvent::TurnComplete
         ));
@@ -1797,16 +1788,13 @@ mod tests {
         // Caller settles: flush draft + stop notice (mirrors main thrash path).
         on_answer_thrash_trip(&mut ax.session);
         assert!(ax.session.pending_text.is_empty());
-        assert_eq!(
-            committed_answer_texts(&ax.session),
-            vec![last_allowed]
-        );
+        assert_eq!(committed_answer_texts(&ax.session), vec![last_allowed]);
         assert!(
             ax.session.messages.iter().any(|m| {
                 m.role == Role::System
-                    && m.content.iter().any(|b| {
-                        matches!(b, ContentBlock::Text(t) if t == ANSWER_THRASH_STOP_NOTICE)
-                    })
+                    && m.content.iter().any(
+                        |b| matches!(b, ContentBlock::Text(t) if t == ANSWER_THRASH_STOP_NOTICE),
+                    )
             }),
             "stop notice must be present as a system message"
         );
@@ -1950,7 +1938,10 @@ mod tests {
 
         // THEN the outgoing prompt begins with the user's text AND the
         // unsynced draft follows it.
-        assert!(prompt.starts_with("confirm"), "user text must stay first: {prompt}");
+        assert!(
+            prompt.starts_with("confirm"),
+            "user text must stay first: {prompt}"
+        );
         let user_pos = prompt.find("confirm").unwrap();
         let draft_pos = prompt
             .find("outline gate preview")
@@ -2013,10 +2004,7 @@ mod tests {
     fn plan_editor_refresh_suffix_and_reshape() {
         let a = vec!["hello".into()];
         let b = vec!["hello".into(), "world".into()];
-        assert_eq!(
-            plan_editor_refresh(&a, &a),
-            EditorRefreshKind::Reuse
-        );
+        assert_eq!(plan_editor_refresh(&a, &a), EditorRefreshKind::Reuse);
         assert_eq!(
             plan_editor_refresh(&a, &b),
             EditorRefreshKind::InPlace { dirty_from: 1 }
@@ -2068,7 +2056,10 @@ mod tests {
             ax.chat_editors[user_idx].highlight_version, user_version,
             "settled user block must keep its editor (version) across live-answer growth"
         );
-        assert_eq!(ax.chat_blocks[user_idx].lines, vec!["user asks".to_string()]);
+        assert_eq!(
+            ax.chat_blocks[user_idx].lines,
+            vec!["user asks".to_string()]
+        );
     }
 
     // @spec chat/stream-ui Settled and live editor refresh: Suffix-growing live answer refreshes in place
@@ -2104,8 +2095,7 @@ mod tests {
         );
         let lines = &ax.chat_editors[ans_idx].lines;
         assert!(
-            lines.iter().any(|l| l.contains("line two"))
-                || lines.join("\n").contains("line two"),
+            lines.iter().any(|l| l.contains("line two")) || lines.join("\n").contains("line two"),
             "live answer must include suffix: {lines:?}"
         );
         let _ = v_before;
@@ -2250,15 +2240,16 @@ mod tests {
         ax.fast_response = fast_response::from_user_choice(
             7,
             Some("Pick one?".into()),
-            [("opt-a".into(), "Alpha".into()), ("opt-b".into(), "Beta".into())],
+            [
+                ("opt-a".into(), "Alpha".into()),
+                ("opt-b".into(), "Beta".into()),
+            ],
         );
 
         // WHEN the first option is activated (no agent handle → wire is no-op)
         activate_fast_response(
             &mut ax,
-            FastResponsePick::Option {
-                id: "opt-a".into(),
-            },
+            FastResponsePick::Option { id: "opt-a".into() },
             &hl,
         );
 
@@ -2320,8 +2311,7 @@ mod tests {
 
         let mut ax = AgentSession::new("foo".into(), ScopeKind::Change);
         ax.is_awaiting_user = true;
-        ax.fast_response =
-            fast_response::from_user_choice(1, None, [("a".into(), "Alpha".into())]);
+        ax.fast_response = fast_response::from_user_choice(1, None, [("a".into(), "Alpha".into())]);
 
         settle_user_choice_transcript(&mut ax, "Alpha".into());
 
@@ -2378,19 +2368,14 @@ mod tests {
         let hl = SyntaxHighlighter::new();
         let mut ax = AgentSession::new("foo".into(), ScopeKind::Change);
         ax.is_awaiting_user = true;
-        ax.fast_response = fast_response::from_user_choice(
-            7,
-            None,
-            [("opt-a".into(), "Alpha".into())],
-        );
+        ax.fast_response =
+            fast_response::from_user_choice(7, None, [("opt-a".into(), "Alpha".into())]);
         ax.chat_input = EditorState::new("partial freeform");
         assert!(!ax.chat_input.text().trim().is_empty());
 
         activate_fast_response(
             &mut ax,
-            FastResponsePick::Option {
-                id: "opt-a".into(),
-            },
+            FastResponsePick::Option { id: "opt-a".into() },
             &hl,
         );
 
@@ -2399,10 +2384,7 @@ mod tests {
             "typed freeform must be cleared on chip pick"
         );
         assert!(!ax.is_awaiting_user);
-        assert!(matches!(
-            ax.fast_response.source,
-            FastResponseSource::None
-        ));
+        assert!(matches!(ax.fast_response.source, FastResponseSource::None));
         // Host answer chip is committed; ordinary Text user turn is not.
         assert!(ax.session.messages.iter().any(|m| {
             m.content
@@ -2410,9 +2392,9 @@ mod tests {
                 .any(|b| matches!(b, ContentBlock::UserChoiceAnswer { text } if text == "Alpha"))
         }));
         assert!(!ax.session.messages.iter().any(|m| {
-            m.content
-                .iter()
-                .any(|b| matches!(b, ContentBlock::Text(t) if t == "Alpha" || t == "partial freeform"))
+            m.content.iter().any(
+                |b| matches!(b, ContentBlock::Text(t) if t == "Alpha" || t == "partial freeform"),
+            )
         }));
     }
 
@@ -2623,7 +2605,10 @@ mod tests {
         // THEN still uncustomized and equal width for current (default) window
         assert!(!ix.width_customized);
         rebalance_uncustomized(&mut ix, theme::DEFAULT_WINDOW_WIDTH);
-        assert_eq!(ix.width, equal_interaction_width(theme::DEFAULT_WINDOW_WIDTH));
+        assert_eq!(
+            ix.width,
+            equal_interaction_width(theme::DEFAULT_WINDOW_WIDTH)
+        );
         assert_eq!(ix.width, start_w);
     }
 
@@ -2668,9 +2653,7 @@ mod tests {
             stale,
             "fixture must differ from default half"
         );
-        assert!(
-            free_content_chat_width(current_w) / 2.0 > interaction_toggle::MIN_PANEL_WIDTH
-        );
+        assert!(free_content_chat_width(current_w) / 2.0 > interaction_toggle::MIN_PANEL_WIDTH);
         // WHEN the panel is force-shown without a door open
         show_panel(&mut ix, current_w);
         // THEN width equals half free for the current window and stays uncustomized
@@ -2771,12 +2754,7 @@ pub fn update(
             }
         }
         Msg::AgentChat(chat_msg) => {
-            handle_agent_chat(
-                state,
-                chat_msg,
-                highlighter,
-                agent_input_hints,
-            );
+            handle_agent_chat(state, chat_msg, highlighter, agent_input_hints);
         }
         Msg::TerminalScroll => {
             if let Some(tt) = state.active_terminal_mut() {
@@ -2938,20 +2916,16 @@ fn handle_agent_chat(
 
             // Awaiting a structured choice: freeform submit is a custom answer
             // on the parked question (in-band), not cancel + next user turn.
-            if let Some(plan) = plan_freeform_while_awaiting(
-                ax.is_awaiting_user,
-                &ax.fast_response.source,
-                &typed,
-            ) {
+            if let Some(plan) =
+                plan_freeform_while_awaiting(ax.is_awaiting_user, &ax.fast_response.source, &typed)
+            {
                 let answer_text = plan.text.clone();
                 if let Some(correlation_id) = plan.correlation_id
                     && let Some(handle) = ax.agent_handle.as_ref()
                 {
                     handle.answer_user_choice(
                         correlation_id,
-                        duckchat::UserChoiceAnswer::Custom {
-                            text: plan.text,
-                        },
+                        duckchat::UserChoiceAnswer::Custom { text: plan.text },
                     );
                 }
                 settle_user_choice_transcript(ax, answer_text);
@@ -3090,19 +3064,11 @@ fn handle_agent_chat(
 
             // Bottom-pin pad for fast response (when content > viewport so
             // on_scroll fires). Short content is measured via ChromeLayout.
-            recompute_fast_response_top_pad(
-                ax,
-                bounds.height,
-                content.height,
-            );
+            recompute_fast_response_top_pad(ax, bounds.height, content.height);
 
             // Re-engaging stick while pure-content dirtiness was deferred
             // (user was reading history): paint the live answer now.
-            if ax.stick_to_bottom
-                && !was_stuck
-                && ax.chat_ui_dirty
-                && ax.session.is_streaming
-            {
+            if ax.stick_to_bottom && !was_stuck && ax.chat_ui_dirty && ax.session.is_streaming {
                 materialize_chat_ui(ax, highlighter);
             }
         }
@@ -3131,11 +3097,7 @@ fn handle_agent_chat(
 
 /// Recompute `fast_response_top_pad` from scroll/measure bounds. Zero when chips
 /// are not visible so the next show starts clean.
-fn recompute_fast_response_top_pad(
-    ax: &mut AgentSession,
-    viewport_h: f32,
-    content_h: f32,
-) {
+fn recompute_fast_response_top_pad(ax: &mut AgentSession, viewport_h: f32, content_h: f32) {
     let input_empty = ax.chat_input.text().trim().is_empty();
     if crate::fast_response::visible(
         ax.session.is_streaming,
@@ -3143,11 +3105,8 @@ fn recompute_fast_response_top_pad(
         input_empty,
         &ax.fast_response,
     ) {
-        ax.fast_response_top_pad = crate::fast_response::bottom_pad(
-            viewport_h,
-            content_h,
-            ax.fast_response_top_pad,
-        );
+        ax.fast_response_top_pad =
+            crate::fast_response::bottom_pad(viewport_h, content_h, ax.fast_response_top_pad);
     } else {
         ax.fast_response_top_pad = 0.0;
     }
@@ -3265,15 +3224,22 @@ pub fn recover_from_lost_session(ax: &mut AgentSession, highlighter: &SyntaxHigh
     }
 
     // Last non-priming user message is the turn that failed mid-resume.
-    let Some((last_idx, text)) = ax.session.messages.iter().enumerate().rev().find_map(|(i, m)| {
-        if m.role != Role::User || m.is_priming {
-            return None;
-        }
-        m.content.iter().find_map(|b| match b {
-            ContentBlock::Text(t) if !t.is_empty() => Some((i, t.clone())),
-            _ => None,
+    let Some((last_idx, text)) = ax
+        .session
+        .messages
+        .iter()
+        .enumerate()
+        .rev()
+        .find_map(|(i, m)| {
+            if m.role != Role::User || m.is_priming {
+                return None;
+            }
+            m.content.iter().find_map(|b| match b {
+                ContentBlock::Text(t) if !t.is_empty() => Some((i, t.clone())),
+                _ => None,
+            })
         })
-    }) else {
+    else {
         ax.session.is_streaming = false;
         if let Some(handle) = ax.agent_handle.as_ref()
             && let Err(e) = crate::chat_store::save_session(&ax.session, Some(handle.working_dir()))
@@ -3459,9 +3425,7 @@ pub fn settle_user_choice_transcript(ax: &mut AgentSession, answer_text: String)
 
     ax.session.messages.push(ChatMessage {
         role: Role::User,
-        content: vec![ContentBlock::UserChoiceAnswer {
-            text: answer_text,
-        }],
+        content: vec![ContentBlock::UserChoiceAnswer { text: answer_text }],
         timestamp: String::new(),
         is_priming: false,
     });
@@ -3492,10 +3456,9 @@ pub fn plan_freeform_while_awaiting(
         return None;
     }
     let correlation_id = match source {
-        crate::fast_response::FastResponseSource::UserChoice {
-            correlation_id,
-            ..
-        } => Some(*correlation_id),
+        crate::fast_response::FastResponseSource::UserChoice { correlation_id, .. } => {
+            Some(*correlation_id)
+        }
         crate::fast_response::FastResponseSource::None
         | crate::fast_response::FastResponseSource::OneshotHints => None,
     };
@@ -3514,8 +3477,7 @@ pub fn apply_user_choice_request(
     _allow_cancel: bool,
 ) {
     // UI ignores allow_cancel — shell has no cancel chip; esc/freeform cancel on wire.
-    ax.fast_response =
-        crate::fast_response::from_user_choice(correlation_id, prompt, options);
+    ax.fast_response = crate::fast_response::from_user_choice(correlation_id, prompt, options);
     ax.is_awaiting_user = true;
 }
 
@@ -3564,7 +3526,9 @@ pub fn send_prompt_text(ax: &mut AgentSession, text: String, highlighter: &Synta
             scope_key: ax.session.scope.clone(),
             change_facts: ax.scope_facts.clone(),
         };
-        let scope_blurb = crate::scope::CurrentScopeHook.compute(&scope).map(|o| o.text);
+        let scope_blurb = crate::scope::CurrentScopeHook
+            .compute(&scope)
+            .map(|o| o.text);
         let priming_text = assemble_priming_body(agents_md.as_deref(), scope_blurb.as_deref());
 
         ax.session.messages.push(crate::chat_store::ChatMessage {
@@ -3734,7 +3698,9 @@ fn rehighlight_input(input: &mut EditorState, highlighter: &SyntaxHighlighter) {
 pub(crate) enum EffectiveModel {
     Available(ModelRef),
     /// Cascade produced a preferred choice that is not in the process catalog.
-    Missing { preferred: ModelRef },
+    Missing {
+        preferred: ModelRef,
+    },
     /// No pin, no project override, no global.
     Unconfigured,
 }
@@ -3797,11 +3763,7 @@ pub(crate) fn resolve_effective_model(
 /// prompt as a preamble, so any kept draft is already carried as a committed
 /// message — clear the unsynced draft rather than adding a duplicate resync
 /// reminder.
-pub fn build_recovery_prompt(
-    session: &mut ChatSession,
-    history_end: usize,
-    text: &str,
-) -> String {
+pub fn build_recovery_prompt(session: &mut ChatSession, history_end: usize, text: &str) -> String {
     session.unsynced_draft = None;
     let history = &session.messages[..history_end];
     if history.is_empty() {
@@ -3991,19 +3953,13 @@ pub fn rebuild_chat_editor(ax: &mut AgentSession, highlighter: &SyntaxHighlighte
             let plan = plan_editor_refresh(&ax.chat_blocks[i].lines, &block.lines);
             match plan {
                 EditorRefreshKind::Reuse => {
-                    let existing =
-                        std::mem::replace(&mut ax.chat_editors[i], EditorState::new(""));
+                    let existing = std::mem::replace(&mut ax.chat_editors[i], EditorState::new(""));
                     new_editors.push(existing);
                 }
                 EditorRefreshKind::InPlace { dirty_from } => {
                     let mut existing =
                         std::mem::replace(&mut ax.chat_editors[i], EditorState::new(""));
-                    refresh_editor_in_place(
-                        &mut existing,
-                        &block.lines,
-                        dirty_from,
-                        highlighter,
-                    );
+                    refresh_editor_in_place(&mut existing, &block.lines, dirty_from, highlighter);
                     new_editors.push(existing);
                 }
                 EditorRefreshKind::FullRebuild => {
@@ -4421,12 +4377,7 @@ pub fn update_with_side_effects(
     agent_input_hints: bool,
     window_w: f32,
 ) {
-    let just_opened = update(
-        state,
-        msg,
-        highlighter,
-        agent_input_hints,
-    );
+    let just_opened = update(state, msg, highlighter, agent_input_hints);
     // Uncustomized panels rebalance to half free space when the door opens.
     if just_opened {
         rebalance_uncustomized(state, window_w);
@@ -4740,9 +4691,7 @@ pub fn view_column<'a, M: 'a + Clone>(
                     EffectiveModel::Missing { preferred } => {
                         agent_chat::missing_closed_model_choice(Some(preferred))
                     }
-                    EffectiveModel::Unconfigured => {
-                        agent_chat::missing_closed_model_choice(None)
-                    }
+                    EffectiveModel::Unconfigured => agent_chat::missing_closed_model_choice(None),
                 };
                 let context_max = effective
                     .available_ref()

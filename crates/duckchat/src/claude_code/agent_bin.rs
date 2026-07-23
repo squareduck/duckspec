@@ -39,8 +39,7 @@ pub fn resolve_claude_acp_binary() -> Result<PathBuf, Error> {
 /// spawn with a typed error (same class as a missing `grok`).
 pub fn claude_acp_launch() -> AgentLaunch {
     AgentLaunch::new(|| {
-        let path = resolve_claude_acp_binary()
-            .unwrap_or_else(|_| PathBuf::from(CLAUDE_ACP_BIN));
+        let path = resolve_claude_acp_binary().unwrap_or_else(|_| PathBuf::from(CLAUDE_ACP_BIN));
         tokio::process::Command::new(path)
     })
 }
@@ -170,8 +169,8 @@ mod tests {
         {
             let _guard = ENV_LOCK.lock().unwrap();
             // No env override, no sibling, no PATH hit → resolve fails with Spawn.
-            let err = resolve_with(None, Some(Path::new("/no/such/duckboard")), |_| None)
-                .unwrap_err();
+            let err =
+                resolve_with(None, Some(Path::new("/no/such/duckboard")), |_| None).unwrap_err();
             assert!(matches!(err, Error::Spawn(_)), "got {err:?}");
         }
 

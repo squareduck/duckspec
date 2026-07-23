@@ -986,7 +986,9 @@ pub enum EditorAction {
     /// Drag ran past an edge of an editor that fits its content inside an
     /// *outer* scrollable (a chat message body). `dy` is logical px to move
     /// that outer container; positive scrolls toward the end.
-    AutoScroll { dy: f32 },
+    AutoScroll {
+        dy: f32,
+    },
 }
 
 impl EditorAction {

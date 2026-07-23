@@ -13,7 +13,7 @@ mod turn;
 pub use ask_user as turn_ask_user;
 pub use event::map_update;
 pub use launch::AgentLaunch;
-pub use runtime::{AcpMainRuntime, AcpOneshotRuntime};
 #[cfg(test)]
 pub(crate) use runtime::pick_oneshot_model;
+pub use runtime::{AcpMainRuntime, AcpOneshotRuntime};
 pub use turn::{AcpModel, AcpTurn, InitResult, PromptResult};

@@ -169,7 +169,11 @@ fn file_credentials_json() -> Option<String> {
 
 fn claude_credentials_path() -> Option<PathBuf> {
     let home = std::env::var_os("HOME")?;
-    Some(PathBuf::from(home).join(".claude").join(".credentials.json"))
+    Some(
+        PathBuf::from(home)
+            .join(".claude")
+            .join(".credentials.json"),
+    )
 }
 
 fn parse_oauth_access_token(raw: &str) -> Option<String> {
@@ -237,10 +241,7 @@ async fn fetch_models(auth: &Auth) -> Result<Vec<AdvertisedModel>, DiscoverError
                 .display_name
                 .filter(|s| !s.trim().is_empty())
                 .unwrap_or_else(|| m.id.clone());
-            let context_window = m
-                .max_input_tokens
-                .filter(|&n| n > 0)
-                .map(|n| n as usize);
+            let context_window = m.max_input_tokens.filter(|&n| n > 0).map(|n| n as usize);
             AdvertisedModel {
                 id: m.id,
                 name,
@@ -306,7 +307,10 @@ mod tests {
             .pointer("/_meta/modelState/availableModels")
             .and_then(Value::as_array)
             .expect("availableModels array");
-        assert!(!available.is_empty(), "fallback advertise set must be non-empty");
+        assert!(
+            !available.is_empty(),
+            "fallback advertise set must be non-empty"
+        );
         let ids: Vec<&str> = available
             .iter()
             .filter_map(|m| m.get("modelId").and_then(Value::as_str))

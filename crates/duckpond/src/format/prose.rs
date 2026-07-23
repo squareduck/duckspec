@@ -266,20 +266,14 @@ mod tests {
     fn keeps_image_atomic() {
         let input = "![alt text](path/to/img.png) caption";
         let chunks = tokenize(input);
-        assert_eq!(
-            chunks,
-            vec!["![alt text](path/to/img.png)", "caption"]
-        );
+        assert_eq!(chunks, vec!["![alt text](path/to/img.png)", "caption"]);
     }
 
     #[test]
     fn autolink_atomic() {
         let input = "visit <https://example.com/long> soon";
         let chunks = tokenize(input);
-        assert_eq!(
-            chunks,
-            vec!["visit", "<https://example.com/long>", "soon"]
-        );
+        assert_eq!(chunks, vec!["visit", "<https://example.com/long>", "soon"]);
     }
 
     #[test]

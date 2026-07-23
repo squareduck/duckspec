@@ -308,8 +308,7 @@ mod tests {
     #[test]
     fn cmd_digit_selects_matching_option() {
         let fr = sample_options();
-        let selected =
-            resolve_cmd_digit_when_visible(false, false, true, &fr, 2).expect("visible");
+        let selected = resolve_cmd_digit_when_visible(false, false, true, &fr, 2).expect("visible");
         assert_eq!(
             selected,
             FastResponsePick::Option {
@@ -380,7 +379,10 @@ mod tests {
         let fr = from_user_choice(
             1,
             Some("Ship later or now?".into()),
-            [("later".into(), "Later".into()), ("now".into(), "Now".into())],
+            [
+                ("later".into(), "Later".into()),
+                ("now".into(), "Now".into()),
+            ],
         );
         assert!(!is_empty(&fr));
         // WHEN live chrome is derived
@@ -468,18 +470,9 @@ mod tests {
     fn option_pick_maps_to_selected_answer() {
         use duckchat::UserChoiceAnswer;
 
-        let fr = from_user_choice(
-            7,
-            Some("Ship?".into()),
-            [("opt-a".into(), "Alpha".into())],
-        );
+        let fr = from_user_choice(7, Some("Ship?".into()), [("opt-a".into(), "Alpha".into())]);
         let pick = resolve_cmd_digit(&fr, 1).expect("option");
-        assert_eq!(
-            pick,
-            FastResponsePick::Option {
-                id: "opt-a".into()
-            }
-        );
+        assert_eq!(pick, FastResponsePick::Option { id: "opt-a".into() });
         let answer = match pick {
             FastResponsePick::Option { id } => UserChoiceAnswer::Selected { option_id: id },
         };
@@ -505,10 +498,7 @@ mod tests {
         );
         // Oneshot activation path is send_prompt_text with that id (product),
         // not answer_user_choice.
-        assert!(!matches!(
-            fr.source,
-            FastResponseSource::UserChoice { .. }
-        ));
+        assert!(!matches!(fr.source, FastResponseSource::UserChoice { .. }));
     }
 
     // @spec chat/fast-response Awaiting composer chrome: Awaiting user applies quiet accent tint to the composer section

@@ -123,9 +123,7 @@ pub fn trailing_next_actions(source: &str) -> Vec<NextAction> {
 }
 
 fn is_trailing_card(card: &MetaCard, lines: &[&str]) -> bool {
-    let last_non_empty = lines
-        .iter()
-        .rposition(|l| !l.trim().is_empty());
+    let last_non_empty = lines.iter().rposition(|l| !l.trim().is_empty());
     match last_non_empty {
         None => false,
         Some(idx) => card.line_end >= idx,
@@ -359,10 +357,7 @@ More prose after the card.
         assert_eq!(actions[0].send, "confirm");
         // AND reason text is not included in the send text
         assert!(!actions[0].send.contains("write"));
-        assert_eq!(
-            actions[0].reason.as_deref(),
-            Some("write this proposal")
-        );
+        assert_eq!(actions[0].reason.as_deref(), Some("write this proposal"));
     }
 
     // @spec chat/transcript Meta-card line background: Meta-card lines on an Answer get meta-card background

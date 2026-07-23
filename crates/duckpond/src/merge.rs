@@ -50,8 +50,7 @@ pub fn merge_spec_delta(source: &str, delta: &str) -> Result<Merged<Spec>, Merge
         None => Ok(Merged::Deleted),
         Some(rendered) => {
             let elements = parse::parse_elements(&rendered);
-            let artifact =
-                parse::spec::parse_spec(&elements).map_err(MergeValidateError::Parse)?;
+            let artifact = parse::spec::parse_spec(&elements).map_err(MergeValidateError::Parse)?;
             Ok(Merged::Updated { rendered, artifact })
         }
     }

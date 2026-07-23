@@ -363,9 +363,7 @@ impl AcpTurn {
                             {
                                 return Err(Error::SessionNotFound);
                             }
-                            return Err(Error::Protocol(format!(
-                                "agent {method} failed: {err}"
-                            )));
+                            return Err(Error::Protocol(format!("agent {method} failed: {err}")));
                         }
                         return Ok(msg.get("result").cloned().unwrap_or(Value::Null));
                     }
@@ -375,14 +373,8 @@ impl AcpTurn {
                 (true, Some(req_id)) => {
                     let agent_method = msg.get("method").and_then(Value::as_str).unwrap_or("");
                     let params = msg.get("params").cloned().unwrap_or(Value::Null);
-                    self.handle_agent_request(
-                        req_id.clone(),
-                        agent_method,
-                        &params,
-                        cancel,
-                        host,
-                    )
-                    .await?;
+                    self.handle_agent_request(req_id.clone(), agent_method, &params, cancel, host)
+                        .await?;
                 }
                 // A notification: `method`, no `id`.
                 (true, None) => {
@@ -582,7 +574,9 @@ enum ClientRequestHost<'a> {
 #[derive(Debug)]
 enum AgentRequestKind {
     /// `session/request_permission` with only allow/reject kinds.
-    ToolPermission { allow_option_id: String },
+    ToolPermission {
+        allow_option_id: String,
+    },
     /// Structured product question (Grok ask-user, product-labeled permission).
     UserChoice {
         prompt: Option<String>,
@@ -677,12 +671,9 @@ fn encode_choice_result(wire: &ChoiceWire, answer: &UserChoiceAnswer) -> Value {
             let label = super::ask_user::label_for_selection(options, option_id);
             super::ask_user::encode_selected(question_text, &label)
         }
-        (
-            ChoiceWire::AskUserQuestion {
-                question_text, ..
-            },
-            UserChoiceAnswer::Custom { text },
-        ) => super::ask_user::encode_selected(question_text, text),
+        (ChoiceWire::AskUserQuestion { question_text, .. }, UserChoiceAnswer::Custom { text }) => {
+            super::ask_user::encode_selected(question_text, text)
+        }
         (ChoiceWire::AskUserQuestion { .. }, UserChoiceAnswer::Cancelled) => {
             super::ask_user::encode_cancelled()
         }
@@ -965,8 +956,7 @@ mod tests {
     /// @spec harness/acp-client Session open and resume: A turn with a prior session id resumes that id
     #[tokio::test]
     async fn open_with_prior_session_resumes_it() {
-        let (mut turn, written) =
-            scripted("{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{}}\n");
+        let (mut turn, written) = scripted("{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{}}\n");
 
         let sid = turn
             .open(Some("sess-123"), Path::new("/proj"))
@@ -1053,7 +1043,11 @@ mod tests {
         assert!(
             spawn_result.is_ok(),
             "spawn should succeed: {}",
-            spawn_result.as_ref().err().map(|e| e.to_string()).unwrap_or_default()
+            spawn_result
+                .as_ref()
+                .err()
+                .map(|e| e.to_string())
+                .unwrap_or_default()
         );
         // Give the shell a moment to write the argv file.
         for _ in 0..50 {
@@ -1066,11 +1060,7 @@ mod tests {
         let lines: Vec<&str> = recorded.lines().collect();
         assert_eq!(
             lines,
-            [
-                script_path.to_str().unwrap(),
-                "--agent-flag",
-                "stdio",
-            ],
+            [script_path.to_str().unwrap(), "--agent-flag", "stdio",],
             "client must not append harness flags to the launch argv"
         );
         drop(spawn_result);
@@ -1095,9 +1085,7 @@ mod tests {
     /// must leave the prompt response to be sent when the test is ready.
     async fn peer_with_midturn<F, Fut>(on_prompt: F) -> (AcpTurn, Arc<Mutex<Vec<Value>>>)
     where
-        F: FnOnce(Value, tokio::io::WriteHalf<tokio::io::DuplexStream>) -> Fut
-            + Send
-            + 'static,
+        F: FnOnce(Value, tokio::io::WriteHalf<tokio::io::DuplexStream>) -> Fut + Send + 'static,
         Fut: std::future::Future<Output = tokio::io::WriteHalf<tokio::io::DuplexStream>>
             + Send
             + 'static,
@@ -1177,8 +1165,10 @@ mod tests {
             }
         });
 
-        let turn =
-            AcpTurn::from_transport(Box::pin(client_write), Box::pin(BufReader::new(client_read)));
+        let turn = AcpTurn::from_transport(
+            Box::pin(client_write),
+            Box::pin(BufReader::new(client_read)),
+        );
         (turn, written)
     }
 
@@ -1212,16 +1202,7 @@ mod tests {
         let cancel = CancelToken::new();
         let content = [json!({ "type": "text", "text": "hi" })];
         let result = turn
-            .prompt_events(
-                "mid-sess",
-                &content,
-                "",
-                None,
-                None,
-                &tx,
-                &cancel,
-                &pending,
-            )
+            .prompt_events("mid-sess", &content, "", None, None, &tx, &cancel, &pending)
             .await
             .expect("prompt completes");
         assert_eq!(result.stop_reason.as_deref(), Some("end_turn"));
@@ -1235,9 +1216,9 @@ mod tests {
         }
 
         let msgs = written.lock().unwrap().clone();
-        let allow = msgs.iter().find(|m| {
-            m.get("id") == Some(&json!(99)) && m.get("result").is_some()
-        });
+        let allow = msgs
+            .iter()
+            .find(|m| m.get("id") == Some(&json!(99)) && m.get("result").is_some());
         let allow = allow.expect("client answered permission request");
         assert_eq!(
             allow["result"]["outcome"]["outcome"], "selected",
@@ -1307,16 +1288,7 @@ mod tests {
         });
 
         let result = turn
-            .prompt_events(
-                "mid-sess",
-                &content,
-                "",
-                None,
-                None,
-                &tx,
-                &cancel,
-                &pending,
-            )
+            .prompt_events("mid-sess", &content, "", None, None, &tx, &cancel, &pending)
             .await
             .expect("prompt completes after answer");
         assert_eq!(result.stop_reason.as_deref(), Some("end_turn"));
@@ -1376,18 +1348,9 @@ mod tests {
             }
         });
 
-        turn.prompt_events(
-            "mid-sess",
-            &content,
-            "",
-            None,
-            None,
-            &tx,
-            &cancel,
-            &pending,
-        )
-        .await
-        .expect("turn continues after selection");
+        turn.prompt_events("mid-sess", &content, "", None, None, &tx, &cancel, &pending)
+            .await
+            .expect("turn continues after selection");
 
         let msgs = written.lock().unwrap().clone();
         let reply = msgs
@@ -1436,18 +1399,9 @@ mod tests {
             }
         });
 
-        turn.prompt_events(
-            "mid-sess",
-            &content,
-            "",
-            None,
-            None,
-            &tx,
-            &cancel,
-            &pending,
-        )
-        .await
-        .expect("turn continues after host cancel");
+        turn.prompt_events("mid-sess", &content, "", None, None, &tx, &cancel, &pending)
+            .await
+            .expect("turn continues after host cancel");
 
         let msgs = written.lock().unwrap().clone();
         let reply = msgs
@@ -1487,14 +1441,7 @@ mod tests {
 
         let turn_task = tokio::spawn(async move {
             turn.prompt_events(
-                "mid-sess",
-                &content,
-                "",
-                None,
-                None,
-                &tx,
-                &cancel2,
-                &pending,
+                "mid-sess", &content, "", None, None, &tx, &cancel2, &pending,
             )
             .await
         });
@@ -1569,7 +1516,10 @@ mod tests {
             .iter()
             .find(|m| m.get("id") == Some(&json!(55)) && m.get("result").is_some())
             .expect("auto-completed without host");
-        assert!(reply["result"].is_null(), "oneshot null-completes questions");
+        assert!(
+            reply["result"].is_null(),
+            "oneshot null-completes questions"
+        );
     }
 
     #[test]
@@ -1686,8 +1636,7 @@ mod tests {
                 label: "Yes".into(),
             }],
         };
-        let result =
-            encode_choice_result(&wire, &UserChoiceAnswer::Custom { text: free.into() });
+        let result = encode_choice_result(&wire, &UserChoiceAnswer::Custom { text: free.into() });
         assert_eq!(result["outcome"], "accepted", "result={result}");
         assert_eq!(result["answers"]["Ship?"], free);
         assert_ne!(result["outcome"], "skip_interview");
@@ -1695,9 +1644,7 @@ mod tests {
         // Claude parent path uses permission wire; freeform rides as selected optionId.
         let perm = encode_choice_result(
             &ChoiceWire::Permission,
-            &UserChoiceAnswer::Custom {
-                text: free.into(),
-            },
+            &UserChoiceAnswer::Custom { text: free.into() },
         );
         assert_eq!(perm["outcome"]["outcome"], "selected");
         assert_eq!(perm["outcome"]["optionId"], free);

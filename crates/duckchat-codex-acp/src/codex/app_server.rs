@@ -5,6 +5,7 @@
 //! user-input for the agent, and surfaces notifications.
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -16,8 +17,8 @@ use tokio::sync::{Mutex, mpsc, oneshot};
 use tracing::warn;
 
 use super::ask_user::{
-    auto_allow_approval_result, encode_user_input_rpc, is_ordinary_approval_method,
-    is_user_input_method, UserInputDecision,
+    UserInputDecision, auto_allow_approval_result, encode_user_input_rpc,
+    is_ordinary_approval_method, is_user_input_method,
 };
 use super::spawn::CodexSpawnFactory;
 
@@ -243,6 +244,7 @@ impl AppServer {
         thread_id: &str,
         input: Vec<Value>,
         model: Option<&str>,
+        writable_roots: &[PathBuf],
     ) -> Result<String, AppServerError> {
         // Drain stale notifications from prior turns.
         {
@@ -257,6 +259,10 @@ impl AppServer {
         let mut params = json!({
             "threadId": thread_id,
             "input": input,
+            "sandboxPolicy": {
+                "type": "workspaceWrite",
+                "writableRoots": writable_roots,
+            },
         });
         if let Some(m) = model.filter(|s| !s.is_empty()) {
             params["model"] = json!(m);
@@ -430,10 +436,7 @@ async fn handle_incoming(
     ) {
         if is_user_input_method(method) {
             let params = msg.get("params").cloned().unwrap_or(Value::Null);
-            let _ = user_input_tx.send(UserInputNeed {
-                rpc_id: id,
-                params,
-            });
+            let _ = user_input_tx.send(UserInputNeed { rpc_id: id, params });
             return;
         }
 

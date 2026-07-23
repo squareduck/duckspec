@@ -147,7 +147,9 @@ mod tests {
     #[test]
     fn ask_user_question_is_not_among_disallowed_tools() {
         assert!(
-            !DISALLOWED_TOOLS.split(',').any(|t| t.trim() == "AskUserQuestion"),
+            !DISALLOWED_TOOLS
+                .split(',')
+                .any(|t| t.trim() == "AskUserQuestion"),
             "AskUserQuestion must be allowed so Claude can issue structured questions: {DISALLOWED_TOOLS}"
         );
         // Sanity: other interactive tools stay blocked.

@@ -574,18 +574,19 @@ impl TerminalState {
     /// Record (or clear with None) the live drag pointer. Called from canvas
     /// update() on CursorMoved while dragging, and with None on ButtonReleased.
     pub fn set_drag_pointer(&self, pointer: Option<(f32, f32, f32)>) {
-        self.drag_pointer.set(pointer.map(|(x, y, viewport_height)| DragPointer {
-            x,
-            y,
-            viewport_height,
-        }));
+        self.drag_pointer
+            .set(pointer.map(|(x, y, viewport_height)| DragPointer {
+                x,
+                y,
+                viewport_height,
+            }));
     }
 
     /// Drag active *and* pointer past a vertical edge — gates the subscription.
     pub fn is_drag_autoscrolling(&self) -> bool {
-        self.drag_pointer.get().is_some_and(|dp| {
-            autoscroll::edge_velocity(dp.y, 0.0, dp.viewport_height) != 0.0
-        })
+        self.drag_pointer
+            .get()
+            .is_some_and(|dp| autoscroll::edge_velocity(dp.y, 0.0, dp.viewport_height) != 0.0)
     }
 
     /// Advance one frame: scroll the display toward the edge and re-extend the
@@ -601,11 +602,7 @@ impl TerminalState {
             return false;
         }
         let raw = -(velocity / cell_height());
-        let lines = if raw >= 0.0 {
-            raw.ceil()
-        } else {
-            raw.floor()
-        } as isize;
+        let lines = if raw >= 0.0 { raw.ceil() } else { raw.floor() } as isize;
         if lines == 0 {
             return false;
         }

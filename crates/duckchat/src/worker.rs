@@ -226,9 +226,7 @@ fn spawn_worker_with_oneshot_budget<P: Provider + 'static>(
                     .await
                     {
                         Ok(inner) => inner,
-                        Err(_elapsed) => Err(Error::Timeout(
-                            "oneshot call exceeded budget".into(),
-                        )),
+                        Err(_elapsed) => Err(Error::Timeout("oneshot call exceeded budget".into())),
                     };
                     let ok = result.is_ok();
                     let _ = req.reply.send(result);
@@ -281,12 +279,7 @@ fn spawn_worker_with_oneshot_budget<P: Provider + 'static>(
                     }
 
                     let outcome = main
-                        .run_turn(
-                            req,
-                            events.clone(),
-                            cancel.clone(),
-                            pending_choices.clone(),
-                        )
+                        .run_turn(req, events.clone(), cancel.clone(), pending_choices.clone())
                         .await;
                     let send_result = match outcome {
                         Ok(out) => {
@@ -302,17 +295,13 @@ fn spawn_worker_with_oneshot_budget<P: Provider + 'static>(
                                     .map_err(|_| ());
                             }
                             if r.is_ok() {
-                                r = events
-                                    .send(AgentEvent::TurnComplete)
-                                    .await
-                                    .map_err(|_| ());
+                                r = events.send(AgentEvent::TurnComplete).await.map_err(|_| ());
                             }
                             r
                         }
-                        Err(Error::Cancelled) => events
-                            .send(AgentEvent::TurnComplete)
-                            .await
-                            .map_err(|_| ()),
+                        Err(Error::Cancelled) => {
+                            events.send(AgentEvent::TurnComplete).await.map_err(|_| ())
+                        }
                         Err(e) if e.is_session_not_found() => {
                             // Dead resume id — forget it so a retry opens
                             // session/new instead of looping on session/load.
@@ -575,15 +564,13 @@ mod tests {
                 .lock()
                 .unwrap()
                 .push((model_hint, text.clone(), sid));
-            self.log
-                .oneshot_sessions
-                .lock()
-                .unwrap()
-                .push(sid);
+            self.log.oneshot_sessions.lock().unwrap().push(sid);
 
             match model_hint {
                 OneshotKind::Title => Ok(format!("\"Title for session {sid}.\"")),
-                OneshotKind::ReplySuggest => Ok(format!("REPLY: /ds-spec\nREPLY: no thanks ({sid})")),
+                OneshotKind::ReplySuggest => {
+                    Ok(format!("REPLY: /ds-spec\nREPLY: no thanks ({sid})"))
+                }
             }
         }
 
@@ -683,7 +670,12 @@ mod tests {
     async fn title_summary_is_requested_through_the_chat_handle() {
         let log = Arc::new(FakeLog::default());
         let (tx, mut rx) = mpsc::channel(16);
-        let handle = spawn_worker(FakeProvider::new(log.clone()), std::env::temp_dir(), tx, None);
+        let handle = spawn_worker(
+            FakeProvider::new(log.clone()),
+            std::env::temp_dir(),
+            tx,
+            None,
+        );
 
         // First turn activates paths (not required for title, but realistic).
         handle.send_prompt("hello".into());
@@ -704,7 +696,12 @@ mod tests {
     async fn reply_suggestions_are_requested_through_the_chat_handle() {
         let log = Arc::new(FakeLog::default());
         let (tx, mut rx) = mpsc::channel(16);
-        let handle = spawn_worker(FakeProvider::new(log.clone()), std::env::temp_dir(), tx, None);
+        let handle = spawn_worker(
+            FakeProvider::new(log.clone()),
+            std::env::temp_dir(),
+            tx,
+            None,
+        );
 
         handle.send_prompt("hello".into());
         drain_until_turn_complete(&mut rx).await;
@@ -725,7 +722,12 @@ mod tests {
     async fn first_turn_succeeds_without_a_prior_pre_warm_call() {
         let log = Arc::new(FakeLog::default());
         let (tx, mut rx) = mpsc::channel(16);
-        let handle = spawn_worker(FakeProvider::new(log.clone()), std::env::temp_dir(), tx, None);
+        let handle = spawn_worker(
+            FakeProvider::new(log.clone()),
+            std::env::temp_dir(),
+            tx,
+            None,
+        );
 
         // No ensure_hot / pre-warm API call — just send.
         handle.send_prompt("first turn".into());
@@ -747,7 +749,12 @@ mod tests {
     async fn oneshot_after_first_send_needs_no_separate_pre_warm_api() {
         let log = Arc::new(FakeLog::default());
         let (tx, mut rx) = mpsc::channel(16);
-        let handle = spawn_worker(FakeProvider::new(log.clone()), std::env::temp_dir(), tx, None);
+        let handle = spawn_worker(
+            FakeProvider::new(log.clone()),
+            std::env::temp_dir(),
+            tx,
+            None,
+        );
 
         handle.send_prompt("first".into());
         drain_until_turn_complete(&mut rx).await;
@@ -766,7 +773,12 @@ mod tests {
     async fn title_and_reply_suggestions_run_one_at_a_time_on_the_oneshot_path() {
         let log = Arc::new(FakeLog::default());
         let (tx, mut rx) = mpsc::channel(16);
-        let handle = spawn_worker(FakeProvider::new(log.clone()), std::env::temp_dir(), tx, None);
+        let handle = spawn_worker(
+            FakeProvider::new(log.clone()),
+            std::env::temp_dir(),
+            tx,
+            None,
+        );
 
         handle.send_prompt("go".into());
         drain_until_turn_complete(&mut rx).await;
@@ -798,7 +810,12 @@ mod tests {
     async fn a_second_oneshot_call_does_not_resume_the_prior_oneshot_session() {
         let log = Arc::new(FakeLog::default());
         let (tx, mut rx) = mpsc::channel(16);
-        let handle = spawn_worker(FakeProvider::new(log.clone()), std::env::temp_dir(), tx, None);
+        let handle = spawn_worker(
+            FakeProvider::new(log.clone()),
+            std::env::temp_dir(),
+            tx,
+            None,
+        );
 
         handle.send_prompt("go".into());
         drain_until_turn_complete(&mut rx).await;
@@ -873,7 +890,12 @@ mod tests {
         // Fake provider is cold-capable: no process reuse beyond ensure_hot bookkeeping.
         let log = Arc::new(FakeLog::default());
         let (tx, _rx) = mpsc::channel(16);
-        let handle = spawn_worker(FakeProvider::new(log.clone()), std::env::temp_dir(), tx, None);
+        let handle = spawn_worker(
+            FakeProvider::new(log.clone()),
+            std::env::temp_dir(),
+            tx,
+            None,
+        );
 
         let title = handle
             .title_summary(TitleRequest::new("cold path title"))
@@ -960,9 +982,7 @@ mod tests {
             None,
         );
 
-        let first = handle
-            .title_summary(TitleRequest::new("first hangs"))
-            .await;
+        let first = handle.title_summary(TitleRequest::new("first hangs")).await;
         assert!(
             matches!(first, Err(Error::Timeout(_))),
             "first oneshot should time out: {first:?}"

@@ -23,7 +23,7 @@ orphans.
 - **THEN** the guard reports the backlink, naming its source file
 
 > test: code
-> - crates/duckpond/tests/audit.rs:197
+> - crates/duckpond/tests/audit.rs:196
 
 ### Scenario: An archive that preserves every backlinked scenario reports no orphans
 
@@ -35,7 +35,7 @@ orphans.
 - **THEN** the guard reports no orphans
 
 > test: code
-> - crates/duckpond/tests/audit.rs:224
+> - crates/duckpond/tests/audit.rs:227
 
 ### Scenario: A backlink already unresolved before the archive is not attributed to it
 
@@ -45,7 +45,7 @@ orphans.
 - **THEN** the guard does not report that backlink
 
 > test: code
-> - crates/duckpond/tests/audit.rs:254
+> - crates/duckpond/tests/audit.rs:257
 
 ## Requirement: Refusal and override
 

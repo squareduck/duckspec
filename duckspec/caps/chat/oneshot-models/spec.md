@@ -48,7 +48,7 @@ for that harness when no default match applies.
 - **THEN** the resolved model is the configured id
 
 > test: code
-> - crates/duckboard/src/agent.rs:652
+> - crates/duckboard/src/agent.rs:629
 
 ### Scenario: Missing or unknown config falls back to string-match default then first catalog model
 
@@ -64,7 +64,7 @@ for that harness when no default match applies.
 - **AND** otherwise the resolved model is the first catalog model for that harness
 
 > test: code
-> - crates/duckboard/src/agent.rs:670
+> - crates/duckboard/src/agent.rs:646
 
 ## Requirement: Settings pickers when hints enabled
 
@@ -92,7 +92,7 @@ are disabled, Settings SHALL NOT show those oneshot model pickers.
 - **THEN** no oneshot model picker is shown
 
 > test: code
-> - crates/duckboard/src/area/settings.rs:501
+> - crates/duckboard/src/area/settings.rs:498
 
 ## Requirement: Oneshots use the resolved preference
 
@@ -108,4 +108,4 @@ resolved oneshot model as the preferred model for the oneshot path.
 - **THEN** the oneshot path prefers that resolved model
 
 > test: code
-> - crates/duckboard/src/agent.rs:699
+> - crates/duckboard/src/agent.rs:674

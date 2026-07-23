@@ -141,9 +141,7 @@ fn known_harness_commands_are_installed_under_the_harness_path() {
         let body = fs::read_to_string(&dest).unwrap_or_else(|e| {
             panic!("expected installed {name}: {e}");
         });
-        let expected = file
-            .contents_utf8()
-            .expect("stock command is valid UTF-8");
+        let expected = file.contents_utf8().expect("stock command is valid UTF-8");
         assert_eq!(
             body, expected,
             "installed {name} must match stock command body"
@@ -213,12 +211,7 @@ fn known_codex_skills_are_installed_under_agents_skills() {
         // Paths in include_dir are embed-root-relative; match by basename.
         let skill_md = skill_dir
             .files()
-            .find(|f| {
-                f.path()
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    == Some("SKILL.md")
-            })
+            .find(|f| f.path().file_name().and_then(|n| n.to_str()) == Some("SKILL.md"))
             .expect("stock skill has SKILL.md");
         installed += 1;
         let dest = target.join(dir_name).join("SKILL.md");

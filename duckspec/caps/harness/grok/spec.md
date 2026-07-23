@@ -27,7 +27,7 @@ available model when the preferred model is absent.
 - **AND** each returned model carries a context window
 
 > test: code
-> - crates/duckchat/src/grok.rs:351
+> - crates/duckchat/src/grok.rs:350
 
 ### Scenario: Title model falls back when the preferred fast model is absent
 
@@ -39,7 +39,7 @@ available model when the preferred model is absent.
 - **THEN** it selects another available model rather than failing
 
 > test: code
-> - crates/duckchat/src/grok.rs:395
+> - crates/duckchat/src/grok.rs:394
 
 ### Scenario: Each listed model carries a display name
 
@@ -48,7 +48,7 @@ available model when the preferred model is absent.
 - **THEN** each returned model carries a non-empty display name
 
 > test: code
-> - crates/duckchat/src/grok.rs:369
+> - crates/duckchat/src/grok.rs:368
 
 ## Requirement: Graceful unavailability
 
@@ -65,7 +65,7 @@ empty list and running a turn SHALL fail with a typed error rather than panickin
 - **AND** the turn fails with a typed error rather than panicking
 
 > test: code
-> - crates/duckchat/src/grok.rs:410
+> - crates/duckchat/src/grok.rs:412
 
 ## Requirement: Prompt attachments
 
@@ -102,7 +102,7 @@ unresolved `attach:` link SHALL be left as its original literal markdown text.
 - **AND** the text after the marker appears as a text content block after the image block
 
 > test: code
-> - crates/duckchat/src/grok.rs:304
+> - crates/duckchat/src/grok.rs:305
 
 ### Scenario: A non-image attachment is represented as text
 
@@ -113,7 +113,7 @@ unresolved `attach:` link SHALL be left as its original literal markdown text.
 - **AND** the content does not include an image content block for that attachment
 
 > test: code
-> - crates/duckchat/src/grok.rs:320
+> - crates/duckchat/src/grok.rs:319
 
 ### Scenario: An unresolved attach marker is left literal
 
@@ -123,7 +123,7 @@ unresolved `attach:` link SHALL be left as its original literal markdown text.
 - **THEN** the original markdown link remains as text content
 
 > test: code
-> - crates/duckchat/src/grok.rs:342
+> - crates/duckchat/src/grok.rs:341
 
 ## Requirement: Warm oneshot path
 
@@ -142,7 +142,7 @@ SHALL NOT resume a prior oneshot conversation session.
 - **AND** it does not resume the prior oneshot session id
 
 > test: code
-> - crates/duckchat/src/acp/runtime.rs:890
+> - crates/duckchat/src/acp/runtime.rs:906
 
 ### Scenario: An oneshot call on a hot path reuses the process
 
@@ -151,7 +151,7 @@ SHALL NOT resume a prior oneshot conversation session.
 - **THEN** the harness does not spawn a new agent process for that call
 
 > test: code
-> - crates/duckchat/src/acp/runtime.rs:922
+> - crates/duckchat/src/acp/runtime.rs:938
 
 ## Requirement: Native Grok agent launch
 
@@ -169,7 +169,7 @@ intermediate owned proxy whose only role is to forward ACP to grok.
 - **AND** it does not route the turn through an intermediate Grok-only ACP proxy
 
 > test: code
-> - crates/duckchat/src/grok.rs:427
+> - crates/duckchat/src/grok.rs:429
 
 ## Requirement: Structured questions enabled
 
@@ -186,7 +186,7 @@ turn (always-approve style), so ordinary tool permission prompts do not require 
 - **THEN** they do not include `--no-ask-user`
 
 > test: code
-> - crates/duckchat/src/grok.rs:474
+> - crates/duckchat/src/grok.rs:478
 
 ### Scenario: Main launch still auto-approves tool execution
 
@@ -195,7 +195,7 @@ turn (always-approve style), so ordinary tool permission prompts do not require 
 - **THEN** they include the always-approve flag that auto-approves tool execution
 
 > test: code
-> - crates/duckchat/src/grok.rs:484
+> - crates/duckchat/src/grok.rs:488
 
 ## Requirement: Question wire mapping
 
@@ -217,7 +217,7 @@ a skip-interview response.
 - **THEN** a host user-choice event is emitted for that request
 
 > test: code
-> - crates/duckchat/src/grok.rs:494
+> - crates/duckchat/src/grok.rs:498
 
 ### Scenario: A host selection completes with an accepted questionnaire response
 
@@ -227,7 +227,7 @@ a skip-interview response.
 - **AND** that response carries the chosen answer for the question
 
 > test: code
-> - crates/duckchat/src/grok.rs:528
+> - crates/duckchat/src/grok.rs:532
 
 ### Scenario: Host custom freeform answer completes with an accepted free-text answer
 
@@ -246,7 +246,7 @@ a skip-interview response.
 
 > test: code
 > - crates/duckchat/src/acp/ask_user.rs:104
-> - crates/duckchat/src/grok.rs:549
+> - crates/duckchat/src/grok.rs:553
 
 ### Scenario: A host cancel completes with a skip-interview response
 
@@ -255,4 +255,4 @@ a skip-interview response.
 - **THEN** the agent request is completed with a skip-interview response
 
 > test: code
-> - crates/duckchat/src/grok.rs:538
+> - crates/duckchat/src/grok.rs:542

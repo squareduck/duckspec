@@ -154,11 +154,9 @@ formal artifacts yet. Treat the conversation as early-stage scoping; don't expec
 a change directory to exist."
                     .to_string()
             }
-            ScopeKind::Caps => {
-                "Current duckspec scope: the project's capability tree (caps). See \
+            ScopeKind::Caps => "Current duckspec scope: the project's capability tree (caps). See \
 `duckspec/caps/` and `duckspec/project.md`."
-                    .to_string()
-            }
+                .to_string(),
             ScopeKind::Codex => {
                 "Current duckspec scope: the project's codex. See `duckspec/codex/` and \
 `duckspec/project.md`."

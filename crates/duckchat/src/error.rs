@@ -60,11 +60,7 @@ pub fn protocol_indicates_session_not_found(msg: &str) -> bool {
 /// True when a JSON-RPC `error` object from `session/load` means the session
 /// path is gone (or never matched the cwd key).
 pub fn rpc_error_is_session_not_found(err: &serde_json::Value) -> bool {
-    if err
-        .pointer("/data/code")
-        .and_then(|v| v.as_str())
-        == Some("FS_NOT_FOUND")
-    {
+    if err.pointer("/data/code").and_then(|v| v.as_str()) == Some("FS_NOT_FOUND") {
         return true;
     }
     let message = err.get("message").and_then(|v| v.as_str()).unwrap_or("");

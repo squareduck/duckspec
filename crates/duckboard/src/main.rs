@@ -15,12 +15,12 @@ mod chat_store;
 pub mod config;
 mod data;
 mod default_prompts;
-mod meta_card;
 mod fast_response;
 pub mod highlight;
 mod idea_format;
 mod idea_store;
 mod keybinds;
+mod meta_card;
 mod path_env;
 mod path_link;
 mod scope;
@@ -492,10 +492,7 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
             {
                 tracing::warn!("failed to persist seeded global default model: {e}");
             }
-            tracing::info!(
-                models = catalog.len(),
-                "model catalog ready"
-            );
+            tracing::info!(models = catalog.len(), "model catalog ready");
             return Task::none();
         }
         Message::Refresh => {
@@ -981,7 +978,7 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                         &state.highlighter,
                         state.config.chat.agent_input_hints,
                         state.window_width,
-                        );
+                    );
                     // Scroll: open/switch → snap-to-latest in
                     // `update_with_scroll_preservation`.
                     return Task::none();
@@ -997,7 +994,7 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                         &state.highlighter,
                         state.config.chat.agent_input_hints,
                         state.window_width,
-                        );
+                    );
                     // Scroll: open/switch → snap-to-latest in wrapper.
                     return focus_chat_input();
                 }
@@ -1018,7 +1015,7 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                         &state.highlighter,
                         state.config.chat.agent_input_hints,
                         state.window_width,
-                        );
+                    );
                     return restore_chat_scroll(state);
                 }
                 area::dashboard::Message::HoverRecent(path) => {
@@ -1069,8 +1066,8 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                             &state.project,
                             &state.highlighter,
                             state.config.chat.agent_input_hints,
-                        state.window_width,
-                            );
+                            state.window_width,
+                        );
                         // Scroll: open/switch → snap-to-latest in wrapper.
                         return Task::none();
                     }
@@ -1102,7 +1099,7 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                         &state.highlighter,
                         state.config.chat.agent_input_hints,
                         state.window_width,
-                        );
+                    );
                     if needs_focus {
                         return focus_chat_input();
                     }
@@ -1135,8 +1132,8 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                 &state.project,
                 &state.highlighter,
                 state.config.chat.agent_input_hints,
-                        state.window_width,
-                );
+                state.window_width,
+            );
             if needs_focus {
                 return focus_chat_input();
             }
@@ -1156,8 +1153,8 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                 &state.project,
                 &state.highlighter,
                 state.config.chat.agent_input_hints,
-                        state.window_width,
-                );
+                state.window_width,
+            );
             if needs_focus {
                 return focus_chat_input();
             }
@@ -1226,8 +1223,8 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                     &state.project,
                     &state.highlighter,
                     state.config.chat.agent_input_hints,
-                        state.window_width,
-                    );
+                    state.window_width,
+                );
                 // SelectIdea spawns the exploration session with
                 // empty chrome; refresh so the chat input renders lifecycle
                 // chrome (mirrors ideas.rs).
@@ -1273,8 +1270,8 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                     &state.project,
                     &state.highlighter,
                     state.config.chat.agent_input_hints,
-                        state.window_width,
-                    );
+                    state.window_width,
+                );
                 // Scroll: open/switch → snap-to-latest in wrapper.
                 return Task::none();
             }
@@ -1303,8 +1300,8 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                 &state.project,
                 &state.highlighter,
                 state.config.chat.agent_input_hints,
-                        state.window_width,
-                );
+                state.window_width,
+            );
             if focus_tag_input {
                 return iced::widget::operation::focus(area::ideas::TAG_INPUT_ID);
             }
@@ -1460,12 +1457,7 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
             );
             let mut title_task_input: Option<TitleTaskInput> = None;
             // `(handle, assistant, user, gen)` — freeform oneshot, no heuristic/cmds.
-            type ReplyTaskInput = (
-                duckchat::AgentHandle,
-                String,
-                Option<String>,
-                u64,
-            );
+            type ReplyTaskInput = (duckchat::AgentHandle, String, Option<String>, u64);
             let mut reply_task_input: Option<ReplyTaskInput> = None;
             // Staged `(folder-slug, exploration-id)` from a `ds create change`
             // tool call, committed to `pending_bindings` once the `ax` borrow
@@ -1520,7 +1512,9 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                         ax.needs_flush = true;
                         ax.chat_ui_dirty = true;
                         if interaction::should_materialize_chat_ui(
-                            &AgentEvent::ContentDelta { text: String::new() },
+                            &AgentEvent::ContentDelta {
+                                text: String::new(),
+                            },
                             streaming_before,
                             kind_switch,
                         ) {
@@ -1533,7 +1527,9 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                         ax.needs_flush = true;
                         ax.chat_ui_dirty = true;
                         if interaction::should_materialize_chat_ui(
-                            &AgentEvent::ReasoningDelta { text: String::new() },
+                            &AgentEvent::ReasoningDelta {
+                                text: String::new(),
+                            },
                             streaming_before,
                             kind_switch,
                         ) {
@@ -1670,12 +1666,7 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                             {
                                 ax.begin_default_prompts_oneshot();
                                 let prompts_gen = ax.default_prompts_gen;
-                                reply_task_input = Some((
-                                    handle,
-                                    assistant,
-                                    user,
-                                    prompts_gen,
-                                ));
+                                reply_task_input = Some((handle, assistant, user, prompts_gen));
                             }
                         }
                         // Shell empty until oneshot settles (or clear if ineligible).
@@ -1717,10 +1708,7 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                         // stored id — typically a cwd-key mismatch or prune.
                         // Drop the dead id and re-dispatch the last user turn
                         // with a history preamble so the chat unblocks.
-                        tracing::warn!(
-                            key,
-                            "agent session not found; recovering as fresh session"
-                        );
+                        tracing::warn!(key, "agent session not found; recovering as fresh session");
                         recover_lost_session = true;
                     }
                     AgentEvent::SessionIdUpdated { session_id } => {
@@ -1745,8 +1733,7 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                         // persists last-known fill. Do not set needs_flush for
                         // usage alone (avoid rewriting the session on every
                         // telemetry tick when messages are unchanged).
-                        ax.session.context_tokens =
-                            ax.agent_input_tokens + ax.agent_output_tokens;
+                        ax.session.context_tokens = ax.agent_input_tokens + ax.agent_output_tokens;
                     }
                     AgentEvent::ProcessExited => {
                         tracing::info!(key, "agent process exited");
@@ -1869,12 +1856,8 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                 let route_key = key.clone();
                 // `AgentHandle` is `Clone`; move the clone into the async task
                 // so title summary uses the chat's oneshot runtime.
-                let work = async move {
-                    handle
-                        .title_summary(req)
-                        .await
-                        .map_err(|e| e.to_string())
-                };
+                let work =
+                    async move { handle.title_summary(req).await.map_err(|e| e.to_string()) };
                 follow_tasks.push(Task::perform(work, move |result| {
                     Message::SessionTitleReady {
                         key: route_key.clone(),
@@ -2411,8 +2394,8 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                 && !mods.alt()
                 && keybinds::keybind_chat_landmarks(state)
             {
-                use keyboard::key::Named;
                 use keybinds::ChatLandmarkAction;
+                use keyboard::key::Named;
                 let action = match &key {
                     keyboard::Key::Named(Named::ArrowUp) => Some(ChatLandmarkAction::HistoryTop),
                     keyboard::Key::Named(Named::ArrowDown) => {
@@ -2521,20 +2504,13 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                 // Agent chat keyboard shortcuts (completion, esc-cancel, enter-send).
                 let agent_input_hints = state.config.chat.agent_input_hints;
                 if agent_chat_active && let Some(ix) = state.interaction_mut(routing_key) {
-                    match interaction::handle_agent_chat_key(
-                        ix,
-                        &key,
-                        mods,
-                        agent_input_hints,
-                    ) {
+                    match interaction::handle_agent_chat_key(ix, &key, mods, agent_input_hints) {
                         interaction::AgentChatKeyResult::Handled => return Task::none(),
                         interaction::AgentChatKeyResult::Dispatch(msg) => {
                             // Tab-cycling defaults should leave the caret in the
                             // chat input so Enter still works without a re-click.
-                            let refocus = matches!(
-                                &msg,
-                                widget::agent_chat::Msg::CycleNextAction(_)
-                            );
+                            let refocus =
+                                matches!(&msg, widget::agent_chat::Msg::CycleNextAction(_));
                             let dispatch = dispatch_interaction_msg(
                                 state,
                                 routing_key,
@@ -2822,10 +2798,11 @@ fn take_pending_chat_snap(state: &mut State) -> Task<Message> {
 /// True when any chat session has an accumulated edge auto-scroll delta from a
 /// drag that ran past the chat fold, awaiting drain into a `scroll_to`.
 fn has_pending_chat_autoscroll(state: &State) -> bool {
-    state
-        .interactions
-        .values()
-        .any(|ix| ix.sessions.iter().any(|ax| ax.pending_chat_autoscroll.is_some()))
+    state.interactions.values().any(|ix| {
+        ix.sessions
+            .iter()
+            .any(|ax| ax.pending_chat_autoscroll.is_some())
+    })
 }
 
 /// Drain each session's pending chat auto-scroll delta into an absolute scroll
@@ -2996,11 +2973,7 @@ fn update_with_scroll_preservation(state: &mut State, message: Message) -> Task<
     // When the active chat identity changes, never replay the previous
     // session's layout snapshot onto the new one. Open/switch → latest;
     // area nav and other non-open identity changes → restore (wrapper owns it).
-    let policy = chat_scroll_policy(
-        id_before != id_after,
-        opens_or_switches,
-        snapshot.is_some(),
-    );
+    let policy = chat_scroll_policy(id_before != id_after, opens_or_switches, snapshot.is_some());
     let task = match policy {
         ChatScrollPolicy::Preserve => Task::batch([task, replay_chat_scroll(snapshot.unwrap())]),
         ChatScrollPolicy::None => task,
@@ -3038,7 +3011,7 @@ fn is_chrome_layout_message(msg: &Message) -> bool {
 /// When fast-response chips are visible on the active chat, schedule a bounds
 /// measure so the in-scroll bottom-pin pad can update. No-op otherwise.
 fn maybe_measure_chrome_pad(state: &State) -> Task<Message> {
-        let Some(scope) = state.active_scope() else {
+    let Some(scope) = state.active_scope() else {
         return Task::none();
     };
     let Some(ix) = state.interactions.get(&scope) else {
@@ -4607,10 +4580,7 @@ fn navigate_find(
 /// Every arm sets `chat_scroll_overridden` so `update_with_scroll_preservation`
 /// does not replay a pre-key snapshot over the jump. Leave-bottom jumps clear
 /// stick so StreamTick auto-snap cannot undo them while streaming.
-fn apply_chat_landmark(
-    state: &mut State,
-    action: keybinds::ChatLandmarkAction,
-) -> Task<Message> {
+fn apply_chat_landmark(state: &mut State, action: keybinds::ChatLandmarkAction) -> Task<Message> {
     use keybinds::ChatLandmarkAction;
     use widget::agent_chat;
 
@@ -4898,8 +4868,8 @@ fn route_interaction(state: &mut State, msg: interaction::Msg) -> Task<Message> 
                 &state.project,
                 &state.highlighter,
                 state.config.chat.agent_input_hints,
-                        state.window_width,
-                );
+                state.window_width,
+            );
         }
         Area::Caps => {
             let window_w = state.window_width;
@@ -4915,8 +4885,8 @@ fn route_interaction(state: &mut State, msg: interaction::Msg) -> Task<Message> 
                 &state.project,
                 &state.highlighter,
                 state.config.chat.agent_input_hints,
-                        state.window_width,
-                );
+                state.window_width,
+            );
         }
         Area::Codex => {
             let window_w = state.window_width;
@@ -4932,8 +4902,8 @@ fn route_interaction(state: &mut State, msg: interaction::Msg) -> Task<Message> 
                 &state.project,
                 &state.highlighter,
                 state.config.chat.agent_input_hints,
-                        state.window_width,
-                );
+                state.window_width,
+            );
         }
         Area::Ideas => {
             area::ideas::update(
@@ -4944,8 +4914,8 @@ fn route_interaction(state: &mut State, msg: interaction::Msg) -> Task<Message> 
                 &state.project,
                 &state.highlighter,
                 state.config.chat.agent_input_hints,
-                        state.window_width,
-                );
+                state.window_width,
+            );
         }
         Area::Dashboard | Area::Settings => {}
     }
@@ -5474,8 +5444,7 @@ fn view_area_three_column(state: &State) -> Element<'_, Message> {
                 .get(&target)
                 .map(|fs| widget::find::view_toolbar(target.clone(), fs).map(Message::Find))
         });
-        let interaction_col =
-            interaction::view_column(
+        let interaction_col = interaction::view_column(
             ix,
             Message::Interaction,
             controls,
@@ -5769,9 +5738,7 @@ fn subscription(state: &State) -> Subscription<Message> {
     subs.push(iced::window::close_requests().map(Message::WindowCloseRequested));
 
     // Equal content/chat split tracks free space; uncustomized panels rebalance.
-    subs.push(
-        iced::window::resize_events().map(|(_id, size)| Message::WindowResized(size)),
-    );
+    subs.push(iced::window::resize_events().map(|(_id, size)| Message::WindowResized(size)));
 
     // ~60fps tick driving terminal edge auto-scroll. Only subscribed while a
     // terminal drag holds the pointer past an edge, so the render loop stays
@@ -5789,10 +5756,11 @@ fn subscription(state: &State) -> Subscription<Message> {
 /// True if any terminal across all interaction panels is currently drag
 /// auto-scrolling (drag active and pointer past a vertical edge).
 fn any_terminal_autoscrolling(state: &State) -> bool {
-    state
-        .interactions
-        .values()
-        .any(|ix| ix.terminals.iter().any(|tt| tt.state.is_drag_autoscrolling()))
+    state.interactions.values().any(|ix| {
+        ix.terminals
+            .iter()
+            .any(|tt| tt.state.is_drag_autoscrolling())
+    })
 }
 
 /// True if any session needs the 10 Hz stream UI tick (see
@@ -6010,10 +5978,7 @@ fn handle_key_event(
                         )
                     )
             };
-            if !is_escape
-                && !is_cmd_arrow_landmark
-                && matches!(status, event::Status::Captured)
-            {
+            if !is_escape && !is_cmd_arrow_landmark && matches!(status, event::Status::Captured) {
                 return None;
             }
             Some(Message::KeyPress(
@@ -6203,13 +6168,12 @@ mod tests {
 
             // THEN the exploration is promoted into the change AND chat focus
             // is requested (callers batch focus_chat_input when promoted).
+            assert!(promoted, "bound promotion must request chat input focus");
             assert!(
-                promoted,
-                "bound promotion must request chat input focus"
+                state
+                    .interactions
+                    .contains_key(&scope::Scope::Change(new_name.to_string()))
             );
-            assert!(state
-                .interactions
-                .contains_key(&scope::Scope::Change(new_name.to_string())));
         });
     }
 
@@ -6235,9 +6199,11 @@ mod tests {
                 !promoted,
                 "unbound detection must not request chat input focus"
             );
-            assert!(!state
-                .interactions
-                .contains_key(&scope::Scope::Change(new_name.to_string())));
+            assert!(
+                !state
+                    .interactions
+                    .contains_key(&scope::Scope::Change(new_name.to_string()))
+            );
         });
     }
 
@@ -6301,9 +6267,7 @@ mod tests {
     #[test]
     fn parses_cd_prefixed_and_compound_command() {
         assert_eq!(
-            parse_create_change(&bash(
-                "cd /repo && ds create change my-thing && ds status"
-            )),
+            parse_create_change(&bash("cd /repo && ds create change my-thing && ds status")),
             Some("my-thing".to_string())
         );
     }
@@ -6313,9 +6277,7 @@ mod tests {
     #[test]
     fn parses_grok_run_terminal_command() {
         assert_eq!(
-            parse_create_change(&bash(
-                "ds create change md-table-render && ds status"
-            )),
+            parse_create_change(&bash("ds create change md-table-render && ds status")),
             Some("md-table-render".to_string())
         );
     }
@@ -6436,8 +6398,22 @@ mod tests {
         let mut state = State::new();
         let p1 = std::path::PathBuf::from("/ideas/exploration/e1.md");
         let p2 = std::path::PathBuf::from("/ideas/exploration/e2.md");
-        seed_exploration_idea(&mut state, &p1, "exploration-1", "sess-1", false, Some(120.0));
-        seed_exploration_idea(&mut state, &p2, "exploration-2", "sess-2", false, Some(50.0));
+        seed_exploration_idea(
+            &mut state,
+            &p1,
+            "exploration-1",
+            "sess-1",
+            false,
+            Some(120.0),
+        );
+        seed_exploration_idea(
+            &mut state,
+            &p2,
+            "exploration-2",
+            "sess-2",
+            false,
+            Some(50.0),
+        );
         state.active_area = Area::Ideas;
         state.ideas.selected = Some(p1.clone());
 
@@ -6613,7 +6589,10 @@ mod tests {
             Some(10.0),
         );
         let prior_id = active_chat_identity(&state);
-        assert_eq!(prior_id.as_ref().map(|i| i.session_id.as_str()), Some("sess-a"));
+        assert_eq!(
+            prior_id.as_ref().map(|i| i.session_id.as_str()),
+            Some("sess-a")
+        );
 
         // WHEN switching to the other session
         run_scroll_message(

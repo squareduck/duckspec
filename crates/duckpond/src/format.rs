@@ -39,10 +39,9 @@ pub fn format_artifact(
     source: &str,
     config: &FormatConfig,
 ) -> Result<String, FormatError> {
-    let kind =
-        layout::classify(relative_path).ok_or_else(|| FormatError::UnknownArtifactType {
-            path: relative_path.to_path_buf(),
-        })?;
+    let kind = layout::classify(relative_path).ok_or_else(|| FormatError::UnknownArtifactType {
+        path: relative_path.to_path_buf(),
+    })?;
 
     let elements = parse::parse_elements(source);
 
@@ -141,8 +140,7 @@ mod tests {
     #[test]
     fn formats_a_minimal_doc() {
         let source = "# Hello\n\nA short summary.\n";
-        let out =
-            format_artifact(&PathBuf::from("caps/auth/doc.md"), source, &cfg()).unwrap();
+        let out = format_artifact(&PathBuf::from("caps/auth/doc.md"), source, &cfg()).unwrap();
         assert!(out.starts_with("# Hello\n\nA short summary."));
     }
 
@@ -164,8 +162,7 @@ The system SHALL allow sign in.
 
 > test: code
 ";
-        let out =
-            format_artifact(&PathBuf::from("caps/auth/spec.md"), source, &cfg()).unwrap();
+        let out = format_artifact(&PathBuf::from("caps/auth/spec.md"), source, &cfg()).unwrap();
         assert!(out.contains("# Authentication"));
         assert!(out.contains("## Requirement: Sign in"));
     }
@@ -174,8 +171,7 @@ The system SHALL allow sign in.
     fn parse_error_is_surfaced() {
         // Spec without H1 → parse error.
         let source = "no heading\n";
-        let err = format_artifact(&PathBuf::from("caps/auth/spec.md"), source, &cfg())
-            .unwrap_err();
+        let err = format_artifact(&PathBuf::from("caps/auth/spec.md"), source, &cfg()).unwrap_err();
         match err {
             FormatError::Parse { path, errors } => {
                 assert_eq!(path, PathBuf::from("caps/auth/spec.md"));
@@ -204,9 +200,11 @@ Summary.
         .unwrap_err();
         match err {
             FormatError::Parse { errors, .. } => {
-                assert!(errors
-                    .iter()
-                    .any(|e| matches!(e, ParseError::SlugMismatch { .. })));
+                assert!(
+                    errors
+                        .iter()
+                        .any(|e| matches!(e, ParseError::SlugMismatch { .. }))
+                );
             }
             other => panic!("expected Parse error, got {other:?}"),
         }
@@ -230,10 +228,8 @@ The system SHALL allow registered users to sign in.
 
 > test: code
 ";
-        let once =
-            format_artifact(&PathBuf::from("caps/auth/spec.md"), source, &cfg()).unwrap();
-        let twice =
-            format_artifact(&PathBuf::from("caps/auth/spec.md"), &once, &cfg()).unwrap();
+        let once = format_artifact(&PathBuf::from("caps/auth/spec.md"), source, &cfg()).unwrap();
+        let twice = format_artifact(&PathBuf::from("caps/auth/spec.md"), &once, &cfg()).unwrap();
         assert_eq!(once, twice);
     }
 

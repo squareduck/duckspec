@@ -299,10 +299,7 @@ impl AcpOneshotRuntime {
 /// 2. Substring match (e.g. preferred `haiku` → `claude-haiku-4-5-…`)
 /// 3. Cheap/fast default needles (haiku, then composer+fast, then fast)
 /// 4. First advertised model
-pub(crate) fn pick_oneshot_model(
-    preferred: Option<&str>,
-    models: &[AcpModel],
-) -> Option<String> {
+pub(crate) fn pick_oneshot_model(preferred: Option<&str>, models: &[AcpModel]) -> Option<String> {
     if models.is_empty() {
         return None;
     }
@@ -572,7 +569,10 @@ mod tests {
             }
         });
 
-        AcpTurn::from_transport(Box::pin(client_write), Box::pin(BufReader::new(client_read)))
+        AcpTurn::from_transport(
+            Box::pin(client_write),
+            Box::pin(BufReader::new(client_read)),
+        )
     }
 
     /// Fake peer that hangs on the first `session/prompt` until the client
@@ -643,7 +643,10 @@ mod tests {
             }
         });
 
-        AcpTurn::from_transport(Box::pin(client_write), Box::pin(BufReader::new(client_read)))
+        AcpTurn::from_transport(
+            Box::pin(client_write),
+            Box::pin(BufReader::new(client_read)),
+        )
     }
 
     async fn write_line(
@@ -741,7 +744,10 @@ mod tests {
             }
         });
 
-        AcpTurn::from_transport(Box::pin(client_write), Box::pin(BufReader::new(client_read)))
+        AcpTurn::from_transport(
+            Box::pin(client_write),
+            Box::pin(BufReader::new(client_read)),
+        )
     }
 
     /// @spec harness/acp-client Session open and resume: When the agent rebinds the session id during a turn, the client surfaces the rebound id
@@ -752,7 +758,12 @@ mod tests {
         let (tx, mut rx) = mpsc::channel(32);
 
         let out = rt
-            .run_turn(turn_req(None), tx, CancelToken::new(), crate::event::PendingUserChoices::shared())
+            .run_turn(
+                turn_req(None),
+                tx,
+                CancelToken::new(),
+                crate::event::PendingUserChoices::shared(),
+            )
             .await
             .expect("turn with rebind");
         assert_eq!(
@@ -793,7 +804,12 @@ mod tests {
 
         rt.ensure_hot().await.unwrap();
         let out1 = rt
-            .run_turn(turn_req(None), tx.clone(), CancelToken::new(), crate::event::PendingUserChoices::shared())
+            .run_turn(
+                turn_req(None),
+                tx.clone(),
+                CancelToken::new(),
+                crate::event::PendingUserChoices::shared(),
+            )
             .await
             .unwrap();
         assert!(!out1.session_id.is_empty());
@@ -976,7 +992,10 @@ mod tests {
             rt.prompt(OneshotKind::Title, "will hang".into()),
         )
         .await;
-        assert!(hung.is_err(), "first oneshot should not finish within budget");
+        assert!(
+            hung.is_err(),
+            "first oneshot should not finish within budget"
+        );
 
         // Worker cold-reset path after Timeout.
         rt.shutdown().await;
@@ -1056,10 +1075,7 @@ mod tests {
         let selected = pick_oneshot_model(None, &models);
         assert_eq!(selected.as_deref(), Some("claude-haiku-4-5-20251001"));
 
-        let grok = vec![
-            acp_model("grok-4.5"),
-            acp_model("grok-composer-2.5-fast"),
-        ];
+        let grok = vec![acp_model("grok-4.5"), acp_model("grok-composer-2.5-fast")];
         let selected = pick_oneshot_model(None, &grok);
         assert_eq!(selected.as_deref(), Some("grok-composer-2.5-fast"));
     }

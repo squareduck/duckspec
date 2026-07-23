@@ -137,11 +137,7 @@ pub fn source_to_visual(layout: &TableLayout, pos: Pos) -> Option<TableVisualPos
                     .enumerate()
                     .rev()
                     .find(|(_, f)| char_in_cell == f.char_end)
-                    .or_else(|| {
-                        cell.fragments
-                            .last()
-                            .map(|f| (cell.fragments.len() - 1, f))
-                    })
+                    .or_else(|| cell.fragments.last().map(|f| (cell.fragments.len() - 1, f)))
             })?;
 
         let visual_row_before: usize = region.rows[..row_idx].iter().map(|r| r.height).sum();
@@ -149,7 +145,11 @@ pub fn source_to_visual(layout: &TableLayout, pos: Pos) -> Option<TableVisualPos
 
         let frag_len = frag.char_end.saturating_sub(frag.char_start);
         let col_w = region.col_widths.get(cell_idx).copied().unwrap_or(0);
-        let align = region.aligns.get(cell_idx).copied().unwrap_or(ColAlign::Left);
+        let align = region
+            .aligns
+            .get(cell_idx)
+            .copied()
+            .unwrap_or(ColAlign::Left);
         let pad = align_pad(align, col_w, frag_len);
         let within = char_in_cell.saturating_sub(frag.char_start).min(frag_len);
         let char_col = col_origin(&region.col_widths, cell_idx) + pad + within;
@@ -190,9 +190,15 @@ pub fn visual_to_source(
     let cell_idx = col_index_at(&region.col_widths, char_col)?;
     let cell = row.cells.get(cell_idx)?;
     let col_w = region.col_widths.get(cell_idx).copied().unwrap_or(0);
-    let align = region.aligns.get(cell_idx).copied().unwrap_or(ColAlign::Left);
+    let align = region
+        .aligns
+        .get(cell_idx)
+        .copied()
+        .unwrap_or(ColAlign::Left);
     let origin = col_origin(&region.col_widths, cell_idx);
-    let local_x = char_col.saturating_sub(origin).min(col_w.saturating_sub(1).saturating_add(1));
+    let local_x = char_col
+        .saturating_sub(origin)
+        .min(col_w.saturating_sub(1).saturating_add(1));
 
     // Blank continuation rows (short cell in a tall logical row): caret at end.
     if frag_line >= cell.fragments.len() {
@@ -290,7 +296,12 @@ fn try_parse_table(lines: &[String], start: usize, pane_chars: usize) -> Option<
     let total_width_chars = total_width(&col_widths);
 
     let mut rows = Vec::with_capacity(1 + body_rows.len());
-    rows.push(build_table_row(start, RowRole::Header, &header, &col_widths));
+    rows.push(build_table_row(
+        start,
+        RowRole::Header,
+        &header,
+        &col_widths,
+    ));
     for (zebra_i, (src_line, parsed)) in body_rows.iter().enumerate() {
         rows.push(build_table_row(
             *src_line,
@@ -410,7 +421,11 @@ fn build_table_row(
             }
         })
         .collect();
-    let height = cells.iter().map(|c| c.fragments.len().max(1)).max().unwrap_or(1);
+    let height = cells
+        .iter()
+        .map(|c| c.fragments.len().max(1))
+        .max()
+        .unwrap_or(1);
     TableRow {
         source_line,
         role,
@@ -573,17 +588,11 @@ fn split_raw_pipe_segments(line: &str) -> Option<Vec<(Range<usize>, &str)>> {
     segments.push((start..line.len(), &line[start..]));
 
     // Drop leading empty from opening `|`.
-    if segments
-        .first()
-        .is_some_and(|(_, s)| s.is_empty())
-    {
+    if segments.first().is_some_and(|(_, s)| s.is_empty()) {
         segments.remove(0);
     }
     // Drop trailing empty from closing `|`.
-    if segments
-        .last()
-        .is_some_and(|(_, s)| s.is_empty())
-    {
+    if segments.last().is_some_and(|(_, s)| s.is_empty()) {
         segments.pop();
     }
 
@@ -657,22 +666,14 @@ mod tests {
     /// @spec editor/md-table Table recognition: Body column count mismatch yields no region
     #[test]
     fn body_column_count_mismatch_yields_no_region() {
-        let src = lines(&[
-            "| Name | Value |",
-            "| ---- | ----- |",
-            "| only-one-cell |",
-        ]);
+        let src = lines(&["| Name | Value |", "| ---- | ----- |", "| only-one-cell |"]);
         assert!(layout_tables(&src, 80).regions.is_empty());
     }
 
     /// @spec editor/md-table Separator, aligns, and display text: Separator is not a data row and defines aligns
     #[test]
     fn separator_is_not_data_row_and_defines_aligns() {
-        let src = lines(&[
-            "| L | C | R |",
-            "| :--- | :---: | ---: |",
-            "| a | b | c |",
-        ]);
+        let src = lines(&["| L | C | R |", "| :--- | :---: | ---: |", "| a | b | c |"]);
         let layout = layout_tables(&src, 80);
         assert_eq!(layout.regions.len(), 1);
         let region = &layout.regions[0];
@@ -691,11 +692,7 @@ mod tests {
     /// @spec editor/md-table Separator, aligns, and display text: Fragments omit pipe delimiters
     #[test]
     fn fragments_omit_pipe_delimiters() {
-        let src = lines(&[
-            "| Name | Value |",
-            "| ---- | ----- |",
-            "| alpha | beta |",
-        ]);
+        let src = lines(&["| Name | Value |", "| ---- | ----- |", "| alpha | beta |"]);
         let layout = layout_tables(&src, 80);
         assert_eq!(layout.regions.len(), 1);
         let region = &layout.regions[0];
@@ -730,14 +727,7 @@ mod tests {
     #[test]
     fn incomplete_trailing_header_does_not_form_region() {
         // Prose plus a complete table, then an incomplete trailer.
-        let src = lines(&[
-            "intro",
-            "| H |",
-            "| - |",
-            "| v |",
-            "",
-            "| alone |",
-        ]);
+        let src = lines(&["intro", "| H |", "| - |", "| v |", "", "| alone |"]);
         let layout = layout_tables(&src, 80);
         assert_eq!(layout.regions.len(), 1);
         assert_eq!(layout.regions[0].source_lines, 1..=3);
@@ -777,11 +767,7 @@ mod tests {
         // One long body cell; two columns still fit at/above MIN in a mid pane.
         let long = "word ".repeat(20); // plenty of soft-wrap opportunities
         let long = long.trim_end();
-        let src = lines(&[
-            "| H1 | H2 |",
-            "| --- | --- |",
-            &format!("| {long} | ok |"),
-        ]);
+        let src = lines(&["| H1 | H2 |", "| --- | --- |", &format!("| {long} | ok |")]);
         // Pane wide enough for 2 * MIN + gap, narrow enough to force wrap of long cell.
         let pane = MIN_COL_CHARS * 2 + COL_GAP + 4; // 21
         let layout = layout_tables(&src, pane);
@@ -833,11 +819,7 @@ mod tests {
     /// @spec editor/md-table Source mapping: Fragment position maps into the cell’s source text
     #[test]
     fn fragment_position_maps_into_cell_source_text() {
-        let src = lines(&[
-            "| Name | Value |",
-            "| ---- | ----- |",
-            "| alpha | beta |",
-        ]);
+        let src = lines(&["| Name | Value |", "| ---- | ----- |", "| alpha | beta |"]);
         let layout = layout_tables(&src, 80);
         assert_eq!(layout.regions.len(), 1);
         let region = &layout.regions[0];
@@ -856,8 +838,8 @@ mod tests {
             frag.char_end - frag.char_start,
         );
         let char_col = col_origin(&region.col_widths, 0) + pad + 1; // second char
-        let pos = visual_to_source(&layout, 0, visual_row_before, char_col)
-            .expect("visual_to_source");
+        let pos =
+            visual_to_source(&layout, 0, visual_row_before, char_col).expect("visual_to_source");
         assert_eq!(pos.line, row.source_line);
         assert!(
             pos.col >= cell.source_byte.start && pos.col <= cell.source_byte.end,
@@ -870,11 +852,7 @@ mod tests {
     /// @spec editor/md-table Source mapping: Source position in a cell maps to a fragment of that cell
     #[test]
     fn source_position_in_cell_maps_to_fragment_of_that_cell() {
-        let src = lines(&[
-            "| Name | Value |",
-            "| ---- | ----- |",
-            "| alpha | beta |",
-        ]);
+        let src = lines(&["| Name | Value |", "| ---- | ----- |", "| alpha | beta |"]);
         let layout = layout_tables(&src, 80);
         assert_eq!(layout.regions.len(), 1);
         let region = &layout.regions[0];
@@ -910,7 +888,10 @@ mod tests {
             cell.source_byte
         );
         // Lands on a display fragment of this cell (char offset inside some fragment).
-        let char_in = cell.text[..back.col.saturating_sub(cell.source_byte.start).min(cell.text.len())]
+        let char_in = cell.text[..back
+            .col
+            .saturating_sub(cell.source_byte.start)
+            .min(cell.text.len())]
             .chars()
             .count();
         // Use the original source char offset for fragment membership.

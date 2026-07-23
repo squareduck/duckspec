@@ -198,14 +198,13 @@ fn build_plan(
                     });
                 }
             }
-            ArtifactKind::DocDelta
-                if components.len() > 3 && components[2] == "caps" => {
-                    let cap_path: PathBuf = components[3..components.len() - 1].iter().collect();
-                    deltas.push(DeltaOp {
-                        delta_path: file_path.clone(),
-                        target_relative: cap_path.join("doc.md"),
-                    });
-                }
+            ArtifactKind::DocDelta if components.len() > 3 && components[2] == "caps" => {
+                let cap_path: PathBuf = components[3..components.len() - 1].iter().collect();
+                deltas.push(DeltaOp {
+                    delta_path: file_path.clone(),
+                    target_relative: cap_path.join("doc.md"),
+                });
+            }
             _ => {}
         }
     }
@@ -306,14 +305,18 @@ fn execute_plan(duckspec_root: &Path, plan: &ArchivePlan) -> anyhow::Result<Arch
         // Validate through the kind-matched wrapper: a spec delta must re-parse
         // as a spec, a doc delta as a document. Abort on either a merge failure
         // or a post-merge parse failure.
-        let is_spec =
-            op.target_relative.file_name().and_then(|n| n.to_str()) == Some("spec.md");
+        let is_spec = op.target_relative.file_name().and_then(|n| n.to_str()) == Some("spec.md");
         let merged = if is_spec {
             merge::merge_spec_delta(&source, &delta).map(rendered)
         } else {
             merge::merge_doc_delta(&source, &delta).map(rendered)
         }
-        .map_err(|e| anyhow::anyhow!("merge failed for caps/{}: {e}", op.target_relative.display()))?;
+        .map_err(|e| {
+            anyhow::anyhow!(
+                "merge failed for caps/{}: {e}",
+                op.target_relative.display()
+            )
+        })?;
 
         match merged {
             Some(content) => writes.push((op.target_relative.clone(), content)),

@@ -156,9 +156,7 @@ REPLY: second
             "no line-truncation marker expected: {body}"
         );
 
-        let start = body
-            .find("<assistant_message>\n")
-            .expect("assistant block")
+        let start = body.find("<assistant_message>\n").expect("assistant block")
             + "<assistant_message>\n".len();
         let end = body.find("\n</assistant_message>").expect("assistant end");
         assert_eq!(&body[start..end], assistant);
@@ -218,8 +216,7 @@ REPLY: second
             "must not prefer stage slash commands as primary job: {inst}"
         );
         assert!(
-            inst.contains("Do not treat duckspec stage")
-                || inst.contains("stage slash commands"),
+            inst.contains("Do not treat duckspec stage") || inst.contains("stage slash commands"),
             "must not prefer stage commands: {inst}"
         );
     }

@@ -35,7 +35,10 @@ pub enum Message {
     ModelDefaultSelected(ModelChoice),
     AgentInputHintsToggled(bool),
     /// Global oneshot model for a harness (`choice.id` is the model id).
-    OneshotModelSelected { harness: String, choice: ModelChoice },
+    OneshotModelSelected {
+        harness: String,
+        choice: ModelChoice,
+    },
     ResetDefaults,
 }
 
@@ -347,11 +350,8 @@ fn chat_section<'a>(config: &Config) -> Element<'a, Message> {
                 continue;
             }
             let choices = oneshot_choices_for(&models);
-            let selected = selected_oneshot_choice(
-                &harness,
-                config.chat.oneshot_model(&harness),
-                &models,
-            );
+            let selected =
+                selected_oneshot_choice(&harness, config.chat.oneshot_model(&harness), &models);
             let harness_owned = harness.clone();
             let picker = pick_list(choices, Some(selected), move |choice| {
                 Message::OneshotModelSelected {
@@ -486,10 +486,7 @@ mod tests {
         // AND at least one harness with a non-empty catalog slice
         let claude = vec![mi("claude-code", "haiku")];
         let grok = vec![mi("grok", "grok-4.5")];
-        let catalog: [(&str, &[ModelInfo]); 2] = [
-            ("claude-code", &claude),
-            ("grok", &grok),
-        ];
+        let catalog: [(&str, &[ModelInfo]); 2] = [("claude-code", &claude), ("grok", &grok)];
 
         // WHEN the Chat settings section is shown
         let harnesses = oneshot_picker_harnesses(true, &catalog);
@@ -529,10 +526,7 @@ mod tests {
         );
 
         // Grok: first is grok-4.5; string-match default is composer-fast.
-        let grok = vec![
-            mi("grok", "grok-4.5"),
-            mi("grok", "grok-composer-2.5-fast"),
-        ];
+        let grok = vec![mi("grok", "grok-4.5"), mi("grok", "grok-composer-2.5-fast")];
         let selected = selected_oneshot_choice("grok", None, &grok);
         assert_eq!(
             selected.id.as_deref(),
@@ -547,8 +541,7 @@ mod tests {
             mi("claude-code", "claude-sonnet-5"),
             mi("claude-code", "claude-haiku-4-5"),
         ];
-        let selected =
-            selected_oneshot_choice("claude-code", Some("claude-sonnet-5"), &claude);
+        let selected = selected_oneshot_choice("claude-code", Some("claude-sonnet-5"), &claude);
         assert_eq!(selected.id.as_deref(), Some("claude-sonnet-5"));
     }
 
@@ -556,10 +549,7 @@ mod tests {
     fn empty_catalog_harness_is_skipped_by_oneshot_picker_helper() {
         let claude = vec![mi("claude-code", "haiku")];
         let empty: Vec<ModelInfo> = Vec::new();
-        let catalog: [(&str, &[ModelInfo]); 2] = [
-            ("claude-code", &claude),
-            ("grok", &empty),
-        ];
+        let catalog: [(&str, &[ModelInfo]); 2] = [("claude-code", &claude), ("grok", &empty)];
         let harnesses = oneshot_picker_harnesses(true, &catalog);
         assert_eq!(harnesses, vec!["claude-code"]);
     }
@@ -614,10 +604,7 @@ mod tests {
         cfg.set_global_model_default(Some(ModelRef::new("claude-code", "opus")));
         // Simulate ResetDefaults body without process catalog dependency:
         cfg = Config::default();
-        let catalog = vec![
-            mi("claude-code", "sonnet"),
-            mi("grok", "grok-4.5"),
-        ];
+        let catalog = vec![mi("claude-code", "sonnet"), mi("grok", "grok-4.5")];
         assert!(agent::seed_global_default_if_unset(&mut cfg, &catalog));
         assert_eq!(
             cfg.global_model_default(),

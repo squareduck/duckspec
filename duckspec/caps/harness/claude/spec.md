@@ -23,7 +23,7 @@ run Claude turns.
 - **AND** the host does not drive Claude via an in-host stream-json client
 
 > test: code
-> - crates/duckchat/src/claude_code.rs:315
+> - crates/duckchat/src/claude_code.rs:308
 
 ### Scenario: The agent uses the official claude CLI as its backend
 
@@ -52,7 +52,7 @@ Claude Code native session id.
 - **THEN** the open completes without starting the official `claude` process
 
 > test: code
-> - crates/duckchat-claude-acp/src/agent.rs:672
+> - crates/duckchat-claude-acp/src/agent.rs:673
 
 ### Scenario: A turn without a prior session opens a new session and surfaces Claude's native session id
 
@@ -62,7 +62,7 @@ Claude Code native session id.
 - **AND** it surfaces Claude Code's native session id
 
 > test: code
-> - crates/duckchat-claude-acp/src/agent.rs:709
+> - crates/duckchat-claude-acp/src/agent.rs:710
 
 ### Scenario: A turn with a prior Claude session id resumes that id
 
@@ -71,7 +71,7 @@ Claude Code native session id.
 - **THEN** it opens the session by resuming that same id
 
 > test: code
-> - crates/duckchat-claude-acp/src/agent.rs:747
+> - crates/duckchat-claude-acp/src/agent.rs:748
 
 ## Requirement: Duplex main heat
 
@@ -94,7 +94,7 @@ when a prior session id is supplied, resume that id.
   session id
 
 > test: code
-> - crates/duckchat-claude-acp/src/agent.rs:800
+> - crates/duckchat-claude-acp/src/agent.rs:801
 
 ### Scenario: After cancel, a later turn may start Claude again and resume a prior session id
 
@@ -105,7 +105,7 @@ when a prior session id is supplied, resume that id.
 - **AND** it opens the session by resuming that id
 
 > test: code
-> - crates/duckchat-claude-acp/src/agent.rs:854
+> - crates/duckchat-claude-acp/src/agent.rs:855
 
 ## Requirement: Profile-compatible event emission
 
@@ -134,7 +134,7 @@ rather than only after the turn has completed.
 - **THEN** it emits profile thought chunks for that thinking
 
 > test: code
-> - crates/duckchat-claude-acp/src/claude/map.rs:179
+> - crates/duckchat-claude-acp/src/claude/map.rs:176
 
 ### Scenario: Profile updates are delivered to the host before the turn completes
 
@@ -147,7 +147,7 @@ rather than only after the turn has completed.
   prompt result
 
 > test: code
-> - crates/duckchat-claude-acp/src/agent.rs:929
+> - crates/duckchat-claude-acp/src/agent.rs:930
 
 ### Scenario: A Claude tool call surfaces as profile tool use then result
 
@@ -161,7 +161,7 @@ rather than only after the turn has completed.
   tool output
 
 > test: code
-> - crates/duckchat-claude-acp/src/claude/map.rs:200
+> - crates/duckchat-claude-acp/src/claude/map.rs:194
 
 ## Requirement: Agent binary discovery
 
@@ -179,7 +179,7 @@ than panicking.
 - **THEN** it selects that override path
 
 > test: code
-> - crates/duckchat/src/claude_code/agent_bin.rs:136
+> - crates/duckchat/src/claude_code/agent_bin.rs:135
 
 ### Scenario: When env is unset, a sibling of the running executable is used if present
 
@@ -189,7 +189,7 @@ than panicking.
 - **THEN** it selects that sibling binary
 
 > test: code
-> - crates/duckchat/src/claude_code/agent_bin.rs:150
+> - crates/duckchat/src/claude_code/agent_bin.rs:149
 
 ### Scenario: A missing agent binary fails the turn with a typed error
 
@@ -198,7 +198,7 @@ than panicking.
 - **THEN** the turn fails with a typed error rather than panicking
 
 > test: code
-> - crates/duckchat/src/claude_code/agent_bin.rs:167
+> - crates/duckchat/src/claude_code/agent_bin.rs:166
 
 ## Requirement: AskUserQuestion available
 
@@ -238,7 +238,7 @@ equivalent skip).
 - **THEN** the ACP parent surfaces a host user-choice event for those options
 
 > test: code
-> - crates/duckchat-claude-acp/src/claude/ask_user.rs:288
+> - crates/duckchat-claude-acp/src/claude/ask_user.rs:290
 
 ### Scenario: Host selection completes with allow and answers
 
@@ -319,7 +319,7 @@ required to use this preferred oneshot model (session model selection is separat
 - **THEN** it selects the preferred oneshot model
 
 > test: code
-> - crates/duckchat/src/acp/runtime.rs:1009
+> - crates/duckchat/src/acp/runtime.rs:1028
 
 ### Scenario: Oneshot model falls back when preferred is absent
 
@@ -331,7 +331,7 @@ required to use this preferred oneshot model (session model selection is separat
 - **THEN** it selects another advertised model rather than failing
 
 > test: code
-> - crates/duckchat/src/acp/runtime.rs:1025
+> - crates/duckchat/src/acp/runtime.rs:1044
 
 ## Requirement: Model discovery
 
@@ -352,7 +352,7 @@ an empty list without panicking.
 - **AND** each listed model is tagged with the Claude harness
 
 > test: code
-> - crates/duckchat/src/claude_code.rs:385
+> - crates/duckchat/src/claude_code.rs:382
 
 ### Scenario: Each listed model carries a display name
 
@@ -361,7 +361,7 @@ an empty list without panicking.
 - **THEN** each listed model carries a non-empty display name
 
 > test: code
-> - crates/duckchat/src/claude_code.rs:413
+> - crates/duckchat/src/claude_code.rs:410
 
 ### Scenario: A model with a known context window carries that window
 
@@ -370,7 +370,7 @@ an empty list without panicking.
 - **THEN** that listed model carries the same context window
 
 > test: code
-> - crates/duckchat/src/claude_code.rs:439
+> - crates/duckchat/src/claude_code.rs:436
 
 ### Scenario: Discovery failure yields an empty host list without panic
 
@@ -380,7 +380,7 @@ an empty list without panicking.
 - **AND** the listing completes without panicking
 
 > test: code
-> - crates/duckchat/src/claude_code.rs:456
+> - crates/duckchat/src/claude_code.rs:453
 
 ## Requirement: Agent model advertise
 
@@ -398,7 +398,7 @@ rather than an empty advertise set.
 - **THEN** the initialize result advertises that live catalog
 
 > test: code
-> - crates/duckchat-claude-acp/src/models.rs:261
+> - crates/duckchat-claude-acp/src/models.rs:262
 
 ### Scenario: Failed live discovery advertises the curated alias fallback
 
@@ -408,4 +408,4 @@ rather than an empty advertise set.
 - **AND** the advertise set is non-empty
 
 > test: code
-> - crates/duckchat-claude-acp/src/models.rs:295
+> - crates/duckchat-claude-acp/src/models.rs:296

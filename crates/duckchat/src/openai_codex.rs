@@ -8,9 +8,7 @@
 mod agent_bin;
 mod discover;
 
-pub use agent_bin::{
-    CODEX_ACP_BIN, CODEX_ACP_ENV, codex_acp_launch, resolve_codex_acp_binary,
-};
+pub use agent_bin::{CODEX_ACP_BIN, CODEX_ACP_ENV, codex_acp_launch, resolve_codex_acp_binary};
 
 use std::path::Path;
 use std::sync::OnceLock;
@@ -149,9 +147,7 @@ impl Provider for OpenaiCodexProvider {
     }
 
     fn list_models(&self) -> Vec<ModelInfo> {
-        self.models
-            .get_or_init(|| self.discover_models())
-            .clone()
+        self.models.get_or_init(|| self.discover_models()).clone()
     }
 
     fn list_commands(&self, project_root: &Path) -> Vec<SlashCommand> {
@@ -322,13 +318,14 @@ for line in sys.stdin:
                 .map(|a| a.to_string_lossy().into_owned())
                 .collect();
             assert!(
-                program.contains(CODEX_ACP_BIN)
-                    || args.iter().any(|a| a.contains(CODEX_ACP_BIN)),
+                program.contains(CODEX_ACP_BIN) || args.iter().any(|a| a.contains(CODEX_ACP_BIN)),
                 "default Codex launch must target {CODEX_ACP_BIN}, got program={program} args={args:?}"
             );
             // Host must not speak App Server methods itself.
             assert!(
-                !args.iter().any(|a| a == "app-server" || a.contains("thread/start")),
+                !args
+                    .iter()
+                    .any(|a| a == "app-server" || a.contains("thread/start")),
                 "host must not drive Codex via in-host App Server: {args:?}"
             );
             provider
@@ -439,7 +436,10 @@ for line in sys.stdin:
         }));
 
         let listed = provider.list_models();
-        assert!(listed.is_empty(), "expected empty model list, got {listed:?}");
+        assert!(
+            listed.is_empty(),
+            "expected empty model list, got {listed:?}"
+        );
 
         let mut rt = provider.open_main_runtime(std::path::Path::new("/tmp"));
         let (tx, _rx) = mpsc::channel(8);

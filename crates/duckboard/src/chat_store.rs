@@ -49,9 +49,13 @@ pub enum ContentBlock {
         output: String,
     },
     /// Mid-turn structured question text (host display chip).
-    UserChoiceQuestion { text: String },
+    UserChoiceQuestion {
+        text: String,
+    },
     /// Settled pick label or freeform answer (host display chip).
-    UserChoiceAnswer { text: String },
+    UserChoiceAnswer {
+        text: String,
+    },
 }
 
 /// In-memory chat session.
@@ -1332,7 +1336,10 @@ mod tests {
             // Confirm the on-disk JSON has no Reasoning variant.
             let path = scope_dir("legacy-scope", Some(&root)).join("sess-legacy.json");
             let raw = std::fs::read_to_string(&path).unwrap();
-            assert!(!raw.contains("Reasoning"), "fixture must not contain Reasoning");
+            assert!(
+                !raw.contains("Reasoning"),
+                "fixture must not contain Reasoning"
+            );
 
             // WHEN the session is loaded.
             let loaded = load_sessions_for("legacy-scope", Some(&root));

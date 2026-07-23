@@ -68,7 +68,7 @@ require the source tree that built the binary to be present on disk at runtime.
 - **AND** the command exits successfully
 
 > test: code
-> - crates/duckspec/tests/stock_content.rs:184
+> - crates/duckspec/tests/stock_content.rs:182
 
 ## Requirement: Clear unknown-name failures
 
@@ -110,4 +110,4 @@ filesystem error for the absent stock name.
 - **AND** the error message does not report a missing filesystem path for stock content
 
 > test: code
-> - crates/duckspec/tests/stock_content.rs:158
+> - crates/duckspec/tests/stock_content.rs:156

@@ -39,7 +39,7 @@ forbid host question and answer transcript blocks committed when a user choice s
   option chip
 
 > test: code
-> - crates/duckboard/src/fast_response.rs:410
+> - crates/duckboard/src/fast_response.rs:412
 
 ## Requirement: Visibility
 
@@ -145,7 +145,7 @@ oneshot suggestion. There is no cancel key binding on the shell.
 - **THEN** there is no selection
 
 > test: code
-> - crates/duckboard/src/fast_response.rs:321
+> - crates/duckboard/src/fast_response.rs:320
 
 ## Requirement: Chip labels
 
@@ -164,7 +164,7 @@ present a cancel chip.
 - **AND** the label includes `/ds-step` after the hotkey
 
 > test: code
-> - crates/duckboard/src/fast_response.rs:340
+> - crates/duckboard/src/fast_response.rs:339
 
 ## Requirement: Bottom pad
 
@@ -190,7 +190,7 @@ not sufficient).
 - **THEN** the pad height is 300
 
 > test: code
-> - crates/duckboard/src/fast_response.rs:350
+> - crates/duckboard/src/fast_response.rs:349
 
 ### Scenario: Content at or above viewport yields zero pad
 
@@ -200,7 +200,7 @@ not sufficient).
 - **THEN** the pad height is 0
 
 > test: code
-> - crates/duckboard/src/fast_response.rs:356
+> - crates/duckboard/src/fast_response.rs:355
 
 ## Requirement: Population
 
@@ -222,8 +222,8 @@ SHALL NOT replace the shell while the session is awaiting a user choice.
 - **THEN** the options list remains non-empty
 
 > test: code
-> - crates/duckboard/src/area/change.rs:2317
-> - crates/duckboard/src/fast_response.rs:440
+> - crates/duckboard/src/area/change.rs:2321
+> - crates/duckboard/src/fast_response.rs:442
 
 ### Scenario: Ordinary refresh leaves options empty when oneshot is ineligible
 
@@ -233,7 +233,7 @@ SHALL NOT replace the shell while the session is awaiting a user choice.
 - **THEN** the options list is empty
 
 > test: code
-> - crates/duckboard/src/area/change.rs:2277
+> - crates/duckboard/src/area/change.rs:2281
 
 ### Scenario: Refresh preserves oneshot fill when still eligible
 
@@ -245,7 +245,7 @@ SHALL NOT replace the shell while the session is awaiting a user choice.
 - **AND** the options match the settled oneshot list in order
 
 > test: code
-> - crates/duckboard/src/area/change.rs:2359
+> - crates/duckboard/src/area/change.rs:2363
 
 ### Scenario: Settled eligible oneshot fills the option shell
 
@@ -255,7 +255,7 @@ SHALL NOT replace the shell while the session is awaiting a user choice.
 - **THEN** the options list contains those settled replies in order
 
 > test: code
-> - crates/duckboard/src/area/change.rs:2399
+> - crates/duckboard/src/area/change.rs:2403
 
 ### Scenario: Live user choice overwrites oneshot fill
 
@@ -266,7 +266,7 @@ SHALL NOT replace the shell while the session is awaiting a user choice.
 - **AND** the shell is no longer filled from oneshot hints
 
 > test: code
-> - crates/duckboard/src/area/change.rs:2427
+> - crates/duckboard/src/area/change.rs:2431
 
 ### Scenario: Oneshot settle does not replace a live user-choice fill
 
@@ -276,7 +276,7 @@ SHALL NOT replace the shell while the session is awaiting a user choice.
 - **THEN** the options list remains the user-choice options
 
 > test: code
-> - crates/duckboard/src/area/change.rs:2462
+> - crates/duckboard/src/area/change.rs:2466
 
 ## Requirement: Question activation
 
@@ -305,7 +305,7 @@ the host settled choice transcript for that answer (question when present, then 
   activation
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:2240
+> - crates/duckboard/src/area/interaction.rs:2230
 
 ## Requirement: Freeform while awaiting
 
@@ -341,7 +341,7 @@ answer (question when present, then answer with the freeform text).
 - **AND** the text is not left only staged in the interrupt queue
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:2181
+> - crates/duckboard/src/area/interaction.rs:2171
 
 ## Requirement: Awaiting composer chrome
 
@@ -361,7 +361,7 @@ it does not stand out as an untinted control.
 - **THEN** the composer section uses the quiet accent awaiting tint
 
 > test: code
-> - crates/duckboard/src/fast_response.rs:514
+> - crates/duckboard/src/fast_response.rs:504
 
 ### Scenario: Not awaiting leaves the composer section untinted
 
@@ -370,7 +370,7 @@ it does not stand out as an untinted control.
 - **THEN** the composer section does not use the quiet accent awaiting tint
 
 > test: code
-> - crates/duckboard/src/fast_response.rs:531
+> - crates/duckboard/src/fast_response.rs:521
 
 ### Scenario: Model selector matches the composer section tint while awaiting
 
@@ -379,7 +379,7 @@ it does not stand out as an untinted control.
 - **THEN** it uses the same quiet accent awaiting tint as the composer section
 
 > test: code
-> - crates/duckboard/src/fast_response.rs:543
+> - crates/duckboard/src/fast_response.rs:533
 
 ## Requirement: Empty-send formatting
 
@@ -424,7 +424,7 @@ session. It SHALL NOT complete a mid-turn user choice in-band for that activatio
 - **AND** no mid-turn user choice is completed in-band for the activation
 
 > test: code
-> - crates/duckboard/src/fast_response.rs:492
+> - crates/duckboard/src/fast_response.rs:485
 
 ## Requirement: Live question chip
 
@@ -449,7 +449,7 @@ the option chips under ordinary visibility rules.
 - **AND** the question chip is not a numbered selectable option
 
 > test: code
-> - crates/duckboard/src/fast_response.rs:376
+> - crates/duckboard/src/fast_response.rs:375
 
 ### Scenario: Empty prompt omits the question chip
 
@@ -461,7 +461,7 @@ the option chips under ordinary visibility rules.
 - **AND** the option chips are still shown under ordinary visibility rules
 
 > test: code
-> - crates/duckboard/src/fast_response.rs:394
+> - crates/duckboard/src/fast_response.rs:396
 
 ## Requirement: Settled choice transcript
 
@@ -493,7 +493,7 @@ commit question or answer host entries for that choice.
 - **AND** the question entry appears before the answer entry
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:2285
+> - crates/duckboard/src/area/interaction.rs:2276
 
 ### Scenario: Settle without a prompt commits answer only
 
@@ -504,7 +504,7 @@ commit question or answer host entries for that choice.
 - **AND** the session transcript does not include a host question entry for that choice
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:2314
+> - crates/duckboard/src/area/interaction.rs:2305
 
 ### Scenario: Cancel commits no choice blocks
 
@@ -514,4 +514,4 @@ commit question or answer host entries for that choice.
 - **AND** the session transcript does not gain a host answer entry for that choice
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:2340
+> - crates/duckboard/src/area/interaction.rs:2330

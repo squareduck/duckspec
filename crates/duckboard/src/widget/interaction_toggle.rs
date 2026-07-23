@@ -311,7 +311,8 @@ impl<'a, M: Clone> Widget<M, Theme, iced::Renderer> for InteractionHandle<'a, M>
         );
 
         // Middle grip — vertical "⋮" dots signalling the strip is draggable.
-        let total_h = GRIP_DOT_COUNT as f32 * GRIP_DOT + (GRIP_DOT_COUNT as f32 - 1.0) * GRIP_DOT_GAP;
+        let total_h =
+            GRIP_DOT_COUNT as f32 * GRIP_DOT + (GRIP_DOT_COUNT as f32 - 1.0) * GRIP_DOT_GAP;
         let dot_x = bounds.x + (HANDLE_WIDTH - GRIP_DOT) / 2.0;
         let mut dot_y = bounds.y + (bounds.height - total_h) / 2.0;
         for _ in 0..GRIP_DOT_COUNT {

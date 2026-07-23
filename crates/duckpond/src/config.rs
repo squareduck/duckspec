@@ -180,7 +180,11 @@ mod tests {
     #[test]
     fn non_array_exclude_is_rejected() {
         let dir = tempfile::tempdir().unwrap();
-        fs::write(dir.path().join("config.toml"), "exclude = \"references/\"\n").unwrap();
+        fs::write(
+            dir.path().join("config.toml"),
+            "exclude = \"references/\"\n",
+        )
+        .unwrap();
         let err = Config::load(dir.path()).unwrap_err();
         assert!(matches!(err, ConfigError::BadExclude));
     }

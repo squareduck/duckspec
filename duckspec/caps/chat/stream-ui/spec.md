@@ -27,7 +27,7 @@ Deferred materialization SHALL NOT drop stream text from the session.
   run for those deltas
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:1372
+> - crates/duckboard/src/area/interaction.rs:1367
 
 ### Scenario: Reasoning deltas accumulate on the session without materialization
 
@@ -42,7 +42,7 @@ Deferred materialization SHALL NOT drop stream text from the session.
   run for those deltas
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:1399
+> - crates/duckboard/src/area/interaction.rs:1394
 
 ## Requirement: Bounded materialization while streaming
 
@@ -72,7 +72,7 @@ tick and regardless of stick-to-bottom.
 - **THEN** chat UI materialization does not run for those deltas alone
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:1425
+> - crates/duckboard/src/area/interaction.rs:1420
 
 ### Scenario: Stream UI tick materializes accumulated session answer text into the chat UI
 
@@ -88,7 +88,7 @@ tick and regardless of stick-to-bottom.
 - **AND** the live answer presented by the chat UI includes that session answer text
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:1461
+> - crates/duckboard/src/area/interaction.rs:1452
 
 ### Scenario: Stream UI tick skips materialize while scrolled up in history
 
@@ -99,7 +99,7 @@ tick and regardless of stick-to-bottom.
 - **AND** the session still holds the accumulated pure-content text
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:1494
+> - crates/duckboard/src/area/interaction.rs:1485
 
 ### Scenario: Re-sticking to bottom materializes deferred content
 
@@ -113,7 +113,7 @@ tick and regardless of stick-to-bottom.
 - **AND** the live answer presented by the chat UI includes the deferred session text
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:1512
+> - crates/duckboard/src/area/interaction.rs:1503
 
 ### Scenario: Tool use materializes the chat UI immediately with an Activity row
 
@@ -123,7 +123,7 @@ tick and regardless of stick-to-bottom.
 - **AND** the chat UI includes an Activity row for that tool
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:1586
+> - crates/duckboard/src/area/interaction.rs:1577
 
 ### Scenario: Turn complete materializes the final answer immediately
 
@@ -137,7 +137,7 @@ tick and regardless of stick-to-bottom.
   UI tick
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:1628
+> - crates/duckboard/src/area/interaction.rs:1619
 
 ### Scenario: Answer-to-reasoning channel switch materializes without committing the answer
 
@@ -147,7 +147,7 @@ tick and regardless of stick-to-bottom.
 - **AND** the open answer draft remains uncommitted on the session
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:1748
+> - crates/duckboard/src/area/interaction.rs:1739
 
 ## Requirement: Settled and live editor refresh
 
@@ -176,7 +176,7 @@ still keep their editors.
 - **AND** that editor is not replaced by a newly constructed editor for the same lines
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:2034
+> - crates/duckboard/src/area/interaction.rs:2022
 
 ### Scenario: Suffix-growing live answer refreshes in place
 
@@ -190,7 +190,7 @@ still keep their editors.
 - **AND** the editor is not constructed as a brand-new editor from the full joined text
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:2074
+> - crates/duckboard/src/area/interaction.rs:2065
 
 ### Scenario: Block list reshape uses full rebuild for affected indices
 
@@ -205,7 +205,7 @@ still keep their editors.
 - **AND** any earlier block whose lines are unchanged keeps its existing editor
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:2114
+> - crates/duckboard/src/area/interaction.rs:2104
 
 ## Requirement: Hybrid layout reuse
 
@@ -228,7 +228,7 @@ share that geometry so consumers can read it without a deep copy of the full lay
 - **AND** the returned geometry matches the previously computed layout
 
 > test: code
-> - crates/duckboard/src/widget/text_edit/render.rs:3155
+> - crates/duckboard/src/widget/text_edit/render.rs:3107
 
 ### Scenario: Cache hit shares layout geometry without deep-cloning the tree
 
@@ -238,7 +238,7 @@ share that geometry so consumers can read it without a deep copy of the full lay
 - **AND** satisfying the request does not require deep-cloning the full layout tree
 
 > test: code
-> - crates/duckboard/src/widget/text_edit/render.rs:3179
+> - crates/duckboard/src/widget/text_edit/render.rs:3134
 
 ## Requirement: Answer draft across thought
 
@@ -262,7 +262,7 @@ answer draft into the session’s messages before the tool is recorded.
   draft
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:1676
+> - crates/duckboard/src/area/interaction.rs:1667
 
 ### Scenario: Answer after reasoning replaces the live draft
 
@@ -273,7 +273,7 @@ answer draft into the session’s messages before the tool is recorded.
 - **AND** the live answer draft does not retain the first body
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:1694
+> - crates/duckboard/src/area/interaction.rs:1685
 
 ### Scenario: Tool use commits the open answer draft
 
@@ -283,7 +283,7 @@ answer draft into the session’s messages before the tool is recorded.
 - **AND** the live answer draft is empty
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:1722
+> - crates/duckboard/src/area/interaction.rs:1713
 
 ## Requirement: Answer thrash budget
 
@@ -311,7 +311,7 @@ The concrete budget size is an implementation constant, not part of this contrac
 - **AND** a short stop notice is shown that is not a second full answer rewrite
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:1779
+> - crates/duckboard/src/area/interaction.rs:1770
 
 ### Scenario: Tool use resets the thrash budget
 
@@ -325,7 +325,7 @@ The concrete budget size is an implementation constant, not part of this contrac
 - **THEN** the in-flight turn is not cancelled solely for exceeding the thrash budget
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:1821
+> - crates/duckboard/src/area/interaction.rs:1809
 
 ## Requirement: Stream UI tick need
 
@@ -346,7 +346,7 @@ materialize SHALL NOT need the stream UI tick.
 - **THEN** the session needs the stream UI tick
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:1541
+> - crates/duckboard/src/area/interaction.rs:1532
 
 ### Scenario: Idle awaiting without deferred materialize does not need the stream UI tick
 
@@ -356,7 +356,7 @@ materialize SHALL NOT need the stream UI tick.
 - **THEN** the session does not need the stream UI tick
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:1556
+> - crates/duckboard/src/area/interaction.rs:1547
 
 ### Scenario: Awaiting with deferred pure content on stick-to-bottom needs the stream UI tick
 
@@ -366,4 +366,4 @@ materialize SHALL NOT need the stream UI tick.
 - **THEN** the session needs the stream UI tick
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:1571
+> - crates/duckboard/src/area/interaction.rs:1562

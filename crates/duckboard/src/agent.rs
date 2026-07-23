@@ -14,10 +14,10 @@ use tokio::sync::mpsc;
 
 pub use duckchat::{AgentHandle, ModelInfo, ModelRef, SlashCommand};
 
+use duckchat::Provider;
 use duckchat::claude_code::ClaudeCodeProvider;
 use duckchat::grok::GrokProvider;
 use duckchat::openai_codex::OpenaiCodexProvider;
-use duckchat::Provider;
 
 /// Shared Claude provider so model discovery is memoized across catalog reads.
 fn claude_provider() -> &'static ClaudeCodeProvider {
@@ -83,11 +83,7 @@ impl ModelCatalog {
         let map = self.by_harness.read().expect("model catalog lock");
         // Stable harness order: claude-code, grok, openai-codex, then any others alphabetically.
         let mut keys: Vec<String> = map.keys().cloned().collect();
-        keys.sort_by(|a, b| {
-            harness_rank(a)
-                .cmp(&harness_rank(b))
-                .then_with(|| a.cmp(b))
-        });
+        keys.sort_by(|a, b| harness_rank(a).cmp(&harness_rank(b)).then_with(|| a.cmp(b)));
         keys.into_iter()
             .flat_map(|k| map.get(&k).cloned().unwrap_or_default())
             .collect()
@@ -157,14 +153,13 @@ pub fn seed_global_default_model(catalog: &[ModelInfo]) -> Option<ModelRef> {
     if catalog.is_empty() {
         return None;
     }
-    if let Some(m) = catalog.iter().find(|m| {
-        m.harness == FORMER_BUILTIN_HARNESS && m.id == FORMER_BUILTIN_MODEL
-    }) {
+    if let Some(m) = catalog
+        .iter()
+        .find(|m| m.harness == FORMER_BUILTIN_HARNESS && m.id == FORMER_BUILTIN_MODEL)
+    {
         return Some(ModelRef::new(&m.harness, &m.id));
     }
-    catalog
-        .first()
-        .map(|m| ModelRef::new(&m.harness, &m.id))
+    catalog.first().map(|m| ModelRef::new(&m.harness, &m.id))
 }
 
 /// If `config.default_model` is unset, seed it from `catalog` and return whether
@@ -214,10 +209,7 @@ pub fn resolve_oneshot_model(
 }
 
 /// Preferred oneshot model for `harness` from global config + process catalog.
-pub fn resolved_oneshot_model_for(
-    harness: &str,
-    configured: Option<&str>,
-) -> Option<String> {
+pub fn resolved_oneshot_model_for(harness: &str, configured: Option<&str>) -> Option<String> {
     let catalog = models_for_harness(harness);
     resolve_oneshot_model(harness, configured, &catalog)
 }
@@ -362,8 +354,7 @@ fn agent_stream(
             // driver is generic over the concrete provider — no trait object.
             match Harness::dispatch(&harness) {
                 Harness::Grok => {
-                    drive_provider(GrokProvider::new(), project_root, sender, oneshot_model)
-                        .await
+                    drive_provider(GrokProvider::new(), project_root, sender, oneshot_model).await
                 }
                 Harness::ClaudeCode => {
                     drive_provider(
@@ -449,11 +440,7 @@ async fn drive_provider<P: duckchat::Provider + 'static>(
             duckchat::AgentEvent::UserChoiceRequest(req) => AgentEvent::UserChoiceRequest {
                 correlation_id: req.correlation_id,
                 prompt: req.prompt,
-                options: req
-                    .options
-                    .into_iter()
-                    .map(|o| (o.id, o.label))
-                    .collect(),
+                options: req.options.into_iter().map(|o| (o.id, o.label)).collect(),
                 allow_cancel: req.allow_cancel,
             },
         };
@@ -507,10 +494,7 @@ mod tests {
         // harness under test.
         let cat = ModelCatalog::new();
         cat.refresh_from([
-            (
-                "claude-code",
-                vec![mi("claude-code", "opus", None)],
-            ),
+            ("claude-code", vec![mi("claude-code", "opus", None)]),
             ("grok", vec![mi("grok", "grok-4.5", Some(256_000))]),
             (
                 "openai-codex",
@@ -537,10 +521,7 @@ mod tests {
         // WHEN the app starts and the model catalog is refreshed
         let cat = ModelCatalog::new();
         cat.refresh_from([
-            (
-                "claude-code",
-                vec![mi("claude-code", "sonnet", None)],
-            ),
+            ("claude-code", vec![mi("claude-code", "sonnet", None)]),
             ("grok", vec![mi("grok", "grok-4.5", Some(256_000))]),
         ]);
 
@@ -581,10 +562,7 @@ mod tests {
     fn empty_rediscovery_clears_the_prior_harness_list() {
         // GIVEN a harness whose catalog slice is non-empty
         let cat = ModelCatalog::new();
-        cat.apply_harness(
-            "grok",
-            vec![mi("grok", "grok-4.5", Some(256_000))],
-        );
+        cat.apply_harness("grok", vec![mi("grok", "grok-4.5", Some(256_000))]);
 
         // AND a rediscovery for that harness that yields an empty set
         // WHEN the catalog is refreshed for that harness
@@ -614,8 +592,10 @@ mod tests {
     fn offered_selectable_models_are_the_catalog_contents() {
         // GIVEN a process model catalog with models from one or more harnesses
         let cat = ModelCatalog::new();
-        let contents = [mi("claude-code", "opus", None),
-            mi("grok", "grok-4.5", Some(256_000))];
+        let contents = [
+            mi("claude-code", "opus", None),
+            mi("grok", "grok-4.5", Some(256_000)),
+        ];
         cat.refresh_from([
             ("claude-code", vec![contents[0].clone()]),
             ("grok", vec![contents[1].clone()]),
@@ -635,10 +615,7 @@ mod tests {
     fn context_window_lookup_uses_the_catalog_entry_for_the_selected_model() {
         // GIVEN a catalog entry for a model with a known context window
         let cat = ModelCatalog::new();
-        cat.apply_harness(
-            "grok",
-            vec![mi("grok", "grok-4.5", Some(500_000))],
-        );
+        cat.apply_harness("grok", vec![mi("grok", "grok-4.5", Some(500_000))]);
         let selected = ModelRef::new("grok", "grok-4.5");
 
         // AND that model selected
@@ -660,8 +637,7 @@ mod tests {
         ];
 
         // WHEN the oneshot model for the harness is resolved
-        let resolved =
-            resolve_oneshot_model("claude-code", Some("haiku"), &catalog);
+        let resolved = resolve_oneshot_model("claude-code", Some("haiku"), &catalog);
 
         // THEN the resolved model is the configured id
         assert_eq!(resolved.as_deref(), Some("haiku"));
@@ -681,8 +657,7 @@ mod tests {
 
         // WHEN the oneshot model for the harness is resolved
         let with_match = resolve_oneshot_model("claude-code", None, &catalog);
-        let unknown_config =
-            resolve_oneshot_model("claude-code", Some("missing"), &catalog);
+        let unknown_config = resolve_oneshot_model("claude-code", Some("missing"), &catalog);
         let no_match_catalog = vec![
             mi("claude-code", "opus", None),
             mi("claude-code", "sonnet", None),
@@ -730,7 +705,11 @@ mod tests {
         let resolved = resolve_oneshot_model("claude-code", None, &catalog);
         // THEN id is a real catalog entry (exact match for pick_oneshot_model)
         assert_eq!(resolved.as_deref(), Some("claude-haiku-4-5-20251001"));
-        assert!(catalog.iter().any(|m| Some(m.id.as_str()) == resolved.as_deref()));
+        assert!(
+            catalog
+                .iter()
+                .any(|m| Some(m.id.as_str()) == resolved.as_deref())
+        );
     }
 
     #[test]
@@ -766,7 +745,7 @@ mod tests {
     /// @spec harness/selection Global default model setting: An unset global default is seeded from the first catalog model when the former built-in is absent
     #[test]
     fn unset_global_default_is_seeded_from_the_first_catalog_model_when_the_former_built_in_is_absent()
-    {
+     {
         // GIVEN no configured global default
         let mut cfg = crate::config::Config::default();
         assert!(cfg.global_model_default().is_none());

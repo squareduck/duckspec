@@ -1066,7 +1066,10 @@ enum ExplorationHoverAction {
     Archive(String),
     ArmRemove(String),
     /// `armed` tints the control red (second click after arming).
-    Remove { id: String, armed: bool },
+    Remove {
+        id: String,
+        armed: bool,
+    },
 }
 
 fn exploration_hover_action(exp: &Exploration, armed: bool) -> ExplorationHoverAction {
@@ -1092,11 +1095,13 @@ fn exploration_hover_button<'a>(action: ExplorationHoverAction) -> Element<'a, M
         ExplorationHoverAction::Archive(id) => {
             collapsible::close_button_sized(Message::ArchiveExploration(id), list_view::ICON_SIZE)
         }
-        ExplorationHoverAction::Remove { id, armed: true } => collapsible::close_button_sized_tinted(
-            Message::RemoveExploration(id),
-            list_view::ICON_SIZE,
-            theme::error(),
-        ),
+        ExplorationHoverAction::Remove { id, armed: true } => {
+            collapsible::close_button_sized_tinted(
+                Message::RemoveExploration(id),
+                list_view::ICON_SIZE,
+                theme::error(),
+            )
+        }
         ExplorationHoverAction::Remove { id, armed: false } => {
             collapsible::close_button_sized(Message::RemoveExploration(id), list_view::ICON_SIZE)
         }
@@ -1256,18 +1261,17 @@ pub fn view_list<'a>(
         })
         .collect();
 
-    let archived_section =
-        if has_archived_section(&project.archived_changes, &state.explorations) {
-            Some(collapsible::view_with_add_owned(
-                format!("Archived  ({archived_count})"),
-                state.expanded_sections.contains("archived"),
-                Message::ToggleSection("archived".to_string()),
-                None,
-                list_view::view(archived_rows, None),
-            ))
-        } else {
-            None
-        };
+    let archived_section = if has_archived_section(&project.archived_changes, &state.explorations) {
+        Some(collapsible::view_with_add_owned(
+            format!("Archived  ({archived_count})"),
+            state.expanded_sections.contains("archived"),
+            Message::ToggleSection("archived".to_string()),
+            None,
+            list_view::view(archived_rows, None),
+        ))
+    } else {
+        None
+    };
 
     let change_section = collapsible::view_with_add_owned(
         format!("Change  ({change_count})"),
@@ -2569,7 +2573,10 @@ mod breadcrumb_tests {
             c.reviews = vec!["01-initial.md".into(), "02-post-implementation.md".into()];
         });
         let facts = change_scope_facts("foo", &project).expect("active change has facts");
-        assert_eq!(facts.current_review.as_deref(), Some("02-post-implementation.md"));
+        assert_eq!(
+            facts.current_review.as_deref(),
+            Some("02-post-implementation.md")
+        );
 
         let text = orientation_for("foo", &project);
         assert!(
@@ -2862,10 +2869,7 @@ mod breadcrumb_tests {
     /// @spec archive/browse Interleaved archived rows: Mixed archive rows order by archive date descending
     #[test]
     fn mixed_archive_rows_order_by_date_descending() {
-        let project = make_project(
-            &[],
-            &["2026-01-01-01-old", "2026-07-12-09-new"],
-        );
+        let project = make_project(&[], &["2026-01-01-01-old", "2026-07-12-09-new"]);
         let mut older_exp = Exploration::new(1);
         older_exp.archived_at = Some("2026-03-15T10:00:00+00:00".into());
         let mut newer_exp = Exploration::new(2);
@@ -2893,9 +2897,11 @@ mod breadcrumb_tests {
         exp.idea_path = Some("/ideas/x.md".into());
         exp.mark_archived();
         let entries = archived_entries(&project.archived_changes, std::slice::from_ref(&exp));
-        assert!(!entries
-            .iter()
-            .any(|e| matches!(e, ArchivedEntry::Exploration(_))));
+        assert!(
+            !entries
+                .iter()
+                .any(|e| matches!(e, ArchivedEntry::Exploration(_)))
+        );
         assert_eq!(entries.len(), 1);
     }
 
@@ -2938,15 +2944,9 @@ mod breadcrumb_tests {
         let exps = vec![live, archived_exp, idea_owned, idea_archived];
 
         // Change: one live non–idea-owned exploration + two active changes.
-        assert_eq!(
-            change_section_count(&exps, &project.active_changes),
-            1 + 2
-        );
+        assert_eq!(change_section_count(&exps, &project.active_changes), 1 + 2);
         // Archived: one change + one non–idea-owned archived exploration.
-        assert_eq!(
-            archived_section_count(&project.archived_changes, &exps),
-            2
-        );
+        assert_eq!(archived_section_count(&project.archived_changes, &exps), 2);
         // Only-exploration archive still counts.
         assert_eq!(
             archived_section_count(&[], std::slice::from_ref(&exps[1])),
@@ -3008,7 +3008,11 @@ mod explorer_tests {
         state.expand_explorer_ancestors("crates/duckboard/src/main.rs");
         assert!(state.expanded_explorer_dirs.contains("crates"));
         assert!(state.expanded_explorer_dirs.contains("crates/duckboard"));
-        assert!(state.expanded_explorer_dirs.contains("crates/duckboard/src"));
+        assert!(
+            state
+                .expanded_explorer_dirs
+                .contains("crates/duckboard/src")
+        );
         assert_eq!(state.expanded_explorer_dirs.len(), 3);
     }
 

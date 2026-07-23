@@ -1,7 +1,7 @@
 mod common;
 
 use duckpond::merge::{
-    apply_delta, merge_doc_delta, merge_spec_delta, summarize_errors, MergeValidateError, Merged,
+    MergeValidateError, Merged, apply_delta, merge_doc_delta, merge_spec_delta, summarize_errors,
 };
 
 fn merge_fixture(name: &str) -> Result<Option<String>, Vec<duckpond::error::MergeError>> {
@@ -153,7 +153,10 @@ fn spec_merge_returns_rendered_and_parsed_spec() {
                 .find(|r| r.name == "Bar")
                 .expect("requirement Bar");
             let names: Vec<&str> = bar.scenarios.iter().map(|s| s.name.as_str()).collect();
-            assert!(names.contains(&"Baz") && names.contains(&"Qux"), "got {names:?}");
+            assert!(
+                names.contains(&"Baz") && names.contains(&"Qux"),
+                "got {names:?}"
+            );
         }
         Merged::Deleted => panic!("expected an update, got a deletion"),
     }

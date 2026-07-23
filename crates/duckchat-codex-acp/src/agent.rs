@@ -4,18 +4,43 @@
 //! is the real `thread.id`. One app-server child stays process-hot across main
 //! turns until cancel kills it.
 
-use std::collections::HashSet;
-use std::path::PathBuf;
+use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
 
 use serde_json::{Value, json};
 
 use crate::codex::ask_user::{
-    decode_user_input, decision_from_parent_result, permission_request_params,
+    decision_from_parent_result, decode_user_input, permission_request_params,
 };
 use crate::codex::{
     AppServer, AppServerError, CodexSpawnFactory, TurnStreamEvent, acp_prompt_to_turn_input,
     default_spawn_factory, map_notification,
 };
+
+/// Repository-local paths that a Codex turn may write in addition to the
+/// ordinary workspace. Discovery never follows metadata files or symlinks.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RepositoryAccess {
+    root: PathBuf,
+    writable_roots: Vec<PathBuf>,
+}
+
+impl RepositoryAccess {
+    fn discover(root: &Path) -> Self {
+        let root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+        let writable_roots = [".git", ".jj"]
+            .into_iter()
+            .map(|name| root.join(name))
+            .filter(|path| {
+                std::fs::symlink_metadata(path).is_ok_and(|metadata| metadata.file_type().is_dir())
+            })
+            .collect();
+        Self {
+            root,
+            writable_roots,
+        }
+    }
+}
 
 /// Errors returned from session operations (mapped to JSON-RPC by the loop).
 #[derive(Debug)]
@@ -68,6 +93,9 @@ impl From<AppServerError> for AgentError {
 pub(crate) struct Agent {
     /// Known ACP session handles (Codex thread ids).
     sessions: HashSet<String>,
+    /// Repository access context by Codex thread id. Unlike `sessions`, this
+    /// survives app-server heat loss and is refreshed on every ACP open/load.
+    repository_access: HashMap<String, RepositoryAccess>,
     /// Process-hot app-server, if any.
     hot: Option<AppServer>,
     /// Spawn factory for official (or scripted) `codex app-server`.
@@ -84,6 +112,7 @@ impl Agent {
     pub(crate) fn with_factory(factory: CodexSpawnFactory) -> Self {
         Self {
             sessions: HashSet::new(),
+            repository_access: HashMap::new(),
             hot: None,
             factory,
             in_flight: None,
@@ -119,6 +148,7 @@ impl Agent {
     /// Open a new session: ensure heat, `thread/start`, return thread id.
     pub(crate) async fn session_new(&mut self, params: &Value) -> Result<Value, AgentError> {
         let cwd = cwd_from_params(params);
+        let repository_access = RepositoryAccess::discover(&cwd);
         let model = model_from_params(params);
 
         self.ensure_hot().await?;
@@ -127,6 +157,8 @@ impl Agent {
             .thread_start(&cwd.to_string_lossy(), model.as_deref())
             .await?;
         self.sessions.insert(thread_id.clone());
+        self.repository_access
+            .insert(thread_id.clone(), repository_access);
         Ok(json!({ "sessionId": thread_id }))
     }
 
@@ -138,14 +170,15 @@ impl Agent {
             .ok_or_else(|| AgentError::InvalidParams("session/load missing sessionId".into()))?
             .to_string();
         let cwd = cwd_from_params(params);
-        let _ = cwd; // resume uses thread id; cwd optional override later if needed
+        let repository_access = RepositoryAccess::discover(&cwd);
         let _ = model_from_params(params);
 
         self.ensure_hot().await?;
         let hot = self.hot.as_mut().expect("ensure_hot leaves hot set");
         match hot.thread_resume(&session_id).await {
             Ok(id) => {
-                self.sessions.insert(id);
+                self.sessions.insert(id.clone());
+                self.repository_access.insert(id, repository_access);
                 Ok(json!({}))
             }
             Err(e) if e.is_session_not_found() => Err(AgentError::SessionNotFound(e.to_string())),
@@ -226,8 +259,20 @@ impl Agent {
         R: tokio::io::AsyncBufRead + Unpin + Send,
         W: FnMut(Value) -> Result<(), AgentError> + Send,
     {
+        let writable_roots = self
+            .repository_access
+            .get(session_id)
+            .map(|access| access.writable_roots.clone())
+            .ok_or_else(|| {
+                AgentError::InvalidParams(format!(
+                    "session/prompt has no repository context for {session_id}"
+                ))
+            })?;
         let hot = self.hot.as_mut().expect("hot after ensure");
-        let turn_id = match hot.turn_start(session_id, input, model).await {
+        let turn_id = match hot
+            .turn_start(session_id, input, model, &writable_roots)
+            .await
+        {
             Ok(id) => id,
             Err(e) => {
                 self.in_flight = None;
@@ -431,6 +476,7 @@ def err(id, message):
 
 threads = set()
 turn_n = 0
+policy_rejected = False
 
 for line in sys.stdin:
     line = line.strip()
@@ -520,6 +566,12 @@ for line in sys.stdin:
     elif method == "turn/start":
         turn_n += 1
         tid = params.get("threadId") or ""
+        inputs = params.get("input") or []
+        if (not policy_rejected
+                and any(block.get("text") == "reject-policy" for block in inputs if isinstance(block, dict))):
+            policy_rejected = True
+            err(mid, "sandbox policy rejected")
+            continue
         turn_id = f"turn-{turn_n}"
         turn = {"id": turn_id, "items": [], "status": "inProgress"}
         reply(mid, {"turn": turn})
@@ -534,7 +586,7 @@ for line in sys.stdin:
                 "threadId": tid,
                 "turnId": turn_id,
                 "itemId": "msg-1",
-                "delta": "echo-ok",
+                "delta": json.dumps(params.get("sandboxPolicy")),
             },
         }), flush=True)
         print(json.dumps({
@@ -585,11 +637,16 @@ for line in sys.stdin:
         })
     }
 
-    async fn prompt_ok(agent: &mut Agent, session_id: &str, text: &str) -> Value {
-        let mut sink = |_u: Value| {};
+    async fn prompt_with_updates(
+        agent: &mut Agent,
+        session_id: &str,
+        text: &str,
+    ) -> Result<(Value, Vec<Value>), AgentError> {
+        let mut updates = Vec::new();
+        let mut sink = |u: Value| updates.push(u);
         let mut parent = tokio::io::BufReader::new(tokio::io::empty());
         let mut write = |_m: Value| -> Result<(), AgentError> { Ok(()) };
-        agent
+        let result = agent
             .run_prompt(
                 &json!({
                     "sessionId": session_id,
@@ -599,8 +656,27 @@ for line in sys.stdin:
                 &mut parent,
                 &mut write,
             )
+            .await?;
+        Ok((result, updates))
+    }
+
+    async fn prompt_ok(agent: &mut Agent, session_id: &str, text: &str) -> Value {
+        prompt_with_updates(agent, session_id, text)
             .await
             .unwrap()
+            .0
+    }
+
+    fn sandbox_policy(updates: &[Value]) -> Value {
+        let text = updates
+            .iter()
+            .find_map(|update| {
+                update
+                    .pointer("/update/content/text")
+                    .and_then(Value::as_str)
+            })
+            .expect("scripted app-server emits sandbox policy as assistant text");
+        serde_json::from_str(text).expect("sandbox policy JSON")
     }
 
     /// Profile updates are delivered while the turn runs (not only after stop).
@@ -764,6 +840,125 @@ for line in sys.stdin:
         );
         let rpc = err.to_rpc_value();
         assert_eq!(rpc["data"]["code"], "FS_NOT_FOUND");
+        agent.cancel(None).await;
+    }
+
+    /// @spec harness/openai-codex Repository-scoped VCS access: Direct repository metadata is writable on every turn
+    #[tokio::test]
+    async fn direct_repository_metadata_is_writable_on_every_turn() {
+        let repository = tempfile::tempdir().unwrap();
+        std::fs::create_dir(repository.path().join(".git")).unwrap();
+        std::fs::create_dir(repository.path().join(".jj")).unwrap();
+        let root = repository.path().canonicalize().unwrap();
+        let expected_roots = json!([
+            root.join(".git").to_string_lossy(),
+            root.join(".jj").to_string_lossy(),
+        ]);
+
+        let mut agent = Agent::with_factory(scripted_factory());
+        let sid = agent
+            .session_new(&json!({ "cwd": repository.path().to_string_lossy() }))
+            .await
+            .unwrap()["sessionId"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        for text in ["first", "second"] {
+            let (_, updates) = prompt_with_updates(&mut agent, &sid, text).await.unwrap();
+            let policy = sandbox_policy(&updates);
+            assert_eq!(policy["type"], "workspaceWrite");
+            assert_eq!(policy["writableRoots"], expected_roots);
+        }
+        agent.cancel(None).await;
+    }
+
+    /// @spec harness/openai-codex Repository-scoped VCS access: External metadata indirection is not granted
+    #[test]
+    fn external_metadata_indirection_is_not_granted() {
+        let repository = tempfile::tempdir().unwrap();
+        let external = tempfile::tempdir().unwrap();
+        std::fs::write(
+            repository.path().join(".git"),
+            format!("gitdir: {}", external.path().display()),
+        )
+        .unwrap();
+
+        let access = RepositoryAccess::discover(repository.path());
+
+        assert_eq!(access.root, repository.path().canonicalize().unwrap());
+        assert!(
+            access.writable_roots.is_empty(),
+            "a .git file must not grant its external target: {access:?}"
+        );
+    }
+
+    /// @spec harness/openai-codex Repository-scoped VCS access: Resumed and restarted sessions reapply refreshed repository access
+    #[tokio::test]
+    async fn resumed_restarted_session_reapplies_refreshed_repository_access() {
+        let repository = tempfile::tempdir().unwrap();
+        std::fs::create_dir(repository.path().join(".git")).unwrap();
+        let root = repository.path().canonicalize().unwrap();
+        let mut agent = Agent::with_factory(scripted_factory());
+        let sid = agent
+            .session_new(&json!({ "cwd": repository.path().to_string_lossy() }))
+            .await
+            .unwrap()["sessionId"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        let (_, first_updates) = prompt_with_updates(&mut agent, &sid, "first")
+            .await
+            .unwrap();
+        assert_eq!(
+            sandbox_policy(&first_updates)["writableRoots"],
+            json!([root.join(".git").to_string_lossy()])
+        );
+        agent.cancel(Some(&sid)).await;
+        assert!(!agent.has_hot_app_server());
+
+        std::fs::create_dir(repository.path().join(".jj")).unwrap();
+        agent
+            .session_load(&json!({
+                "sessionId": &sid,
+                "cwd": repository.path().to_string_lossy(),
+            }))
+            .await
+            .unwrap();
+        let (_, resumed_updates) = prompt_with_updates(&mut agent, &sid, "resumed")
+            .await
+            .unwrap();
+        assert_eq!(
+            sandbox_policy(&resumed_updates)["writableRoots"],
+            json!([
+                root.join(".git").to_string_lossy(),
+                root.join(".jj").to_string_lossy(),
+            ])
+        );
+        agent.cancel(None).await;
+    }
+
+    /// @spec harness/openai-codex Repository-scoped VCS access: A rejected repository policy does not trigger a weaker retry
+    #[tokio::test]
+    async fn rejected_repository_policy_does_not_trigger_weaker_retry() {
+        let repository = tempfile::tempdir().unwrap();
+        std::fs::create_dir(repository.path().join(".git")).unwrap();
+        let mut agent = Agent::with_factory(scripted_factory());
+        let sid = agent
+            .session_new(&json!({ "cwd": repository.path().to_string_lossy() }))
+            .await
+            .unwrap()["sessionId"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        let result = prompt_with_updates(&mut agent, &sid, "reject-policy").await;
+
+        assert!(
+            matches!(result, Err(AgentError::Process(ref message)) if message.contains("sandbox policy rejected")),
+            "the first policy rejection must surface without a retry: {result:?}"
+        );
         agent.cancel(None).await;
     }
 

@@ -18,7 +18,11 @@ enum InstallLayout {
 
 const HARNESS_COMMAND_DIR: &[(&str, &str, InstallLayout)] = &[
     ("claude", ".claude/commands", InstallLayout::FlatMarkdown),
-    ("opencode", ".opencode/commands", InstallLayout::FlatMarkdown),
+    (
+        "opencode",
+        ".opencode/commands",
+        InstallLayout::FlatMarkdown,
+    ),
     ("codex", ".agents/skills", InstallLayout::SkillDirs),
 ];
 
@@ -70,11 +74,7 @@ fn supported_harnesses() -> Vec<&'static str> {
         .collect()
 }
 
-fn install_commands(
-    harness: &str,
-    target_dir: &Path,
-    layout: InstallLayout,
-) -> anyhow::Result<()> {
+fn install_commands(harness: &str, target_dir: &Path, layout: InstallLayout) -> anyhow::Result<()> {
     match layout {
         InstallLayout::FlatMarkdown => {
             for (filename, body) in content::command_files(harness) {

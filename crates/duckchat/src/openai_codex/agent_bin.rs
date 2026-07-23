@@ -169,8 +169,8 @@ mod tests {
         {
             let _guard = ENV_LOCK.lock().unwrap();
             // No env override, no sibling, no PATH hit → resolve fails with Spawn.
-            let err = resolve_with(None, Some(Path::new("/no/such/duckboard")), |_| None)
-                .unwrap_err();
+            let err =
+                resolve_with(None, Some(Path::new("/no/such/duckboard")), |_| None).unwrap_err();
             assert!(matches!(err, Error::Spawn(_)), "got {err:?}");
         }
 
@@ -232,9 +232,7 @@ mod tests {
         .unwrap();
         assert_eq!(from_path, path_hit);
         assert!(
-            from_path
-                .file_name()
-                .is_some_and(|n| n == CODEX_ACP_BIN),
+            from_path.file_name().is_some_and(|n| n == CODEX_ACP_BIN),
             "PATH resolution must target the native agent, not a JS runtime"
         );
 

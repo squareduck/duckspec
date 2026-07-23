@@ -35,14 +35,12 @@ pub fn next_action_list(
 ) -> Vec<NextAction> {
     if session_empty {
         if let Some(inh) = inherited
-            && !inh.is_empty() {
-                return inh.to_vec();
-            }
+            && !inh.is_empty()
+        {
+            return inh.to_vec();
+        }
         return match crate::fast_response::lifecycle_send_text(bootstrap) {
-            Some(send) => vec![NextAction {
-                send,
-                reason: None,
-            }],
+            Some(send) => vec![NextAction { send, reason: None }],
             None => Vec::new(),
         };
     }
@@ -54,10 +52,7 @@ pub fn next_action_list(
 
 /// Settled oneshot list when agent input hints is on; otherwise empty.
 /// At most three entries are kept (parser may already cap).
-pub fn oneshot_display_prompts(
-    oneshot_replies: &[String],
-    agent_input_hints: bool,
-) -> Vec<String> {
+pub fn oneshot_display_prompts(oneshot_replies: &[String], agent_input_hints: bool) -> Vec<String> {
     if !agent_input_hints {
         return Vec::new();
     }
@@ -143,11 +138,7 @@ pub fn next_ghost_text(
 }
 
 /// Whether to show the tab-available marker for multi next actions.
-pub fn next_tab_marker_visible(
-    input_empty: bool,
-    is_streaming: bool,
-    actions_len: usize,
-) -> bool {
+pub fn next_tab_marker_visible(input_empty: bool, is_streaming: bool, actions_len: usize) -> bool {
     input_empty && !is_streaming && actions_len > 1
 }
 
@@ -182,11 +173,7 @@ pub fn cycle_active_index(len: usize, active_idx: usize, delta: i8) -> usize {
 
 /// Clamp `active_idx` into `[0, len)` (or `0` when empty) after the list changes.
 pub fn clamp_active_index(len: usize, active_idx: usize) -> usize {
-    if len == 0 {
-        0
-    } else {
-        active_idx.min(len - 1)
-    }
+    if len == 0 { 0 } else { active_idx.min(len - 1) }
 }
 
 /// Active next-action index after rebuilding the list.
@@ -335,12 +322,7 @@ Done.
                 reason: None,
             },
         ];
-        let got = next_action_list(
-            true,
-            Some("/ds-explore"),
-            None,
-            Some(&inherited),
-        );
+        let got = next_action_list(true, Some("/ds-explore"), None, Some(&inherited));
         // THEN exactly the inherited tokens in order (not lifecycle)
         assert_eq!(got.len(), 2);
         assert_eq!(got[0].send, "/ds-spec");
@@ -543,7 +525,10 @@ Done.
     #[test]
     fn superseded_generation_does_not_arm_oneshot() {
         let applied = apply_oneshot_if_current(5, 4, Ok(vec!["stale".into()]));
-        assert!(applied.is_none(), "superseded gen must not replace the list");
+        assert!(
+            applied.is_none(),
+            "superseded gen must not replace the list"
+        );
     }
 
     // @spec chat/default-prompts Oneshot readiness: Failed or timed-out oneshot settles without presenting suggestions
@@ -558,7 +543,12 @@ Done.
         // Ready with empty list — no suggestions to present
         assert!(list.is_empty());
         assert!(!oneshot_chips_allowed(false, false, 0, true, list.len()));
-        assert!(!oneshot_under_input_chrome_visible(true, false, false, list.len()));
+        assert!(!oneshot_under_input_chrome_visible(
+            true,
+            false,
+            false,
+            list.len()
+        ));
     }
 
     // @spec chat/default-prompts Oneshot readiness: Agent handle end while pending leaves suggestions ready empty
@@ -618,10 +608,8 @@ Done.
 
     #[test]
     fn oneshot_display_keeps_up_to_three() {
-        let display = oneshot_display_prompts(
-            &["a".into(), "b".into(), "c".into(), "d".into()],
-            true,
-        );
+        let display =
+            oneshot_display_prompts(&["a".into(), "b".into(), "c".into(), "d".into()], true);
         assert_eq!(display, vec!["a", "b", "c"]);
         assert!(oneshot_display_prompts(&["a".into()], false).is_empty());
     }

@@ -277,7 +277,9 @@ mod tests {
         // Ordinary tool control → auto-allow; no permission_request_params used.
         let decision = auto_allow_ordinary_tool();
         match decision {
-            PermissionDecision::Allow { updated_input: None } => {}
+            PermissionDecision::Allow {
+                updated_input: None,
+            } => {}
             other => panic!("expected bare allow, got {other:?}"),
         }
         let wire = encode_control_response("perm_bash", &decision);

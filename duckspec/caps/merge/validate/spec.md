@@ -33,7 +33,7 @@ H1), it SHALL return a deletion outcome carrying no rendered text.
 - **AND** no rendered text is produced
 
 > test: code
-> - crates/duckpond/tests/merge.rs:162
+> - crates/duckpond/tests/merge.rs:165
 
 ### Scenario: A doc merge is validated with the document parser
 
@@ -47,7 +47,7 @@ H1), it SHALL return a deletion outcome carrying no rendered text.
 - **THEN** the result is an update carrying the rendered markdown and the parsed document
 
 > test: code
-> - crates/duckpond/tests/merge.rs:173
+> - crates/duckpond/tests/merge.rs:176
 
 ## Requirement: Failure classification
 
@@ -66,7 +66,7 @@ remaining errors.
 - **THEN** the merge returns a merge error
 
 > test: code
-> - crates/duckpond/tests/merge.rs:196
+> - crates/duckpond/tests/merge.rs:199
 
 ### Scenario: Merged text that violates its schema returns a parse error
 
@@ -78,7 +78,7 @@ remaining errors.
 - **THEN** the merge returns a parse error
 
 > test: code
-> - crates/duckpond/tests/merge.rs:218
+> - crates/duckpond/tests/merge.rs:221
 
 ### Scenario: A multi-error failure renders as one summarized line
 
@@ -90,4 +90,4 @@ remaining errors.
   errors
 
 > test: code
-> - crates/duckpond/tests/merge.rs:241
+> - crates/duckpond/tests/merge.rs:244

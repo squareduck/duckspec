@@ -25,8 +25,8 @@ pub type PermissionResolver<'a> = dyn FnMut(
         String,
         Value,
     ) -> Pin<Box<dyn Future<Output = Result<PermissionDecision, DuplexError>> + Send + 'a>>
-        + Send
-        + 'a;
+    + Send
+    + 'a;
 
 /// Arguments used when spawning an inner Claude process.
 #[derive(Debug, Clone)]
@@ -456,7 +456,6 @@ for line in sys.stdin:
             cmd
         })
     }
-
 
     #[tokio::test]
     async fn open_with_first_prompt_surfaces_native_session_id() {

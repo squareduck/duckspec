@@ -50,9 +50,7 @@ fn map_item_started(params: &Value, session_id: &str) -> Vec<Value> {
     };
     match item.get("type").and_then(Value::as_str) {
         Some("commandExecution") | Some("mcpToolCall") | Some("webSearch") | Some("fileChange") => {
-            tool_call_from_item(item, session_id)
-                .into_iter()
-                .collect()
+            tool_call_from_item(item, session_id).into_iter().collect()
         }
         // agentMessage streams via item/agentMessage/delta; no started map.
         _ => Vec::new(),
@@ -76,13 +74,14 @@ fn map_item_completed(params: &Value, session_id: &str) -> Vec<Value> {
 }
 
 fn map_token_usage(params: &Value, session_id: &str) -> Vec<Value> {
-    // Prefer cumulative total.totalTokens; fall back to last.totalTokens.
+    // The latest turn approximates active context. Cumulative thread usage is
+    // only a compatibility fallback for payloads that omit the latest turn.
     let total = params
-        .pointer("/tokenUsage/total/totalTokens")
+        .pointer("/tokenUsage/last/totalTokens")
         .and_then(Value::as_u64)
         .or_else(|| {
             params
-                .pointer("/tokenUsage/last/totalTokens")
+                .pointer("/tokenUsage/total/totalTokens")
                 .and_then(Value::as_u64)
         });
     let Some(total) = total else {
@@ -154,10 +153,7 @@ fn tool_title_and_input(item: &Value) -> (String, Value) {
             } else {
                 format!("{server}/{tool}")
             };
-            (
-                title,
-                item.get("arguments").cloned().unwrap_or(json!({})),
-            )
+            (title, item.get("arguments").cloned().unwrap_or(json!({})))
         }
         Some("webSearch") => (
             "webSearch".into(),
@@ -257,10 +253,7 @@ mod tests {
         });
         let updates = map_notification(&notif, "sess-1");
         assert_eq!(updates.len(), 1);
-        assert_eq!(
-            updates[0]["update"]["sessionUpdate"],
-            "agent_message_chunk"
-        );
+        assert_eq!(updates[0]["update"]["sessionUpdate"], "agent_message_chunk");
         assert_eq!(updates[0]["update"]["content"]["text"], "hello from codex");
         assert_eq!(updates[0]["sessionId"], "sess-1");
     }
@@ -346,8 +339,46 @@ mod tests {
         });
         let updates = map_notification(&notif, "sess-1");
         assert_eq!(updates.len(), 1);
-        assert_eq!(updates[0]["_meta"]["totalTokens"], 160);
+        assert_eq!(updates[0]["_meta"]["totalTokens"], 15);
         assert_eq!(updates[0]["sessionId"], "sess-1");
+    }
+
+    /// @spec harness/openai-codex Profile-compatible event emission: Cumulative token telemetry is used when latest-turn usage is absent
+    #[test]
+    fn cumulative_token_telemetry_is_fallback_when_latest_is_absent() {
+        let notif = json!({
+            "method": "thread/tokenUsage/updated",
+            "params": {
+                "tokenUsage": {
+                    "total": {
+                        "totalTokens": 160
+                    }
+                }
+            }
+        });
+
+        let updates = map_notification(&notif, "sess-1");
+
+        assert_eq!(updates.len(), 1);
+        assert_eq!(updates[0]["_meta"]["totalTokens"], 160);
+    }
+
+    /// @spec harness/openai-codex Profile-compatible event emission: Missing token totals emit no usage update
+    #[test]
+    fn missing_token_totals_emit_no_usage_update() {
+        let notif = json!({
+            "method": "thread/tokenUsage/updated",
+            "params": {
+                "tokenUsage": {
+                    "last": {},
+                    "total": {}
+                }
+            }
+        });
+
+        let updates = map_notification(&notif, "sess-1");
+
+        assert!(updates.is_empty());
     }
 
     #[test]

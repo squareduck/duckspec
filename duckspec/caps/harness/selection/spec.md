@@ -54,7 +54,7 @@ available.
 - **THEN** the preferred model is the per-chat pin
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:992
+> - crates/duckboard/src/area/interaction.rs:985
 
 ### Scenario: A project override is preferred over the global default
 
@@ -65,7 +65,7 @@ available.
 - **THEN** the preferred model is the project override
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:1007
+> - crates/duckboard/src/area/interaction.rs:1000
 
 ### Scenario: The global default is preferred when pin and project override are unset
 
@@ -76,7 +76,7 @@ available.
 - **THEN** the preferred model is the global default
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:1021
+> - crates/duckboard/src/area/interaction.rs:1014
 
 ### Scenario: A preferred model absent from the catalog is not available
 
@@ -86,7 +86,7 @@ available.
 - **THEN** the model for the turn is not available
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:1034
+> - crates/duckboard/src/area/interaction.rs:1027
 
 ### Scenario: With no preferred model at any cascade level, the model is not available
 
@@ -97,7 +97,7 @@ available.
 - **THEN** the model for the turn is not available
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:1053
+> - crates/duckboard/src/area/interaction.rs:1046
 
 ## Requirement: Harness dispatch
 
@@ -113,7 +113,7 @@ of models offered for selection SHALL include the models of every registered har
 - **THEN** the provider that runs the turn is the one identified by that harness
 
 > test: code
-> - crates/duckboard/src/agent.rs:482
+> - crates/duckboard/src/agent.rs:469
 
 ### Scenario: The offered models span every registered harness
 
@@ -122,7 +122,7 @@ of models offered for selection SHALL include the models of every registered har
 - **THEN** the list includes models from every registered harness
 
 > test: code
-> - crates/duckboard/src/agent.rs:502
+> - crates/duckboard/src/agent.rs:489
 
 ## Requirement: Global default model setting
 
@@ -151,7 +151,7 @@ model in catalog order.
 - **THEN** the global default is `grok` / `grok-4.5`
 
 > test: code
-> - crates/duckboard/src/agent.rs:743
+> - crates/duckboard/src/agent.rs:722
 
 ### Scenario: An unset global default is seeded from the first catalog model when the former built-in is absent
 
@@ -161,7 +161,7 @@ model in catalog order.
 - **THEN** the global default is the first model in catalog order
 
 > test: code
-> - crates/duckboard/src/agent.rs:766
+> - crates/duckboard/src/agent.rs:745
 
 ## Requirement: Send requires an available model
 
@@ -178,4 +178,4 @@ available. The application SHALL NOT invent a substitute model in that case.
 - **AND** no substitute model is chosen for the turn
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:1068
+> - crates/duckboard/src/area/interaction.rs:1061

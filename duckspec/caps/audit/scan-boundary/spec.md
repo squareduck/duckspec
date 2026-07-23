@@ -21,7 +21,7 @@ than cause an error.
 - **THEN** only the backlink inside the configured directory is returned
 
 > test: code
-> - crates/duckpond/src/audit.rs:1222
+> - crates/duckpond/src/audit.rs:1221
 
 ### Scenario: Empty test_paths scans from the project root
 
@@ -31,7 +31,7 @@ than cause an error.
 - **THEN** the backlink is returned
 
 > test: code
-> - crates/duckpond/src/audit.rs:1242
+> - crates/duckpond/src/audit.rs:1241
 
 ## Requirement: Excluded paths
 
@@ -55,7 +55,7 @@ empty when absent; a non-array value SHALL fail config loading with
 - **THEN** only the backlink in the non-excluded location is returned
 
 > test: code
-> - crates/duckpond/src/audit.rs:1258
+> - crates/duckpond/src/audit.rs:1261
 
 ### Scenario: Non-array exclude raises BadExclude
 
@@ -89,4 +89,4 @@ nested projects SHALL NOT suppress backlinks elsewhere in the enclosing project.
 - **AND** the backlink in the enclosing project is returned
 
 > test: code
-> - crates/duckpond/src/audit.rs:1287
+> - crates/duckpond/src/audit.rs:1290

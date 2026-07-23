@@ -20,7 +20,7 @@ list alone SHALL NOT make the scenario linked.
 - **THEN** the scenario is linked
 
 > test: code
-> - crates/duckpond/tests/change_coverage.rs:117
+> - crates/duckpond/tests/change_coverage.rs:118
 
 ### Scenario: Marker path list without a source backlink leaves the scenario open
 
@@ -30,7 +30,7 @@ list alone SHALL NOT make the scenario linked.
 - **THEN** the scenario is open
 
 > test: code
-> - crates/duckpond/tests/change_coverage.rs:130
+> - crates/duckpond/tests/change_coverage.rs:131
 
 ### Scenario: A linked scenario is not reported as open
 
@@ -39,7 +39,7 @@ list alone SHALL NOT make the scenario linked.
 - **THEN** the scenario is not reported as open
 
 > test: code
-> - crates/duckpond/tests/change_coverage.rs:144
+> - crates/duckpond/tests/change_coverage.rs:145
 
 ## Requirement: Snapshot is change-introduced test code only
 
@@ -57,7 +57,7 @@ appear in the snapshot.
 - **THEN** the snapshot includes that scenario
 
 > test: code
-> - crates/duckpond/tests/change_coverage.rs:160
+> - crates/duckpond/tests/change_coverage.rs:161
 
 ### Scenario: Delta-introduced test:code scenario is included
 
@@ -69,7 +69,7 @@ appear in the snapshot.
 - **THEN** the snapshot includes that scenario
 
 > test: code
-> - crates/duckpond/tests/change_coverage.rs:171
+> - crates/duckpond/tests/change_coverage.rs:172
 
 ### Scenario: Pre-existing base scenario is excluded
 
@@ -79,7 +79,7 @@ appear in the snapshot.
 - **THEN** the snapshot does not include that scenario
 
 > test: code
-> - crates/duckpond/tests/change_coverage.rs:198
+> - crates/duckpond/tests/change_coverage.rs:199
 
 ### Scenario: Non-test:code scenario is excluded
 
@@ -88,7 +88,7 @@ appear in the snapshot.
 - **THEN** the snapshot does not include that scenario
 
 > test: code
-> - crates/duckpond/tests/change_coverage.rs:225
+> - crates/duckpond/tests/change_coverage.rs:226
 
 ## Requirement: Change status surfaces the partition
 
@@ -126,4 +126,4 @@ depend on step checkbox state.
 - **AND** linkage is the same as when the step task is unchecked
 
 > test: code
-> - crates/duckpond/tests/change_coverage.rs:251
+> - crates/duckpond/tests/change_coverage.rs:252

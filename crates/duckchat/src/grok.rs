@@ -285,7 +285,8 @@ mod tests {
     #[test]
     fn resolved_image_attachment_is_sent_as_acp_image_block() {
         let mut req = TurnRequest::new("see [clip.png](attach:a1)", std::env::temp_dir());
-        req.attachments.insert("a1".to_string(), img_att("clip.png"));
+        req.attachments
+            .insert("a1".to_string(), img_att("clip.png"));
 
         let blocks = assemble_content(&req);
         let image = blocks
@@ -304,11 +305,9 @@ mod tests {
     /// @spec harness/grok Prompt attachments: Surrounding text is preserved as text blocks
     #[test]
     fn surrounding_text_is_preserved_as_text_blocks() {
-        let mut req = TurnRequest::new(
-            "before [clip.png](attach:a1) after",
-            std::env::temp_dir(),
-        );
-        req.attachments.insert("a1".to_string(), img_att("clip.png"));
+        let mut req = TurnRequest::new("before [clip.png](attach:a1) after", std::env::temp_dir());
+        req.attachments
+            .insert("a1".to_string(), img_att("clip.png"));
 
         let blocks = assemble_content(&req);
         assert_eq!(blocks.len(), 3);
@@ -396,7 +395,10 @@ mod tests {
     #[test]
     fn title_model_falls_back_when_preferred_absent() {
         // Preferred fast model absent → selects another available model.
-        let without_fast = vec![model("grok-4.5", Some(256_000)), model("grok-3", Some(131_072))];
+        let without_fast = vec![
+            model("grok-4.5", Some(256_000)),
+            model("grok-3", Some(131_072)),
+        ];
         assert_eq!(pick_title_model(&without_fast).as_deref(), Some("grok-4.5"));
 
         // When present, it is preferred.
@@ -447,7 +449,9 @@ mod tests {
             "launch must invoke the native grok binary: {args:?}"
         );
         assert!(
-            !args.iter().any(|a| a.contains("duckchat-claude") || a.contains("grok-proxy")),
+            !args
+                .iter()
+                .any(|a| a.contains("duckchat-claude") || a.contains("grok-proxy")),
             "must not route through an intermediate Grok-only ACP proxy: {args:?}"
         );
         // Agent stdio mode flags on the final argv (client does not add them).

@@ -37,10 +37,7 @@ pub fn run(path: Option<String>, dry: bool) -> anyhow::Result<()> {
 
         if layout::classify(relative).is_none() {
             if single_file_mode {
-                anyhow::bail!(
-                    "not a recognized duckspec artifact: {}",
-                    relative.display()
-                );
+                anyhow::bail!("not a recognized duckspec artifact: {}", relative.display());
             }
             continue;
         }
@@ -114,11 +111,7 @@ mod tests {
         fs::create_dir_all(&duckspec).unwrap();
 
         let unwrapped = "# Hello\n\nThis is a long summary that should remain on one line because it fits comfortably under ninety characters wide.\n";
-        let path = write(
-            &duckspec,
-            "caps/things/doc.md",
-            unwrapped,
-        );
+        let path = write(&duckspec, "caps/things/doc.md", unwrapped);
 
         // Run via the public format_artifact (the CLI shells out to this).
         let cfg = duckpond::config::FormatConfig::default();

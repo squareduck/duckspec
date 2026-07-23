@@ -24,7 +24,7 @@ project state never makes the agent ask which change to act on.
 - **AND** it directs disambiguation to the case where the user names a different change
 
 > test: code
-> - crates/duckboard/src/scope.rs:226
+> - crates/duckboard/src/scope.rs:224
 
 ## Requirement: Lifecycle reflection
 
@@ -43,7 +43,7 @@ report completion.
 - **AND** it suggests the apply stage as the next step
 
 > test: code
-> - crates/duckboard/src/area/change.rs:2489
+> - crates/duckboard/src/area/change.rs:2493
 
 ### Scenario: A change with only a proposal reports the design next-stage
 
@@ -52,7 +52,7 @@ report completion.
 - **THEN** it suggests the design stage as the next step
 
 > test: code
-> - crates/duckboard/src/area/change.rs:2539
+> - crates/duckboard/src/area/change.rs:2543
 
 ### Scenario: A change with all steps complete reports completion and the archive next-stage
 
@@ -63,7 +63,7 @@ report completion.
 - **AND** it suggests the archive stage as the next step
 
 > test: code
-> - crates/duckboard/src/area/change.rs:2507
+> - crates/duckboard/src/area/change.rs:2511
 
 ### Scenario: All steps complete with a review suggests the step next-stage
 
@@ -73,7 +73,7 @@ report completion.
 - **THEN** it suggests the step stage as the next step
 
 > test: code
-> - crates/duckboard/src/area/change.rs:2524
+> - crates/duckboard/src/area/change.rs:2528
 
 ## Requirement: Non-change scope orientation
 
@@ -90,7 +90,7 @@ scope and SHALL NOT report change progress or a change next-stage.
 - **AND** it does not report change progress or a change next-stage
 
 > test: code
-> - crates/duckboard/src/scope.rs:285
+> - crates/duckboard/src/scope.rs:283
 
 ### Scenario: A capability-tree scope carries no change facts
 
@@ -101,7 +101,7 @@ scope and SHALL NOT report change progress or a change next-stage.
 - **AND** it does not report change progress or a change next-stage
 
 > test: code
-> - crates/duckboard/src/scope.rs:308
+> - crates/duckboard/src/scope.rs:306
 
 ### Scenario: A codex scope points at the codex tree
 
@@ -112,7 +112,7 @@ scope and SHALL NOT report change progress or a change next-stage.
 - **AND** it does not report change progress or a change next-stage
 
 > test: code
-> - crates/duckboard/src/scope.rs:335
+> - crates/duckboard/src/scope.rs:333
 
 ## Requirement: Reliable first-turn delivery
 
@@ -129,7 +129,7 @@ the same session.
 - **THEN** the orientation is part of the message body sent on that turn
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:1085
+> - crates/duckboard/src/area/interaction.rs:1080
 
 ### Scenario: Orientation is present when the project has no AGENTS.md
 
@@ -138,7 +138,7 @@ the same session.
 - **THEN** the orientation is part of the message body sent on that turn
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:1102
+> - crates/duckboard/src/area/interaction.rs:1097
 
 ### Scenario: A resumed session does not repeat the orientation
 
@@ -147,7 +147,7 @@ the same session.
 - **THEN** the orientation is not included again
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:1122
+> - crates/duckboard/src/area/interaction.rs:1117
 
 ## Requirement: Current review in orientation
 
@@ -171,7 +171,7 @@ reviews.
   `duckspec/changes/{name}/reviews/{filename}`
 
 > test: code
-> - crates/duckboard/src/area/change.rs:2563
+> - crates/duckboard/src/area/change.rs:2567
 
 ### Scenario: A change with no reviews reports no current review
 
@@ -180,7 +180,7 @@ reviews.
 - **THEN** it does not report a current review
 
 > test: code
-> - crates/duckboard/src/area/change.rs:2585
+> - crates/duckboard/src/area/change.rs:2592
 
 ### Scenario: Adding a review does not change reported step progress
 
@@ -190,4 +190,4 @@ reviews.
 - **THEN** both report the same step progress (done and total)
 
 > test: code
-> - crates/duckboard/src/area/change.rs:2600
+> - crates/duckboard/src/area/change.rs:2607

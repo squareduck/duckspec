@@ -2,9 +2,7 @@
 
 use iced::Task;
 use iced::advanced::widget::{Id, Operation, operation};
-use iced::widget::{
-    Space, button, column, container, pick_list, row, rule, scrollable, text,
-};
+use iced::widget::{Space, button, column, container, pick_list, row, rule, scrollable, text};
 use iced::{Element, Length, Rectangle, Vector};
 
 pub const CHAT_SCROLLABLE_ID: &str = "agent-chat-scroll";
@@ -63,7 +61,10 @@ pub enum Msg {
     /// Layout measure of the chat scrollable (viewport + content heights).
     /// Used to recompute the bottom-pin pad even when content fits the
     /// viewport and iced suppresses `on_scroll` notifications.
-    ChromeLayout { viewport_h: f32, content_h: f32 },
+    ChromeLayout {
+        viewport_h: f32,
+        content_h: f32,
+    },
 }
 
 // ── Model picker ─────────────────────────────────────────────────────────────
@@ -265,10 +266,7 @@ pub fn unresumable_stored_session(has_stored_agent_id: bool, will_resume: bool) 
 /// Whether the composer footer shows the resend-history hint. True only when
 /// the transcript is non-empty *and* a stored agent session is not resumable
 /// for the effective harness (typically after a harness switch).
-pub fn show_resend_history_hint(
-    has_messages: bool,
-    unresumable_stored_session: bool,
-) -> bool {
+pub fn show_resend_history_hint(has_messages: bool, unresumable_stored_session: bool) -> bool {
     has_messages && unresumable_stored_session
 }
 
@@ -413,10 +411,7 @@ pub fn build_transcript_segments(session: &ChatSession) -> Vec<TranscriptSeg> {
                     activity_index.clear();
                     append_answer(&mut segs, t, false);
                 }
-                (
-                    Role::Assistant,
-                    ContentBlock::ToolUse { id, name, input },
-                ) => {
+                (Role::Assistant, ContentBlock::ToolUse { id, name, input }) => {
                     // Structured questions use host chips, not Activity rows.
                     if is_host_choice_tool_name(name) {
                         continue;
@@ -437,10 +432,7 @@ pub fn build_transcript_segments(session: &ChatSession) -> Vec<TranscriptSeg> {
                         });
                     }
                 }
-                (
-                    Role::Assistant,
-                    ContentBlock::ToolResult { id, name, output },
-                ) => {
+                (Role::Assistant, ContentBlock::ToolResult { id, name, output }) => {
                     if is_host_choice_tool_name(name) {
                         continue;
                     }
@@ -464,15 +456,11 @@ pub fn build_transcript_segments(session: &ChatSession) -> Vec<TranscriptSeg> {
                 }
                 (_, ContentBlock::UserChoiceQuestion { text }) => {
                     activity_index.clear();
-                    segs.push(TranscriptSeg::UserChoiceQuestion {
-                        text: text.clone(),
-                    });
+                    segs.push(TranscriptSeg::UserChoiceQuestion { text: text.clone() });
                 }
                 (_, ContentBlock::UserChoiceAnswer { text }) => {
                     activity_index.clear();
-                    segs.push(TranscriptSeg::UserChoiceAnswer {
-                        text: text.clone(),
-                    });
+                    segs.push(TranscriptSeg::UserChoiceAnswer { text: text.clone() });
                 }
                 // Non-text user/system content (e.g. tools) is not expected
                 // on those roles — skip rather than invent a segment.
@@ -1140,9 +1128,9 @@ fn truncate_chars(s: &str, max: usize) -> &str {
 /// Index of the latest non-empty Answer (`BlockKind::Assistant`) block, if any.
 /// Empty Answer bodies are not band targets.
 pub fn last_answer_band_target(blocks: &[Block]) -> Option<usize> {
-    blocks.iter().rposition(|b| {
-        b.kind == BlockKind::Assistant && b.lines.iter().any(|l| !l.is_empty())
-    })
+    blocks
+        .iter()
+        .rposition(|b| b.kind == BlockKind::Assistant && b.lines.iter().any(|l| !l.is_empty()))
 }
 
 // ── Answer reply landmarks ──────────────────────────────────────────────────
@@ -1315,21 +1303,11 @@ impl Operation<()> for ScrollToAdjacentAnswer {
         let offset_y = self.measured_offset_y.unwrap_or(self.offset_y);
         let current =
             current_answer_for_reply_jumps(&anchors, &tops, offset_y, self.stick_to_bottom);
-        let target = target_answer_for_reply_jump(
-            &anchors,
-            &tops,
-            current,
-            self.go_prev,
-            offset_y,
-        );
+        let target = target_answer_for_reply_jump(&anchors, &tops, current, self.go_prev, offset_y);
         let Some(target_idx) = target else {
             return operation::Outcome::None;
         };
-        let Some(&(_, by)) = self
-            .collected_ys
-            .iter()
-            .find(|(i, _)| *i == target_idx)
-        else {
+        let Some(&(_, by)) = self.collected_ys.iter().find(|(i, _)| *i == target_idx) else {
             return operation::Outcome::None;
         };
         let target_y = (by - sy).max(0.0);
@@ -1502,12 +1480,9 @@ pub fn view<'a>(
         status.is_streaming,
         next_actions.len(),
     );
-    let ghost_body = crate::default_prompts::next_ghost_text(
-        status.is_streaming,
-        next_actions,
-        next_action_idx,
-    )
-    .unwrap_or("");
+    let ghost_body =
+        crate::default_prompts::next_ghost_text(status.is_streaming, next_actions, next_action_idx)
+            .unwrap_or("");
     let ghost = if ghost_body.is_empty() {
         String::new()
     } else if show_tab_marker {
@@ -1541,8 +1516,8 @@ pub fn view<'a>(
     // input's own text (container XS + TextEdit CONTENT_PAD = 12px).
     // Fill is measured against the *selected* model's window (`context_max`).
     // An unknown window yields no fill — raw token count only, no percentage.
-    let ctx_pct = context_fill(status.context_tokens, status.context_max)
-        .map(|fill| (fill * 100.0) as usize);
+    let ctx_pct =
+        context_fill(status.context_tokens, status.context_max).map(|fill| (fill * 100.0) as usize);
     let ctx_color = match ctx_pct {
         Some(pct) if pct >= 90 => theme::error(),
         Some(pct) if pct >= 75 => theme::warning(),
@@ -1575,13 +1550,12 @@ pub fn view<'a>(
     // harness-prefixed `label` via Display. Equality is on (harness, id).
     let mut selected_closed = status.selected_model.clone();
     selected_closed.label = selected_closed.closed_label.clone();
-    let model_pick_style = if crate::fast_response::awaiting_composer_chrome(
-        status.is_awaiting_user,
-    ) {
-        theme::pick_list_ghost_awaiting_style
-    } else {
-        theme::pick_list_ghost_style
-    };
+    let model_pick_style =
+        if crate::fast_response::awaiting_composer_chrome(status.is_awaiting_user) {
+            theme::pick_list_ghost_awaiting_style
+        } else {
+            theme::pick_list_ghost_style
+        };
     meta_inner = meta_inner.push(
         pick_list(
             status.model_choices,
@@ -1646,8 +1620,8 @@ pub fn view<'a>(
         ]
         .spacing(theme::SPACING_XS)
         .align_y(iced::Alignment::Center);
-        let pill_col = column![header_row, container(editor).width(Length::Fill)]
-            .spacing(theme::SPACING_XS);
+        let pill_col =
+            column![header_row, container(editor).width(Length::Fill)].spacing(theme::SPACING_XS);
         composer_col = composer_col.push(
             container(pill_col)
                 .padding([theme::SPACING_SM, theme::SPACING_MD])
@@ -1692,9 +1666,8 @@ pub fn view<'a>(
     // Horizontal padding here sums with TextEdit's internal CONTENT_PAD (8px)
     // to land the input's text at the same 12px the chat headers use.
     // Awaiting a user choice: quiet accent tint on the whole composer section.
-    let composer_style = if crate::fast_response::awaiting_composer_chrome(
-        status.is_awaiting_user,
-    ) {
+    let composer_style = if crate::fast_response::awaiting_composer_chrome(status.is_awaiting_user)
+    {
         theme::chat_composer_awaiting
     } else {
         theme::chat_input
@@ -1901,8 +1874,7 @@ fn view_thinking_block<'a>(
     } else {
         block.label.clone()
     };
-    let header =
-        secondary_segment_header(!collapsed, header_label, Msg::ToggleCollapse(idx));
+    let header = secondary_segment_header(!collapsed, header_label, Msg::ToggleCollapse(idx));
 
     let mut col = column![header].width(Length::Fill);
     if body_shown && let Some(ed) = editor {
@@ -2015,9 +1987,7 @@ fn format_number(n: usize) -> String {
 
 /// Option chrome: optional question chip, then numbered option chips.
 /// View chrome only until activation / settle commits host blocks.
-fn view_fast_response<'a>(
-    fr: &'a crate::fast_response::FastResponse,
-) -> Element<'a, Msg> {
+fn view_fast_response<'a>(fr: &'a crate::fast_response::FastResponse) -> Element<'a, Msg> {
     use crate::fast_response::{FastResponsePick, live_question_prompt, option_chip_label};
 
     let mut col = column![].spacing(theme::SPACING_XS);
@@ -2029,9 +1999,7 @@ fn view_fast_response<'a>(
     for (i, opt) in fr.options.iter().enumerate() {
         col = col.push(view_fast_response_chip(
             option_chip_label(i + 1, &opt.label),
-            FastResponsePick::Option {
-                id: opt.id.clone(),
-            },
+            FastResponsePick::Option { id: opt.id.clone() },
         ));
     }
 
@@ -2081,8 +2049,9 @@ fn view_fast_response_chip<'a>(
                 ..Default::default()
             };
             match status {
-                iced::widget::button::Status::Hovered
-                | iced::widget::button::Status::Pressed => base,
+                iced::widget::button::Status::Hovered | iced::widget::button::Status::Pressed => {
+                    base
+                }
                 _ => base,
             }
         })
@@ -2220,7 +2189,10 @@ mod tests {
         let choices = group_choices(models);
         // THEN each model appears under its owning harness — the choice carries
         // its model's harness and its label is presented under that harness.
-        let opus = choices.iter().find(|c| c.id.as_deref() == Some("opus")).unwrap();
+        let opus = choices
+            .iter()
+            .find(|c| c.id.as_deref() == Some("opus"))
+            .unwrap();
         assert_eq!(opus.harness.as_deref(), Some("claude-code"));
         assert!(opus.label.starts_with("Claude Code · "));
         let grok = choices
@@ -2461,7 +2433,10 @@ mod tests {
     fn known_claude_and_grok_tools_share_calm_labels() {
         // Claude-style names
         assert_eq!(
-            format_tool_summary("Read", r#"{"path":"crates/duckboard/src/widget/agent_chat.rs"}"#),
+            format_tool_summary(
+                "Read",
+                r#"{"path":"crates/duckboard/src/widget/agent_chat.rs"}"#
+            ),
             "Read · src/widget/agent_chat.rs"
         );
         assert_eq!(
@@ -2473,7 +2448,10 @@ mod tests {
             "Grep · \"format_tool_summary\""
         );
         assert_eq!(
-            format_tool_summary("Edit", r#"{"file_path":"src/state.rs","old_string":"a","new_string":"b"}"#),
+            format_tool_summary(
+                "Edit",
+                r#"{"file_path":"src/state.rs","old_string":"a","new_string":"b"}"#
+            ),
             "Edit · src/state.rs"
         );
 
@@ -2483,10 +2461,7 @@ mod tests {
             "Read · foo.rs"
         );
         assert_eq!(
-            format_tool_summary(
-                "run_terminal_command",
-                r#"{"command":"ds status"}"#
-            ),
+            format_tool_summary("run_terminal_command", r#"{"command":"ds status"}"#),
             "Shell · ds status"
         );
         assert_eq!(
@@ -2507,13 +2482,22 @@ mod tests {
         );
         assert_eq!(summary, "Some obscure tool · widget");
         assert!(!summary.contains('{'), "must not dump JSON: {summary}");
-        assert!(!summary.contains("nested"), "must not dump nested objects: {summary}");
+        assert!(
+            !summary.contains("nested"),
+            "must not dump nested objects: {summary}"
+        );
 
         // Empty / minimal input: name alone, still clean.
-        assert_eq!(format_tool_summary("camelCaseThing", ""), "Camel case thing");
+        assert_eq!(
+            format_tool_summary("camelCaseThing", ""),
+            "Camel case thing"
+        );
         assert_eq!(format_tool_summary("  ", r#"{}"#), "Tool");
         assert_eq!(
-            format_tool_summary("run_mystery", r#"{"old_string":"a\nb","new_string":"c\nd"}"#),
+            format_tool_summary(
+                "run_mystery",
+                r#"{"old_string":"a\nb","new_string":"c\nd"}"#
+            ),
             "Run mystery"
         );
     }
@@ -2694,10 +2678,16 @@ mod tests {
 
         // THEN the segments are Thinking, Activity, Thinking, Answer in order.
         assert_eq!(segs.len(), 4);
-        assert!(matches!(&segs[0], TranscriptSeg::Thinking { lines, .. } if lines == &["first thought".to_string()]));
+        assert!(
+            matches!(&segs[0], TranscriptSeg::Thinking { lines, .. } if lines == &["first thought".to_string()])
+        );
         assert!(matches!(&segs[1], TranscriptSeg::Activity { tools, .. } if tools.len() == 1));
-        assert!(matches!(&segs[2], TranscriptSeg::Thinking { lines, .. } if lines == &["second thought".to_string()]));
-        assert!(matches!(&segs[3], TranscriptSeg::Answer { lines, .. } if lines == &["final answer".to_string()]));
+        assert!(
+            matches!(&segs[2], TranscriptSeg::Thinking { lines, .. } if lines == &["second thought".to_string()])
+        );
+        assert!(
+            matches!(&segs[3], TranscriptSeg::Answer { lines, .. } if lines == &["final answer".to_string()])
+        );
     }
 
     /// @spec chat/transcript Segment construction: Live pending reasoning appears on an open Thinking segment
@@ -2840,11 +2830,7 @@ mod tests {
     #[test]
     fn thinking_collapsed_label_includes_line_count() {
         // GIVEN a Thinking segment whose body has a known number of lines.
-        let lines: Vec<String> = vec![
-            "line one".into(),
-            "line two".into(),
-            "line three".into(),
-        ];
+        let lines: Vec<String> = vec!["line one".into(), "line two".into(), "line three".into()];
 
         // WHEN the collapsed label for that segment is produced.
         let label = thinking_collapsed_label(&lines);
@@ -3219,10 +3205,7 @@ mod tests {
         let mut states = Vec::new();
         sync_collapse_states(&mut states, &segs_live);
         assert_eq!(states.len(), 1);
-        assert!(
-            !states[0].collapsed,
-            "live Thinking should start expanded"
-        );
+        assert!(!states[0].collapsed, "live Thinking should start expanded");
         assert!(!states[0].user_set);
 
         // Intermediate: reasoning committed, still streaming, NO answer yet.
@@ -3238,7 +3221,10 @@ mod tests {
         let segs_committed = build_transcript_segments(&session);
         assert_eq!(segs_committed.len(), 1);
         assert!(
-            matches!(&segs_committed[0], TranscriptSeg::Thinking { live: true, .. }),
+            matches!(
+                &segs_committed[0],
+                TranscriptSeg::Thinking { live: true, .. }
+            ),
             "committed Thinking mid-stream with no Answer should stay live: {segs_committed:?}"
         );
         sync_collapse_states(&mut states, &segs_committed);
@@ -3365,10 +3351,7 @@ mod tests {
             "Thinking must stay expanded while following Activity is live"
         );
         assert!(!states[0].user_set);
-        assert!(
-            !states[1].collapsed,
-            "live Activity should start expanded"
-        );
+        assert!(!states[1].collapsed, "live Activity should start expanded");
     }
 
     #[test]
@@ -3417,15 +3400,14 @@ mod tests {
 
         // TurnComplete / settled: still collapsed, Activity settles too.
         session.pending_text.clear();
-        session.messages[0].content.push(ContentBlock::Text("final answer".into()));
+        session.messages[0]
+            .content
+            .push(ContentBlock::Text("final answer".into()));
         session.is_streaming = false;
         let segs_settled = build_transcript_segments(&session);
         sync_collapse_states(&mut states, &segs_settled);
         assert!(states[0].collapsed, "settled Thinking stays collapsed");
-        assert!(
-            states[1].collapsed,
-            "settled Activity should be collapsed"
-        );
+        assert!(states[1].collapsed, "settled Activity should be collapsed");
         assert!(!states[0].user_set);
     }
 }

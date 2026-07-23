@@ -168,10 +168,7 @@ mod tests {
         let msg: ProtocolMsg = serde_json::from_str(line).unwrap();
         let updates = claude_line_to_updates(&msg, "sess-1");
         assert_eq!(updates.len(), 1);
-        assert_eq!(
-            updates[0]["update"]["sessionUpdate"],
-            "agent_message_chunk"
-        );
+        assert_eq!(updates[0]["update"]["sessionUpdate"], "agent_message_chunk");
         assert_eq!(updates[0]["update"]["content"]["text"], "hello");
         assert_eq!(updates[0]["sessionId"], "sess-1");
     }
@@ -189,10 +186,7 @@ mod tests {
         let msg: ProtocolMsg = serde_json::from_str(line).unwrap();
         let updates = claude_line_to_updates(&msg, "sess-1");
         assert_eq!(updates.len(), 1);
-        assert_eq!(
-            updates[0]["update"]["sessionUpdate"],
-            "agent_thought_chunk"
-        );
+        assert_eq!(updates[0]["update"]["sessionUpdate"], "agent_thought_chunk");
         assert_eq!(updates[0]["update"]["content"]["text"], "let me reason");
         assert_eq!(updates[0]["sessionId"], "sess-1");
     }

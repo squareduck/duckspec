@@ -166,7 +166,10 @@ mod tests {
         });
         let mut input = acp_prompt_to_turn_input(&params);
         assert_eq!(input.blocks.len(), 3);
-        assert_eq!(input.blocks[0], json!({ "type": "text", "text": "before " }));
+        assert_eq!(
+            input.blocks[0],
+            json!({ "type": "text", "text": "before " })
+        );
         assert_eq!(input.blocks[1]["type"], "localImage");
         assert_eq!(input.blocks[2], json!({ "type": "text", "text": " after" }));
         input.cleanup();

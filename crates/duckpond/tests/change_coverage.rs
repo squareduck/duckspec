@@ -71,7 +71,8 @@ fn step_body(scenario: &str, checked: bool) -> String {
 }
 
 fn key_in(keys: &[ScenarioKey], scenario: &str) -> bool {
-    keys.iter().any(|k| k.scenario == scenario && k.cap_path == "foo")
+    keys.iter()
+        .any(|k| k.scenario == scenario && k.cap_path == "foo")
 }
 
 fn in_snapshot(cov: &ChangeCoverage, scenario: &str) -> bool {

@@ -167,10 +167,7 @@ fn list_marker(elem: &Element) -> Option<ListMarker> {
 
 fn separator(prev: &Element, next: &Element, next_in_loose_list: bool) -> &'static str {
     match (prev, next) {
-        (
-            Element::ListItem { marker: m1, .. },
-            Element::ListItem { marker: m2, .. },
-        ) => {
+        (Element::ListItem { marker: m1, .. }, Element::ListItem { marker: m2, .. }) => {
             if m1 != m2 || next_in_loose_list {
                 "\n\n"
             } else {

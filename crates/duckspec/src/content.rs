@@ -60,12 +60,9 @@ pub fn skill_dirs(harness: &str) -> impl Iterator<Item = (&'static str, &'static
     // `files()` rather than `get_file("SKILL.md")`.
     Box::new(dir.dirs().filter_map(|skill_dir| {
         let name = skill_dir.path().file_name()?.to_str()?;
-        let skill_md = skill_dir.files().find(|f| {
-            f.path()
-                .file_name()
-                .and_then(|n| n.to_str())
-                == Some("SKILL.md")
-        })?;
+        let skill_md = skill_dir
+            .files()
+            .find(|f| f.path().file_name().and_then(|n| n.to_str()) == Some("SKILL.md"))?;
         let body = skill_md
             .contents_utf8()
             .expect("stock skill is valid UTF-8");
