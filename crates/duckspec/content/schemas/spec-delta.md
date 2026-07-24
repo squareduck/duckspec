@@ -71,7 +71,7 @@ headings are plain content (no markers) — e.g. `### Scenario: …`.
 | --- | --- |
 | Few children add, remove, or edit | `@` parent + child ops |
 | Most of a requirement's scenarios rewritten | `~` requirement + full new body and scenarios as content |
-| Norm prose only; scenarios stay | `@` with body text, no H3s |
+| Umbrella only; scenarios stay | `@` with body text, no H3s |
 | Rename needed | `=` then `@` or `~` under the **new** name |
 ```
 
@@ -104,7 +104,7 @@ Requirement: Email-password authentication
 
 ## @ Requirement: Session expiration
 
-### - Scenario: Idle timeout at 30 minutes
+### - Scenario: Idle timeout expires session
 
 ### + Scenario: Force logout on password change
 
@@ -116,7 +116,7 @@ Requirement: Email-password authentication
 
 ## + Requirement: Two-factor authentication
 
-The system SHALL support TOTP-based 2FA for users who opt in.
+Optional TOTP-based 2FA for users who opt in.
 
 > test: code
 

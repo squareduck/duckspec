@@ -1,8 +1,9 @@
 # Spec schema
 
-A capability spec is concise technical documentation backed by tests: cohesive
-normative requirements completely describe the important behavior, and each
-scenario is an independent unit of proof — not a checklist of assertions.
+A capability spec is concise technical documentation backed by tests: short
+requirement umbrellas group independent scenario proofs of the important
+behavior. Scenarios own the observable detail; requirement prose is not a
+second inventory of those cases.
 
 ## Structure
 
@@ -13,7 +14,7 @@ scenario is an independent unit of proof — not a checklist of assertions.
 
 ## Requirement: <requirement name>
 
-<normative prose: SHALL / MUST / SHOULD / MAY>
+<short plain-language description: cohesion and shared invariants only>
 
 > test: code
 
@@ -41,7 +42,7 @@ scenario is an independent unit of proof — not a checklist of assertions.
 - Every H3 is `Scenario: <name>`; no other H3s
 - No H4 or deeper
 - Requirement names must not contain colons
-- A requirement needs normative prose, at least one scenario, or both (not empty)
+- A requirement needs umbrella prose, at least one scenario, or both (not empty)
 - Scenario body: exactly one unordered list of GWT bullets, optionally then a
   test-marker blockquote - nothing else
 - At least one `**WHEN**` and one `**THEN**` per scenario
@@ -64,20 +65,29 @@ apply still must satisfy this schema. Delta shape (markers, ops) is
 
 ## Quality
 
-- **Complete, not exhaustive.** Normative prose describes every important
-  behavior the capability owns. Important means a stable observable rule whose
-  violation materially changes correctness, safety, data, interoperability, or
-  user experience - not every input, branch, or implementation detail.
-- **Cohesive whole.** Requirements form the shortest clear contract for the
-  capability. Merge overlap, remove stale or misplaced behavior, and reorganize
-  existing content when that improves the complete file.
-- **Minimal requirement prose.** Every requirement has a concise normative
-  summary of the high-level contract. It provides the umbrella rule or
-  relationship that makes the scenarios cohesive; it never previews,
-  enumerates, or paraphrases the scenarios beneath it.
-- **Normative precision.** SHALL / MUST / SHOULD / MAY mean what they say.
-  Concrete cases and distinct outcomes belong in scenarios rather than being
-  repeated in requirement prose.
+- **Complete, not exhaustive.** Requirements and scenarios together describe
+  every important behavior the capability owns. Important means a stable
+  observable rule whose violation materially changes correctness, safety, data,
+  interoperability, or user experience - not every input, branch, or
+  implementation detail. Completeness lives in that pairing; umbrella prose
+  does not carry the full contract alone.
+- **Cohesive whole.** Requirements form the shortest clear grouping of the
+  capability's proofs. Merge overlap, remove stale or misplaced behavior, and
+  reorganize existing content when that improves the complete file.
+- **Short plain umbrellas.** Every requirement has a brief plain-language
+  description of the high-level concern: why its scenarios belong together, and
+  any single shared invariant they all rely on (named concepts, not tunable
+  numbers). It never previews, enumerates, field-lists, method-lists, or
+  paraphrases the scenarios beneath it. Prefer about one sentence. Do not grow
+  the umbrella as scenario count grows.
+- **No modal house style.** Do not use SHALL / MUST / SHOULD / MAY as the default
+  voice. Write ordinary present-tense technical English. Concrete cases and
+  distinct outcomes belong only in scenarios.
+- **Named thresholds, not baked constants.** Prefer named concepts (`idle
+  timeout`, `retry budget`) over literal values (`30 minutes`, `3 retries`)
+  unless the specific number is a product-defining rule that must not drift with
+  implementation tuning. Code and tests own default values; baking them into the
+  contract causes needless churn when they change.
 - **One concern per requirement.** Split unrelated behavior, but do not invent
   requirements merely to hold scenarios or to mirror API surfaces (write path,
   read path, default) of the same rule.
@@ -90,7 +100,8 @@ apply still must satisfy this schema. Delta shape (markers, ops) is
 - **Do not mint fluff.** Reject non-goals, negative architecture notes, storage
   column names, and UI chrome as requirements or scenarios unless they are the
   behavior under contract. "Not a feature flag", "docs say X", and setup
-  preconditions are not scenarios.
+  preconditions are not scenarios. Out-of-scope notes do not belong in
+  requirement prose.
 - **Tests inform the contract.** Existing tests may reveal stable intentional
   behavior missing from the spec. Helper and implementation tests need not
   become scenarios; important behavioral tests should have a natural spec
@@ -99,7 +110,7 @@ apply still must satisfy this schema. Delta shape (markers, ops) is
   independently important observable outcomes. GIVEN is state, WHEN is the
   action under test, THEN is the result. A multi-assert test may cover several
   states under one scenario without restating each assert as GWT. Omit setup
-  narration, SHALL in clauses, and restatements of the requirement.
+  narration, modal verbs in clauses, and restatements of the requirement.
 - **Observer-facing.** Returns, persisted state, events, responses, and visible
   recovery are contract material. Private fields, module placement, function
   names, and branches belong to implementation or design.
@@ -118,7 +129,9 @@ if not already in context.
 
 Two scenarios only because they are independent failure modes (expire vs reset),
 not opposite steps of one toggle. A single control's lifecycle stays one
-scenario with one multi-assert test.
+scenario with one multi-assert test. The requirement umbrella states the shared
+rule once; scenarios own the cases. Thresholds are named concepts, not baked
+constants — the idle duration lives in code unless the product freezes a value.
 
 ```markdown
 # Session expiration
@@ -127,15 +140,15 @@ Sessions expire after inactivity to limit stolen-token blast radius.
 
 ## Requirement: Idle timeout
 
-The system SHALL expire authenticated sessions after 30 minutes of inactivity,
-measured from the last request (not from login time).
+Authenticated sessions expire after the idle timeout, measured from the last
+request.
 
 > test: code
 
 ### Scenario: Idle session expires
 
 - **GIVEN** an authenticated user
-- **AND** 30 minutes have passed without activity
+- **AND** the idle timeout has elapsed without activity
 - **WHEN** the user makes a new request
 - **THEN** the request is rejected as unauthenticated
 - **AND** the session is invalidated
@@ -144,5 +157,5 @@ measured from the last request (not from login time).
 
 - **GIVEN** an authenticated user
 - **WHEN** the user makes a request before the idle timeout
-- **THEN** the session remains valid for another 30 minutes
+- **THEN** the idle timer is reset
 ```

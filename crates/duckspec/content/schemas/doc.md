@@ -35,7 +35,7 @@ Body is freeform markdown (headings, prose, lists, tables, diagrams, code).
   failures fit together. A title and summary are only a scaffold.
 - **Paired, not duplicated.** Share vocabulary and boundaries with the spec,
   but do not paraphrase requirements and scenarios line by line. The spec owns
-  exact normative behavior; the doc makes the complete system understandable.
+  the behavioral contract; the doc makes the complete system understandable.
 - **Domain H2s.** Name sections after what the capability actually has -
   `Session lifecycle`, `Token format`, `Retry behavior`, `Error handling`,
   `Concurrency`, `Rate limits` - whatever shape it has. Avoid generic shells
@@ -74,9 +74,9 @@ tokens that expire on idle and invalidate on sign-out.
                          sign-in
                             │
                             ▼
-                 ┌──────────┐  idle 30m  ┌──────────┐
-                 │  active  │ ─────────► │ expired  │
-                 └────┬─────┘            └──────────┘
+                 ┌──────────┐  idle timeout  ┌──────────┐
+                 │  active  │ ─────────────► │ expired  │
+                 └────┬─────┘                └──────────┘
                       │
                       │ sign-out
                       ▼
@@ -85,7 +85,7 @@ tokens that expire on idle and invalidate on sign-out.
                  └──────────┘
 ```
 
-A session moves from `active` to `expired` after 30 minutes without an
+A session moves from `active` to `expired` after the idle timeout without an
 authenticated request. Expired and revoked sessions are not reactivated; a new
 sign-in issues a new session.
 

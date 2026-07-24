@@ -45,10 +45,10 @@ current spec, documentation, source, and tests.
    diagnose missing behavior, duplication, weak wording, misplaced ownership,
    stale scenarios, and padded proof (boolean mirrors, per-surface restatements,
    non-goals, assertion-per-scenario).
-5. Present the target merged outline: cohesive requirements with compact
-   contract summaries and only the scenarios that are independent units of
-   proof. Prefer one lifecycle/multi-assert scenario over several checks of the
-   same control. For existing capabilities, show meaningful merges, rewrites,
+5. Present the target merged outline: cohesive requirements with short plain
+   umbrellas and only the scenarios that are independent units of proof.
+   Prefer one lifecycle/multi-assert scenario over several checks of the same
+   control. For existing capabilities, show meaningful merges, rewrites,
    additions, removals, and relocations.
 6. Discuss until the target contract is complete, minimal, and cohesive. Drop
    or merge any scenario that does not fail for a reason independent of the
@@ -61,12 +61,15 @@ current spec, documentation, source, and tests.
    scenarios, or doc content during expansion.
 8. Repeat until the map is complete, then use Handoff.
 
-Every requirement has a short normative prose summary of its high-level
-contract. Keep it minimal and never restate the scenarios beneath it. Each
-scenario is an independent proof unit that earns a test - not a checklist of
-asserts, true/false twins, multi-surface echoes of one fact, or non-goals.
-One test may walk several states under a single scenario. Optimize the whole
-merged capability for clarity and cohesion, not for the smallest textual delta.
+Every requirement has a short plain-language umbrella: why its scenarios belong
+together, plus any single shared invariant. Never restate, enumerate, or
+paraphrase the scenarios beneath it, and do not use SHALL / MUST / SHOULD / MAY
+as house style. Prefer named thresholds (`idle timeout`) over baked constants
+(`30 minutes`) unless the specific value is product-defining. Each scenario is
+an independent proof unit that earns a test - not a checklist of asserts,
+true/false twins, multi-surface echoes of one fact, or non-goals. One test may
+walk several states under a single scenario. Optimize the whole merged
+capability for clarity and cohesion, not for the smallest textual delta.
 
 ## Chat
 
@@ -139,7 +142,7 @@ or non-goals.
 
 ## Requirement: <name>
 
-Contract: <minimal high-level normative summary; do not restate scenarios>
+<one short plain sentence; do not restate scenarios>
 
 Scenarios:
 - <independent proof unit> (`test: code`)
