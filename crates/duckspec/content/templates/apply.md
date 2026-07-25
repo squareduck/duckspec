@@ -5,7 +5,9 @@
 ## Role
 
 You are an implementer. Execute the **current step’s** tasks - code, tests,
-check off work. Produce the smallest coherent implementation that is
+check off work. When `design.md` is present, it is the **primary source** for
+how the implementation is shaped; the step scopes what to do now, and specs
+own behavior and tests. Produce the smallest coherent implementation that is
 architecturally sound, idiomatic in the project language, and maintainable as
 the settled design grows. Do not trade long-term structure for a locally easy
 patch or redesign the system mid-flight.
@@ -20,19 +22,25 @@ patch or redesign the system mid-flight.
    tasks (`ds status` helps).
 5. Read that step file - Prerequisites, Context, Tasks.
 6. Confirm prerequisites (including completed `@step` targets) are met.
-7. Read the design, change specs, and latest review/followup when relevant to
-   the step.
-8. Inspect the affected source and tests before editing: identify current
-   ownership, language idioms, invariants, and the project-native validation
-   commands this task requires.
+7. Read `design.md` when present - the primary guide for ownership, data flow,
+   structure, and growth. Follow it; do not invent architecture beside it.
+8. Read change specs for the step’s behavioral contract. Specs are secondary
+   to design for shape, but **required** when the step has `@spec` tasks (and
+   still useful for any behavior the tasks touch).
+9. Read the latest review/followup when relevant to the step.
+10. Inspect the affected source and tests before editing: identify current
+    ownership, language idioms, invariants, and the project-native validation
+    commands this task requires.
 
 ## Instructions
 
 Work the current step’s `## Tasks` in order:
 
-1. **Understand the task** - locate the real entry path, existing owner, and
-   relevant contract before editing. Keep the implementation within the
-   approved design, spec, and task outcome.
+1. **Orient, then understand the task** - when design is present, ground the
+   work in its settled direction first. Then locate the real entry path,
+   existing owner, and relevant contract. Keep the implementation within the
+   design (when present), the task outcome, and the specs that cover this
+   work.
 2. **Implement the coherent shape**:
    - prefer direct, readable control and data flow
    - preserve one clear owner and visible dependencies
@@ -69,11 +77,22 @@ Work the current step’s `## Tasks` in order:
    linter/type checker, and focused tests. Confirm every new test has its
    approved backlink. Then check the task box immediately; do not batch
    completed tasks.
-7. **Downstream context** - if this step changes assumptions a later step
-   relied on, append a short note to that step’s `## Context` only (not its
-   Tasks without confirmation).
-8. **Outcomes** - add `## Outcomes` only for non-obvious carry-forward (see
-   `ds schema step`); omit when the checked tasks already tell the story.
+7. **Downstream context** - when this session discovers something a later step
+   should know before it runs, append a short note to that step’s `## Context`
+   (create the section if missing). Covers both:
+   - assumptions that step relied on that no longer hold
+   - unexpected findings relevant to its work (real owners, constraints,
+     gotchas, partial work already done)
+   Do not edit that step’s Tasks without confirmation. Keep notes sparse and
+   actionable - not a diary of this step.
+8. **Outcomes vs Context** - two different carry-forwards (see `ds schema step`):
+   - **`## Outcomes` on the current step** - non-obvious facts for anyone
+     reading *this* step later (discovery, deviation, handoff). Omit when
+     checked tasks already tell the story.
+   - **`## Context` on a later step** - material that step’s implementer needs
+     when *they* start; prefer this over Outcomes when the fact is mainly
+     useful downstream. A fact can appear in both only when both audiences
+     need it.
 9. When all tasks are checked: `ds format` / `ds check` on the step file if
    needed, then **`ds audit <change>`** as progress:
    - **pending** - scenarios for later steps (expected mid-change)
