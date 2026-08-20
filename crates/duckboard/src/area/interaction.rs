@@ -2662,6 +2662,163 @@ mod tests {
         assert_eq!(ix.width, equal_interaction_width(current_w));
         assert_eq!(ix.width, free_content_chat_width(current_w) / 2.0);
     }
+
+    // ── chat/oversized-messages: size gate ────────────────────────────────
+
+    // @spec chat/oversized-messages Size gate: Over the line cap
+    #[test]
+    fn oversized_over_the_line_cap() {
+        // GIVEN a body whose line count exceeds the oversized line cap
+        // AND its source character count is within the oversized character cap
+        let lines: Vec<String> = (0..=OVERSIZED_LINE_CAP).map(|i| i.to_string()).collect();
+        assert!(lines.len() > OVERSIZED_LINE_CAP);
+        assert!(lines.join("\n").chars().count() <= OVERSIZED_CHAR_CAP);
+        // WHEN the size gate is evaluated
+        let oversized = is_oversized(&lines);
+        // THEN the body is oversized
+        assert!(oversized);
+    }
+
+    // @spec chat/oversized-messages Size gate: Over the character cap on a single long line
+    #[test]
+    fn oversized_over_the_character_cap_on_a_single_long_line() {
+        // GIVEN a body of one line whose source character count exceeds the oversized
+        // character cap
+        let lines = vec!["a".repeat(OVERSIZED_CHAR_CAP + 1)];
+        assert_eq!(lines.len(), 1);
+        assert!(lines.join("\n").chars().count() > OVERSIZED_CHAR_CAP);
+        // WHEN the size gate is evaluated
+        let oversized = is_oversized(&lines);
+        // THEN the body is oversized
+        assert!(oversized);
+    }
+
+    fn oversized_user_body() -> String {
+        (0..=OVERSIZED_LINE_CAP)
+            .map(|i| format!("line {i}"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    fn session_with_user_text(text: &str) -> AgentSession {
+        let mut ax = AgentSession::new("oversized-user".into(), ScopeKind::Change);
+        ax.session.messages.push(ChatMessage {
+            role: Role::User,
+            content: vec![ContentBlock::Text(text.to_string())],
+            timestamp: String::new(),
+            is_priming: false,
+        });
+        ax
+    }
+
+    // @spec chat/oversized-messages User display prefix: Oversized user card is an unhighlighted prefix
+    #[test]
+    fn oversized_user_card_is_an_unhighlighted_prefix() {
+        // GIVEN a session whose user message body is oversized
+        let full = oversized_user_body();
+        let mut ax = session_with_user_text(&full);
+        let hl = SyntaxHighlighter::new();
+        // WHEN the chat UI is materialized
+        materialize_chat_ui(&mut ax, &hl);
+        let user_idx = ax
+            .chat_blocks
+            .iter()
+            .position(|b| b.kind == BlockKind::User)
+            .expect("user block");
+        let block = &ax.chat_blocks[user_idx];
+        let display = block.lines.join("\n");
+        // THEN the user card's display lines are a source prefix of that body
+        assert!(
+            full.starts_with(&display),
+            "display should be a source prefix"
+        );
+        assert_ne!(display, full);
+        // AND the display lines are within the size gate
+        assert!(!is_oversized(&block.lines));
+        assert!(block.truncated);
+        // AND the user editor has no syntax highlight
+        assert!(ax.chat_editors[user_idx].highlight_spans.is_none());
+        // AND the session still holds the full user message body
+        match ax.session.messages[0].content.as_slice() {
+            [ContentBlock::Text(t)] => assert_eq!(t, &full),
+            other => panic!("expected user text, got {other:?}"),
+        }
+    }
+
+    // @spec chat/oversized-messages User display prefix: Copy full writes the stored user body
+    #[test]
+    fn copy_full_writes_the_stored_user_body() {
+        // GIVEN a materialized oversized user card
+        let full = oversized_user_body();
+        let mut ax = session_with_user_text(&full);
+        let hl = SyntaxHighlighter::new();
+        materialize_chat_ui(&mut ax, &hl);
+        let user_idx = ax
+            .chat_blocks
+            .iter()
+            .position(|b| b.kind == BlockKind::User)
+            .expect("user block");
+        let prefix = ax.chat_blocks[user_idx].lines.join("\n");
+        assert_ne!(prefix, full);
+        // WHEN copy full is invoked for that card
+        let copied = copy_full_user_text(&ax, user_idx);
+        // THEN the clipboard receives the full stored user message body
+        assert_eq!(copied.as_deref(), Some(full.as_str()));
+    }
+
+    // @spec chat/oversized-messages Composer and queue highlight: Oversized composer and queue skip highlight, and a composer under the gate is highlighted
+    #[test]
+    fn oversized_composer_and_queue_skip_highlight_under_gate_composer_is_highlighted() {
+        // GIVEN composer and queue buffers
+        let hl = SyntaxHighlighter::new();
+        let huge = oversized_user_body();
+        let mut composer = EditorState::new(&huge);
+        // WHEN highlight is applied while each is oversized and again after the
+        // composer is within the size gate
+        rehighlight_input(&mut composer, &hl);
+        let queue = make_queue_editor(&huge, &hl);
+        // THEN the oversized composer and queue have no syntax highlight
+        assert!(composer.highlight_spans.is_none());
+        assert!(queue.highlight_spans.is_none());
+        let mut small = EditorState::new("short prompt");
+        rehighlight_input(&mut small, &hl);
+        // AND the under-gate composer has syntax highlight
+        assert!(small.highlight_spans.is_some());
+    }
+
+    // @spec chat/oversized-messages Composer and queue highlight: Theme rehighlight skips truncated user cards and oversized composer and queue
+    #[test]
+    fn theme_rehighlight_skips_truncated_user_and_oversized_composer_queue() {
+        // GIVEN a truncated user card
+        let full = oversized_user_body();
+        let mut ax = session_with_user_text(&full);
+        let hl = SyntaxHighlighter::new();
+        materialize_chat_ui(&mut ax, &hl);
+        let user_idx = ax
+            .chat_blocks
+            .iter()
+            .position(|b| b.kind == BlockKind::User && b.truncated)
+            .expect("truncated user block");
+        // AND an oversized composer
+        ax.chat_input = EditorState::new(&full);
+        ax.chat_input.highlight_spans = Some(vec![vec![]]);
+        // AND an oversized queue
+        ax.queue_editor = Some({
+            let mut q = EditorState::new(&full);
+            q.highlight_spans = Some(vec![vec![]]);
+            q
+        });
+        // WHEN theme rehighlight runs
+        rehighlight_chat_session(&mut ax, &hl);
+        // THEN those editors have no syntax highlight
+        assert!(ax.chat_editors[user_idx].highlight_spans.is_none());
+        assert!(ax.chat_input.highlight_spans.is_none());
+        assert!(
+            ax.queue_editor
+                .as_ref()
+                .is_some_and(|q| q.highlight_spans.is_none())
+        );
+    }
 }
 
 // ── Shared messages ─────────────────────────────────────────────────────────
@@ -3080,6 +3237,9 @@ fn handle_agent_chat(
             // viewport and iced suppresses on_scroll.
             recompute_fast_response_top_pad(ax, viewport_h, content_h);
         }
+        agent_chat::Msg::CopyFull(_) => {
+            // Clipboard write is intercepted in `main::update` (needs a Task).
+        }
     }
 
     // When chrome is hidden (typing, streaming, empty chrome), drop the pad
@@ -3154,11 +3314,10 @@ pub fn set_tentative_from_tab(ax: &mut AgentSession, editor: &EditorState, displ
 }
 
 /// Build a read-only queue editor with markdown highlighting applied so the
-/// queue pill reads like a regular chat message.
+/// queue pill reads like a regular chat message. Oversized buffers skip highlight.
 fn make_queue_editor(text: &str, highlighter: &SyntaxHighlighter) -> EditorState {
     let mut editor = EditorState::new(text);
-    let syntax = highlighter.find_syntax("md");
-    editor.highlight_spans = Some(highlighter.highlight_lines(&editor.lines, syntax));
+    maybe_highlight(&mut editor, highlighter, false);
     editor
 }
 
@@ -3689,8 +3848,25 @@ pub fn send_prompt_text(ax: &mut AgentSession, text: String, highlighter: &Synta
 
 /// Re-run markdown syntax highlighting on the chat input.
 fn rehighlight_input(input: &mut EditorState, highlighter: &SyntaxHighlighter) {
+    maybe_highlight(input, highlighter, false);
+}
+
+/// Theme / bulk rehighlight for one chat session. Truncated user editors stay
+/// unhighlighted; composer and queue skip when oversized. Other transcript
+/// editors keep markdown highlight (including oversized Answer/Thinking).
+pub(crate) fn rehighlight_chat_session(ax: &mut AgentSession, highlighter: &SyntaxHighlighter) {
+    maybe_highlight(&mut ax.chat_input, highlighter, false);
+    if let Some(queue) = ax.queue_editor.as_mut() {
+        maybe_highlight(queue, highlighter, false);
+    }
     let syntax = highlighter.find_syntax("md");
-    input.highlight_spans = Some(highlighter.highlight_lines(&input.lines, syntax));
+    for (block, editor) in ax.chat_blocks.iter().zip(ax.chat_editors.iter_mut()) {
+        if block.truncated {
+            maybe_highlight(editor, highlighter, true);
+        } else {
+            editor.highlight_spans = Some(highlighter.highlight_lines(&editor.lines, syntax));
+        }
+    }
 }
 
 /// Outcome of resolving the model for a turn: preferred cascade + catalog check.
@@ -3873,12 +4049,94 @@ fn suffix_growth_dirty_from(old: &[String], new: &[String]) -> Option<usize> {
     }
 }
 
+/// Line count that a chat body must exceed to be oversized.
+pub(crate) const OVERSIZED_LINE_CAP: usize = 200;
+/// Source-character count (`lines.join("\n")`) that a chat body must exceed
+/// to be oversized.
+pub(crate) const OVERSIZED_CHAR_CAP: usize = 16_384;
+
+fn source_char_count(lines: &[String]) -> usize {
+    lines.join("\n").chars().count()
+}
+
+/// True when `lines` exceeds the oversized line cap or character cap.
+pub(crate) fn is_oversized(lines: &[String]) -> bool {
+    lines.len() > OVERSIZED_LINE_CAP || source_char_count(lines) > OVERSIZED_CHAR_CAP
+}
+
+/// Exact source prefix within both oversized caps. No ellipsis line.
+pub(crate) fn display_prefix(lines: &[String]) -> Vec<String> {
+    if !is_oversized(lines) {
+        return lines.to_vec();
+    }
+    let mut out = Vec::new();
+    let mut chars = 0usize;
+    for line in lines {
+        if out.len() >= OVERSIZED_LINE_CAP {
+            break;
+        }
+        let line_chars = line.chars().count();
+        let newline = usize::from(!out.is_empty());
+        let next_chars = chars + newline + line_chars;
+        if next_chars > OVERSIZED_CHAR_CAP {
+            let remain = OVERSIZED_CHAR_CAP.saturating_sub(chars + newline);
+            if remain > 0 {
+                out.push(line.chars().take(remain).collect());
+            }
+            break;
+        }
+        out.push(line.clone());
+        chars = next_chars;
+    }
+    out
+}
+
+/// Markdown-highlight `editor` unless `skip` is set or the buffer is oversized.
+pub(crate) fn maybe_highlight(
+    editor: &mut EditorState,
+    highlighter: &SyntaxHighlighter,
+    skip: bool,
+) {
+    if skip || is_oversized(&editor.lines) {
+        editor.highlight_spans = None;
+        return;
+    }
+    let syntax = highlighter.find_syntax("md");
+    editor.highlight_spans = Some(highlighter.highlight_lines(&editor.lines, syntax));
+}
+
 fn make_highlighted_editor(lines: &[String], highlighter: &SyntaxHighlighter) -> EditorState {
     let content = lines.join("\n");
     let mut editor = EditorState::new(&content);
     let syntax = highlighter.find_syntax("md");
     editor.highlight_spans = Some(highlighter.highlight_lines(&editor.lines, syntax));
     editor
+}
+
+fn make_truncated_editor(lines: &[String], highlighter: &SyntaxHighlighter) -> EditorState {
+    let content = lines.join("\n");
+    let mut editor = EditorState::new(&content);
+    maybe_highlight(&mut editor, highlighter, true);
+    editor
+}
+
+fn make_block_editor(block: &Block, highlighter: &SyntaxHighlighter) -> EditorState {
+    if block.truncated {
+        make_truncated_editor(&block.lines, highlighter)
+    } else {
+        make_highlighted_editor(&block.lines, highlighter)
+    }
+}
+
+fn apply_user_display_prefix(blocks: &mut [Block]) {
+    for block in blocks {
+        if block.kind != crate::widget::text_edit::BlockKind::User || !is_oversized(&block.lines) {
+            continue;
+        }
+        block.full_char_count = source_char_count(&block.lines);
+        block.lines = display_prefix(&block.lines);
+        block.truncated = true;
+    }
 }
 
 /// Tint Answer lines that fall in `write` / `next` meta-card ranges.
@@ -3945,7 +4203,8 @@ pub fn rebuild_chat_editor(ax: &mut AgentSession, highlighter: &SyntaxHighlighte
     // Segment model → collapse policy → editor blocks (index-aligned).
     let segs = agent_chat::build_transcript_segments(&ax.session);
     agent_chat::sync_collapse_states(&mut ax.chat_collapse, &segs);
-    let new_blocks = agent_chat::blocks_from_segments(&segs);
+    let mut new_blocks = agent_chat::blocks_from_segments(&segs);
+    apply_user_display_prefix(&mut new_blocks);
 
     let mut new_editors = Vec::with_capacity(new_blocks.len());
     for (i, block) in new_blocks.iter().enumerate() {
@@ -3960,14 +4219,17 @@ pub fn rebuild_chat_editor(ax: &mut AgentSession, highlighter: &SyntaxHighlighte
                     let mut existing =
                         std::mem::replace(&mut ax.chat_editors[i], EditorState::new(""));
                     refresh_editor_in_place(&mut existing, &block.lines, dirty_from, highlighter);
+                    if block.truncated {
+                        maybe_highlight(&mut existing, highlighter, true);
+                    }
                     new_editors.push(existing);
                 }
                 EditorRefreshKind::FullRebuild => {
-                    new_editors.push(make_highlighted_editor(&block.lines, highlighter));
+                    new_editors.push(make_block_editor(block, highlighter));
                 }
             }
         } else {
-            new_editors.push(make_highlighted_editor(&block.lines, highlighter));
+            new_editors.push(make_block_editor(block, highlighter));
         }
         // Answer blocks: tint meta-card lines after lines are finalized.
         if block.kind == crate::widget::text_edit::BlockKind::Assistant
@@ -3979,6 +4241,16 @@ pub fn rebuild_chat_editor(ax: &mut AgentSession, highlighter: &SyntaxHighlighte
 
     ax.chat_editors = new_editors;
     ax.chat_blocks = new_blocks;
+}
+
+/// Full stored user-segment body for a display block index, if that index is a
+/// User segment. Reads the session, not the truncated display prefix.
+pub(crate) fn copy_full_user_text(ax: &AgentSession, block_idx: usize) -> Option<String> {
+    let segs = agent_chat::build_transcript_segments(&ax.session);
+    match segs.get(block_idx) {
+        Some(agent_chat::TranscriptSeg::User { lines }) => Some(lines.join("\n")),
+        _ => None,
+    }
 }
 
 /// Rebuild chat blocks/editors from `ax.session` and clear `chat_ui_dirty`.

@@ -117,6 +117,9 @@ apply still must satisfy this schema. Delta shape (markers, ops) is
 - **Distinctive names.** Name the independent proof (e.g. the control or failure
   mode), not a single assert. Avoid "Happy path", "Test 1", true/false twins,
   and sentence-length restatements.
+- **No visual tests.** Never put pure UI visual descriptions in specs or docs.
+  What color something is, how it looks, which icon it uses. All of that is
+  just churn because visuals change often and don't describe critical behavior.
 
 Body markdown follows `style` (load only if not already in context).
 

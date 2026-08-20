@@ -466,6 +466,13 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
     if let Some((path, line)) = extract_open_path(&message) {
         return open_path_reference(state, &path, line);
     }
+    if let Some(idx) = extract_copy_full_idx(&message)
+        && let Some((ix, _)) = state.active_interaction()
+        && let Some(ax) = ix.active()
+        && let Some(text) = interaction::copy_full_user_text(ax, idx)
+    {
+        return iced::clipboard::write(text);
+    }
     match message {
         Message::AreaSelected(area) => {
             switch_area(state, area);
@@ -3404,8 +3411,8 @@ fn extract_ideas_interaction_msg(msg: &area::ideas::Message) -> Option<&interact
 ///
 /// File and diff tabs spawn async jobs (returned as a batched `Task`) so a
 /// theme toggle doesn't block the UI while syntect reparses every open
-/// file. Chat/queue buffers are small and stay sync — their highlight
-/// cost is negligible.
+/// file. Chat editors stay sync; oversized composer/queue and truncated user
+/// cards skip highlight (`rehighlight_chat_session`).
 fn rehighlight_all(state: &mut State) -> Task<Message> {
     let mut tasks: Vec<Task<Message>> = Vec::new();
 
@@ -3461,18 +3468,9 @@ fn rehighlight_all(state: &mut State) -> Task<Message> {
         }
     }
 
-    let md_syntax = state.highlighter.find_syntax("md");
     for ix in state.interactions.values_mut() {
         for ax in ix.sessions.iter_mut() {
-            ax.chat_input.highlight_spans = Some(
-                state
-                    .highlighter
-                    .highlight_lines(&ax.chat_input.lines, md_syntax),
-            );
-            for editor in ax.chat_editors.iter_mut() {
-                editor.highlight_spans =
-                    Some(state.highlighter.highlight_lines(&editor.lines, md_syntax));
-            }
+            interaction::rehighlight_chat_session(ax, &state.highlighter);
         }
     }
 
@@ -4942,10 +4940,25 @@ pub fn set_match_line_highlights(editor: &mut widget::text_edit::EditorState, li
     }
 }
 
-/// Open a single search hit as a regular file tab, scrolled so the match line
-/// sits near the center of the editor viewport. Highlights every hit in
-/// `all_hits` whose path matches this file so the user sees the full picture
-/// rather than just the one they confirmed.
+/// Pull a `CopyFull` block index from an interaction message for the clipboard
+/// write.
+fn extract_copy_full_idx(msg: &Message) -> Option<usize> {
+    fn from_im(im: &interaction::Msg) -> Option<usize> {
+        match im {
+            interaction::Msg::AgentChat(widget::agent_chat::Msg::CopyFull(idx)) => Some(*idx),
+            _ => None,
+        }
+    }
+    match msg {
+        Message::Interaction(im) => from_im(im),
+        Message::Caps(area::caps::Message::Interaction(im)) => from_im(im),
+        Message::Codex(area::codex::Message::Interaction(im)) => from_im(im),
+        Message::Ideas(area::ideas::Message::Interaction(im)) => from_im(im),
+        Message::Change(area::change::Message::Interaction(im)) => from_im(im),
+        _ => None,
+    }
+}
+
 /// Pull a cmd-clicked path reference out of any message route that carries
 /// editor or terminal actions. Returns `(path, 1-based line)`.
 fn extract_open_path(msg: &Message) -> Option<(String, Option<usize>)> {
@@ -5050,6 +5063,10 @@ fn open_path_in_tab(state: &mut State, abs: PathBuf, line: Option<usize>) -> Tas
     }
 }
 
+/// Open a single search hit as a regular file tab, scrolled so the match line
+/// sits near the center of the editor viewport. Highlights every hit in
+/// `all_hits` whose path matches this file so the user sees the full picture
+/// rather than just the one they confirmed.
 fn open_search_hit_as_file(
     state: &mut State,
     hit: &widget::text_search::SearchHit,

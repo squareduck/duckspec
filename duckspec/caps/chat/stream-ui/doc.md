@@ -25,8 +25,9 @@ UI is deferred — except that after a thrash trip, further answer/reasoning del
 turn are ignored until streaming ends.
 
 **Materialize** rebuilds the view inputs the chat column paints: transcript blocks and
-per-block editors (including markdown highlight and table-capable `TextEdit` state). That
-work is the expensive part when answers are long or contain GFM tables.
+per-block editors (table-capable `TextEdit` state). Markdown highlight and oversized
+user-card prefix follow `chat/oversized-messages`. That work is the expensive part when
+answers are long or contain GFM tables.
 
 ## When materialization runs
 
@@ -72,8 +73,9 @@ block i after materialize
 ```
 
 Earlier settled messages (user turns, completed answers) therefore avoid full re-highlight
-on every live-answer tick. Only the growing tail pays the refresh cost; when the segment
-list reshapes, affected indices rebuild while unchanged prefixes still reuse.
+on every live-answer tick. An oversized user card whose display prefix is unchanged also
+reuses. Only the growing tail pays the refresh cost; when the segment list reshapes,
+affected indices rebuild while unchanged prefixes still reuse.
 
 ## Hybrid layout cache
 
@@ -100,18 +102,20 @@ every paint of unchanged blocks.
 ## Relationship to other chat capabilities
 
 ```
-| Capability        | Owns                                              |
-| ----------------- | ------------------------------------------------- |
-| chat/transcript   | Segment list from session + pending buffers       |
-| chat/stream-ui    | When that view is materialized and how editors    |
-|                   | / hybrid layout are refreshed under load          |
-| chat/persistence  | When the session is written to disk               |
-| editor/md-table   | Pure table geometry for a line buffer             |
+| Capability              | Owns                                              |
+| ----------------------- | ------------------------------------------------- |
+| chat/transcript         | Segment list from session + pending buffers       |
+| chat/stream-ui          | When that view is materialized and how editors    |
+|                         | / hybrid layout are refreshed under load          |
+| chat/oversized-messages | Size gate; user-card prefix and copy full;        |
+|                         | composer/queue highlight skip                     |
+| chat/persistence        | When the session is written to disk               |
+| editor/md-table         | Pure table geometry for a line buffer             |
 ```
 
-Transcript construction and persistence schedules are independent of this capability.
-Materialization reads the same session the transcript model describes; it does not change
-segment rules or flush intervals.
+Transcript construction, persistence schedules, and oversized display policy are
+independent of this capability. Materialization reads the same session the transcript
+model describes; it does not change segment rules or flush intervals.
 
 ## Answer draft and thrash budget
 

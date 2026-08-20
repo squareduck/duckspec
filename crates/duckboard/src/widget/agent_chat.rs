@@ -65,6 +65,8 @@ pub enum Msg {
         viewport_h: f32,
         content_h: f32,
     },
+    /// Copy the stored full body of a truncated user card.
+    CopyFull(usize),
 }
 
 // ── Model picker ─────────────────────────────────────────────────────────────
@@ -749,49 +751,35 @@ pub fn tool_status_glyph(status: ToolRowStatus) -> &'static str {
 pub fn blocks_from_segments(segs: &[TranscriptSeg]) -> Vec<Block> {
     segs.iter()
         .map(|seg| match seg {
-            TranscriptSeg::User { lines } => Block {
-                kind: BlockKind::User,
-                label: "User".to_string(),
-                lines: lines.clone(),
-            },
-            TranscriptSeg::System { lines } => Block {
-                kind: BlockKind::System,
-                label: "System".to_string(),
-                lines: lines.clone(),
-            },
-            TranscriptSeg::Thinking { lines, live } => Block {
-                kind: BlockKind::Reasoning,
-                label: if *live {
-                    "Thinking ···".to_string()
+            TranscriptSeg::User { lines } => Block::new(BlockKind::User, "User", lines.clone()),
+            TranscriptSeg::System { lines } => {
+                Block::new(BlockKind::System, "System", lines.clone())
+            }
+            TranscriptSeg::Thinking { lines, live } => Block::new(
+                BlockKind::Reasoning,
+                if *live { "Thinking ···" } else { "Thinking" },
+                lines.clone(),
+            ),
+            TranscriptSeg::Answer { lines, live } => Block::new(
+                BlockKind::Assistant,
+                if *live {
+                    "Assistant ···"
                 } else {
-                    "Thinking".to_string()
+                    "Assistant"
                 },
-                lines: lines.clone(),
-            },
-            TranscriptSeg::Answer { lines, live } => Block {
-                kind: BlockKind::Assistant,
-                label: if *live {
-                    "Assistant ···".to_string()
-                } else {
-                    "Assistant".to_string()
-                },
-                lines: lines.clone(),
-            },
-            TranscriptSeg::Activity { tools, .. } => Block {
-                kind: BlockKind::Activity,
-                label: activity_collapsed_label(tools),
-                lines: activity_body_lines(tools),
-            },
-            TranscriptSeg::UserChoiceQuestion { text } => Block {
-                kind: BlockKind::UserChoiceQuestion,
-                label: "Question".to_string(),
-                lines: text_lines(text),
-            },
-            TranscriptSeg::UserChoiceAnswer { text } => Block {
-                kind: BlockKind::UserChoiceAnswer,
-                label: "Answer".to_string(),
-                lines: text_lines(text),
-            },
+                lines.clone(),
+            ),
+            TranscriptSeg::Activity { tools, .. } => Block::new(
+                BlockKind::Activity,
+                activity_collapsed_label(tools),
+                activity_body_lines(tools),
+            ),
+            TranscriptSeg::UserChoiceQuestion { text } => {
+                Block::new(BlockKind::UserChoiceQuestion, "Question", text_lines(text))
+            }
+            TranscriptSeg::UserChoiceAnswer { text } => {
+                Block::new(BlockKind::UserChoiceAnswer, "Answer", text_lines(text))
+            }
         })
         .collect()
 }
@@ -1814,7 +1802,20 @@ fn view_prose_block<'a>(
         .transparent_bg(true)
         .highlights(hl_ranges, hl_current);
 
-    let padded = container(content)
+    let inner: Element<'a, Msg> = if block.kind == BlockKind::User && block.truncated {
+        let shown = block.lines.join("\n").chars().count();
+        column![
+            content,
+            view_copy_full_footer(idx, shown, block.full_char_count)
+        ]
+        .spacing(theme::SPACING_XS)
+        .width(Length::Fill)
+        .into()
+    } else {
+        content.into()
+    };
+
+    let padded = container(inner)
         .padding([theme::SPACING_SM, theme::SPACING_MD])
         .width(Length::Fill);
 
@@ -1970,6 +1971,37 @@ fn view_selection_chip<'a>(label: String, tentative: bool) -> Element<'a, Msg> {
     )
     .padding([2.0, theme::SPACING_SM])
     .style(style)
+    .into()
+}
+
+fn view_copy_full_footer<'a>(idx: usize, shown: usize, total: usize) -> Element<'a, Msg> {
+    let counts = text(format!(
+        "{} of {} characters",
+        format_number(shown),
+        format_number(total)
+    ))
+    .size(theme::font_sm())
+    .color(theme::text_muted());
+    let copy = button(
+        text("Copy full")
+            .size(theme::font_sm())
+            .color(theme::text_muted()),
+    )
+    .on_press(Msg::CopyFull(idx))
+    .padding(0.0)
+    .style(|_theme, _status| iced::widget::button::Style {
+        background: None,
+        ..Default::default()
+    });
+    row![
+        counts,
+        text(" · ")
+            .size(theme::font_sm())
+            .color(theme::text_muted()),
+        copy
+    ]
+    .spacing(0.0)
+    .align_y(iced::Alignment::Center)
     .into()
 }
 
@@ -2932,23 +2964,19 @@ mod tests {
     // ── Segment → editor blocks ─────────────────────────────────────────
 
     fn answer_block(text: &str) -> Block {
-        Block {
-            kind: BlockKind::Assistant,
-            label: "Answer".into(),
-            lines: if text.is_empty() {
+        Block::new(
+            BlockKind::Assistant,
+            "Answer",
+            if text.is_empty() {
                 vec![]
             } else {
                 vec![text.into()]
             },
-        }
+        )
     }
 
     fn user_block(text: &str) -> Block {
-        Block {
-            kind: BlockKind::User,
-            label: "User".into(),
-            lines: vec![text.into()],
-        }
+        Block::new(BlockKind::User, "User", vec![text.into()])
     }
 
     // ── Last Answer band target ─────────────────────────────────────────
@@ -2993,19 +3021,11 @@ mod tests {
     }
 
     fn thinking_block(text: &str) -> Block {
-        Block {
-            kind: BlockKind::Reasoning,
-            label: "Thinking".into(),
-            lines: vec![text.into()],
-        }
+        Block::new(BlockKind::Reasoning, "Thinking", vec![text.into()])
     }
 
     fn activity_block() -> Block {
-        Block {
-            kind: BlockKind::Activity,
-            label: "1 tool".into(),
-            lines: vec!["· Read a.rs".into()],
-        }
+        Block::new(BlockKind::Activity, "1 tool", vec!["· Read a.rs".into()])
     }
 
     // ── Answer reply anchors ────────────────────────────────────────────

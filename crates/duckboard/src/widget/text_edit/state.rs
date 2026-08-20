@@ -40,6 +40,22 @@ pub struct Block {
     pub kind: BlockKind,
     pub label: String,
     pub lines: Vec<String>,
+    /// True when `lines` is a size-gated prefix of a User body.
+    pub truncated: bool,
+    /// Source character count of the full User body when `truncated`.
+    pub full_char_count: usize,
+}
+
+impl Block {
+    pub fn new(kind: BlockKind, label: impl Into<String>, lines: Vec<String>) -> Self {
+        Self {
+            kind,
+            label: label.into(),
+            lines,
+            truncated: false,
+            full_char_count: 0,
+        }
+    }
 }
 
 /// Identifies what a visible line maps to within the block structure.
