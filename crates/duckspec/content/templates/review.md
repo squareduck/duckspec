@@ -41,9 +41,14 @@ a solo verdict or implement fixes.
 4. Stay on the active finding until its conclusion and route are clear. Merge,
    split, reorder, or dismiss candidates as the discussion requires.
 5. Route each accepted finding to the earliest invalid layer:
-   - `/ds-design` when technical direction is wrong or incomplete
+   - `/ds-design` when technical direction is wrong or incomplete,
+     including when the intended look in design is wrong
    - `/ds-spec` when design is sound but the behavioral contract is wrong
    - `/ds-step` when design and specs are sound but implementation needs work
+   Paint-only findings (color, font, icon, padding, tint, px chrome) never
+   route to `/ds-spec`. They go to `/ds-design` when the intended look is
+   wrong, or `/ds-step` when implementation missed a look design already
+   states. Do not mint spec updates for a restyle.
 6. When all findings are resolved, synthesize the full discussion per
    `ds schema review`, show the complete record in the write gate, then create,
    write, format, and check the append-only review file.

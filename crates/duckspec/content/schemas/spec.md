@@ -68,9 +68,14 @@ apply still must satisfy this schema. Delta shape (markers, ops) is
 - **Complete, not exhaustive.** Requirements and scenarios together describe
   every important behavior the capability owns. Important means a stable
   observable rule whose violation materially changes correctness, safety, data,
-  interoperability, or user experience - not every input, branch, or
-  implementation detail. Completeness lives in that pairing; umbrella prose
-  does not carry the full contract alone.
+  interoperability, or interaction — not every input, branch, implementation
+  detail, or look. Completeness lives in that pairing; umbrella prose does not
+  carry the full contract alone.
+- **Meaning, not paint.** Specs encode meaning. A purely visual change must not
+  require a spec edit. Color, font, icon, padding, alpha, tint, contrast recipe,
+  px chrome, and paint tokens are not contract. Presence, hit-testing, semantic
+  roles, and interaction are. If a restyle, theme swap, or spacing tweak would
+  force a spec edit, the clause does not belong.
 - **Cohesive whole.** Requirements form the shortest clear grouping of the
   capability's proofs. Merge overlap, remove stale or misplaced behavior, and
   reorganize existing content when that improves the complete file.
@@ -98,10 +103,10 @@ apply still must satisfy this schema. Delta shape (markers, ops) is
   true/false mirrors, and the same fact observed on two surfaces are one
   scenario, not many. Parameterize inputs only when they still prove one story.
 - **Do not mint fluff.** Reject non-goals, negative architecture notes, storage
-  column names, and UI chrome as requirements or scenarios unless they are the
-  behavior under contract. "Not a feature flag", "docs say X", and setup
-  preconditions are not scenarios. Out-of-scope notes do not belong in
-  requirement prose.
+  column names, and UI chrome as requirements or scenarios. "Not a feature
+  flag", "docs say X", and setup preconditions are not scenarios. Out-of-scope
+  notes do not belong in requirement prose. A UI capability does not make
+  chrome into contract.
 - **Tests inform the contract.** Existing tests may reveal stable intentional
   behavior missing from the spec. Helper and implementation tests need not
   become scenarios; important behavioral tests should have a natural spec
@@ -113,13 +118,11 @@ apply still must satisfy this schema. Delta shape (markers, ops) is
   narration, modal verbs in clauses, and restatements of the requirement.
 - **Observer-facing.** Returns, persisted state, events, responses, and visible
   recovery are contract material. Private fields, module placement, function
-  names, and branches belong to implementation or design.
+  names, and branches belong to implementation or design. "Visible" means the
+  user can observe the outcome, not how it is painted.
 - **Distinctive names.** Name the independent proof (e.g. the control or failure
   mode), not a single assert. Avoid "Happy path", "Test 1", true/false twins,
   and sentence-length restatements.
-- **No visual tests.** Never put pure UI visual descriptions in specs or docs.
-  What color something is, how it looks, which icon it uses. All of that is
-  just churn because visuals change often and don't describe critical behavior.
 
 Body markdown follows `style` (load only if not already in context).
 

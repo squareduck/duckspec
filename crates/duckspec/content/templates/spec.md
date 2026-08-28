@@ -37,29 +37,33 @@ current spec, documentation, source, and tests.
    - the cohesive end-state contract
    - important consolidation, relocation, or retirement
    - concrete grounding in design, source, or tests
-2. Present the map in dependency order and resolve ownership conflicts with the
+2. Omit a capability-map entry when the work is purely visual and no current
+   spec already covers it. A restyle, theme swap, or spacing tweak is not a
+   new spec. Do not mint paint-level scenarios. Existing meaning scenarios
+   stay and stay current. Drop bogus scenarios (paint, fluff, non-proof).
+3. Present the map in dependency order and resolve ownership conflicts with the
    user. Do not invent a new capability when an existing one naturally owns
    the behavior.
-3. Emit `confirm map` and wait.
-4. Work through one capability at a time in map order. Read it as a whole, then
+4. Emit `confirm map` and wait.
+5. Work through one capability at a time in map order. Read it as a whole, then
    diagnose missing behavior, duplication, weak wording, misplaced ownership,
-   stale scenarios, and padded proof (boolean mirrors, per-surface restatements,
-   non-goals, assertion-per-scenario).
-5. Present the target merged outline: cohesive requirements with short plain
+   stale scenarios, paint, and padded proof (boolean mirrors, per-surface
+   restatements, non-goals, assertion-per-scenario).
+6. Present the target merged outline: cohesive requirements with short plain
    umbrellas and only the scenarios that are independent units of proof.
    Prefer one lifecycle/multi-assert scenario over several checks of the same
    control. For existing capabilities, show meaningful merges, rewrites,
    additions, removals, and relocations.
-6. Discuss until the target contract is complete, minimal, and cohesive. Drop
+7. Discuss until the target contract is complete, minimal, and cohesive. Drop
    or merge any scenario that does not fail for a reason independent of the
    others. A clearly intentional stable behavior found in existing tests may
    enter the contract. If source or tests expose a new product or architecture
    decision, stop and return to design discussion instead of silently
    canonizing it.
-7. Gate the target merged outline. After confirmation, encode that target as
+8. Gate the target merged outline. After confirmation, encode that target as
    full files or deltas, format, and check. Do not invent requirements,
    scenarios, or doc content during expansion.
-8. Repeat until the map is complete, then use Handoff.
+9. Repeat until the map is complete, then use Handoff.
 
 Every requirement has a short plain-language umbrella: why its scenarios belong
 together, plus any single shared invariant. Never restate, enumerate, or
@@ -70,6 +74,9 @@ an independent proof unit that earns a test - not a checklist of asserts,
 true/false twins, multi-surface echoes of one fact, or non-goals. One test may
 walk several states under a single scenario. Optimize the whole merged
 capability for clarity and cohesion, not for the smallest textual delta.
+Follow spec Quality: meaning, not paint. Visual-only work has no new spec
+artifact. Existing meaning scenarios are still the contract — update them.
+Drop bogus scenarios; do not keep paint as contract.
 
 ## Chat
 
@@ -128,8 +135,10 @@ Preview the intended merged capability, never delta marker syntax. Include the
 doc outline when a doc is created or materially changed. On an update, identify
 important consolidation edits so the user can judge what the final contract
 gains and loses. List only independent proof units under Scenarios - often one
-per requirement. Do not pad the list with default/on/off, read-vs-write mirrors,
-or non-goals.
+per requirement. Do not mint paint (color, font, icon, padding, tint, px
+chrome). Do not pad the list with default/on/off, read-vs-write mirrors, or
+non-goals. Existing meaning scenarios stay in the outline and stay current.
+Drop bogus scenarios from the outline.
 
 ```markdown
 > **write**
@@ -150,7 +159,7 @@ Scenarios:
 ## Cohesion edits
 
 - Merge <overlapping or assertion-level scenarios> into <target>
-- Remove <scenario> because <not an independent failure mode / non-goal>
+- Remove <scenario> because <not an independent failure mode / non-goal / paint>
 
 ## Doc
 

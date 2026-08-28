@@ -33,9 +33,15 @@ Body is freeform markdown (headings, prose, lists, tables, diagrams, code).
 - **Cohesive technical model.** Explain the capability as one system: how its
   pieces relate, what states and flows matter, and how important policies and
   failures fit together. A title and summary are only a scaffold.
-- **Paired, not duplicated.** Share vocabulary and boundaries with the spec,
-  but do not paraphrase requirements and scenarios line by line. The spec owns
-  the behavioral contract; the doc makes the complete system understandable.
+- **Paired, not duplicated.** Share vocabulary, boundaries, and meaning with
+  the spec, but do not paraphrase requirements and scenarios line by line. The
+  spec owns the behavioral contract; the doc makes the complete system
+  understandable. Neither file holds paint the other was forbidden to contract.
+- **Meaning, not paint.** A purely visual change must not require a doc edit.
+  Color, font, icon, padding, alpha, tint, contrast recipe, px chrome, and
+  paint tokens are not the reader model. Presence, hit-testing, semantic roles,
+  and interaction are. If a restyle, theme swap, or spacing tweak would force
+  a doc edit, the sentence does not belong.
 - **Domain H2s.** Name sections after what the capability actually has -
   `Session lifecycle`, `Token format`, `Retry behavior`, `Error handling`,
   `Concurrency`, `Rate limits` - whatever shape it has. Avoid generic shells
