@@ -90,9 +90,10 @@ apply still must satisfy this schema. Delta shape (markers, ops) is
   distinct outcomes belong only in scenarios.
 - **Named thresholds, not baked constants.** Prefer named concepts (`idle
   timeout`, `retry budget`) over literal values (`30 minutes`, `3 retries`)
-  unless the specific number is a product-defining rule that must not drift with
-  implementation tuning. Code and tests own default values; baking them into the
-  contract causes needless churn when they change.
+  unless the specific value is a frozen interoperability or product rule that
+  must not drift with implementation tuning. Code and tests own default values
+  and default tables; baking them into the contract causes needless churn when
+  they change.
 - **One concern per requirement.** Split unrelated behavior, but do not invent
   requirements merely to hold scenarios or to mirror API surfaces (write path,
   read path, default) of the same rule.
@@ -102,6 +103,17 @@ apply still must satisfy this schema. Delta shape (markers, ops) is
   (e.g. unset → enable → disable) over a scenario per check. Opposite inputs,
   true/false mirrors, and the same fact observed on two surfaces are one
   scenario, not many. Parameterize inputs only when they still prove one story.
+  A scenario whose only failure mode is that a source list or default changed
+  is not a proof unit.
+- **Code-owned catalogues, not contract.** Do not inventory a closed set that
+  already has a single source of truth (commands, relative paths, default
+  bindings, method names, prefixes, id sets). If adding or renaming a member
+  would force a spec edit without changing an independent observable rule, the
+  clause does not belong. A scenario may use a member as a handle while proving
+  a rule. It must not THEN/AND the closed set, snapshot default fields, or lock
+  a name to its own literal. Tests must not exist solely to freeze that list.
+  The product-defining exception is a frozen rule (protocol version, frame
+  cap), not a growing inventory.
 - **Do not mint fluff.** Reject non-goals, negative architecture notes, storage
   column names, and UI chrome as requirements or scenarios. "Not a feature
   flag", "docs say X", and setup preconditions are not scenarios. Out-of-scope
@@ -138,6 +150,8 @@ not opposite steps of one toggle. A single control's lifecycle stays one
 scenario with one multi-assert test. The requirement umbrella states the shared
 rule once; scenarios own the cases. Thresholds are named concepts, not baked
 constants — the idle duration lives in code unless the product freezes a value.
+A source-owned list of commands or paths is not a scenario; name a member only
+as a handle while proving a rule.
 
 ```markdown
 # Session expiration

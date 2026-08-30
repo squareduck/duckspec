@@ -60,6 +60,13 @@ Body is freeform markdown (headings, prose, lists, tables, diagrams, code).
   ("previously", "before the fix", "now also supports").
 - **Code-grounded.** Names, flows, states, and seams agree with the implemented
   system and its tests without turning the doc into a file or symbol inventory.
+- **Orientation, not a second table.** A short example or representative layout
+  is for the cold reader. Do not copy a growing source list (every command,
+  every relative path, every default binding, every prefix). If adding an item
+  to the source list would force a doc edit without changing the mental model,
+  the sentence is a catalogue. Prefer the generating rule plus one example, or
+  an ownership map (family → owner). Operator-useful defaults may be labeled
+  informational; they are not a second contract.
 
 ## Formatting
 

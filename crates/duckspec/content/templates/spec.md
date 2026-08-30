@@ -40,15 +40,17 @@ current spec, documentation, source, and tests.
 2. Omit a capability-map entry when the work is purely visual and no current
    spec already covers it. A restyle, theme swap, or spacing tweak is not a
    new spec. Do not mint paint-level scenarios. Existing meaning scenarios
-   stay and stay current. Drop bogus scenarios (paint, fluff, non-proof).
+   stay and stay current. Drop bogus scenarios (paint, fluff, non-proof,
+   catalogues).
 3. Present the map in dependency order and resolve ownership conflicts with the
    user. Do not invent a new capability when an existing one naturally owns
    the behavior.
 4. Emit `confirm map` and wait.
 5. Work through one capability at a time in map order. Read it as a whole, then
    diagnose missing behavior, duplication, weak wording, misplaced ownership,
-   stale scenarios, paint, and padded proof (boolean mirrors, per-surface
-   restatements, non-goals, assertion-per-scenario).
+   stale scenarios, paint, padded proof (boolean mirrors, per-surface
+   restatements, non-goals, assertion-per-scenario), and code-owned catalogues
+   (source-list rosters, default snapshots, tautological name locks).
 6. Present the target merged outline: cohesive requirements with short plain
    umbrellas and only the scenarios that are independent units of proof.
    Prefer one lifecycle/multi-assert scenario over several checks of the same
@@ -69,14 +71,18 @@ Every requirement has a short plain-language umbrella: why its scenarios belong
 together, plus any single shared invariant. Never restate, enumerate, or
 paraphrase the scenarios beneath it, and do not use SHALL / MUST / SHOULD / MAY
 as house style. Prefer named thresholds (`idle timeout`) over baked constants
-(`30 minutes`) unless the specific value is product-defining. Each scenario is
-an independent proof unit that earns a test - not a checklist of asserts,
-true/false twins, multi-surface echoes of one fact, or non-goals. One test may
-walk several states under a single scenario. Optimize the whole merged
-capability for clarity and cohesion, not for the smallest textual delta.
-Follow spec Quality: meaning, not paint. Visual-only work has no new spec
-artifact. Existing meaning scenarios are still the contract — update them.
-Drop bogus scenarios; do not keep paint as contract.
+(`30 minutes`) unless the specific value is a frozen interoperability or product
+rule. A closed list that already lives in source is not a scenario. Use a member
+as a handle; do not THEN/AND the set, snapshot defaults, or keep a test whose
+only job is to freeze that list. On reshape, adding a row to a source list is a
+cohesion removal, not missing coverage. Each scenario is an independent proof
+unit that earns a test - not a checklist of asserts, true/false twins,
+multi-surface echoes of one fact, or non-goals. One test may walk several states
+under a single scenario. Optimize the whole merged capability for clarity and
+cohesion, not for the smallest textual delta. Follow spec Quality: meaning, not
+paint. Visual-only work has no new spec artifact. Existing meaning scenarios are
+still the contract — update them. Drop bogus scenarios; do not keep paint or
+catalogues as contract.
 
 ## Chat
 
@@ -132,13 +138,14 @@ Grounding:
 ### Per capability (confirm-then-write)
 
 Preview the intended merged capability, never delta marker syntax. Include the
-doc outline when a doc is created or materially changed. On an update, identify
-important consolidation edits so the user can judge what the final contract
-gains and loses. List only independent proof units under Scenarios - often one
-per requirement. Do not mint paint (color, font, icon, padding, tint, px
-chrome). Do not pad the list with default/on/off, read-vs-write mirrors, or
-non-goals. Existing meaning scenarios stay in the outline and stay current.
-Drop bogus scenarios from the outline.
+doc outline when a doc is created or materially changed: generating rule plus
+example or ownership map, not a second copy of a source list. On an update,
+identify important consolidation edits so the user can judge what the final
+contract gains and loses. List only independent proof units under Scenarios -
+often one per requirement. Do not mint paint (color, font, icon, padding, tint,
+px chrome). Do not pad the list with default/on/off, read-vs-write mirrors,
+non-goals, or code-owned catalogues. Existing meaning scenarios stay in the
+outline and stay current. Drop bogus scenarios from the outline.
 
 ```markdown
 > **write**
@@ -160,6 +167,7 @@ Scenarios:
 
 - Merge <overlapping or assertion-level scenarios> into <target>
 - Remove <scenario> because <not an independent failure mode / non-goal / paint>
+- Remove <scenario> because <source list / default snapshot, not an independent rule>
 
 ## Doc
 
