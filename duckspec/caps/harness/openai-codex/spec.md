@@ -60,7 +60,7 @@ session-not-found so the host can drop the id and retry.
 - **AND** it surfaces a Codex thread id
 
 > test: code
-> - crates/duckchat-codex-acp/src/agent.rs:782
+> - crates/duckchat-codex-acp/src/agent.rs:733
 
 ### Scenario: A turn with a prior session id resumes that id
 
@@ -69,7 +69,7 @@ session-not-found so the host can drop the id and retry.
 - **THEN** it opens the session by resuming that same id
 
 > test: code
-> - crates/duckchat-codex-acp/src/agent.rs:802
+> - crates/duckchat-codex-acp/src/agent.rs:753
 
 ### Scenario: A failed load of a missing session surfaces session-not-found
 
@@ -78,7 +78,7 @@ session-not-found so the host can drop the id and retry.
 - **THEN** the outcome is session-not-found rather than a successful resume
 
 > test: code
-> - crates/duckchat-codex-acp/src/agent.rs:826
+> - crates/duckchat-codex-acp/src/agent.rs:777
 
 ## Requirement: App-server process heat
 
@@ -101,7 +101,7 @@ a prior session id is supplied, resume that id.
   session id
 
 > test: code
-> - crates/duckchat-codex-acp/src/agent.rs:965
+> - crates/duckchat-codex-acp/src/agent.rs:873
 
 ### Scenario: After cancel, a later turn may spawn again and resume a prior session id
 
@@ -112,7 +112,7 @@ a prior session id is supplied, resume that id.
 - **AND** it opens the session by resuming that id
 
 > test: code
-> - crates/duckchat-codex-acp/src/agent.rs:987
+> - crates/duckchat-codex-acp/src/agent.rs:895
 
 ## Requirement: Profile-compatible event emission
 
@@ -407,7 +407,7 @@ a typed error rather than panicking.
 - **AND** the turn fails with a typed error rather than panicking
 
 > test: code
-> - crates/duckchat-codex-acp/src/agent.rs:752
+> - crates/duckchat-codex-acp/src/agent.rs:703
 > - crates/duckchat/src/openai_codex.rs:431
 
 ## Requirement: Stage skill discovery
@@ -440,65 +440,37 @@ SHALL be empty without failing.
 > test: code
 > - crates/duckchat/src/openai_codex/discover.rs:128
 
-## Requirement: Repository-scoped VCS access
+## Requirement: Full local access
 
-Every Codex turn SHALL use a workspace-write sandbox policy whose additional writable
-roots are the existing `.git` and `.jj` directories directly beneath the normalized
-repository root supplied by ACP session open or load. The agent SHALL refresh that
-repository context on session open or load, retain it independently of app-server process
-heat, and apply it to every turn. It SHALL NOT add absent metadata, file indirections,
-ancestor metadata, or external stores. If the backend rejects the policy, the turn SHALL
-fail through the app-server error path without retrying under a weaker or broader policy.
+Every Codex turn uses an explicit unrestricted local-access policy under the permissions
+of Duckboard's OS user, without inheriting or falling back to another access boundary.
 
 > test: code
 
-### Scenario: Direct repository metadata is writable on every turn
+### Scenario: Every turn receives full local access
 
-- **GIVEN** a normalized repository root with direct `.git` and `.jj` directories
-- **WHEN** the Codex agent starts a turn for that repository
-- **THEN** the turn uses workspace-write
-- **AND** its additional writable roots contain those direct metadata directories
-- **AND** the policy is supplied on every turn
+- **GIVEN** a Codex session whose app-server process remains hot
+- **WHEN** the agent runs consecutive turns on that session
+- **THEN** each turn receives the explicit full-local-access policy
 
 > test: code
-> - crates/duckchat-codex-acp/src/agent.rs:846
+> - crates/duckchat-codex-acp/src/agent.rs:797
 
-### Scenario: External metadata indirection is not granted
+### Scenario: A resumed session reapplies full local access after restart
 
-- **GIVEN** a repository root whose `.git` entry is a file that points to an external
-  store
-
-- **WHEN** the Codex agent derives the turn's additional writable roots
-
-- **THEN** it does not follow or grant access to that external store
-
-- **AND** it grants no writable root for the `.git` file
+- **GIVEN** a persisted Codex thread whose app-server process has restarted
+- **WHEN** the agent resumes the thread and starts its next turn
+- **THEN** the resumed turn receives the explicit full-local-access policy
 
 > test: code
-> - crates/duckchat-codex-acp/src/agent.rs:876
+> - crates/duckchat-codex-acp/src/agent.rs:819
 
-### Scenario: Resumed and restarted sessions reapply refreshed repository access
+### Scenario: A rejected full-access policy does not trigger a fallback
 
-- **GIVEN** a persisted Codex thread whose repository metadata has changed since its
-  previous turn
-
-- **AND** the app-server process has restarted
-
-- **WHEN** the ACP client loads the session and starts its next turn
-
-- **THEN** the agent refreshes repository access from the load working directory
-
-- **AND** the resumed turn receives the refreshed workspace-write policy
-
-> test: code
-> - crates/duckchat-codex-acp/src/agent.rs:896
-
-### Scenario: A rejected repository policy does not trigger a weaker retry
-
-- **GIVEN** the app-server rejects a turn's repository workspace-write policy
+- **GIVEN** the app-server rejects a turn's full-local-access policy
 - **WHEN** the Codex agent handles that rejection
 - **THEN** the turn fails through the app-server error path
-- **AND** the agent does not retry the turn with missing, weaker, or broader permissions
+- **AND** the agent does not retry with a missing, inherited, or sandboxed policy
 
 > test: code
-> - crates/duckchat-codex-acp/src/agent.rs:942
+> - crates/duckchat-codex-acp/src/agent.rs:852

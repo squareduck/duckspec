@@ -4,8 +4,8 @@
 //! is the real `thread.id`. One app-server child stays process-hot across main
 //! turns until cancel kills it.
 
-use std::collections::{HashMap, HashSet};
-use std::path::{Path, PathBuf};
+use std::collections::HashSet;
+use std::path::PathBuf;
 
 use serde_json::{Value, json};
 
@@ -16,31 +16,6 @@ use crate::codex::{
     AppServer, AppServerError, CodexSpawnFactory, TurnStreamEvent, acp_prompt_to_turn_input,
     default_spawn_factory, map_notification,
 };
-
-/// Repository-local paths that a Codex turn may write in addition to the
-/// ordinary workspace. Discovery never follows metadata files or symlinks.
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct RepositoryAccess {
-    root: PathBuf,
-    writable_roots: Vec<PathBuf>,
-}
-
-impl RepositoryAccess {
-    fn discover(root: &Path) -> Self {
-        let root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
-        let writable_roots = [".git", ".jj"]
-            .into_iter()
-            .map(|name| root.join(name))
-            .filter(|path| {
-                std::fs::symlink_metadata(path).is_ok_and(|metadata| metadata.file_type().is_dir())
-            })
-            .collect();
-        Self {
-            root,
-            writable_roots,
-        }
-    }
-}
 
 /// Errors returned from session operations (mapped to JSON-RPC by the loop).
 #[derive(Debug)]
@@ -93,9 +68,6 @@ impl From<AppServerError> for AgentError {
 pub(crate) struct Agent {
     /// Known ACP session handles (Codex thread ids).
     sessions: HashSet<String>,
-    /// Repository access context by Codex thread id. Unlike `sessions`, this
-    /// survives app-server heat loss and is refreshed on every ACP open/load.
-    repository_access: HashMap<String, RepositoryAccess>,
     /// Process-hot app-server, if any.
     hot: Option<AppServer>,
     /// Spawn factory for official (or scripted) `codex app-server`.
@@ -112,7 +84,6 @@ impl Agent {
     pub(crate) fn with_factory(factory: CodexSpawnFactory) -> Self {
         Self {
             sessions: HashSet::new(),
-            repository_access: HashMap::new(),
             hot: None,
             factory,
             in_flight: None,
@@ -148,7 +119,6 @@ impl Agent {
     /// Open a new session: ensure heat, `thread/start`, return thread id.
     pub(crate) async fn session_new(&mut self, params: &Value) -> Result<Value, AgentError> {
         let cwd = cwd_from_params(params);
-        let repository_access = RepositoryAccess::discover(&cwd);
         let model = model_from_params(params);
 
         self.ensure_hot().await?;
@@ -157,8 +127,6 @@ impl Agent {
             .thread_start(&cwd.to_string_lossy(), model.as_deref())
             .await?;
         self.sessions.insert(thread_id.clone());
-        self.repository_access
-            .insert(thread_id.clone(), repository_access);
         Ok(json!({ "sessionId": thread_id }))
     }
 
@@ -169,16 +137,11 @@ impl Agent {
             .and_then(Value::as_str)
             .ok_or_else(|| AgentError::InvalidParams("session/load missing sessionId".into()))?
             .to_string();
-        let cwd = cwd_from_params(params);
-        let repository_access = RepositoryAccess::discover(&cwd);
-        let _ = model_from_params(params);
-
         self.ensure_hot().await?;
         let hot = self.hot.as_mut().expect("ensure_hot leaves hot set");
         match hot.thread_resume(&session_id).await {
             Ok(id) => {
-                self.sessions.insert(id.clone());
-                self.repository_access.insert(id, repository_access);
+                self.sessions.insert(id);
                 Ok(json!({}))
             }
             Err(e) if e.is_session_not_found() => Err(AgentError::SessionNotFound(e.to_string())),
@@ -259,20 +222,8 @@ impl Agent {
         R: tokio::io::AsyncBufRead + Unpin + Send,
         W: FnMut(Value) -> Result<(), AgentError> + Send,
     {
-        let writable_roots = self
-            .repository_access
-            .get(session_id)
-            .map(|access| access.writable_roots.clone())
-            .ok_or_else(|| {
-                AgentError::InvalidParams(format!(
-                    "session/prompt has no repository context for {session_id}"
-                ))
-            })?;
         let hot = self.hot.as_mut().expect("hot after ensure");
-        let turn_id = match hot
-            .turn_start(session_id, input, model, &writable_roots)
-            .await
-        {
+        let turn_id = match hot.turn_start(session_id, input, model).await {
             Ok(id) => id,
             Err(e) => {
                 self.in_flight = None;
@@ -531,7 +482,7 @@ for line in sys.stdin:
             "cwd": thread["cwd"],
             "approvalPolicy": "never",
             "approvalsReviewer": "user",
-            "sandbox": {"type": "workspaceWrite"},
+            "sandbox": {"type": "dangerFullAccess"},
         })
         print(json.dumps({"method": "thread/started", "params": {"thread": thread}}), flush=True)
     elif method == "thread/resume":
@@ -561,7 +512,7 @@ for line in sys.stdin:
             "cwd": "/tmp",
             "approvalPolicy": "never",
             "approvalsReviewer": "user",
-            "sandbox": {"type": "workspaceWrite"},
+            "sandbox": {"type": "dangerFullAccess"},
         })
     elif method == "turn/start":
         turn_n += 1
@@ -843,21 +794,12 @@ for line in sys.stdin:
         agent.cancel(None).await;
     }
 
-    /// @spec harness/openai-codex Repository-scoped VCS access: Direct repository metadata is writable on every turn
+    /// @spec harness/openai-codex Full local access: Every turn receives full local access
     #[tokio::test]
-    async fn direct_repository_metadata_is_writable_on_every_turn() {
-        let repository = tempfile::tempdir().unwrap();
-        std::fs::create_dir(repository.path().join(".git")).unwrap();
-        std::fs::create_dir(repository.path().join(".jj")).unwrap();
-        let root = repository.path().canonicalize().unwrap();
-        let expected_roots = json!([
-            root.join(".git").to_string_lossy(),
-            root.join(".jj").to_string_lossy(),
-        ]);
-
+    async fn every_turn_receives_full_local_access() {
         let mut agent = Agent::with_factory(scripted_factory());
         let sid = agent
-            .session_new(&json!({ "cwd": repository.path().to_string_lossy() }))
+            .session_new(&json!({ "cwd": std::env::temp_dir().to_string_lossy() }))
             .await
             .unwrap()["sessionId"]
             .as_str()
@@ -866,63 +808,34 @@ for line in sys.stdin:
 
         for text in ["first", "second"] {
             let (_, updates) = prompt_with_updates(&mut agent, &sid, text).await.unwrap();
-            let policy = sandbox_policy(&updates);
-            assert_eq!(policy["type"], "workspaceWrite");
-            assert_eq!(policy["writableRoots"], expected_roots);
+            assert_eq!(
+                sandbox_policy(&updates),
+                json!({ "type": "dangerFullAccess" })
+            );
         }
         agent.cancel(None).await;
     }
 
-    /// @spec harness/openai-codex Repository-scoped VCS access: External metadata indirection is not granted
-    #[test]
-    fn external_metadata_indirection_is_not_granted() {
-        let repository = tempfile::tempdir().unwrap();
-        let external = tempfile::tempdir().unwrap();
-        std::fs::write(
-            repository.path().join(".git"),
-            format!("gitdir: {}", external.path().display()),
-        )
-        .unwrap();
-
-        let access = RepositoryAccess::discover(repository.path());
-
-        assert_eq!(access.root, repository.path().canonicalize().unwrap());
-        assert!(
-            access.writable_roots.is_empty(),
-            "a .git file must not grant its external target: {access:?}"
-        );
-    }
-
-    /// @spec harness/openai-codex Repository-scoped VCS access: Resumed and restarted sessions reapply refreshed repository access
+    /// @spec harness/openai-codex Full local access: A resumed session reapplies full local access after restart
     #[tokio::test]
-    async fn resumed_restarted_session_reapplies_refreshed_repository_access() {
-        let repository = tempfile::tempdir().unwrap();
-        std::fs::create_dir(repository.path().join(".git")).unwrap();
-        let root = repository.path().canonicalize().unwrap();
+    async fn resumed_session_reapplies_full_local_access_after_restart() {
         let mut agent = Agent::with_factory(scripted_factory());
         let sid = agent
-            .session_new(&json!({ "cwd": repository.path().to_string_lossy() }))
+            .session_new(&json!({ "cwd": std::env::temp_dir().to_string_lossy() }))
             .await
             .unwrap()["sessionId"]
             .as_str()
             .unwrap()
             .to_string();
 
-        let (_, first_updates) = prompt_with_updates(&mut agent, &sid, "first")
-            .await
-            .unwrap();
-        assert_eq!(
-            sandbox_policy(&first_updates)["writableRoots"],
-            json!([root.join(".git").to_string_lossy()])
-        );
+        prompt_ok(&mut agent, &sid, "first").await;
         agent.cancel(Some(&sid)).await;
         assert!(!agent.has_hot_app_server());
 
-        std::fs::create_dir(repository.path().join(".jj")).unwrap();
         agent
             .session_load(&json!({
                 "sessionId": &sid,
-                "cwd": repository.path().to_string_lossy(),
+                "cwd": std::env::temp_dir().to_string_lossy(),
             }))
             .await
             .unwrap();
@@ -930,23 +843,18 @@ for line in sys.stdin:
             .await
             .unwrap();
         assert_eq!(
-            sandbox_policy(&resumed_updates)["writableRoots"],
-            json!([
-                root.join(".git").to_string_lossy(),
-                root.join(".jj").to_string_lossy(),
-            ])
+            sandbox_policy(&resumed_updates),
+            json!({ "type": "dangerFullAccess" })
         );
         agent.cancel(None).await;
     }
 
-    /// @spec harness/openai-codex Repository-scoped VCS access: A rejected repository policy does not trigger a weaker retry
+    /// @spec harness/openai-codex Full local access: A rejected full-access policy does not trigger a fallback
     #[tokio::test]
-    async fn rejected_repository_policy_does_not_trigger_weaker_retry() {
-        let repository = tempfile::tempdir().unwrap();
-        std::fs::create_dir(repository.path().join(".git")).unwrap();
+    async fn rejected_full_access_policy_does_not_trigger_fallback() {
         let mut agent = Agent::with_factory(scripted_factory());
         let sid = agent
-            .session_new(&json!({ "cwd": repository.path().to_string_lossy() }))
+            .session_new(&json!({ "cwd": std::env::temp_dir().to_string_lossy() }))
             .await
             .unwrap()["sessionId"]
             .as_str()

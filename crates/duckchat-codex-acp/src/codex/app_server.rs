@@ -5,7 +5,6 @@
 //! user-input for the agent, and surfaces notifications.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -244,7 +243,6 @@ impl AppServer {
         thread_id: &str,
         input: Vec<Value>,
         model: Option<&str>,
-        writable_roots: &[PathBuf],
     ) -> Result<String, AppServerError> {
         // Drain stale notifications from prior turns.
         {
@@ -260,8 +258,7 @@ impl AppServer {
             "threadId": thread_id,
             "input": input,
             "sandboxPolicy": {
-                "type": "workspaceWrite",
-                "writableRoots": writable_roots,
+                "type": "dangerFullAccess",
             },
         });
         if let Some(m) = model.filter(|s| !s.is_empty()) {

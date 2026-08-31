@@ -23,17 +23,13 @@ turn. Resume stays harness-bound: a Codex thread id cannot be loaded on Claude o
 ## Session lifecycle
 
 ```
-session/new(cwd)  ─┐
-                   ├─► refresh repository access ─► remember by thread id
-session/load(cwd) ─┘
-          │
-          ├─ new thread: thread/start
-          └─ known thread: thread/resume
-                         │
-                         ▼
-session/prompt ─► turn/start + explicit repository sandbox policy
-                         │
-                         └─ stream profile updates
+session/new(cwd)  ─► thread/start  ─┐
+                                    ├─► session/prompt
+session/load(cwd) ─► thread/resume ─┘          │
+                                               ▼
+                                  turn/start + dangerFullAccess
+                                               │
+                                               └─► stream profile updates
 ```
 
 New conversations open a Codex thread immediately so the id the host persists is the real
@@ -41,14 +37,10 @@ thread id from the first open. The agent keeps one app-server child warm across 
 when possible. Cancel best-effort interrupts a tracked turn and then ends that heat; a
 later turn may spawn again and still resume the stored thread id.
 
-Repository access context is separate from app-server process membership. Session open and
-load refresh it from the normalized working directory, and every turn applies it
-explicitly. Restarting the app-server therefore clears process membership without losing
-the repository boundary. Restarting the ACP agent reconstructs the same context from the
-next `session/load`.
-
-Mid-prompt cancel from the host usually kills the owned ACP process through the shared
-client path rather than waiting for an in-band `session/cancel`.
+Full local access is attached explicitly to every turn. It is independent of app-server
+process heat and requires no repository context to reconstruct after a restart. Mid-prompt
+cancel from the host usually kills the owned ACP process through the shared client path
+rather than waiting for an in-band `session/cancel`.
 
 ## Events and tools
 
@@ -96,23 +88,20 @@ The Codex backend is optional. When the owned agent binary, official `codex`, or
 unavailable, model discovery is empty and turns fail with typed errors rather than
 panicking, so other harnesses keep working.
 
-## Repository access
+## Full local access
 
-Each turn uses workspace-write plus explicit writable roots for existing `.git` and `.jj`
-directories directly beneath the normalized repository root:
+Every turn uses Codex's `dangerFullAccess` policy. Commands run without the Codex
+filesystem sandbox and with the files, credentials, processes, networks, databases,
+sockets, and services available to Duckboard's OS user. This is a machine-level boundary,
+not containment within the selected repository.
 
-```
-repository
-├── working files   workspace-write
-├── .git/           additional writable root when present
-└── .jj/            additional writable root when present
-```
+Thread start and resume remain approval-free. Ordinary app-server approval requests are
+still handled automatically for protocol compatibility, while structured questions keep
+using the host user-choice path.
 
-Discovery stays inside that root. The agent does not search ancestors, follow a `.git`
-file into an external worktree store, or grant absent metadata paths. A repository without
-direct metadata directories receives workspace-write with no additional roots.
+Project instructions such as `AGENTS.md` govern the work the agent is expected to perform,
+but they do not provide operating-system isolation. The access policy is unconditional; it
+is not inherited from the user's Codex configuration or exposed as a Duckboard setting.
 
-This sandbox grants the capability to use Git and Jujutsu. Duckspec workflow and project
-instructions such as `AGENTS.md` remain responsible for deciding when commits or
-destructive version-control operations are appropriate. A backend that rejects the policy
-fails the turn; the agent does not silently retry with a different permission boundary.
+If the app-server rejects the policy, the turn fails through the app-server error path.
+The agent does not retry with a sandboxed, inherited, or omitted policy.
