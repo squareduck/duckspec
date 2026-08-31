@@ -6,8 +6,7 @@ next send.
 
 ## Why transcripts diverge
 
-Duckboard cancels a turn in two situations: the user presses cancel, or the answer-thrash
-budget trips and the last draft is kept. In both cases the transcript keeps answer text
+Duckboard cancels a turn when the user presses cancel. The transcript keeps answer text
 the user can read and respond to — but the agent runtime never records a reply that was
 still streaming when the turn was cancelled. The user's next message then answers text the
 agent has no memory of sending. A bare token like `confirm` lands on the wrong gate, and

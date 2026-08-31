@@ -1502,20 +1502,8 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                         ax.chat_commands = commands;
                     }
                     AgentEvent::ContentDelta { text } => {
-                        let tripped_before = ax.session.answer_thrash_tripped;
                         let kind_switch =
                             interaction::apply_answer_content_delta(&mut ax.session, &text);
-                        if ax.session.answer_thrash_tripped && !tripped_before {
-                            // Budget crossed: keep last draft, notice, cancel heat.
-                            // Same priming cleanup as CancelPressed so TurnComplete
-                            // cannot dispatch a staged follow-up after thrash.
-                            interaction::on_answer_thrash_trip(&mut ax.session);
-                            if let Some(handle) = &ax.agent_handle {
-                                handle.cancel();
-                            }
-                            interaction::clear_priming_followup(ax);
-                            force_materialize = true;
-                        }
                         ax.needs_flush = true;
                         ax.chat_ui_dirty = true;
                         if interaction::should_materialize_chat_ui(
@@ -1555,7 +1543,6 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                             staged_binding = Some((slug, ax.session.scope.clone()));
                         }
                         interaction::flush_all_pending(&mut ax.session);
-                        interaction::reset_answer_thrash(&mut ax.session);
                         ax.session.messages.push(chat_store::ChatMessage {
                             role: chat_store::Role::Assistant,
                             content: vec![chat_store::ContentBlock::ToolUse { id, name, input }],
@@ -1606,7 +1593,6 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                             ax.cancel_in_flight = false;
                         }
                         interaction::flush_all_pending(&mut ax.session);
-                        interaction::reset_answer_thrash(&mut ax.session);
                         ax.session.is_streaming = false;
                         // Drop any leftover chips if the turn ended without answer.
                         interaction::clear_user_choice_shell(ax);
@@ -1691,7 +1677,6 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                         } else {
                             tracing::error!(key, "agent error: {msg}");
                             ax.session.is_streaming = false;
-                            interaction::reset_answer_thrash(&mut ax.session);
                             interaction::clear_user_choice_shell(ax);
                             // Drop priming state so a failed AGENTS.md priming
                             // doesn't fire its follow-up against a half-broken
@@ -1746,7 +1731,6 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                         tracing::info!(key, "agent process exited");
                         ax.agent_handle = None;
                         ax.session.is_streaming = false;
-                        interaction::reset_answer_thrash(&mut ax.session);
                         interaction::clear_user_choice_shell(ax);
                         // Drop any priming state — without a handle the
                         // follow-up can't dispatch, and stale flags would

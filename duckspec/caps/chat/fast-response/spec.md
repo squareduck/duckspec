@@ -305,7 +305,7 @@ the host settled choice transcript for that answer (question when present, then 
   activation
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:2230
+> - crates/duckboard/src/area/interaction.rs:2127
 
 ## Requirement: Freeform while awaiting
 
@@ -341,7 +341,7 @@ answer (question when present, then answer with the freeform text).
 - **AND** the text is not left only staged in the interrupt queue
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:2171
+> - crates/duckboard/src/area/interaction.rs:2068
 
 ## Requirement: Awaiting composer chrome
 
@@ -493,7 +493,7 @@ commit question or answer host entries for that choice.
 - **AND** the question entry appears before the answer entry
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:2276
+> - crates/duckboard/src/area/interaction.rs:2173
 
 ### Scenario: Settle without a prompt commits answer only
 
@@ -504,7 +504,7 @@ commit question or answer host entries for that choice.
 - **AND** the session transcript does not include a host question entry for that choice
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:2305
+> - crates/duckboard/src/area/interaction.rs:2202
 
 ### Scenario: Cancel commits no choice blocks
 
@@ -514,4 +514,4 @@ commit question or answer host entries for that choice.
 - **AND** the session transcript does not gain a host answer entry for that choice
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:2330
+> - crates/duckboard/src/area/interaction.rs:2227

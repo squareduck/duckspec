@@ -13,16 +13,14 @@ Stream handling has two layers:
 agent event
     │
     ▼
- session apply          always — pending buffers / messages / thrash budget
+ session apply          always — pending buffers / messages / turn flags
     │
     ▼
  chat UI materialize    gated — builds chat_blocks + editors for paint
 ```
 
-**Apply** updates the session (pending answer/reasoning text, tool rows, turn flags, and
-the answer thrash counter). Nothing needed for a correct transcript is dropped because the
-UI is deferred — except that after a thrash trip, further answer/reasoning deltas for that
-turn are ignored until streaming ends.
+**Apply** updates the session (pending answer/reasoning text, tool rows, and turn flags).
+Nothing needed for a correct transcript is dropped because the UI is deferred.
 
 **Materialize** rebuilds the view inputs the chat column paints: transcript blocks and
 per-block editors (table-capable `TextEdit` state). Markdown highlight and oversized
@@ -117,7 +115,7 @@ Transcript construction, persistence schedules, and oversized display policy are
 independent of this capability. Materialization reads the same session the transcript
 model describes; it does not change segment rules or flush intervals.
 
-## Answer draft and thrash budget
+## Answer draft
 
 While streaming, the open answer is a **live draft** in the pending answer buffer:
 
@@ -127,16 +125,3 @@ answer draft ──reasoning──► draft stays uncommitted
              ──tool──────► draft committed, then tool row
              ──turn end──► draft committed
 ```
-
-Each answer-after-thought replacement increments a per-turn counter against a small fixed
-client budget (implementation constant). Replacements within budget keep streaming; the
-first replacement that would exceed the budget cancels the turn, keeps the last draft, and
-shows a short stop notice.
-
-```
-within budget  →  keep streaming (draft replaced)
-over budget    →  cancel turn · keep last draft · short stop notice
-```
-
-Tool use resets the counter so a new answer span after tools starts fresh. The stop notice
-is not a second assistant write-gate; the last draft remains the turn’s answer.

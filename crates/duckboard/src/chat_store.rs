@@ -71,12 +71,6 @@ pub struct ChatSession {
     /// Streaming reasoning, distinct from answer prose. Not persisted as a
     /// field — folded into `ContentBlock::Reasoning` on flush / snapshot.
     pub pending_reasoning: String,
-    /// Count of answer-after-thought draft replacements in the current turn
-    /// span (reset on tool use / turn end). In-memory only — not persisted.
-    pub answer_replace_count: u32,
-    /// True after the thrash budget trips; further answer/reasoning deltas
-    /// are dropped until the counter is reset. In-memory only.
-    pub answer_thrash_tripped: bool,
     /// Agent CLI session id, used to resume the same agent-side conversation
     /// across turns. Set after the first successful turn; persisted so
     /// conversations can be resumed across app restarts.
@@ -106,10 +100,10 @@ pub struct ChatSession {
     /// the composer meter can show correct-ish fill after app restart.
     /// Zero when never observed or on legacy files without the field.
     pub context_tokens: usize,
-    /// Kept answer draft of a cancelled turn (user cancel or thrash trip)
-    /// that the agent runtime never recorded. Carried into the next send as
-    /// a system-reminder, then cleared. Persisted so the resync survives a
-    /// restart between the cancellation and the next send.
+    /// Kept answer draft of a user-cancelled turn that the agent runtime never
+    /// recorded. Carried into the next send as a system-reminder, then cleared.
+    /// Persisted so the resync survives a restart between the cancellation and
+    /// the next send.
     pub unsynced_draft: Option<String>,
 }
 
@@ -132,8 +126,6 @@ impl ChatSession {
             is_streaming: false,
             pending_text: String::new(),
             pending_reasoning: String::new(),
-            answer_replace_count: 0,
-            answer_thrash_tripped: false,
             agent_session_id: None,
             session_harness: None,
             title: None,
@@ -354,8 +346,6 @@ pub fn load_sessions_for(scope: &str, project_root: Option<&Path>) -> Vec<ChatSe
             is_streaming: false,
             pending_text: String::new(),
             pending_reasoning: String::new(),
-            answer_replace_count: 0,
-            answer_thrash_tripped: false,
             agent_session_id: persisted.agent_session_id,
             session_harness: persisted.session_harness,
             title: persisted.title,

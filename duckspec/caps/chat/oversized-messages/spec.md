@@ -19,7 +19,7 @@ counted on source lines and source characters.
 - **THEN** the body is oversized
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:2668
+> - crates/duckboard/src/area/interaction.rs:2565
 
 ### Scenario: Over the character cap on a single long line
 
@@ -31,7 +31,7 @@ counted on source lines and source characters.
 - **THEN** the body is oversized
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:2682
+> - crates/duckboard/src/area/interaction.rs:2579
 
 ## Requirement: User display prefix
 
@@ -50,7 +50,7 @@ highlight; the session keeps the full text.
 - **AND** the session still holds the full user message body
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:2714
+> - crates/duckboard/src/area/interaction.rs:2611
 
 ### Scenario: Copy full writes the stored user body
 
@@ -59,7 +59,7 @@ highlight; the session keeps the full text.
 - **THEN** the clipboard receives the full stored user message body
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:2748
+> - crates/duckboard/src/area/interaction.rs:2645
 
 ## Requirement: Composer and queue highlight
 
@@ -80,7 +80,7 @@ oversized.
 - **AND** the under-gate composer has syntax highlight
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:2769
+> - crates/duckboard/src/area/interaction.rs:2666
 
 ### Scenario: Theme rehighlight skips truncated user cards and oversized composer and queue
 
@@ -91,4 +91,4 @@ oversized.
 - **THEN** those editors have no syntax highlight
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:2789
+> - crates/duckboard/src/area/interaction.rs:2686

@@ -1758,110 +1758,7 @@ mod tests {
         );
     }
 
-    /// Drive answer → thought → answer replace `n` times (each ends with a draft).
-    fn thrash_replaces(session: &mut ChatSession, n: u32) {
-        apply_answer_content_delta(session, "body-0");
-        for i in 1..=n {
-            apply_reasoning_content_delta(session, "think");
-            apply_answer_content_delta(session, &format!("body-{i}"));
-        }
-    }
-
-    // @spec chat/stream-ui Answer thrash budget: Exceeding the budget cancels and keeps the last draft
-    #[test]
-    fn exceeding_budget_trips_thrash_keeps_last_draft() {
-        let mut ax = streaming_session();
-        // Use the full allowed replacement budget → draft is body-{budget}.
-        thrash_replaces(&mut ax.session, ANSWER_REPLACE_BUDGET);
-        let last_allowed = format!("body-{ANSWER_REPLACE_BUDGET}");
-        assert_eq!(ax.session.pending_text, last_allowed);
-        assert!(!ax.session.answer_thrash_tripped);
-        assert_eq!(ax.session.answer_replace_count, ANSWER_REPLACE_BUDGET);
-
-        // Next replace attempt: trip without replacing the last complete draft.
-        apply_reasoning_content_delta(&mut ax.session, "think again");
-        let ks = apply_answer_content_delta(&mut ax.session, "body-should-not-apply");
-        assert!(ks);
-        assert!(ax.session.answer_thrash_tripped);
-        assert_eq!(ax.session.pending_text, last_allowed);
-
-        // Caller settles: flush draft + stop notice (mirrors main thrash path).
-        on_answer_thrash_trip(&mut ax.session);
-        assert!(ax.session.pending_text.is_empty());
-        assert_eq!(committed_answer_texts(&ax.session), vec![last_allowed]);
-        assert!(
-            ax.session.messages.iter().any(|m| {
-                m.role == Role::System
-                    && m.content.iter().any(
-                        |b| matches!(b, ContentBlock::Text(t) if t == ANSWER_THRASH_STOP_NOTICE),
-                    )
-            }),
-            "stop notice must be present as a system message"
-        );
-
-        // Further deltas are dropped.
-        apply_answer_content_delta(&mut ax.session, "late thrash");
-        apply_reasoning_content_delta(&mut ax.session, "late think");
-        assert!(ax.session.pending_text.is_empty());
-        assert!(ax.session.pending_reasoning.is_empty());
-    }
-
-    // @spec chat/stream-ui Answer thrash budget: Tool use resets the thrash budget
-    #[test]
-    fn tool_use_resets_thrash_budget() {
-        let mut ax = streaming_session();
-        thrash_replaces(&mut ax.session, ANSWER_REPLACE_BUDGET);
-        assert_eq!(ax.session.answer_replace_count, ANSWER_REPLACE_BUDGET);
-
-        // Tool boundary: commit draft and reset thrash (mirrors ToolUse handling).
-        flush_all_pending(&mut ax.session);
-        reset_answer_thrash(&mut ax.session);
-        ax.session.messages.push(ChatMessage {
-            role: Role::Assistant,
-            content: vec![ContentBlock::ToolUse {
-                id: "t1".into(),
-                name: "Read".into(),
-                input: "f".into(),
-            }],
-            timestamp: String::new(),
-            is_priming: false,
-        });
-
-        assert_eq!(ax.session.answer_replace_count, 0);
-        assert!(!ax.session.answer_thrash_tripped);
-
-        // A new answer-after-thought replace after tools must not trip solely
-        // from the pre-tool thrash count (still within a fresh budget).
-        apply_answer_content_delta(&mut ax.session, "after-tool-1");
-        apply_reasoning_content_delta(&mut ax.session, "think");
-        apply_answer_content_delta(&mut ax.session, "after-tool-2");
-        assert!(!ax.session.answer_thrash_tripped);
-        assert_eq!(ax.session.pending_text, "after-tool-2");
-        assert_eq!(ax.session.answer_replace_count, 1);
-        assert!(ax.session.answer_replace_count <= ANSWER_REPLACE_BUDGET);
-    }
-
     // ── chat/cancel-resync: draft capture on cancellation ─────────────────
-
-    // @spec chat/cancel-resync Draft capture on cancellation: Thrash trip captures the kept draft
-    #[test]
-    fn thrash_trip_captures_the_kept_draft() {
-        let mut ax = streaming_session();
-        // GIVEN a streaming turn whose in-flight answer draft is non-empty.
-        thrash_replaces(&mut ax.session, ANSWER_REPLACE_BUDGET);
-        let kept = format!("body-{ANSWER_REPLACE_BUDGET}");
-        assert_eq!(ax.session.pending_text, kept);
-
-        // WHEN the answer-thrash budget trips and the turn is cancelled
-        // (mirrors the main path: trip settle before cancelling the agent).
-        apply_reasoning_content_delta(&mut ax.session, "think again");
-        apply_answer_content_delta(&mut ax.session, "over-budget rewrite");
-        assert!(ax.session.answer_thrash_tripped);
-        on_answer_thrash_trip(&mut ax.session);
-
-        // THEN the session's unsynced draft equals the kept draft.
-        assert_eq!(ax.session.unsynced_draft.as_deref(), Some(kept.as_str()));
-    }
 
     // @spec chat/cancel-resync Draft capture on cancellation: User cancel captures the in-flight draft
     #[test]
@@ -3439,7 +3336,6 @@ pub fn recover_from_lost_session(ax: &mut AgentSession, highlighter: &SyntaxHigh
     ax.session.is_streaming = true;
     ax.session.pending_text.clear();
     ax.session.pending_reasoning.clear();
-    reset_answer_thrash(&mut ax.session);
     ax.cancel_in_flight = false;
     if let Err(e) = crate::chat_store::save_session(&ax.session, Some(handle.working_dir())) {
         tracing::error!("failed to persist session after resume loss: {e}");
@@ -3809,7 +3705,6 @@ pub fn send_prompt_text(ax: &mut AgentSession, text: String, highlighter: &Synta
     ax.session.is_streaming = true;
     ax.session.pending_text.clear();
     ax.session.pending_reasoning.clear();
-    reset_answer_thrash(&mut ax.session);
     // A new turn is starting — a stale cancel flag must not make this turn's
     // completed draft look cancelled at its TurnComplete.
     ax.cancel_in_flight = false;
@@ -4291,31 +4186,17 @@ pub fn flush_all_pending(session: &mut ChatSession) {
     flush_pending_text(session);
 }
 
-/// Max answer-after-thought replacements allowed before thrash cancel.
-/// Trip when `answer_replace_count` would exceed this (first disallowed replace).
-pub const ANSWER_REPLACE_BUDGET: u32 = 1;
-
-/// User-visible stop notice when the thrash budget trips (not a second answer).
-pub const ANSWER_THRASH_STOP_NOTICE: &str =
-    "Stopped: the assistant kept rewriting the same reply. Last draft kept.";
-
-/// Reset thrash counter and trip flag (tool use, turn end, new send).
-pub fn reset_answer_thrash(session: &mut ChatSession) {
-    session.answer_replace_count = 0;
-    session.answer_thrash_tripped = false;
-}
-
 /// Drop AGENTS.md priming flags so TurnComplete cannot dispatch a staged
-/// follow-up after cancel (user CancelPressed or thrash trip).
+/// follow-up after cancel (user CancelPressed).
 pub fn clear_priming_followup(ax: &mut AgentSession) {
     ax.priming_in_flight = false;
     ax.pending_followup_prompt = None;
 }
 
-/// Stash the in-flight answer draft at cancellation (user cancel or thrash
-/// trip) so the next send can resync it to the agent. Text already committed
-/// at tool boundaries is recorded by the agent runtime and is not captured;
-/// an empty draft leaves the session's unsynced draft untouched.
+/// Stash the in-flight answer draft at user cancellation so the next send can
+/// resync it to the agent. Text already committed at tool boundaries is
+/// recorded by the agent runtime and is not captured; an empty draft leaves
+/// the session's unsynced draft untouched.
 pub fn capture_unsynced_draft(session: &mut ChatSession) {
     if !session.pending_text.is_empty() {
         session.unsynced_draft = Some(session.pending_text.clone());
@@ -4339,42 +4220,18 @@ pub fn apply_resync_reminder(prompt: String, session: &mut ChatSession) -> Strin
     )
 }
 
-/// Commit the last draft and append the thrash stop notice. Call once when
-/// the budget first trips (before cancelling the agent).
-pub fn on_answer_thrash_trip(session: &mut ChatSession) {
-    capture_unsynced_draft(session);
-    flush_all_pending(session);
-    session.messages.push(ChatMessage {
-        role: Role::System,
-        content: vec![ContentBlock::Text(ANSWER_THRASH_STOP_NOTICE.into())],
-        timestamp: String::new(),
-        is_priming: false,
-    });
-}
-
 /// Apply an answer content delta to the session. Returns `true` when this
 /// delta kind-switched away from pending reasoning (structural for the UI).
 ///
 /// After reasoning, a non-empty live answer draft is **replaced** (cleared then
-/// appended) so thought↔answer thrash does not concatenate or multi-commit
-/// full answers. Contiguous answer deltas without a reasoning interlude still
-/// append. When the thrash budget is exceeded, the session is marked tripped
-/// (caller should cancel); further deltas no-op until reset.
+/// appended) so thought↔answer does not concatenate or multi-commit full
+/// answers. Contiguous answer deltas without a reasoning interlude still
+/// append.
 pub fn apply_answer_content_delta(session: &mut ChatSession, text: &str) -> bool {
-    if session.answer_thrash_tripped {
-        return false;
-    }
     let kind_switch = !session.pending_reasoning.is_empty();
     flush_pending_reasoning(session);
     if kind_switch && !session.pending_text.is_empty() {
-        let next = session.answer_replace_count.saturating_add(1);
-        if next > ANSWER_REPLACE_BUDGET {
-            // Keep the last complete draft; do not start a truncated rewrite.
-            session.answer_thrash_tripped = true;
-            return true;
-        }
         session.pending_text.clear();
-        session.answer_replace_count = next;
     }
     session.pending_text.push_str(text);
     kind_switch
@@ -4385,11 +4242,8 @@ pub fn apply_answer_content_delta(session: &mut ChatSession, text: &str) -> bool
 ///
 /// Does **not** commit `pending_text` — the open answer stays a live draft
 /// across thought. Commit happens on tool use / turn complete via
-/// [`flush_all_pending`]. No-op after thrash trip.
+/// [`flush_all_pending`].
 pub fn apply_reasoning_content_delta(session: &mut ChatSession, text: &str) -> bool {
-    if session.answer_thrash_tripped {
-        return false;
-    }
     let kind_switch = !session.pending_text.is_empty();
     session.pending_reasoning.push_str(text);
     kind_switch

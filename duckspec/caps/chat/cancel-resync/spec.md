@@ -6,22 +6,11 @@ history and the visible transcript stay in agreement.
 
 ## Requirement: Draft capture on cancellation
 
-When a turn ends by cancellation — user cancel or answer-thrash trip — the session SHALL
-record the answer text the transcript keeps for that turn as its unsynced draft, including
-deltas that arrive between the cancel request and the turn's end. Cancellation with an
-empty in-flight draft SHALL leave no unsynced draft: text already committed at tool
-boundaries is recorded by the agent runtime and needs no resync.
-
-> test: code
-
-### Scenario: Thrash trip captures the kept draft
-
-- **GIVEN** a streaming turn whose in-flight answer draft is non-empty
-- **WHEN** the answer-thrash budget trips and the turn is cancelled
-- **THEN** the session's unsynced draft equals the kept draft
-
-> test: code
-> - crates/duckboard/src/area/interaction.rs:1846
+When a turn ends by user cancellation, the session SHALL record the answer text the
+transcript keeps for that turn as its unsynced draft, including deltas that arrive between
+the cancel request and the turn's end. Cancellation with an empty in-flight draft SHALL
+leave no unsynced draft: text already committed at tool boundaries is recorded by the
+agent runtime and needs no resync.
 
 ### Scenario: User cancel captures the in-flight draft
 
@@ -30,7 +19,7 @@ boundaries is recorded by the agent runtime and needs no resync.
 - **THEN** the session's unsynced draft equals that draft
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:1866
+> - crates/duckboard/src/area/interaction.rs:1763
 
 ### Scenario: Deltas arriving after cancel are part of the captured draft
 
@@ -39,7 +28,7 @@ boundaries is recorded by the agent runtime and needs no resync.
 - **THEN** the session's unsynced draft includes those deltas
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:1902
+> - crates/duckboard/src/area/interaction.rs:1799
 
 ### Scenario: Cancellation with no in-flight draft records nothing
 
@@ -49,7 +38,7 @@ boundaries is recorded by the agent runtime and needs no resync.
 - **THEN** the session has no unsynced draft
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:1885
+> - crates/duckboard/src/area/interaction.rs:1782
 
 ## Requirement: Resync reminder on next send
 
@@ -68,7 +57,7 @@ SHALL clear the unsynced draft without adding a reminder.
 - **THEN** the user's text precedes the unsynced draft in the outgoing prompt
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:1929
+> - crates/duckboard/src/area/interaction.rs:1826
 
 ### Scenario: The reminder rides only one send
 
@@ -77,7 +66,7 @@ SHALL clear the unsynced draft without adding a reminder.
 - **THEN** only the first outgoing prompt carries the draft
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:1952
+> - crates/duckboard/src/area/interaction.rs:1849
 
 ### Scenario: A recovery resend carrying transcript history clears the draft without a reminder
 
@@ -87,4 +76,4 @@ SHALL clear the unsynced draft without adding a reminder.
 - **AND** the recovery prompt carries no resync reminder
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:1969
+> - crates/duckboard/src/area/interaction.rs:1866

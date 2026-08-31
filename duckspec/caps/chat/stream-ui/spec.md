@@ -176,7 +176,7 @@ still keep their editors.
 - **AND** that editor is not replaced by a newly constructed editor for the same lines
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:2022
+> - crates/duckboard/src/area/interaction.rs:1919
 
 ### Scenario: Suffix-growing live answer refreshes in place
 
@@ -190,7 +190,7 @@ still keep their editors.
 - **AND** the editor is not constructed as a brand-new editor from the full joined text
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:2065
+> - crates/duckboard/src/area/interaction.rs:1962
 
 ### Scenario: Block list reshape uses full rebuild for affected indices
 
@@ -205,7 +205,7 @@ still keep their editors.
 - **AND** any earlier block whose lines are unchanged keeps its existing editor
 
 > test: code
-> - crates/duckboard/src/area/interaction.rs:2104
+> - crates/duckboard/src/area/interaction.rs:2001
 
 ## Requirement: Hybrid layout reuse
 
@@ -284,48 +284,6 @@ answer draft into the session’s messages before the tool is recorded.
 
 > test: code
 > - crates/duckboard/src/area/interaction.rs:1713
-
-## Requirement: Answer thrash budget
-
-Within one streaming turn, answer-after-thought draft replacements share a small fixed
-client budget. A further answer-after-thought replacement that would exceed that budget
-SHALL cancel the in-flight turn, keep the last live answer draft as the turn’s answer, and
-surface a short stop notice that is not an answer rewrite. The replacement count SHALL
-reset when a tool use is applied so answer spans separated by tools do not share a budget.
-The concrete budget size is an implementation constant, not part of this contract.
-
-> test: code
-
-### Scenario: Exceeding the budget cancels and keeps the last draft
-
-- **GIVEN** a streaming turn that has already used its full thrash replacement budget
-  (answer-after-thought draft replacements)
-
-- **WHEN** a further answer-after-thought replacement begins (answer content after
-  reasoning with a non-empty draft)
-
-- **THEN** the in-flight turn is cancelled
-
-- **AND** the session keeps the last live answer draft as the turn’s answer
-
-- **AND** a short stop notice is shown that is not a second full answer rewrite
-
-> test: code
-> - crates/duckboard/src/area/interaction.rs:1770
-
-### Scenario: Tool use resets the thrash budget
-
-- **GIVEN** a streaming turn that has already used its full thrash replacement budget
-
-- **AND** a tool use has since been applied (budget reset)
-
-- **WHEN** answer content is applied after further reasoning with a non-empty draft
-  (another answer-after-thought replacement within a fresh budget)
-
-- **THEN** the in-flight turn is not cancelled solely for exceeding the thrash budget
-
-> test: code
-> - crates/duckboard/src/area/interaction.rs:1809
 
 ## Requirement: Stream UI tick need
 

@@ -19,7 +19,7 @@ sessions. An exploration loaded without an archive stamp SHALL be treated as liv
 - **THEN** it has no archive stamp
 
 > test: code
-> - crates/duckboard/src/chat_store.rs:1444
+> - crates/duckboard/src/chat_store.rs:1434
 
 ### Scenario: Archiving stamps archive time and keeps chats
 
@@ -29,7 +29,7 @@ sessions. An exploration loaded without an archive stamp SHALL be treated as liv
 - **AND** its chat sessions remain available under its scope
 
 > test: code
-> - crates/duckboard/src/chat_store.rs:1452
+> - crates/duckboard/src/chat_store.rs:1442
 
 ### Scenario: Missing stamp loads as live
 
@@ -38,7 +38,7 @@ sessions. An exploration loaded without an archive stamp SHALL be treated as liv
 - **THEN** that exploration is treated as live
 
 > test: code
-> - crates/duckboard/src/chat_store.rs:1478
+> - crates/duckboard/src/chat_store.rs:1468
 
 ## Requirement: Live list membership
 
