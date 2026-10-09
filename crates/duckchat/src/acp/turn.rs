@@ -25,6 +25,7 @@ use crate::error::{self, Error};
 use crate::event::{
     AgentEvent, PendingUserChoices, UserChoiceAnswer, UserChoiceOption, UserChoiceRequest,
 };
+use crate::provider::ModelEffort;
 use crate::request::ReasoningMode;
 
 use super::event::map_update;
@@ -50,12 +51,23 @@ pub struct AcpTurn {
     next_id: u64,
 }
 
-/// Parsed `initialize` handshake result: whether the agent can resume sessions
-/// and the models it advertises (each with its context window).
+/// Parsed `initialize` handshake result: whether the agent can resume sessions,
+/// the models it advertises, and the optional catalog fetch status.
 #[derive(Debug, Clone)]
 pub struct InitResult {
     pub load_session: bool,
     pub models: Vec<AcpModel>,
+    /// Catalog fetch reported under `modelState.catalog`. A missing catalog
+    /// object is [`CatalogStatus::Ok`] with no expiry.
+    pub catalog: CatalogStatus,
+}
+
+/// Whether the agent's catalog fetch succeeded, and when a successful catalog
+/// expires if the agent sent an instant.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CatalogStatus {
+    Ok { expires_at: Option<String> },
+    Failed,
 }
 
 /// A model an agent advertises in its `modelState.availableModels`.
@@ -64,6 +76,8 @@ pub struct AcpModel {
     pub id: String,
     pub name: String,
     pub context_window: Option<usize>,
+    /// Effort scale when the model's handshake meta included one.
+    pub effort: Option<ModelEffort>,
 }
 
 /// Result of a completed `session/prompt`.
@@ -208,6 +222,7 @@ impl AcpTurn {
     /// `content` is the multi-block ACP prompt array (text and/or image
     /// blocks). Optional `reasoning` sets `reasoningEffort` when present
     /// (Grok-style knobs; harnesses that do not support it simply omit it).
+    /// `effort` is not set here: oneshot title and reply sends omit it.
     /// `cancel` is checked cooperatively between protocol lines: a flipped flag
     /// kills the child and returns [`Error::Cancelled`].
     pub async fn prompt(
@@ -226,9 +241,7 @@ impl AcpTurn {
         if !model.is_empty() {
             params["model"] = json!(model);
         }
-        if let Some(effort) = reasoning.and_then(reasoning_effort) {
-            params["reasoningEffort"] = json!(effort);
-        }
+        set_prompt_knobs(&mut params, reasoning, None);
         let result = self
             .request(
                 "session/prompt",
@@ -263,7 +276,8 @@ impl AcpTurn {
     /// prompt response).
     ///
     /// Mid-turn structured questions park on `pending_choices` and emit
-    /// [`AgentEvent::UserChoiceRequest`] for the host.
+    /// [`AgentEvent::UserChoiceRequest`] for the host. Optional `effort` is
+    /// copied to `session/prompt` as `effort` and omitted when absent.
     #[allow(clippy::too_many_arguments)] // turn parameters are irreducibly distinct
     pub async fn prompt_events(
         &mut self,
@@ -271,6 +285,7 @@ impl AcpTurn {
         content: &[Value],
         model: &str,
         reasoning: Option<ReasoningMode>,
+        effort: Option<&str>,
         context_window: Option<usize>,
         events: &mpsc::Sender<AgentEvent>,
         cancel: &CancelToken,
@@ -288,9 +303,7 @@ impl AcpTurn {
         if !model.is_empty() {
             params["model"] = json!(model);
         }
-        if let Some(effort) = reasoning.and_then(reasoning_effort) {
-            params["reasoningEffort"] = json!(effort);
-        }
+        set_prompt_knobs(&mut params, reasoning, effort);
         let host = ClientRequestHost::Interactive {
             events,
             pending: pending_choices,
@@ -558,6 +571,17 @@ fn reasoning_effort(mode: ReasoningMode) -> Option<&'static str> {
     }
 }
 
+/// Copy reasoning mode and effort onto `session/prompt` as separate fields.
+/// Each is omitted when absent. `ReasoningMode::Off` omits `reasoningEffort`.
+fn set_prompt_knobs(params: &mut Value, reasoning: Option<ReasoningMode>, effort: Option<&str>) {
+    if let Some(level) = reasoning.and_then(reasoning_effort) {
+        params["reasoningEffort"] = json!(level);
+    }
+    if let Some(level) = effort {
+        params["effort"] = json!(level);
+    }
+}
+
 /// How agent→client requests are completed during a JSON-RPC pump.
 #[derive(Clone, Copy)]
 enum ClientRequestHost<'a> {
@@ -795,7 +819,30 @@ impl InitResult {
         Self {
             load_session,
             models,
+            catalog: catalog_from_result(v),
         }
+    }
+}
+
+/// `modelState.catalog` when the agent sent an object; otherwise ok with no
+/// expiry so peers that omit the object stay ordinary model lists.
+fn catalog_from_result(v: &Value) -> CatalogStatus {
+    let Some(obj) = v
+        .pointer("/_meta/modelState/catalog")
+        .or_else(|| v.pointer("/modelState/catalog"))
+        .filter(|c| c.is_object())
+    else {
+        return CatalogStatus::Ok { expires_at: None };
+    };
+    match obj.get("status").and_then(Value::as_str) {
+        Some("ok") => CatalogStatus::Ok {
+            expires_at: obj
+                .get("expiresAt")
+                .and_then(Value::as_str)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string),
+        },
+        _ => CatalogStatus::Failed,
     }
 }
 
@@ -823,8 +870,36 @@ impl AcpModel {
             id,
             name,
             context_window,
+            effort: effort_from_value(v),
         })
     }
+}
+
+/// Effort object `{ default, levels }` under the model's `_meta`, with a
+/// top-level fallback. Absent or incomplete objects carry no effort.
+fn effort_from_value(v: &Value) -> Option<ModelEffort> {
+    let obj = v
+        .pointer("/_meta/effort")
+        .or_else(|| v.get("effort"))
+        .filter(|e| e.is_object())?;
+    let default_level = obj
+        .get("default")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())?
+        .to_string();
+    let levels: Vec<String> = obj
+        .get("levels")
+        .and_then(Value::as_array)?
+        .iter()
+        .map(|level| level.as_str().filter(|s| !s.is_empty()).map(str::to_string))
+        .collect::<Option<_>>()?;
+    if levels.is_empty() {
+        return None;
+    }
+    Some(ModelEffort {
+        default_level,
+        levels,
+    })
 }
 
 #[cfg(test)]
@@ -951,6 +1026,126 @@ mod tests {
         assert_eq!(init.models[0].name, "Grok 4.5");
         assert_eq!(init.models[0].context_window, Some(500_000));
         assert_eq!(init.models[1].context_window, Some(200_000));
+    }
+
+    async fn initialize_result(result: Value) -> InitResult {
+        let mut line = json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": result,
+        })
+        .to_string();
+        line.push('\n');
+        let (mut turn, _written) = scripted(&line);
+        turn.initialize().await.unwrap()
+    }
+
+    /// @spec harness/acp-client Initialize handshake metadata: Advertised effort is carried when the model sends it
+    #[tokio::test]
+    async fn advertised_effort_is_carried_when_the_model_sends_it() {
+        let init = initialize_result(json!({
+            "protocolVersion": 1,
+            "agentCapabilities": { "loadSession": true },
+            "_meta": {
+                "modelState": {
+                    "availableModels": [
+                        {
+                            "modelId": "claude-sonnet-5",
+                            "name": "Sonnet",
+                            "_meta": {
+                                "effort": {
+                                    "default": "medium",
+                                    "levels": ["low", "medium", "high", "xhigh", "max"]
+                                }
+                            }
+                        },
+                        {
+                            "modelId": "claude-haiku-5",
+                            "name": "Haiku"
+                        }
+                    ]
+                }
+            }
+        }))
+        .await;
+
+        assert_eq!(
+            init.models[0]
+                .effort
+                .as_ref()
+                .map(|e| e.default_level.as_str()),
+            Some("medium")
+        );
+        let levels: Vec<&str> = init.models[0]
+            .effort
+            .as_ref()
+            .unwrap()
+            .levels
+            .iter()
+            .map(String::as_str)
+            .collect();
+        assert_eq!(levels, ["low", "medium", "high", "xhigh", "max"]);
+        assert!(init.models[1].effort.is_none());
+    }
+
+    /// @spec harness/acp-client Initialize handshake metadata: Catalog status is optional handshake metadata
+    #[tokio::test]
+    async fn catalog_status_is_optional_handshake_metadata() {
+        let cases = [
+            (
+                json!({
+                    "protocolVersion": 1,
+                    "_meta": { "modelState": { "availableModels": [] } }
+                }),
+                CatalogStatus::Ok { expires_at: None },
+            ),
+            (
+                json!({
+                    "protocolVersion": 1,
+                    "_meta": {
+                        "modelState": {
+                            "availableModels": [],
+                            "catalog": {
+                                "status": "ok",
+                                "expiresAt": "2026-10-16T08:03:29Z"
+                            }
+                        }
+                    }
+                }),
+                CatalogStatus::Ok {
+                    expires_at: Some("2026-10-16T08:03:29Z".into()),
+                },
+            ),
+            (
+                json!({
+                    "protocolVersion": 1,
+                    "_meta": {
+                        "modelState": {
+                            "availableModels": [],
+                            "catalog": { "status": "ok" }
+                        }
+                    }
+                }),
+                CatalogStatus::Ok { expires_at: None },
+            ),
+            (
+                json!({
+                    "protocolVersion": 1,
+                    "_meta": {
+                        "modelState": {
+                            "availableModels": [],
+                            "catalog": { "status": "failed" }
+                        }
+                    }
+                }),
+                CatalogStatus::Failed,
+            ),
+        ];
+
+        for (result, expected) in cases {
+            let init = initialize_result(result).await;
+            assert_eq!(init.catalog, expected);
+        }
     }
 
     /// @spec harness/acp-client Session open and resume: A turn with a prior session id resumes that id
@@ -1202,7 +1397,9 @@ mod tests {
         let cancel = CancelToken::new();
         let content = [json!({ "type": "text", "text": "hi" })];
         let result = turn
-            .prompt_events("mid-sess", &content, "", None, None, &tx, &cancel, &pending)
+            .prompt_events(
+                "mid-sess", &content, "", None, None, None, &tx, &cancel, &pending,
+            )
             .await
             .expect("prompt completes");
         assert_eq!(result.stop_reason.as_deref(), Some("end_turn"));
@@ -1288,7 +1485,9 @@ mod tests {
         });
 
         let result = turn
-            .prompt_events("mid-sess", &content, "", None, None, &tx, &cancel, &pending)
+            .prompt_events(
+                "mid-sess", &content, "", None, None, None, &tx, &cancel, &pending,
+            )
             .await
             .expect("prompt completes after answer");
         assert_eq!(result.stop_reason.as_deref(), Some("end_turn"));
@@ -1348,9 +1547,11 @@ mod tests {
             }
         });
 
-        turn.prompt_events("mid-sess", &content, "", None, None, &tx, &cancel, &pending)
-            .await
-            .expect("turn continues after selection");
+        turn.prompt_events(
+            "mid-sess", &content, "", None, None, None, &tx, &cancel, &pending,
+        )
+        .await
+        .expect("turn continues after selection");
 
         let msgs = written.lock().unwrap().clone();
         let reply = msgs
@@ -1399,9 +1600,11 @@ mod tests {
             }
         });
 
-        turn.prompt_events("mid-sess", &content, "", None, None, &tx, &cancel, &pending)
-            .await
-            .expect("turn continues after host cancel");
+        turn.prompt_events(
+            "mid-sess", &content, "", None, None, None, &tx, &cancel, &pending,
+        )
+        .await
+        .expect("turn continues after host cancel");
 
         let msgs = written.lock().unwrap().clone();
         let reply = msgs
@@ -1441,7 +1644,7 @@ mod tests {
 
         let turn_task = tokio::spawn(async move {
             turn.prompt_events(
-                "mid-sess", &content, "", None, None, &tx, &cancel2, &pending,
+                "mid-sess", &content, "", None, None, None, &tx, &cancel2, &pending,
             )
             .await
         });

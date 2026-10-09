@@ -42,10 +42,14 @@ pub(crate) fn claude_argv_prefix() -> Vec<OsString> {
 }
 
 /// Build a `Command` for a duplex stream-json Claude session.
+///
+/// `--effort` is set only when `effort` is a level. Callers that have no
+/// level (including title and reply oneshots) omit the flag.
 pub(crate) fn build_claude_command(
     cwd: &Path,
     resume: Option<&str>,
     model: Option<&str>,
+    effort: Option<&str>,
     bypass_permissions: bool,
 ) -> Command {
     let prefix = claude_argv_prefix();
@@ -89,6 +93,10 @@ pub(crate) fn build_claude_command(
         cmd.arg("--model").arg(m);
     }
 
+    if let Some(level) = effort {
+        cmd.arg("--effort").arg(level);
+    }
+
     cmd
 }
 
@@ -123,7 +131,7 @@ mod tests {
         );
 
         // Full duplex command also ends with the official CLI name in argv.
-        let cmd = build_claude_command(Path::new("/tmp"), None, Some("sonnet"), true);
+        let cmd = build_claude_command(Path::new("/tmp"), None, Some("sonnet"), None, true);
         let args: Vec<String> = cmd
             .as_std()
             .get_args()
@@ -161,7 +169,7 @@ mod tests {
         let _guard = ENV_LOCK.lock().unwrap();
         let prev = std::env::var_os("DUCKCHAT_CLAUDE_BIN");
         unsafe { std::env::set_var("DUCKCHAT_CLAUDE_BIN", "/tmp/fake-claude") };
-        let cmd = build_claude_command(Path::new("/tmp"), None, None, true);
+        let cmd = build_claude_command(Path::new("/tmp"), None, None, None, true);
         let args: Vec<String> = cmd
             .as_std()
             .get_args()

@@ -23,7 +23,7 @@ foreign runtime to run Codex turns.
 - **AND** the host does not drive Codex via an in-host App Server client
 
 > test: code
-> - crates/duckchat/src/openai_codex.rs:298
+> - crates/duckchat/src/openai_codex.rs:300
 
 ### Scenario: The agent uses official codex app-server as its backend
 
@@ -311,7 +311,7 @@ is absent.
 
 > test: code
 > - crates/duckchat-codex-acp/src/models.rs:136
-> - crates/duckchat/src/openai_codex.rs:362
+> - crates/duckchat/src/openai_codex.rs:364
 
 ### Scenario: Each listed model carries a display name
 
@@ -320,7 +320,7 @@ is absent.
 - **THEN** each returned model carries a non-empty display name
 
 > test: code
-> - crates/duckchat/src/openai_codex.rs:385
+> - crates/duckchat/src/openai_codex.rs:387
 
 ### Scenario: Preferred oneshot model is selected when advertised
 
@@ -332,7 +332,7 @@ is absent.
 - **THEN** it selects the preferred oneshot model
 
 > test: code
-> - crates/duckchat/src/openai_codex.rs:406
+> - crates/duckchat/src/openai_codex.rs:410
 
 ### Scenario: Oneshot model falls back when preferred is absent
 
@@ -344,7 +344,7 @@ is absent.
 - **THEN** it selects another advertised model rather than failing
 
 > test: code
-> - crates/duckchat/src/openai_codex.rs:418
+> - crates/duckchat/src/openai_codex.rs:422
 
 ## Requirement: Prompt attachments
 
@@ -408,7 +408,7 @@ a typed error rather than panicking.
 
 > test: code
 > - crates/duckchat-codex-acp/src/agent.rs:703
-> - crates/duckchat/src/openai_codex.rs:431
+> - crates/duckchat/src/openai_codex.rs:435
 
 ## Requirement: Stage skill discovery
 

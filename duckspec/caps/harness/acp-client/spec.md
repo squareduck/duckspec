@@ -4,6 +4,12 @@ The shared ACP client runtime drives every harness turn: it spawns a launch-para
 agent child, opens or resumes a session, maps profile `session/update` notifications into
 neutral agent events, and keeps the main agent process warm across turns until cancel.
 
+The shared ACP client runtime drives every harness turn: it spawns a launch-parameterized
+agent child, opens or resumes a session, maps profile `session/update` notifications into
+neutral agent events, and keeps the main agent process warm across turns until cancel.
+Initialize may carry optional per-model effort and catalog status, and a turn's effort
+level is copied onto `session/prompt` as `effort`.
+
 ## Requirement: Launch-parameterized agent process
 
 The client SHALL spawn the agent process defined by the harness launch (program and
@@ -21,7 +27,7 @@ allowed to spawn again and, when a prior session id is supplied, resume that id.
 - **THEN** the spawned agent process is that launch-supplied command
 
 > test: code
-> - crates/duckchat/src/acp/turn.rs:1003
+> - crates/duckchat/src/acp/turn.rs:1198
 
 ### Scenario: A second turn on a hot main path reuses the agent process
 
@@ -35,7 +41,7 @@ allowed to spawn again and, when a prior session id is supplied, resume that id.
   session id
 
 > test: code
-> - crates/duckchat/src/acp/runtime.rs:798
+> - crates/duckchat/src/acp/runtime.rs:914
 
 ### Scenario: After cancel, a later turn may spawn again and resume a prior session id
 
@@ -46,7 +52,7 @@ allowed to spawn again and, when a prior session id is supplied, resume that id.
 - **AND** it opens the session by resuming that id
 
 > test: code
-> - crates/duckchat/src/acp/runtime.rs:839
+> - crates/duckchat/src/acp/runtime.rs:955
 
 ## Requirement: Session open and resume
 
@@ -68,7 +74,7 @@ session-not-found outcome so the caller can drop the id and retry.
 - **AND** it surfaces the session id the agent assigned
 
 > test: code
-> - crates/duckchat/src/acp/turn.rs:880
+> - crates/duckchat/src/acp/turn.rs:955
 
 ### Scenario: A turn with a prior session id resumes that id
 
@@ -77,7 +83,7 @@ session-not-found outcome so the caller can drop the id and retry.
 - **THEN** it opens the session by resuming that same id
 
 > test: code
-> - crates/duckchat/src/acp/turn.rs:956
+> - crates/duckchat/src/acp/turn.rs:1151
 
 ### Scenario: When the agent rebinds the session id during a turn, the client surfaces the rebound id
 
@@ -87,7 +93,7 @@ session-not-found outcome so the caller can drop the id and retry.
 - **THEN** it surfaces the rebound session id for the caller to persist
 
 > test: code
-> - crates/duckchat/src/acp/runtime.rs:753
+> - crates/duckchat/src/acp/runtime.rs:869
 
 ### Scenario: A failed load of a missing session surfaces session-not-found
 
@@ -96,7 +102,7 @@ session-not-found outcome so the caller can drop the id and retry.
 - **THEN** the outcome is session-not-found rather than a successful resume
 
 > test: code
-> - crates/duckchat/src/acp/turn.rs:974
+> - crates/duckchat/src/acp/turn.rs:1169
 
 ## Requirement: Profile event translation
 
@@ -160,7 +166,7 @@ after the auto-allow.
 - **AND** the client does not emit a host user-choice event for that request
 
 > test: code
-> - crates/duckchat/src/acp/turn.rs:1175
+> - crates/duckchat/src/acp/turn.rs:1370
 
 ## Requirement: Mid-turn user choice
 
@@ -194,7 +200,7 @@ protocol-correct cancelled outcome for that request.
 - **AND** the agent request remains open until answered or cancelled
 
 > test: code
-> - crates/duckchat/src/acp/turn.rs:1230
+> - crates/duckchat/src/acp/turn.rs:1427
 
 ### Scenario: Host selected answer completes the pending request
 
@@ -204,7 +210,7 @@ protocol-correct cancelled outcome for that request.
 - **AND** the turn may continue after the completion
 
 > test: code
-> - crates/duckchat/src/acp/turn.rs:1307
+> - crates/duckchat/src/acp/turn.rs:1506
 
 ### Scenario: Host custom freeform answer completes the pending request
 
@@ -218,7 +224,7 @@ protocol-correct cancelled outcome for that request.
 - **AND** the request is not completed as cancelled
 
 > test: code
-> - crates/duckchat/src/acp/turn.rs:1628
+> - crates/duckchat/src/acp/turn.rs:1831
 
 ### Scenario: Host cancel completes the pending request as cancelled
 
@@ -227,7 +233,7 @@ protocol-correct cancelled outcome for that request.
 - **THEN** the agent request is completed as cancelled
 
 > test: code
-> - crates/duckchat/src/acp/turn.rs:1364
+> - crates/duckchat/src/acp/turn.rs:1565
 
 ### Scenario: Turn cancel completes a pending choice as cancelled
 
@@ -236,7 +242,7 @@ protocol-correct cancelled outcome for that request.
 - **THEN** the agent request is completed as cancelled
 
 > test: code
-> - crates/duckchat/src/acp/turn.rs:1414
+> - crates/duckchat/src/acp/turn.rs:1617
 
 ### Scenario: Permission product choice carries prompt from tool title
 
@@ -254,7 +260,7 @@ protocol-correct cancelled outcome for that request.
 - **AND** the user-choice event carries the product options
 
 > test: code
-> - crates/duckchat/src/acp/turn.rs:1569
+> - crates/duckchat/src/acp/turn.rs:1772
 
 ## Requirement: Headless and oneshot safety
 
@@ -272,4 +278,65 @@ without parking on oneshot so headless oneshot work cannot deadlock.
 - **THEN** the call completes without waiting for a host UI answer
 
 > test: code
-> - crates/duckchat/src/acp/turn.rs:1479
+> - crates/duckchat/src/acp/turn.rs:1682
+
+## Requirement: Initialize handshake metadata
+
+Optional per-model effort and an optional catalog status ride on initialize. A handshake
+that omits them stays a normal model list.
+
+> test: code
+
+### Scenario: Advertised effort is carried when the model sends it
+
+- **GIVEN** an initialize handshake with two models
+- **AND** one model includes an effort object with a default and a list of levels
+- **AND** the other model includes no effort object
+- **WHEN** the client parses the handshake
+- **THEN** the first model carries that default and those levels
+- **AND** the second model carries no effort
+
+> test: code
+> - crates/duckchat/src/acp/turn.rs:1043
+
+### Scenario: Catalog status is optional handshake metadata
+
+- **GIVEN** a handshake with no catalog object
+- **AND** a handshake whose catalog object is ok and includes an expiry
+- **AND** a handshake whose catalog object is ok and includes no expiry
+- **AND** a handshake whose catalog object is failed
+- **WHEN** the client parses each handshake
+- **THEN** the handshake with no catalog object reads as ok with no expiry
+- **AND** the ok object that includes an expiry keeps ok and that expiry
+- **AND** the ok object with no expiry keeps ok and no expiry
+- **AND** the failed object keeps failed
+
+> test: code
+> - crates/duckchat/src/acp/turn.rs:1091
+
+## Requirement: Prompt effort
+
+A turn's effort level is a `session/prompt` field of its own, separate from the
+reasoning-mode field.
+
+> test: code
+
+### Scenario: Effort and reasoning mode use different prompt fields
+
+- **GIVEN** a turn request that carries an effort level and no reasoning mode
+
+- **AND** a turn request that carries a reasoning mode and no effort level
+
+- **AND** a turn request that carries neither
+
+- **WHEN** the client builds `session/prompt` for each
+
+- **THEN** the effort-level turn sends that level as `effort` and leaves `reasoningEffort`
+  unset
+
+- **AND** the reasoning-mode turn sends `reasoningEffort` and leaves `effort` unset
+
+- **AND** the turn with neither omits both
+
+> test: code
+> - crates/duckchat/src/acp/runtime.rs:747

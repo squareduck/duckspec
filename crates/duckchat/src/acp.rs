@@ -16,4 +16,4 @@ pub use launch::AgentLaunch;
 #[cfg(test)]
 pub(crate) use runtime::pick_oneshot_model;
 pub use runtime::{AcpMainRuntime, AcpOneshotRuntime};
-pub use turn::{AcpModel, AcpTurn, InitResult, PromptResult};
+pub use turn::{AcpModel, AcpTurn, CatalogStatus, InitResult, PromptResult};

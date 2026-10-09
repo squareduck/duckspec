@@ -103,6 +103,7 @@ fn to_model_info(m: AcpModel) -> ModelInfo {
         id: m.id.clone(),
         display: humanize_display(&m.id, &m.name),
         context_window: m.context_window,
+        effort: None,
     }
 }
 
@@ -292,6 +293,7 @@ for line in sys.stdin:
             id: id.to_string(),
             name: format!("{id} display"),
             context_window: None,
+            effort: None,
         }
     }
 
@@ -390,11 +392,13 @@ for line in sys.stdin:
                 id: "gpt-5.4".into(),
                 name: "GPT-5.4".into(),
                 context_window: None,
+                effort: None,
             },
             AcpModel {
                 id: "gpt-5.4-mini".into(),
                 name: "gpt-5.4-mini".into(), // same as id → humanize
                 context_window: None,
+                effort: None,
             },
         ];
         let listed: Vec<ModelInfo> = handshake.into_iter().map(to_model_info).collect();

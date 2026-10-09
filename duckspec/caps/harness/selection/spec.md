@@ -24,7 +24,7 @@ as the Claude harness.
 - **THEN** the loaded choice names the same harness and model
 
 > test: code
-> - crates/duckchat/src/provider.rs:197
+> - crates/duckchat/src/provider.rs:208
 
 ### Scenario: A legacy bare model id loads as the Claude harness
 
@@ -33,7 +33,7 @@ as the Claude harness.
 - **THEN** the loaded choice names the Claude harness and that model
 
 > test: code
-> - crates/duckchat/src/provider.rs:208
+> - crates/duckchat/src/provider.rs:219
 
 ## Requirement: Default model resolution
 
@@ -113,7 +113,7 @@ of models offered for selection SHALL include the models of every registered har
 - **THEN** the provider that runs the turn is the one identified by that harness
 
 > test: code
-> - crates/duckboard/src/agent.rs:469
+> - crates/duckboard/src/agent.rs:800
 
 ### Scenario: The offered models span every registered harness
 
@@ -122,7 +122,7 @@ of models offered for selection SHALL include the models of every registered har
 - **THEN** the list includes models from every registered harness
 
 > test: code
-> - crates/duckboard/src/agent.rs:489
+> - crates/duckboard/src/agent.rs:820
 
 ## Requirement: Global default model setting
 
@@ -141,7 +141,7 @@ model in catalog order.
 - **THEN** that choice is stored as a global application setting
 
 > test: code
-> - crates/duckboard/src/config.rs:340
+> - crates/duckboard/src/config.rs:347
 
 ### Scenario: An unset global default is seeded from the former built-in when that model is in the catalog
 
@@ -151,7 +151,7 @@ model in catalog order.
 - **THEN** the global default is `grok` / `grok-4.5`
 
 > test: code
-> - crates/duckboard/src/agent.rs:722
+> - crates/duckboard/src/agent.rs:1292
 
 ### Scenario: An unset global default is seeded from the first catalog model when the former built-in is absent
 
@@ -161,7 +161,7 @@ model in catalog order.
 - **THEN** the global default is the first model in catalog order
 
 > test: code
-> - crates/duckboard/src/agent.rs:745
+> - crates/duckboard/src/agent.rs:1315
 
 ## Requirement: Send requires an available model
 

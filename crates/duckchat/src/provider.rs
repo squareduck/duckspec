@@ -95,6 +95,14 @@ pub struct Capabilities {
     pub slash_commands: bool,
 }
 
+/// Effort scale advertised for one model: the default level, then the levels
+/// in the order the agent sent them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModelEffort {
+    pub default_level: String,
+    pub levels: Vec<String>,
+}
+
 #[derive(Debug, Clone)]
 pub struct ModelInfo {
     /// The harness that owns this model, e.g. `"claude-code"` | `"grok"`. Keeps
@@ -105,6 +113,9 @@ pub struct ModelInfo {
     /// Context window in tokens, when the harness reports one. Drives the usage
     /// meter denominator; `None` when the harness exposes no such figure.
     pub context_window: Option<usize>,
+    /// Effort scale when this harness advertises one. Grok and Codex leave it
+    /// unset.
+    pub effort: Option<ModelEffort>,
 }
 
 /// The persisted unit of model choice: a harness id paired with a model id.

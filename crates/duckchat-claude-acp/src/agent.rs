@@ -3,6 +3,9 @@
 //! Official `claude` is not started on `session/new` or cold `session/load`.
 //! The first `session/prompt` spawns duplex, writes user content, and binds
 //! Claude's native session id (returned on the prompt result when rebound).
+//! A later main prompt reuses that process only while it is still that session
+//! and was spawned with the prompt's model and effort. Title and reply
+//! oneshots are a separate agent process and do not pass `--effort`.
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -85,6 +88,13 @@ struct PendingOpen {
     resume: Option<String>,
 }
 
+/// Duplex-hot Claude process plus the model and effort it was spawned with.
+struct HotSpawn {
+    duplex: ClaudeDuplex,
+    model: Option<String>,
+    effort: Option<String>,
+}
+
 /// Session table + optional duplex-hot Claude process.
 pub(crate) struct Agent {
     /// Known ACP session handles (provisional and/or native).
@@ -93,8 +103,8 @@ pub(crate) struct Agent {
     pending: HashMap<String, PendingOpen>,
     /// After first bind: provisional open id → Claude native id.
     provisional_to_native: HashMap<String, String>,
-    /// Process-hot duplex, if any.
-    hot: Option<ClaudeDuplex>,
+    /// Process-hot duplex, if any, with the model and effort of that spawn.
+    hot: Option<HotSpawn>,
     /// Spawn factory for the official (or scripted) `claude` CLI.
     factory: ClaudeSpawnFactory,
     /// When true, pass `--permission-mode bypassPermissions`.
@@ -126,15 +136,11 @@ impl Agent {
         Self::with_factory(crate::claude::counting_factory(factory, counter), true)
     }
 
-    /// ACP `initialize` result: protocol version, loadSession, and models from
-    /// live discovery (Models API via Claude credentials) or curated fallback.
+    /// ACP `initialize` result: protocol version, loadSession, the filtered
+    /// Claude Code catalog, and that fetch's status. A failed fetch still
+    /// returns a result and advertises no models.
     pub(crate) async fn initialize(&self) -> Value {
-        let live = crate::models::discover_live_models().await;
-        if let Err(ref e) = live {
-            tracing::warn!("claude model live discovery failed, using curated fallback: {e}");
-        }
-        let models = crate::models::resolve_advertised_models(live);
-        crate::models::initialize_result(&models)
+        crate::models::advertise_initialize().await
     }
 
     /// Open a new ACP session without starting the official `claude` process.
@@ -145,7 +151,7 @@ impl Agent {
 
         // Drop any prior heat before opening a new conversation.
         if let Some(hot) = self.hot.take() {
-            hot.kill().await;
+            hot.duplex.kill().await;
         }
 
         let provisional = new_provisional_id();
@@ -176,13 +182,13 @@ impl Agent {
         let resolved = self.resolve_id(&session_id);
 
         if let Some(hot) = self.hot.as_mut() {
-            if hot.session_id == resolved && hot.alive() {
+            if hot.duplex.session_id == resolved && hot.duplex.alive() {
                 self.sessions.insert(session_id);
                 return Ok(json!({}));
             }
             // Wrong session or dead process — tear down; cold load records resume.
             if let Some(old) = self.hot.take() {
-                old.kill().await;
+                old.duplex.kill().await;
             }
         }
 
@@ -239,7 +245,7 @@ impl Agent {
         let live_id = self
             .hot
             .as_ref()
-            .map(|h| h.session_id.clone())
+            .map(|h| h.duplex.session_id.clone())
             .unwrap_or_else(|| request_id.clone());
         self.sessions.insert(live_id.clone());
 
@@ -265,14 +271,25 @@ impl Agent {
         W: FnMut(Value) -> Result<(), AgentError> + Send,
     {
         let resolved = self.resolve_id(request_id);
+        let prompt_model = model_from_params(params);
+        let prompt_effort = effort_from_params(params);
 
-        // Drop heat if it is for a different conversation or dead.
+        // Reuse only while this session is alive and was spawned with this
+        // prompt's model and effort. A mismatch takes the cold path, which
+        // resumes the same native id. Model and effort are read from the
+        // prompt that is starting, so a picker change during an in-flight
+        // turn does not cancel that turn.
         let drop_hot = match self.hot.as_mut() {
-            Some(hot) => hot.session_id != resolved || !hot.alive(),
+            Some(hot) => {
+                hot.duplex.session_id != resolved
+                    || !hot.duplex.alive()
+                    || hot.model != prompt_model
+                    || hot.effort != prompt_effort
+            }
             None => false,
         };
         if drop_hot && let Some(old) = self.hot.take() {
-            old.kill().await;
+            old.duplex.kill().await;
         }
 
         if self.hot.is_some() {
@@ -303,6 +320,11 @@ impl Agent {
             }
         };
         let model = model_from_params(params).or(pending.model);
+        let effort = effort_from_params(params);
+        // Kept aside: the open future borrows `model` and `effort` until it
+        // drops at the end of this function.
+        let spawned_model = model.clone();
+        let spawned_effort = effort.clone();
         let resume = pending.resume.clone();
         let factory = self.factory.clone();
         let bypass = self.bypass_permissions;
@@ -317,6 +339,7 @@ impl Agent {
             &cwd,
             resume.as_deref(),
             model.as_deref(),
+            effort.as_deref(),
             bypass,
             content,
             on_update,
@@ -350,7 +373,11 @@ impl Agent {
                 .insert(request_id.to_string(), native.clone());
         }
         self.sessions.insert(native.clone());
-        self.hot = Some(duplex);
+        self.hot = Some(HotSpawn {
+            duplex,
+            model: spawned_model,
+            effort: spawned_effort,
+        });
         Ok(())
     }
 
@@ -378,7 +405,9 @@ impl Agent {
         let session_id = session_id.to_string();
 
         let result = {
-            let prompt_fut = hot.prompt_with_resolver(content, on_update, &mut resolve);
+            let prompt_fut = hot
+                .duplex
+                .prompt_with_resolver(content, on_update, &mut resolve);
             tokio::pin!(prompt_fut);
 
             loop {
@@ -419,7 +448,7 @@ impl Agent {
     /// may re-spawn and resume.
     pub(crate) async fn cancel(&mut self, _session_id: Option<&str>) {
         if let Some(hot) = self.hot.take() {
-            hot.kill().await;
+            hot.duplex.kill().await;
         }
     }
 
@@ -450,6 +479,17 @@ fn model_from_params(params: &Value) -> Option<String> {
         .pointer("/_meta/model")
         .or_else(|| params.get("model"))
         .and_then(Value::as_str)
+        .filter(|model| !model.is_empty())
+        .map(str::to_string)
+}
+
+/// Effort level copied onto `session/prompt` as `effort`. Absent or empty
+/// means this prompt has no level, so the spawn omits `--effort`.
+fn effort_from_params(params: &Value) -> Option<String> {
+    params
+        .get("effort")
+        .and_then(Value::as_str)
+        .filter(|level| !level.is_empty())
         .map(str::to_string)
 }
 
@@ -579,6 +619,7 @@ mod tests {
     use crate::claude::duplex::ClaudeSpawnArgs;
     use std::process::Stdio;
     use std::sync::Arc;
+    use std::sync::Mutex;
     use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
     use tokio::process::Command;
 
@@ -654,20 +695,62 @@ for line in sys.stdin:
     }), flush=True)
 "#;
 
+    fn scripted_command(args: &ClaudeSpawnArgs) -> Command {
+        let mut cmd = Command::new("python3");
+        cmd.arg("-u")
+            .arg("-c")
+            .arg(SCRIPTED_CLAUDE_PY)
+            .env("RESUME", args.resume.clone().unwrap_or_default())
+            .current_dir(&args.cwd)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .kill_on_drop(true);
+        cmd
+    }
+
     fn scripted_factory() -> ClaudeSpawnFactory {
-        Arc::new(|args: &ClaudeSpawnArgs| {
-            let mut cmd = Command::new("python3");
-            cmd.arg("-u")
-                .arg("-c")
-                .arg(SCRIPTED_CLAUDE_PY)
-                .env("RESUME", args.resume.clone().unwrap_or_default())
-                .current_dir(&args.cwd)
-                .stdin(Stdio::piped())
-                .stdout(Stdio::piped())
-                .stderr(Stdio::null())
-                .kill_on_drop(true);
-            cmd
+        Arc::new(scripted_command)
+    }
+
+    /// One production `claude` argv plus the spawn args the agent handed over.
+    #[derive(Clone, Debug)]
+    struct SeenSpawn {
+        resume: Option<String>,
+        model: Option<String>,
+        effort: Option<String>,
+        argv: Vec<String>,
+    }
+
+    fn remember_spawn(log: &Mutex<Vec<SeenSpawn>>, args: &ClaudeSpawnArgs) {
+        let real = crate::claude::default_spawn_factory();
+        let built = real(args);
+        let argv = built
+            .as_std()
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+        log.lock().unwrap().push(SeenSpawn {
+            resume: args.resume.clone(),
+            model: args.model.clone(),
+            effort: args.effort.clone(),
+            argv,
+        });
+    }
+
+    /// Records the command the production factory would run, then spawns the
+    /// scripted peer so the turn can finish without a real `claude` binary.
+    fn recording_factory(log: Arc<Mutex<Vec<SeenSpawn>>>) -> ClaudeSpawnFactory {
+        Arc::new(move |args: &ClaudeSpawnArgs| {
+            remember_spawn(&log, args);
+            scripted_command(args)
         })
+    }
+
+    fn flag_value<'a>(argv: &'a [String], flag: &str) -> Option<&'a str> {
+        argv.windows(2)
+            .find(|w| w[0] == flag)
+            .map(|w| w[1].as_str())
     }
 
     /// @spec harness/claude Session lifecycle and native session ids: Opening a new session does not start the official claude process before the first user prompt
@@ -734,7 +817,7 @@ for line in sys.stdin:
             "first prompt rebinds to Claude native id"
         );
         assert_eq!(
-            agent.hot.as_ref().map(|h| h.session_id.as_str()),
+            agent.hot.as_ref().map(|h| h.duplex.session_id.as_str()),
             Some("claude-native-sess-1")
         );
         assert!(
@@ -791,14 +874,14 @@ for line in sys.stdin:
         .await
         .unwrap();
         assert_eq!(
-            agent.hot.as_ref().map(|h| h.session_id.as_str()),
+            agent.hot.as_ref().map(|h| h.duplex.session_id.as_str()),
             Some(native.as_str())
         );
         assert_eq!(counter.load(AtomicOrdering::SeqCst), 1);
         agent.cancel(None).await;
     }
 
-    /// @spec harness/claude Duplex main heat: A second main turn reuses the inner Claude process when duplex-hot
+    /// @spec harness/claude Duplex main heat: Hot process follows the prompt's model and effort
     #[tokio::test]
     async fn second_main_turn_reuses_inner_claude() {
         let counter = Arc::new(AtomicUsize::new(0));
@@ -892,7 +975,7 @@ for line in sys.stdin:
             "cancel ends heat; later turn spawns again"
         );
         assert_eq!(
-            agent.hot.as_ref().map(|h| h.session_id.as_str()),
+            agent.hot.as_ref().map(|h| h.duplex.session_id.as_str()),
             Some(native.as_str())
         );
         agent.cancel(None).await;
@@ -976,5 +1059,307 @@ for line in sys.stdin:
             "host must receive a profile update before the turn's prompt result"
         );
         agent.cancel(None).await;
+    }
+
+    fn prompt_with_model(session_id: &str, text: &str, model: &str, effort: Option<&str>) -> Value {
+        let mut params = json!({
+            "sessionId": session_id,
+            "prompt": [{ "type": "text", "text": text }],
+            "model": model,
+        });
+        if let Some(level) = effort {
+            params["effort"] = json!(level);
+        }
+        params
+    }
+
+    /// @spec harness/claude Duplex main heat: Hot process follows the prompt's model and effort
+    #[tokio::test]
+    async fn hot_process_follows_the_prompts_model_and_effort() {
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let mut agent = Agent::with_factory(recording_factory(Arc::clone(&log)), true);
+        let cwd = std::env::temp_dir().to_string_lossy().to_string();
+        let sid = agent.session_new(&json!({ "cwd": &cwd })).await.unwrap()["sessionId"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        // GIVEN a duplex-hot process spawned with a model and an effort level.
+        let (_, opened) = prompt_collecting(
+            &mut agent,
+            prompt_with_model(&sid, "open", "claude-sonnet-5-5", Some("medium")),
+        )
+        .await
+        .unwrap();
+        let native = opened["sessionId"].as_str().unwrap().to_string();
+        assert_eq!(native, "claude-native-sess-1");
+        {
+            let spawns = log.lock().unwrap();
+            assert_eq!(spawns.len(), 1);
+            assert!(spawns[0].resume.is_none());
+            assert_eq!(
+                flag_value(&spawns[0].argv, "--model"),
+                Some("claude-sonnet-5-5")
+            );
+            assert_eq!(flag_value(&spawns[0].argv, "--effort"), Some("medium"));
+        }
+
+        // WHEN a later main prompt matches that spawn.
+        prompt_collecting(
+            &mut agent,
+            prompt_with_model(&native, "match", "claude-sonnet-5-5", Some("medium")),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            log.lock().unwrap().len(),
+            1,
+            "matching prompt reuses the hot process"
+        );
+        assert_eq!(
+            agent.hot.as_ref().map(|hot| hot.duplex.session_id.as_str()),
+            Some(native.as_str())
+        );
+
+        // WHEN another prompt changes the model, another changes the effort,
+        // and another has no effort level.
+        let cases = [
+            ("claude-opus", Some("medium")),
+            ("claude-opus", Some("high")),
+            ("claude-opus", None),
+        ];
+        for (model, effort) in cases {
+            prompt_collecting(
+                &mut agent,
+                prompt_with_model(&native, "next", model, effort),
+            )
+            .await
+            .unwrap();
+            let spawns = log.lock().unwrap();
+            let seen = spawns.last().unwrap();
+            assert_eq!(seen.resume.as_deref(), Some(native.as_str()));
+            assert_eq!(seen.model.as_deref(), Some(model));
+            assert_eq!(seen.effort.as_deref(), effort);
+            assert_eq!(flag_value(&seen.argv, "--resume"), Some(native.as_str()));
+            assert_eq!(flag_value(&seen.argv, "--model"), Some(model));
+            assert_eq!(flag_value(&seen.argv, "--effort"), effort);
+            assert_eq!(
+                agent.hot.as_ref().map(|hot| hot.duplex.session_id.as_str()),
+                Some(native.as_str()),
+                "cold resume keeps the same native session id"
+            );
+        }
+        assert_eq!(log.lock().unwrap().len(), 4);
+        agent.cancel(None).await;
+    }
+
+    /// Scripted peer that emits one chunk, then waits for `RELEASE_FILE`
+    /// before the result. `INFLIGHT_FILE` is created once the turn is in flight.
+    const HOLDING_CLAUDE_PY: &str = r#"
+import json, sys, os, time
+resume = os.environ.get("RESUME") or None
+if resume == "":
+    resume = None
+session_id = resume or "claude-native-sess-1"
+inflight = os.environ["INFLIGHT_FILE"]
+release = os.environ["RELEASE_FILE"]
+print(json.dumps({
+    "type": "system",
+    "subtype": "init",
+    "session_id": session_id,
+    "model": "sonnet",
+}), flush=True)
+for line in sys.stdin:
+    line = line.strip()
+    if not line:
+        continue
+    print(json.dumps({
+        "type": "stream_event",
+        "event": {
+            "type": "content_block_delta",
+            "delta": {"type": "text_delta", "text": "partial"},
+        },
+    }), flush=True)
+    open(inflight, "w").close()
+    while not os.path.exists(release):
+        time.sleep(0.02)
+    print(json.dumps({
+        "type": "result",
+        "subtype": "success",
+        "is_error": False,
+        "session_id": session_id,
+        "result": "ok",
+    }), flush=True)
+    break
+"#;
+
+    fn holding_factory(
+        log: Arc<Mutex<Vec<SeenSpawn>>>,
+        inflight: std::path::PathBuf,
+        release: std::path::PathBuf,
+    ) -> ClaudeSpawnFactory {
+        Arc::new(move |args: &ClaudeSpawnArgs| {
+            remember_spawn(&log, args);
+            let mut cmd = Command::new("python3");
+            cmd.arg("-u")
+                .arg("-c")
+                .arg(HOLDING_CLAUDE_PY)
+                .env("RESUME", args.resume.clone().unwrap_or_default())
+                .env("INFLIGHT_FILE", &inflight)
+                .env("RELEASE_FILE", &release)
+                .current_dir(&args.cwd)
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::null())
+                .kill_on_drop(true);
+            cmd
+        })
+    }
+
+    /// @spec harness/claude Duplex main heat: A model or effort change during an in-flight turn does not cancel that turn
+    #[tokio::test]
+    async fn model_or_effort_change_during_in_flight_turn_does_not_cancel() {
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let dir = std::env::temp_dir().join(format!(
+            "duckchat-claude-inflight-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock")
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let inflight = dir.join("inflight");
+        let release = dir.join("release");
+        let mut agent = Agent::with_factory(
+            holding_factory(Arc::clone(&log), inflight.clone(), release.clone()),
+            true,
+        );
+        let cwd = std::env::temp_dir().to_string_lossy().to_string();
+        let sid = agent.session_new(&json!({ "cwd": &cwd })).await.unwrap()["sessionId"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        // GIVEN an in-flight Claude main turn.
+        let params = prompt_with_model(&sid, "running", "claude-sonnet-5-5", Some("medium"));
+        let running = tokio::spawn(async move {
+            let outcome = prompt_collecting(&mut agent, params).await;
+            (outcome, agent)
+        });
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while !inflight.exists() {
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("turn should still be in flight");
+        assert_eq!(log.lock().unwrap().len(), 1);
+
+        // WHEN the chat's model or effort changes. The picker is host state
+        // for the following prompt; this turn is not cancelled.
+        let changed_model = "claude-opus";
+        let changed_effort = "max";
+        assert_eq!(
+            log.lock().unwrap().len(),
+            1,
+            "changing the picker must not spawn or kill during the turn"
+        );
+
+        std::fs::write(&release, b"go").unwrap();
+        let (outcome, mut agent) = tokio::time::timeout(std::time::Duration::from_secs(5), running)
+            .await
+            .expect("in-flight turn should finish")
+            .unwrap();
+        let (_updates, result) = outcome.unwrap();
+        assert_eq!(result["stopReason"], "end_turn");
+        assert_eq!(log.lock().unwrap().len(), 1);
+        let hot = agent.hot.as_ref().unwrap();
+        assert_eq!(hot.model.as_deref(), Some("claude-sonnet-5-5"));
+        assert_eq!(hot.effort.as_deref(), Some("medium"));
+        let native = hot.duplex.session_id.clone();
+
+        // The new model and effort apply on the following prompt.
+        prompt_collecting(
+            &mut agent,
+            prompt_with_model(&native, "later", changed_model, Some(changed_effort)),
+        )
+        .await
+        .unwrap();
+        assert_eq!(log.lock().unwrap().len(), 2);
+        assert_eq!(
+            agent.hot.as_ref().unwrap().model.as_deref(),
+            Some(changed_model)
+        );
+        assert_eq!(
+            agent.hot.as_ref().unwrap().effort.as_deref(),
+            Some(changed_effort)
+        );
+        agent.cancel(None).await;
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// @spec harness/claude Duplex main heat: A title or reply oneshot leaves the main hot process in place
+    #[tokio::test]
+    async fn title_or_reply_oneshot_leaves_the_main_hot_process_in_place() {
+        let main_log = Arc::new(Mutex::new(Vec::new()));
+        let mut main = Agent::with_factory(recording_factory(Arc::clone(&main_log)), true);
+        let cwd = std::env::temp_dir().to_string_lossy().to_string();
+        let sid = main.session_new(&json!({ "cwd": &cwd })).await.unwrap()["sessionId"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        // GIVEN a duplex-hot Claude main process.
+        prompt_collecting(
+            &mut main,
+            prompt_with_model(&sid, "main", "claude-sonnet-5-5", Some("medium")),
+        )
+        .await
+        .unwrap();
+        let native = main.hot.as_ref().unwrap().duplex.session_id.clone();
+        assert_eq!(main_log.lock().unwrap().len(), 1);
+
+        // WHEN a title-summary or reply-suggestion oneshot runs. Those sends
+        // are a separate agent process and omit effort (AcpTurn::prompt).
+        let oneshot_log = Arc::new(Mutex::new(Vec::new()));
+        let mut oneshot = Agent::with_factory(recording_factory(Arc::clone(&oneshot_log)), true);
+        let oneshot_sid = oneshot.session_new(&json!({ "cwd": &cwd })).await.unwrap()["sessionId"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let mut live = oneshot_sid;
+        for text in ["title summary of the opening message", "reply suggestion"] {
+            let (_, result) = prompt_collecting(
+                &mut oneshot,
+                prompt_with_model(&live, text, "claude-haiku-4-5", None),
+            )
+            .await
+            .unwrap();
+            if let Some(rebound) = result["sessionId"].as_str() {
+                live = rebound.to_string();
+            }
+        }
+
+        // THEN the main hot process is still in place, and the oneshot spawn
+        // does not pass an effort flag.
+        assert!(main.has_hot_claude());
+        assert_eq!(main.hot.as_ref().unwrap().duplex.session_id, native);
+        assert_eq!(main_log.lock().unwrap().len(), 1);
+        {
+            let oneshots = oneshot_log.lock().unwrap();
+            assert_eq!(
+                oneshots.len(),
+                1,
+                "the reply oneshot reuses its own process"
+            );
+            assert!(oneshots[0].effort.is_none());
+            assert!(flag_value(&oneshots[0].argv, "--effort").is_none());
+            assert_eq!(
+                flag_value(&oneshots[0].argv, "--model"),
+                Some("claude-haiku-4-5")
+            );
+        }
+        main.cancel(None).await;
+        oneshot.cancel(None).await;
     }
 }

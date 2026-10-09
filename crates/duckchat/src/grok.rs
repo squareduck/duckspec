@@ -189,6 +189,7 @@ fn to_model_info(m: crate::acp::AcpModel) -> ModelInfo {
         id: m.id.clone(),
         display: humanize_display(&m.id, &m.name),
         context_window: m.context_window,
+        effort: None,
     }
 }
 
@@ -232,6 +233,7 @@ mod tests {
             id: id.to_string(),
             name: format!("{id} display"),
             context_window: window,
+            effort: None,
         }
     }
 
@@ -374,11 +376,13 @@ mod tests {
                 id: "grok-4.5".into(),
                 name: "Grok 4.5".into(),
                 context_window: Some(256_000),
+                effort: None,
             },
             AcpModel {
                 id: "grok-composer-2.5-fast".into(),
                 name: "grok-composer-2.5-fast".into(), // bare id → humanize
                 context_window: Some(128_000),
+                effort: None,
             },
         ];
 

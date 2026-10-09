@@ -166,7 +166,8 @@ pub fn update(
         Message::ResetDefaults => {
             *config = Config::default();
             // Re-seed a concrete global default when the process catalog has
-            // models — ModelCatalogReady is one-shot and will not re-seed.
+            // models. The next Claude refresh may be hours away, or never
+            // this launch, so don't wait for another ModelCatalogReady.
             let catalog = agent::available_models();
             let _ = agent::seed_global_default_if_unset(config, &catalog);
             let _ = config::save(config);
@@ -476,6 +477,7 @@ mod tests {
             id: id.into(),
             display: id.into(),
             context_window: None,
+            effort: None,
         }
     }
 

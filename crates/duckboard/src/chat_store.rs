@@ -58,6 +58,14 @@ pub enum ContentBlock {
     },
 }
 
+/// Effort level a chat chose for one model. `None` on the session means the
+/// chat has not chosen and the composer follows the catalog default.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EffortPin {
+    pub model: ModelRef,
+    pub level: String,
+}
+
 /// In-memory chat session.
 #[derive(Debug, Clone)]
 pub struct ChatSession {
@@ -105,6 +113,10 @@ pub struct ChatSession {
     /// Persisted so the resync survives a restart between the cancellation and
     /// the next send.
     pub unsynced_draft: Option<String>,
+    /// Effort level this chat pinned, for the model it was chosen against.
+    /// `None` means the chat has not chosen (including sessions saved before
+    /// effort pins existed). The composer then shows the catalog default.
+    pub effort_pin: Option<EffortPin>,
 }
 
 impl ChatSession {
@@ -133,6 +145,7 @@ impl ChatSession {
             selected_model: None,
             context_tokens: 0,
             unsynced_draft: None,
+            effort_pin: None,
         }
     }
 }
@@ -159,6 +172,9 @@ struct PersistedSession {
     context_tokens: usize,
     #[serde(default)]
     unsynced_draft: Option<String>,
+    /// Absent on sessions written before effort pins existed.
+    #[serde(default)]
+    effort_pin: Option<EffortPin>,
 }
 
 /// What the title summariser should summarise. A "bare slash command" turn
@@ -353,6 +369,7 @@ pub fn load_sessions_for(scope: &str, project_root: Option<&Path>) -> Vec<ChatSe
             selected_model: persisted.selected_model,
             context_tokens: persisted.context_tokens,
             unsynced_draft: persisted.unsynced_draft,
+            effort_pin: persisted.effort_pin,
         });
     }
     sessions.sort_by_key(|s| std::cmp::Reverse(s.created_at_nanos));
@@ -399,6 +416,7 @@ pub fn save_session(session: &ChatSession, project_root: Option<&Path>) -> anyho
         selected_model: session.selected_model.clone(),
         context_tokens: session.context_tokens,
         unsynced_draft: session.unsynced_draft.clone(),
+        effort_pin: session.effort_pin.clone(),
     };
     let data = serde_json::to_string_pretty(&persisted)?;
     write_atomic(&path, data.as_bytes())?;

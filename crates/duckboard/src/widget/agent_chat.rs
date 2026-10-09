@@ -16,11 +16,11 @@ const CHAT_INPUT_MAX_ROWS: usize = 20;
 /// absorb sub-pixel layout rounding during streaming rebuilds.
 pub const STICK_TO_BOTTOM_THRESHOLD: f32 = 16.0;
 
-use duckchat::{ModelInfo, ModelRef};
+use duckchat::{ModelEffort, ModelInfo, ModelRef};
 
 use crate::agent::SlashCommand;
 use crate::area::interaction::{self, SelectionContext};
-use crate::chat_store::{ChatSession, ContentBlock, Role};
+use crate::chat_store::{ChatSession, ContentBlock, EffortPin, Role};
 use crate::theme;
 use crate::widget::collapsible;
 use crate::widget::find;
@@ -56,6 +56,8 @@ pub enum Msg {
     ChatScrolled(scrollable::Viewport),
     /// User picked a model from the meta-row selector.
     ModelSelected(ModelChoice),
+    /// User picked an effort level from the meta-row selector.
+    EffortSelected(EffortChoice),
     /// Cycle empty-input next actions (`+1` Tab, `-1` Shift-Tab).
     CycleNextAction(i8),
     /// Layout measure of the chat scrollable (viewport + content heights).
@@ -290,6 +292,177 @@ pub fn format_usage_readout(tokens: usize, window: usize) -> String {
     }
 }
 
+// ── Effort control ──────────────────────────────────────────────────────────
+
+/// One entry in the meta-row effort `pick_list`. `id` is the catalog level;
+/// `label` is the closed control and the menu text. Equality is on `id`.
+#[derive(Debug, Clone)]
+pub struct EffortChoice {
+    pub id: String,
+    pub label: String,
+}
+
+impl PartialEq for EffortChoice {
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id
+    }
+}
+
+impl Eq for EffortChoice {}
+
+impl std::fmt::Display for EffortChoice {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.label)
+    }
+}
+
+/// Trailing composer-footer controls, in render order. The effort slot is
+/// present only when [`show_effort_control`] is true.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ComposerFooterSlot {
+    Model,
+    Effort,
+    Usage,
+}
+
+/// The effort control is shown only when the effective model is available and
+/// that row has an effort scale. A Missing model hides it even if a scale was
+/// known for the id.
+pub fn show_effort_control(model_available: bool, row_has_effort: bool) -> bool {
+    model_available && row_has_effort
+}
+
+/// Model, then effort (when shown), then the usage readout.
+pub fn composer_footer_slots(show_effort: bool) -> Vec<ComposerFooterSlot> {
+    let mut slots = vec![ComposerFooterSlot::Model];
+    if show_effort {
+        slots.push(ComposerFooterSlot::Effort);
+    }
+    slots.push(ComposerFooterSlot::Usage);
+    slots
+}
+
+/// Closed label for a catalog effort id. Known ids use the display map; any
+/// other id is shown unchanged.
+pub fn effort_closed_label(id: &str) -> String {
+    match id {
+        "low" => "Low",
+        "medium" => "Medium",
+        "high" => "High",
+        "xhigh" => "Xhigh",
+        "max" => "Max",
+        other => other,
+    }
+    .to_string()
+}
+
+pub fn effort_choice(id: &str) -> EffortChoice {
+    EffortChoice {
+        id: id.to_string(),
+        label: effort_closed_label(id),
+    }
+}
+
+/// Menu of the row's levels in catalog order. No Default row.
+pub fn effort_menu(levels: &[String]) -> Vec<EffortChoice> {
+    levels.iter().map(|id| effort_choice(id)).collect()
+}
+
+/// Level the closed control shows: the chat's pin when it is for this model
+/// and still offered, otherwise the catalog default.
+pub fn shown_effort_level(
+    default_level: &str,
+    levels: &[String],
+    pin: Option<&EffortPin>,
+    model: &ModelRef,
+) -> String {
+    if let Some(pin) = pin
+        && &pin.model == model
+        && levels.iter().any(|level| level == &pin.level)
+    {
+        return pin.level.clone();
+    }
+    default_level.to_string()
+}
+
+/// Pin written when the chat chooses an offered level, including today's
+/// catalog default.
+pub fn effort_pin_for_choice(model: ModelRef, level: impl Into<String>) -> EffortPin {
+    EffortPin {
+        model,
+        level: level.into(),
+    }
+}
+
+/// Result of reconciling an effort pin when session defaults are stamped.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EffortPinStamp {
+    pub pin: Option<EffortPin>,
+    /// True only when a stored pin was cleared. The caller persists that clear.
+    pub save: bool,
+}
+
+/// Reconcile `pin` with the preferred model after defaults are stamped.
+///
+/// No preferred model keeps the pin. The same preferred model keeps it while
+/// the level is still offered, and also when that model is missing from the
+/// catalog. A different preferred model clears it, as does a level the
+/// available row no longer offers.
+pub fn stamp_effort_pin(
+    pin: Option<&EffortPin>,
+    preferred: Option<&ModelRef>,
+    preferred_available: bool,
+    offered_levels: Option<&[String]>,
+) -> EffortPinStamp {
+    let Some(pin) = pin else {
+        return EffortPinStamp {
+            pin: None,
+            save: false,
+        };
+    };
+    let Some(preferred) = preferred else {
+        return EffortPinStamp {
+            pin: Some(pin.clone()),
+            save: false,
+        };
+    };
+    if &pin.model != preferred {
+        return EffortPinStamp {
+            pin: None,
+            save: true,
+        };
+    }
+    let level_missing = preferred_available
+        && offered_levels.is_none_or(|levels| !levels.iter().any(|level| level == &pin.level));
+    if level_missing {
+        EffortPinStamp {
+            pin: None,
+            save: true,
+        }
+    } else {
+        EffortPinStamp {
+            pin: Some(pin.clone()),
+            save: false,
+        }
+    }
+}
+
+/// Effort a main-chat send carries: the pinned level, else the catalog
+/// default, when the row has a scale. `None` when the row has no scale.
+pub fn main_send_effort(
+    effort: Option<&ModelEffort>,
+    pin: Option<&EffortPin>,
+    model: &ModelRef,
+) -> Option<String> {
+    let effort = effort?;
+    Some(shown_effort_level(
+        &effort.default_level,
+        &effort.levels,
+        pin,
+        model,
+    ))
+}
+
 // ── Status bar info ────────────────────────────────────────────────────────
 
 /// Data for the status bar below the chat input.
@@ -303,6 +476,14 @@ pub struct StatusInfo {
     pub model_choices: Vec<ModelChoice>,
     /// The currently-selected picker entry (matched by `(harness, id)`).
     pub selected_model: ModelChoice,
+    /// Whether the effort control is in the footer. False when the effective
+    /// model is Missing or its row has no effort scale.
+    pub show_effort: bool,
+    /// Effort menu for the effective model. Empty when [`Self::show_effort`]
+    /// is false.
+    pub effort_choices: Vec<EffortChoice>,
+    /// Closed effort selection. `None` when the control is hidden.
+    pub selected_effort: Option<EffortChoice>,
     /// Stored agent session id exists but is not resumable for the effective
     /// harness (typically after a harness switch). False when unbound or when
     /// resume works. Combined with transcript emptiness via
@@ -1498,8 +1679,9 @@ pub fn view<'a>(
         snap: true,
     });
 
-    // Meta row — model + context tokens — sits inside the input container
-    // below the editor, blending into the "paper" surface (à la Zed). The
+    // Meta row — model, effort (when the row has a scale), then context tokens —
+    // sits inside the input container below the editor, blending into the
+    // "paper" surface (à la Zed). The
     // extra `SPACING_SM` horizontal padding lines the meta text up with the
     // input's own text (container XS + TextEdit CONTENT_PAD = 12px).
     // Fill is measured against the *selected* model's window (`context_max`).
@@ -1544,7 +1726,8 @@ pub fn view<'a>(
         } else {
             theme::pick_list_ghost_style
         };
-    meta_inner = meta_inner.push(
+    let show_effort = status.show_effort;
+    let mut model_slot: Option<Element<'a, Msg>> = Some(
         pick_list(
             status.model_choices,
             Some(selected_closed),
@@ -1553,15 +1736,47 @@ pub fn view<'a>(
         .text_size(theme::font_sm())
         .padding([0.0, theme::SPACING_XS])
         .style(model_pick_style)
-        .menu_style(theme::pick_list_menu),
+        .menu_style(theme::pick_list_menu)
+        .into(),
     );
+    let mut effort_slot: Option<Element<'a, Msg>> = if show_effort {
+        Some(
+            pick_list(
+                status.effort_choices,
+                status.selected_effort,
+                Msg::EffortSelected,
+            )
+            .text_size(theme::font_sm())
+            .padding([0.0, theme::SPACING_XS])
+            .style(model_pick_style)
+            .menu_style(theme::pick_list_menu)
+            .into(),
+        )
+    } else {
+        None
+    };
     let ctx_label = match status.context_max {
         // Progressive readout when the window is known and positive.
         Some(max) if max > 0 => format_usage_readout(status.context_tokens, max),
         // No known window → raw token count with no fill.
         _ => format_number(status.context_tokens),
     };
-    meta_inner = meta_inner.push(text(ctx_label).size(theme::font_sm()).color(ctx_color));
+    let mut usage_slot: Option<Element<'a, Msg>> = Some(
+        text(ctx_label)
+            .size(theme::font_sm())
+            .color(ctx_color)
+            .into(),
+    );
+    for slot in composer_footer_slots(show_effort) {
+        let el = match slot {
+            ComposerFooterSlot::Model => model_slot.take(),
+            ComposerFooterSlot::Effort => effort_slot.take(),
+            ComposerFooterSlot::Usage => usage_slot.take(),
+        };
+        if let Some(el) = el {
+            meta_inner = meta_inner.push(el);
+        }
+    }
     // Extra top padding separates the prompt from the meta strip so the
     // toolbar doesn't crowd the last input line.
     let meta_row = container(meta_inner)
@@ -2205,6 +2420,7 @@ mod tests {
             id: id.to_string(),
             display: id.to_string(),
             context_window: window,
+            effort: None,
         }
     }
 
@@ -2364,6 +2580,7 @@ mod tests {
             id: "grok-4.5".to_string(),
             display: "Grok 4.5".to_string(),
             context_window: Some(500_000),
+            effort: None,
         }];
         // WHEN the closed model control label is built (with menu choices).
         let choices = group_choices(models);
@@ -2388,6 +2605,162 @@ mod tests {
         assert_eq!(with_preferred.label, "Missing");
         assert_eq!(unconfigured.closed_label, "Missing");
         assert_eq!(unconfigured.label, "Missing");
+    }
+
+    /// @spec chat/composer-footer Effort control: Effort control is shown between the model and the usage readout
+    #[test]
+    fn effort_control_is_shown_between_the_model_and_the_usage_readout() {
+        // GIVEN an available row with an effort scale, a Missing model, and an
+        // available row with no effort scale.
+        let cases = [(true, true), (false, true), (true, false)];
+        for (model_available, row_has_effort) in cases {
+            // WHEN the composer footer is rendered.
+            let show = show_effort_control(model_available, row_has_effort);
+            let slots = composer_footer_slots(show);
+            if model_available && row_has_effort {
+                // THEN the effort control sits between the model control and
+                // the usage readout.
+                assert_eq!(
+                    slots,
+                    vec![
+                        ComposerFooterSlot::Model,
+                        ComposerFooterSlot::Effort,
+                        ComposerFooterSlot::Usage,
+                    ]
+                );
+            } else {
+                // AND a Missing model, or a row with no scale, shows none.
+                assert!(!slots.contains(&ComposerFooterSlot::Effort));
+                assert_eq!(
+                    slots,
+                    vec![ComposerFooterSlot::Model, ComposerFooterSlot::Usage]
+                );
+            }
+        }
+    }
+
+    /// @spec chat/composer-footer Effort control: A pin keeps the level the chat chose
+    #[test]
+    fn a_pin_keeps_the_level_the_chat_chose() {
+        // GIVEN a chat with no effort pin and a selected model that has a
+        // catalog default.
+        let model = ModelRef::new("claude-code", "claude-sonnet-5");
+        let levels = vec!["low".to_string(), "medium".to_string(), "high".to_string()];
+        let catalog_default = "medium";
+        // Choosing an offered level, including that default.
+        for chosen in ["medium", "high", "low"] {
+            // WHEN the control is shown before a level is chosen.
+            let shown = shown_effort_level(catalog_default, &levels, None, &model);
+            // THEN it shows the catalog default.
+            assert_eq!(shown, catalog_default);
+            // WHEN the user chooses an offered level.
+            let pin = effort_pin_for_choice(model.clone(), chosen);
+            // THEN that level is stored as the chat's pin.
+            assert_eq!(pin.model, model);
+            assert_eq!(pin.level, chosen);
+            // WHEN the catalog default later changes and the chosen level is
+            // still offered.
+            let later = shown_effort_level("low", &levels, Some(&pin), &model);
+            // THEN the pin remains the chosen level.
+            assert_eq!(later, chosen);
+            assert_eq!(pin.level, chosen);
+        }
+    }
+
+    /// @spec chat/composer-footer Effort control: Effort pin follows the preferred model when defaults are stamped
+    #[test]
+    fn effort_pin_follows_the_preferred_model_when_defaults_are_stamped() {
+        // GIVEN a chat with an effort pin.
+        let model = ModelRef::new("claude-code", "claude-sonnet-5");
+        let other = ModelRef::new("claude-code", "claude-haiku-5");
+        let pin = EffortPin {
+            model: model.clone(),
+            level: "high".to_string(),
+        };
+        let offered = vec!["low".to_string(), "medium".to_string(), "high".to_string()];
+        let without_high = vec!["low".to_string(), "medium".to_string()];
+
+        // WHEN defaults are stamped with no preferred model.
+        let no_preferred = stamp_effort_pin(Some(&pin), None, false, None);
+        // THEN the pin is kept and nothing is saved.
+        assert_eq!(no_preferred.pin.as_ref(), Some(&pin));
+        assert!(!no_preferred.save);
+
+        // WHEN the same preferred model still offers the level.
+        let same = stamp_effort_pin(Some(&pin), Some(&model), true, Some(&offered));
+        // THEN the pin is kept.
+        assert_eq!(same.pin.as_ref(), Some(&pin));
+        assert!(!same.save);
+
+        // WHEN the preferred model is different.
+        let different = stamp_effort_pin(Some(&pin), Some(&other), true, Some(&offered));
+        // THEN the pin is cleared and the clear is saved.
+        assert_eq!(different.pin, None);
+        assert!(different.save);
+
+        // WHEN the same available row no longer offers the level.
+        let missing_level = stamp_effort_pin(Some(&pin), Some(&model), true, Some(&without_high));
+        // THEN the pin is cleared and the clear is saved.
+        assert_eq!(missing_level.pin, None);
+        assert!(missing_level.save);
+
+        // WHEN the same model is missing from the catalog.
+        let missing_model = stamp_effort_pin(Some(&pin), Some(&model), false, None);
+        // THEN the pin is kept.
+        assert_eq!(missing_model.pin.as_ref(), Some(&pin));
+        assert!(!missing_model.save);
+        // AND the effort control is hidden.
+        let slots = composer_footer_slots(show_effort_control(false, true));
+        assert!(!slots.contains(&ComposerFooterSlot::Effort));
+    }
+
+    /// @spec chat/composer-footer Effort control: Effort labels and menu follow the row's scale
+    #[test]
+    fn effort_labels_and_menu_follow_the_rows_scale() {
+        // GIVEN levels that include `xhigh` and an id outside the display map.
+        let levels = vec!["xhigh".to_string(), "turbo".to_string(), "low".to_string()];
+        // WHEN the closed control and its menu are built.
+        let closed_xhigh = effort_closed_label("xhigh");
+        let closed_other = effort_closed_label("turbo");
+        let menu = effort_menu(&levels);
+        // THEN `xhigh` is shown as `Xhigh`.
+        assert_eq!(closed_xhigh, "Xhigh");
+        assert_eq!(menu[0].label, "Xhigh");
+        // AND the id outside the display map is shown unchanged.
+        assert_eq!(closed_other, "turbo");
+        assert_eq!(menu[1].label, "turbo");
+        // AND the menu lists the row's levels in catalog order.
+        let ids: Vec<&str> = menu.iter().map(|choice| choice.id.as_str()).collect();
+        assert_eq!(ids, ["xhigh", "turbo", "low"]);
+        // AND the menu has no Default row.
+        assert!(
+            menu.iter()
+                .all(|choice| choice.id != "Default" && choice.label != "Default")
+        );
+    }
+
+    /// @spec chat/composer-footer Effort control: A main send uses the resolved effort level
+    #[test]
+    fn a_main_send_uses_the_resolved_effort_level() {
+        let model = ModelRef::new("claude-code", "claude-sonnet-5");
+        let scale = ModelEffort {
+            default_level: "medium".to_string(),
+            levels: vec!["low".to_string(), "medium".to_string(), "high".to_string()],
+        };
+        let pin = EffortPin {
+            model: model.clone(),
+            level: "high".to_string(),
+        };
+        // GIVEN a pinned row with a scale, an unpinned row with a scale, and a
+        // row with no scale. WHEN a main-chat turn is sent for each.
+        let pinned = main_send_effort(Some(&scale), Some(&pin), &model);
+        let unpinned = main_send_effort(Some(&scale), None, &model);
+        let no_scale = main_send_effort(None, None, &model);
+        // THEN the pinned chat sends that level, the unpinned chat sends the
+        // catalog default, and a row with no scale sends no effort.
+        assert_eq!(pinned.as_deref(), Some("high"));
+        assert_eq!(unpinned.as_deref(), Some("medium"));
+        assert_eq!(no_scale, None);
     }
 
     #[test]

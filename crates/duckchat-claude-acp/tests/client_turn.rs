@@ -27,6 +27,9 @@ import json, sys, os
 # Parse --resume from argv (production spawn forwards flags after the bin).
 resume = None
 argv = sys.argv[1:]
+if "--version" in argv:
+    print("2.1.100", flush=True)
+    sys.exit(0)
 if "--resume" in argv:
     i = argv.index("--resume")
     if i + 1 < len(argv):
@@ -117,11 +120,6 @@ async fn shared_client_completes_turn_against_agent() {
 
     let init = turn.initialize().await.expect("initialize");
     assert!(init.load_session);
-    assert!(
-        !init.models.is_empty(),
-        "initialize must advertise a non-empty model catalog (live or curated fallback): {:?}",
-        init.models.iter().map(|m| &m.id).collect::<Vec<_>>()
-    );
 
     let session_id = turn.open(None, &cwd).await.expect("session/new");
     // Open returns a provisional handle; Claude is not started yet.
@@ -145,6 +143,7 @@ async fn shared_client_completes_turn_against_agent() {
             &session_id,
             &content,
             "sonnet",
+            None,
             None,
             None,
             &tx,
@@ -203,6 +202,7 @@ async fn missing_session_resume_fails_on_first_prompt() {
             "missing-session-id",
             &content,
             "sonnet",
+            None,
             None,
             None,
             &tx,

@@ -31,7 +31,7 @@ pub use event::{
     AgentEvent, PendingUserChoices, Usage, UserChoiceAnswer, UserChoiceOption, UserChoiceRequest,
 };
 pub use hook::{ContextHook, HookOutput};
-pub use provider::{Capabilities, ModelInfo, ModelRef, Provider, SlashCommand};
+pub use provider::{Capabilities, ModelEffort, ModelInfo, ModelRef, Provider, SlashCommand};
 pub use reply_suggest::parse_replies;
 pub use request::{
     Attachment, ReasoningMode, ReplySuggestionRequest, TitleRequest, ToolPolicy, TurnOutcome,

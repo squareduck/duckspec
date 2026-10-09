@@ -18,7 +18,7 @@ NOT imply a preference for another harness.
 - **THEN** that preference is stored as a global application setting for that harness
 
 > test: code
-> - crates/duckboard/src/config.rs:303
+> - crates/duckboard/src/config.rs:310
 
 ### Scenario: Preferences are keyed by harness not by project
 
@@ -28,7 +28,7 @@ NOT imply a preference for another harness.
 - **THEN** the same global preference for that harness is returned
 
 > test: code
-> - crates/duckboard/src/config.rs:320
+> - crates/duckboard/src/config.rs:327
 
 ## Requirement: Oneshot model resolution
 
@@ -48,7 +48,7 @@ for that harness when no default match applies.
 - **THEN** the resolved model is the configured id
 
 > test: code
-> - crates/duckboard/src/agent.rs:629
+> - crates/duckboard/src/agent.rs:1196
 
 ### Scenario: Missing or unknown config falls back to string-match default then first catalog model
 
@@ -64,7 +64,7 @@ for that harness when no default match applies.
 - **AND** otherwise the resolved model is the first catalog model for that harness
 
 > test: code
-> - crates/duckboard/src/agent.rs:646
+> - crates/duckboard/src/agent.rs:1213
 
 ## Requirement: Settings pickers when hints enabled
 
@@ -82,7 +82,7 @@ are disabled, Settings SHALL NOT show those oneshot model pickers.
 - **THEN** an oneshot model picker is offered for each harness that has catalog models
 
 > test: code
-> - crates/duckboard/src/area/settings.rs:482
+> - crates/duckboard/src/area/settings.rs:484
 
 ### Scenario: With agent input hints off, oneshot model pickers are not shown
 
@@ -92,7 +92,7 @@ are disabled, Settings SHALL NOT show those oneshot model pickers.
 - **THEN** no oneshot model picker is shown
 
 > test: code
-> - crates/duckboard/src/area/settings.rs:498
+> - crates/duckboard/src/area/settings.rs:500
 
 ## Requirement: Oneshots use the resolved preference
 
@@ -108,4 +108,4 @@ resolved oneshot model as the preferred model for the oneshot path.
 - **THEN** the oneshot path prefers that resolved model
 
 > test: code
-> - crates/duckboard/src/agent.rs:674
+> - crates/duckboard/src/agent.rs:1241

@@ -397,7 +397,7 @@ enum Message {
     Settings(area::settings::Message),
     // System theme changed
     ThemeChanged(theme::ColorMode),
-    /// App-start model catalog refresh finished; re-read pickers / oneshot resolve.
+    /// Model catalog refresh finished; re-read pickers / oneshot resolve.
     ModelCatalogReady,
     // Animation tick for the streaming indicator; only fires while a session
     // is streaming (see `subscription`).
@@ -439,10 +439,37 @@ fn refresh_model_defaults(state: &mut State) {
         .as_deref()
         .and_then(|root| state.config.project_model_default(root));
     let global = state.config.default_model.clone();
+    let project_root = state.project.project_root.clone();
     for ix in state.interactions.values_mut() {
         for ax in ix.sessions.iter_mut() {
             ax.project_model_default = project.clone();
             ax.global_model_default = global.clone();
+            if ax.session.effort_pin.is_none() {
+                continue;
+            }
+            let preferred = ax.preferred_model();
+            let (available, levels) = match preferred.as_ref() {
+                Some(model) => match catalog
+                    .iter()
+                    .find(|row| row.harness == model.harness && row.id == model.model)
+                {
+                    Some(row) => (true, row.effort.as_ref().map(|scale| scale.levels.clone())),
+                    None => (false, None),
+                },
+                None => (false, None),
+            };
+            let stamp = widget::agent_chat::stamp_effort_pin(
+                ax.session.effort_pin.as_ref(),
+                preferred.as_ref(),
+                available,
+                levels.as_deref(),
+            );
+            if stamp.save {
+                ax.session.effort_pin = stamp.pin;
+                if let Err(e) = chat_store::save_session(&ax.session, project_root.as_deref()) {
+                    tracing::warn!("failed to persist cleared effort pin: {e}");
+                }
+            }
         }
     }
 }
@@ -5706,7 +5733,7 @@ fn subscription(state: &State) -> Subscription<Message> {
     // Global keyboard events.
     subs.push(event::listen_raw(handle_key_event));
 
-    // One-shot process model catalog refresh + UI wake when ready.
+    // Startup catalog refresh, then Claude-only expiry wake / stale retry.
     subs.push(model_catalog_ready_subscription());
 
     // Poll system dark/light mode.
@@ -5791,8 +5818,9 @@ fn theme_subscription() -> Subscription<Message> {
     Subscription::run(theme_detect_stream).map(Message::ThemeChanged)
 }
 
-/// Refresh the process model catalog once per process, then emit
-/// [`Message::ModelCatalogReady`] so views and agent subscriptions re-read it.
+/// Refresh every harness once per process, then keep refreshing Claude only:
+/// one wake at catalog expiry, or a five-minute retry while that slice is
+/// empty or past expiry. Each pass emits [`Message::ModelCatalogReady`].
 fn model_catalog_ready_subscription() -> Subscription<Message> {
     Subscription::run(model_catalog_ready_stream)
 }
@@ -5802,11 +5830,31 @@ fn model_catalog_ready_stream() -> impl iced::futures::Stream<Item = Message> {
     use std::sync::atomic::{AtomicBool, Ordering};
     static STARTED: AtomicBool = AtomicBool::new(false);
 
-    stream::once(async {
-        if !STARTED.swap(true, Ordering::SeqCst) {
-            let _ = tokio::task::spawn_blocking(agent::refresh_model_catalog).await;
+    stream::unfold(false, |after_start| async move {
+        if !after_start {
+            if !STARTED.swap(true, Ordering::SeqCst) {
+                let _ = tokio::task::spawn_blocking(agent::refresh_model_catalog).await;
+            }
+            return Some((Message::ModelCatalogReady, true));
         }
-        Message::ModelCatalogReady
+        // Wake and retry both call `refresh_claude_catalog` — not the
+        // all-harness startup refresh.
+        match agent::claude_catalog_schedule() {
+            agent::ClaudeRefreshSchedule::Idle => {
+                std::future::pending::<()>().await;
+                None
+            }
+            agent::ClaudeRefreshSchedule::Wake { at } => {
+                tokio::time::sleep(agent::duration_until(at)).await;
+                let _ = tokio::task::spawn_blocking(agent::refresh_claude_catalog).await;
+                Some((Message::ModelCatalogReady, true))
+            }
+            agent::ClaudeRefreshSchedule::Retry { every } => {
+                tokio::time::sleep(every).await;
+                let _ = tokio::task::spawn_blocking(agent::refresh_claude_catalog).await;
+                Some((Message::ModelCatalogReady, true))
+            }
+        }
     })
     .boxed()
 }
@@ -5879,7 +5927,7 @@ fn main() -> iced::Result {
     // Detect system dark/light mode before creating the window.
     theme::set_mode(theme::detect_mode());
     tracing::info!(mode = ?theme::mode(), "duckboard starting");
-    // Model catalog refresh runs once via subscription and wakes the UI with
+    // Model catalog refresh runs via subscription and wakes the UI with
     // Message::ModelCatalogReady (see `model_catalog_ready_subscription`).
 
     iced::application(State::new, update_with_scroll_preservation, view)

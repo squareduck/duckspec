@@ -154,6 +154,7 @@ impl MainRuntime for AcpMainRuntime {
                 &content,
                 &model,
                 req.reasoning,
+                req.effort.as_deref(),
                 context_window,
                 &events,
                 &cancel,
@@ -466,6 +467,7 @@ fn assemble_content_from_request(req: &TurnRequest) -> Vec<Value> {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Mutex;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
 
@@ -474,7 +476,7 @@ mod tests {
     use tokio::sync::mpsc;
 
     use super::*;
-    use crate::request::TurnRequest;
+    use crate::request::{ReasoningMode, TurnRequest};
 
     /// Spawn-counting factory that opens a duplex fake ACP peer.
     fn counting_open(spawn_count: Arc<AtomicUsize>) -> OpenChild {
@@ -665,6 +667,120 @@ mod tests {
         req.session_id = session_id.map(str::to_string);
         req.model = Some("grok-composer-2.5-fast".into());
         req
+    }
+
+    /// Peer that records each `session/prompt` params object.
+    fn prompt_capturing_open(prompts: Arc<Mutex<Vec<Value>>>) -> OpenChild {
+        Arc::new(move || {
+            let prompts = Arc::clone(&prompts);
+            Box::pin(async move {
+                let (client, server) = duplex(16 * 1024);
+                let (server_read, mut server_write) = tokio::io::split(server);
+                let (client_read, client_write) = tokio::io::split(client);
+                tokio::spawn(async move {
+                    let mut reader = BufReader::new(server_read);
+                    let mut line = String::new();
+                    let mut next_sess = 1u64;
+                    loop {
+                        line.clear();
+                        match reader.read_line(&mut line).await {
+                            Ok(0) | Err(_) => break,
+                            Ok(_) => {}
+                        }
+                        let msg: Value = match serde_json::from_str(line.trim()) {
+                            Ok(v) => v,
+                            Err(_) => continue,
+                        };
+                        let id = msg.get("id").cloned().unwrap_or(Value::Null);
+                        let method = msg.get("method").and_then(|m| m.as_str()).unwrap_or("");
+                        let reply = match method {
+                            "initialize" => json!({
+                                "jsonrpc": "2.0",
+                                "id": id,
+                                "result": {
+                                    "protocolVersion": 1,
+                                    "agentCapabilities": { "loadSession": true },
+                                    "_meta": {
+                                        "modelState": {
+                                            "availableModels": [{
+                                                "modelId": "grok-composer-2.5-fast",
+                                                "name": "Composer",
+                                            }]
+                                        }
+                                    }
+                                }
+                            }),
+                            "session/new" => {
+                                let sid = format!("sess-{next_sess}");
+                                next_sess += 1;
+                                json!({
+                                    "jsonrpc": "2.0",
+                                    "id": id,
+                                    "result": { "sessionId": sid }
+                                })
+                            }
+                            "session/prompt" => {
+                                if let Some(params) = msg.get("params") {
+                                    prompts.lock().unwrap().push(params.clone());
+                                }
+                                json!({
+                                    "jsonrpc": "2.0",
+                                    "id": id,
+                                    "result": { "stopReason": "end_turn" }
+                                })
+                            }
+                            _ => json!({ "jsonrpc": "2.0", "id": id, "result": {} }),
+                        };
+                        if write_line(&mut server_write, &reply).await.is_err() {
+                            break;
+                        }
+                    }
+                });
+                Ok(AcpTurn::from_transport(
+                    Box::pin(client_write),
+                    Box::pin(BufReader::new(client_read)),
+                ))
+            })
+        })
+    }
+
+    /// @spec harness/acp-client Prompt effort: Effort and reasoning mode use different prompt fields
+    #[tokio::test]
+    async fn effort_and_reasoning_mode_use_different_prompt_fields() {
+        let prompts = Arc::new(Mutex::new(Vec::new()));
+        let mut rt = AcpMainRuntime::with_open(
+            prompt_capturing_open(Arc::clone(&prompts)),
+            std::env::temp_dir(),
+        );
+        let (tx, _rx) = mpsc::channel(8);
+
+        let cases = [
+            (Some("high".to_string()), None),
+            (None, Some(ReasoningMode::Medium)),
+            (None, None),
+        ];
+        for (effort, reasoning) in cases {
+            let mut req = turn_req(None);
+            req.effort = effort;
+            req.reasoning = reasoning;
+            rt.run_turn(
+                req,
+                tx.clone(),
+                CancelToken::new(),
+                crate::event::PendingUserChoices::shared(),
+            )
+            .await
+            .unwrap();
+        }
+
+        let got = prompts.lock().unwrap().clone();
+        assert_eq!(got.len(), 3);
+        assert_eq!(got[0]["effort"], "high");
+        assert!(got[0].get("reasoningEffort").is_none());
+        assert!(got[1].get("effort").is_none());
+        assert_eq!(got[1]["reasoningEffort"], "medium");
+        assert!(got[2].get("effort").is_none());
+        assert!(got[2].get("reasoningEffort").is_none());
     }
 
     /// Fake peer that rebinds session id on first prompt (provisional → durable).
@@ -1019,6 +1135,7 @@ mod tests {
             id: id.to_string(),
             name: format!("{id} display"),
             context_window: None,
+            effort: None,
         }
     }
 

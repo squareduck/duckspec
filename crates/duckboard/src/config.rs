@@ -169,6 +169,13 @@ pub fn set_config_dir_override(dir: PathBuf) {
     CONFIG_DIR_OVERRIDE.with(|c| *c.borrow_mut() = Some(dir));
 }
 
+/// Test-only: drop a [`set_config_dir_override`] so later tests on this thread
+/// use the real config directory.
+#[cfg(test)]
+pub fn clear_config_dir_override() {
+    CONFIG_DIR_OVERRIDE.with(|c| *c.borrow_mut() = None);
+}
+
 pub fn config_dir() -> PathBuf {
     #[cfg(test)]
     if let Some(dir) = CONFIG_DIR_OVERRIDE.with(|c| c.borrow().clone()) {

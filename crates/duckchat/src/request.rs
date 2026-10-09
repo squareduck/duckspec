@@ -22,8 +22,11 @@ pub struct TurnRequest {
     /// Optional model override. `None` lets the provider pick its default.
     pub model: Option<String>,
     /// Optional reasoning/thinking mode. Ignored by providers that don't
-    /// surface this knob.
+    /// surface this knob. Copied to ACP `session/prompt` as `reasoningEffort`.
     pub reasoning: Option<ReasoningMode>,
+    /// Optional effort level for this turn. Copied to ACP `session/prompt` as
+    /// `effort`, separate from [`Self::reasoning`].
+    pub effort: Option<String>,
     /// Tool-call permission policy.
     pub tools: ToolPolicy,
     /// Caller-supplied attachments keyed by id. The `prompt` text may embed
@@ -42,6 +45,7 @@ impl TurnRequest {
             working_dir,
             model: None,
             reasoning: None,
+            effort: None,
             tools: ToolPolicy::default(),
             attachments: HashMap::new(),
         }

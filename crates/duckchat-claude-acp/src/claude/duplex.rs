@@ -34,6 +34,8 @@ pub struct ClaudeSpawnArgs {
     pub cwd: PathBuf,
     pub resume: Option<String>,
     pub model: Option<String>,
+    /// Effort level for `--effort`. `None` omits the flag.
+    pub effort: Option<String>,
     pub bypass_permissions: bool,
 }
 
@@ -48,6 +50,7 @@ pub fn default_spawn_factory() -> ClaudeSpawnFactory {
             &args.cwd,
             args.resume.as_deref(),
             args.model.as_deref(),
+            args.effort.as_deref(),
             args.bypass_permissions,
         )
     })
@@ -111,11 +114,13 @@ impl ClaudeDuplex {
     /// `resume`: `None` for a fresh conversation; `Some(id)` for `--resume`.
     /// Missing resume sessions surface as [`DuplexError::SessionNotFound`].
     #[cfg(test)]
+    #[allow(clippy::too_many_arguments)]
     pub async fn open_with_first_prompt(
         factory: &ClaudeSpawnFactory,
         cwd: &Path,
         resume: Option<&str>,
         model: Option<&str>,
+        effort: Option<&str>,
         bypass_permissions: bool,
         content: Vec<Value>,
         on_update: &mut (dyn FnMut(Value) + Send),
@@ -129,6 +134,7 @@ impl ClaudeDuplex {
             cwd,
             resume,
             model,
+            effort,
             bypass_permissions,
             content,
             on_update,
@@ -146,6 +152,7 @@ impl ClaudeDuplex {
         cwd: &Path,
         resume: Option<&str>,
         model: Option<&str>,
+        effort: Option<&str>,
         bypass_permissions: bool,
         content: Vec<Value>,
         on_update: &mut (dyn FnMut(Value) + Send),
@@ -155,6 +162,7 @@ impl ClaudeDuplex {
             cwd: cwd.to_path_buf(),
             resume: resume.map(str::to_string),
             model: model.map(str::to_string),
+            effort: effort.map(str::to_string),
             bypass_permissions,
         };
         match Self::spawn_write_and_stream(factory, args, content, on_update, resolve).await {
@@ -468,6 +476,7 @@ for line in sys.stdin:
             &cwd,
             None,
             None,
+            None,
             true,
             vec![json!({"type":"text","text":"hi"})],
             &mut sink,
@@ -493,6 +502,7 @@ for line in sys.stdin:
         let mut duplex = ClaudeDuplex::open_with_first_prompt(
             &factory,
             &cwd,
+            None,
             None,
             None,
             true,
@@ -534,6 +544,7 @@ for line in sys.stdin:
             &factory,
             &cwd,
             Some("missing-session-id"),
+            None,
             None,
             true,
             vec![json!({"type":"text","text":"hi"})],

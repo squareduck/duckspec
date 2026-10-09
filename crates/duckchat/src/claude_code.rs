@@ -20,7 +20,9 @@ use std::sync::OnceLock;
 
 use async_trait::async_trait;
 
-use crate::acp::{AcpMainRuntime, AcpModel, AcpOneshotRuntime, AcpTurn, AgentLaunch};
+use crate::acp::{
+    AcpMainRuntime, AcpModel, AcpOneshotRuntime, AcpTurn, AgentLaunch, CatalogStatus, InitResult,
+};
 use crate::error::Error;
 use crate::provider::{Capabilities, ModelInfo, Provider, SlashCommand};
 use crate::reply_suggest::{
@@ -37,9 +39,37 @@ const HARNESS: &str = "claude-code";
 /// curated `haiku` alias the agent advertises on initialize.
 const TITLE_MODEL: &str = "haiku";
 
-/// [`Provider`] over the owned Claude ACP agent (`duckchat-claude-acp`). Models
-/// are discovered once from the agent's ACP `initialize` handshake and cached
-/// for the provider instance lifetime.
+/// Outcome of one Claude `initialize` handshake, including catalog status.
+///
+/// [`ClaudeHandshake::Failed`] is a spawn/protocol error or `catalog.status`
+/// of `failed`. Model rows from that attempt are not a catalog. `list_models`
+/// still caches the first handshake; catalog refresh uses [`ClaudeCodeProvider::force_refresh`].
+#[derive(Debug, Clone)]
+pub enum ClaudeHandshake {
+    Failed,
+    /// Catalog status `ok`. `models` is empty when the catalog had no rows.
+    Ready {
+        models: Vec<ModelInfo>,
+        expires_at: Option<String>,
+    },
+}
+
+impl ClaudeHandshake {
+    fn from_init(init: InitResult) -> Self {
+        match init.catalog {
+            CatalogStatus::Failed => Self::Failed,
+            CatalogStatus::Ok { expires_at } => Self::Ready {
+                models: init.models.into_iter().map(to_model_info).collect(),
+                expires_at,
+            },
+        }
+    }
+}
+
+/// [`Provider`] over the owned Claude ACP agent (`duckchat-claude-acp`).
+/// [`Self::list_models`] caches the first handshake for the provider lifetime.
+/// Catalog retention uses [`Self::force_refresh`], which always runs a new
+/// handshake and reports catalog status. The host keeps the last-good memo.
 #[derive(Clone)]
 pub struct ClaudeCodeProvider {
     launch: AgentLaunch,
@@ -64,36 +94,53 @@ impl ClaudeCodeProvider {
         }
     }
 
+    /// Run a new `initialize` handshake. Does not read or update the
+    /// [`Self::list_models`] cache. The host applies the last-good ladder.
+    pub fn force_refresh(&self) -> ClaudeHandshake {
+        self.handshake()
+    }
+
     /// Discover models from a fresh `initialize` handshake. Synchronous to fit
     /// [`Provider::list_models`]: runs the async handshake on a dedicated
     /// thread with its own runtime. Failure degrades to an empty list.
     fn discover_models(&self) -> Vec<ModelInfo> {
-        let launch = self.launch.clone();
-        std::thread::spawn(move || {
-            let rt = match tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-            {
-                Ok(rt) => rt,
-                Err(_) => return Vec::new(),
-            };
-            rt.block_on(async move {
-                let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-                let mut turn = match AcpTurn::spawn_with(&launch, &cwd).await {
-                    Ok(turn) => turn,
-                    Err(_) => return Vec::new(),
-                };
-                let models = match turn.initialize().await {
-                    Ok(init) => init.models.into_iter().map(to_model_info).collect(),
-                    Err(_) => Vec::new(),
-                };
-                turn.cancel().await;
-                models
-            })
-        })
-        .join()
-        .unwrap_or_default()
+        match self.handshake() {
+            ClaudeHandshake::Ready { models, .. } => models,
+            ClaudeHandshake::Failed => Vec::new(),
+        }
     }
+
+    fn handshake(&self) -> ClaudeHandshake {
+        let launch = self.launch.clone();
+        std::thread::spawn(move || handshake_blocking(launch))
+            .join()
+            .unwrap_or(ClaudeHandshake::Failed)
+    }
+}
+
+/// One blocking handshake. Spawn, runtime, and protocol failures are
+/// [`ClaudeHandshake::Failed`].
+fn handshake_blocking(launch: AgentLaunch) -> ClaudeHandshake {
+    let rt = match tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(rt) => rt,
+        Err(_) => return ClaudeHandshake::Failed,
+    };
+    rt.block_on(async move {
+        let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+        let mut turn = match AcpTurn::spawn_with(&launch, &cwd).await {
+            Ok(turn) => turn,
+            Err(_) => return ClaudeHandshake::Failed,
+        };
+        let handshake = match turn.initialize().await {
+            Ok(init) => ClaudeHandshake::from_init(init),
+            Err(_) => ClaudeHandshake::Failed,
+        };
+        turn.cancel().await;
+        handshake
+    })
 }
 
 impl Default for ClaudeCodeProvider {
@@ -109,6 +156,7 @@ fn to_model_info(m: AcpModel) -> ModelInfo {
         id: m.id.clone(),
         display: humanize_display(&m.id, &m.name),
         context_window: m.context_window,
+        effort: m.effort,
     }
 }
 
@@ -379,15 +427,25 @@ for line in sys.stdin:
         assert!(!provider.capabilities().reasoning);
     }
 
-    /// @spec harness/claude Model discovery: Listed models come from the agent advertise set
+    /// @spec harness/claude Model discovery: Listed models follow the agent advertise set
     #[test]
-    fn listed_models_come_from_the_agent_advertise_set() {
+    fn listed_models_follow_the_agent_advertise_set() {
         let tmp = TempDir::new().unwrap();
         let agent = install_fake_acp_agent_with_models(
             &tmp,
             r#"[
-                {"modelId": "opus", "name": "Opus 4.8"},
-                {"modelId": "sonnet", "name": "Sonnet 4.6"}
+                {
+                    "modelId": "claude-sonnet-5-5",
+                    "name": "Sonnet 5.5",
+                    "_meta": {
+                        "totalContextTokens": 1000000,
+                        "effort": {
+                            "default": "medium",
+                            "levels": ["low", "medium", "high", "xhigh", "max"]
+                        }
+                    }
+                },
+                {"modelId": "claude-plain", "name": "Plain"}
             ]"#,
         );
         let provider = ClaudeCodeProvider::with_launch(AgentLaunch::new({
@@ -395,74 +453,25 @@ for line in sys.stdin:
             move || Command::new(&agent)
         }));
 
-        // GIVEN the owned Claude agent advertising a set of available models
+        // GIVEN the owned Claude agent advertising two models on initialize
         // WHEN the harness lists models
         let listed = provider.list_models();
 
         // THEN the listed models are exactly that advertised set
-        // AND each listed model is tagged with the Claude harness
+        // AND each is tagged with the Claude harness
+        // AND the first carries the display name, window, and effort scale
+        // AND the second carries its display name and neither window nor effort
         assert_eq!(listed.len(), 2);
-        assert_eq!(listed[0].id, "opus");
-        assert_eq!(listed[1].id, "sonnet");
         assert!(listed.iter().all(|m| m.harness == "claude-code"));
-    }
-
-    /// @spec harness/claude Model discovery: Each listed model carries a display name
-    #[test]
-    fn each_listed_model_carries_a_display_name() {
-        // GIVEN the owned Claude agent advertising models with display names
-        let handshake = vec![
-            AcpModel {
-                id: "opus".into(),
-                name: "Opus 4.8".into(),
-                context_window: None,
-            },
-            AcpModel {
-                id: "haiku".into(),
-                name: "haiku".into(), // ugly: same as id → humanize alias
-                context_window: None,
-            },
-        ];
-
-        // WHEN the harness lists models
-        let listed: Vec<ModelInfo> = handshake.into_iter().map(to_model_info).collect();
-
-        // THEN each listed model carries a non-empty display name
-        assert!(listed.iter().all(|m| !m.display.is_empty()));
-        assert_eq!(listed[0].display, "Opus 4.8");
-        assert_eq!(listed[1].display, "Haiku");
-    }
-
-    /// @spec harness/claude Model discovery: A model with a known context window carries that window
-    #[test]
-    fn model_with_known_context_window_carries_that_window() {
-        // GIVEN the owned Claude agent advertising a model with a known context window
-        let handshake = vec![AcpModel {
-            id: "claude-opus-4-8".into(),
-            name: "Claude Opus 4.8".into(),
-            context_window: Some(1_000_000),
-        }];
-
-        // WHEN the harness lists models
-        let listed: Vec<ModelInfo> = handshake.into_iter().map(to_model_info).collect();
-
-        // THEN that listed model carries the same context window
+        assert_eq!(listed[0].id, "claude-sonnet-5-5");
+        assert_eq!(listed[0].display, "Sonnet 5.5");
         assert_eq!(listed[0].context_window, Some(1_000_000));
-    }
-
-    /// @spec harness/claude Model discovery: Discovery failure yields an empty host list without panic
-    #[test]
-    fn discovery_failure_yields_empty_host_list_without_panic() {
-        // GIVEN an environment where Claude model discovery cannot obtain an advertised set
-        let provider = ClaudeCodeProvider::with_launch(AgentLaunch::new(|| {
-            Command::new("/nonexistent/duckchat-claude-acp-does-not-exist")
-        }));
-
-        // WHEN the harness lists models
-        let listed = provider.list_models();
-
-        // THEN the model list is empty
-        // AND the listing completes without panicking
-        assert!(listed.is_empty());
+        let effort = listed[0].effort.as_ref().expect("effort scale");
+        assert_eq!(effort.default_level, "medium");
+        assert_eq!(effort.levels, ["low", "medium", "high", "xhigh", "max"]);
+        assert_eq!(listed[1].id, "claude-plain");
+        assert_eq!(listed[1].display, "Plain");
+        assert!(listed[1].context_window.is_none());
+        assert!(listed[1].effort.is_none());
     }
 }

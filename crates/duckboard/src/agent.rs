@@ -8,14 +8,19 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{OnceLock, RwLock};
+use std::time::Duration;
 
 use iced::Subscription;
+use serde::{Deserialize, Serialize};
+use time::OffsetDateTime;
+use time::format_description::well_known::Rfc3339;
 use tokio::sync::mpsc;
 
 pub use duckchat::{AgentHandle, ModelInfo, ModelRef, SlashCommand};
 
+use duckchat::ModelEffort;
 use duckchat::Provider;
-use duckchat::claude_code::ClaudeCodeProvider;
+use duckchat::claude_code::{ClaudeCodeProvider, ClaudeHandshake};
 use duckchat::grok::GrokProvider;
 use duckchat::openai_codex::OpenaiCodexProvider;
 
@@ -37,35 +42,148 @@ fn openai_codex_provider() -> &'static OpenaiCodexProvider {
     CODEX.get_or_init(OpenaiCodexProvider::new)
 }
 
+/// Harness id for the Claude provider. Snapshot rows load under this id.
+const CLAUDE_HARNESS: &str = "claude-code";
+
+/// How long to wait between Claude retries while its slice is empty or past expiry.
+const CLAUDE_CATALOG_RETRY: Duration = Duration::from_secs(5 * 60);
+
 /// Process-local catalog of models discovered from each available provider.
 ///
-/// Refreshed once at app start. A successful non-empty rediscovery replaces that
-/// harness’s slice; empty/failed rediscovery clears that harness’s slice.
+/// Refreshed at app start. Grok and Codex replace their slice on success and
+/// clear it when rediscovery is empty or fails. Claude keeps a provider memo
+/// and a snapshot across a failed refresh, and is refreshed again at catalog
+/// expiry and while its slice is empty or past expiry.
 pub struct ModelCatalog {
     by_harness: RwLock<HashMap<String, Vec<ModelInfo>>>,
+    /// Last ok Claude model list. Empty until a non-empty success, and empty
+    /// after an empty success. A failed refresh does not change it. The
+    /// snapshot does not fill it: an installed file is an applied slice, not
+    /// a memo, so a later failure can tell the two apart.
+    claude_memo: RwLock<Vec<ModelInfo>>,
+    /// Expiry of the Claude catalog currently held, when the last applied
+    /// success or snapshot named one. Absent means no wake is armed.
+    claude_expires_at: RwLock<Option<String>>,
 }
 
 impl ModelCatalog {
     pub fn new() -> Self {
         Self {
             by_harness: RwLock::new(HashMap::new()),
+            claude_memo: RwLock::new(Vec::new()),
+            claude_expires_at: RwLock::new(None),
         }
     }
 
     /// Apply a discovery result for one harness.
     ///
     /// Always writes `discovered`: non-empty replaces the slice; empty clears
-    /// any prior list for that harness.
+    /// any prior list for that harness and still marks the slice applied.
+    /// Claude's last-good ladder decides what to write; Grok and Codex pass
+    /// rediscovery through directly.
     pub fn apply_harness(&self, harness: &str, discovered: Vec<ModelInfo>) {
         let mut map = self.by_harness.write().expect("model catalog lock");
         map.insert(harness.to_string(), discovered);
     }
 
-    /// Refresh from every registered provider’s `list_models` path.
+    /// Refresh every registered provider. Claude runs a new handshake and the
+    /// last-good ladder. Grok and Codex use their cached discovery.
     pub fn refresh_registered(&self) {
-        self.apply_harness("claude-code", claude_provider().list_models());
+        self.refresh_claude();
         self.apply_harness("grok", grok_provider().list_models());
         self.apply_harness("openai-codex", openai_codex_provider().list_models());
+    }
+
+    /// Claude-only refresh. The expiry wake and the five-minute retry call this.
+    fn refresh_claude(&self) {
+        self.apply_claude_refresh(claude_provider().force_refresh());
+    }
+
+    /// Apply one Claude handshake to the memo, the slice, and the snapshot.
+    fn apply_claude_refresh(&self, handshake: ClaudeHandshake) {
+        match handshake {
+            ClaudeHandshake::Failed => self.retain_claude_on_failure(),
+            ClaudeHandshake::Ready { models, expires_at } => {
+                self.apply_claude_success(models, expires_at)
+            }
+        }
+    }
+
+    fn apply_claude_success(&self, models: Vec<ModelInfo>, expires_at: Option<String>) {
+        let expires_at = expires_at.filter(|s| !s.is_empty());
+        if models.is_empty() {
+            *self.claude_memo.write().expect("claude memo lock") = Vec::new();
+            *self.claude_expires_at.write().expect("claude expiry lock") = expires_at;
+            self.apply_harness(CLAUDE_HARNESS, Vec::new());
+            return;
+        }
+        write_claude_snapshot(&expires_at, &models);
+        *self.claude_memo.write().expect("claude memo lock") = models.clone();
+        *self.claude_expires_at.write().expect("claude expiry lock") = expires_at;
+        self.apply_harness(CLAUDE_HARNESS, models);
+    }
+
+    /// Failure ladder: memo, else the slice already applied this process, else
+    /// the snapshot file, else leave Claude unapplied and empty.
+    fn retain_claude_on_failure(&self) {
+        let memo = self.claude_memo.read().expect("claude memo lock").clone();
+        if !memo.is_empty() {
+            self.apply_harness(CLAUDE_HARNESS, memo);
+            return;
+        }
+        if self.slice_applied(CLAUDE_HARNESS) {
+            return;
+        }
+        let Some(snap) = read_claude_snapshot() else {
+            return;
+        };
+        let models = snap
+            .models
+            .into_iter()
+            .map(ClaudeSnapshotRow::into_model)
+            .collect();
+        *self.claude_expires_at.write().expect("claude expiry lock") =
+            snap.expires_at.filter(|s| !s.is_empty());
+        self.apply_harness(CLAUDE_HARNESS, models);
+    }
+
+    fn slice_applied(&self, harness: &str) -> bool {
+        self.by_harness
+            .read()
+            .expect("model catalog lock")
+            .contains_key(harness)
+    }
+
+    #[cfg(test)]
+    fn claude_memo_models(&self) -> Vec<ModelInfo> {
+        self.claude_memo.read().expect("claude memo lock").clone()
+    }
+
+    fn claude_expires_at(&self) -> Option<String> {
+        self.claude_expires_at
+            .read()
+            .expect("claude expiry lock")
+            .clone()
+    }
+
+    /// What to do after the startup refresh, for the Claude slice only.
+    ///
+    /// A fresh catalog with an expiry arms one wake and does not poll. An
+    /// empty slice or a catalog past expiry retries every five minutes. A
+    /// non-empty catalog with no expiry arms neither until the next launch.
+    fn claude_refresh_schedule(&self, now: OffsetDateTime) -> ClaudeRefreshSchedule {
+        if self.for_harness(CLAUDE_HARNESS).is_empty() {
+            return ClaudeRefreshSchedule::Retry {
+                every: CLAUDE_CATALOG_RETRY,
+            };
+        }
+        match self.claude_expires_at().as_deref().and_then(parse_rfc3339) {
+            Some(at) if at > now => ClaudeRefreshSchedule::Wake { at },
+            Some(_) => ClaudeRefreshSchedule::Retry {
+                every: CLAUDE_CATALOG_RETRY,
+            },
+            None => ClaudeRefreshSchedule::Idle,
+        }
     }
 
     /// Ingest pre-fetched per-harness slices (tests / custom refresh sources).
@@ -105,6 +223,14 @@ impl ModelCatalog {
             .find(|m| m.id == model.model)
             .and_then(|m| m.context_window)
     }
+
+    /// Effort scale for a selected model, when that catalog row advertises one.
+    pub fn effort(&self, model: &ModelRef) -> Option<ModelEffort> {
+        self.for_harness(&model.harness)
+            .into_iter()
+            .find(|m| m.id == model.model)
+            .and_then(|m| m.effort)
+    }
 }
 
 fn harness_rank(h: &str) -> u8 {
@@ -122,6 +248,137 @@ impl Default for ModelCatalog {
     }
 }
 
+/// When to refresh Claude again after the startup pass. Grok and Codex are
+/// not in this schedule.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ClaudeRefreshSchedule {
+    /// One wake at `at`. This variant has no poll interval.
+    Wake { at: OffsetDateTime },
+    /// Poll Claude on this interval while the slice is empty or past expiry.
+    Retry { every: Duration },
+    /// No wake and no retry until the next launch.
+    Idle,
+}
+
+impl ClaudeRefreshSchedule {
+    /// Harness a wake or retry refreshes. Idle refreshes nothing.
+    #[cfg(test)]
+    fn harness(&self) -> Option<&'static str> {
+        match self {
+            Self::Idle => None,
+            Self::Wake { .. } | Self::Retry { .. } => Some(CLAUDE_HARNESS),
+        }
+    }
+
+    /// True when this arm polls. A wake does not.
+    #[cfg(test)]
+    fn polls(&self) -> bool {
+        matches!(self, Self::Retry { .. })
+    }
+}
+
+fn parse_rfc3339(raw: &str) -> Option<OffsetDateTime> {
+    OffsetDateTime::parse(raw, &Rfc3339).ok()
+}
+
+/// Delay until `at`. Already-due instants wait zero so the caller refreshes
+/// and reads the schedule again.
+pub(crate) fn duration_until(at: OffsetDateTime) -> Duration {
+    let now = OffsetDateTime::now_utc();
+    if at <= now {
+        return Duration::ZERO;
+    }
+    std::time::Duration::try_from(at - now).unwrap_or(Duration::from_secs(24 * 60 * 60))
+}
+
+/// `~/.config/duckboard/claude-catalog.json`. Tests redirect [`crate::config::config_dir`].
+fn claude_snapshot_path() -> PathBuf {
+    crate::config::config_dir().join("claude-catalog.json")
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct ClaudeSnapshot {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    expires_at: Option<String>,
+    models: Vec<ClaudeSnapshotRow>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct ClaudeSnapshotRow {
+    id: String,
+    display: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    context_window: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    effort: Option<ClaudeSnapshotEffort>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct ClaudeSnapshotEffort {
+    default_level: String,
+    levels: Vec<String>,
+}
+
+impl ClaudeSnapshotRow {
+    fn from_model(model: &ModelInfo) -> Self {
+        Self {
+            id: model.id.clone(),
+            display: model.display.clone(),
+            context_window: model.context_window,
+            effort: model.effort.as_ref().map(|effort| ClaudeSnapshotEffort {
+                default_level: effort.default_level.clone(),
+                levels: effort.levels.clone(),
+            }),
+        }
+    }
+
+    fn into_model(self) -> ModelInfo {
+        ModelInfo {
+            harness: CLAUDE_HARNESS.to_string(),
+            id: self.id,
+            display: self.display,
+            context_window: self.context_window,
+            effort: self.effort.map(|effort| ModelEffort {
+                default_level: effort.default_level,
+                levels: effort.levels,
+            }),
+        }
+    }
+}
+
+/// A missing or unreadable file is no snapshot. Rows are not filtered.
+fn read_claude_snapshot() -> Option<ClaudeSnapshot> {
+    let text = std::fs::read_to_string(claude_snapshot_path()).ok()?;
+    serde_json::from_str(&text).ok()
+}
+
+fn write_claude_snapshot(expires_at: &Option<String>, models: &[ModelInfo]) {
+    let path = claude_snapshot_path();
+    let Some(dir) = path.parent() else {
+        return;
+    };
+    if let Err(e) = std::fs::create_dir_all(dir) {
+        tracing::warn!(error = %e, dir = %dir.display(), "failed to create claude catalog dir");
+        return;
+    }
+    let snap = ClaudeSnapshot {
+        expires_at: expires_at.clone(),
+        models: models.iter().map(ClaudeSnapshotRow::from_model).collect(),
+    };
+    let Ok(body) = serde_json::to_vec_pretty(&snap) else {
+        return;
+    };
+    let tmp = path.with_extension("json.tmp");
+    if let Err(e) = std::fs::write(&tmp, &body) {
+        tracing::warn!(error = %e, path = %tmp.display(), "failed to write claude catalog snapshot");
+        return;
+    }
+    if let Err(e) = std::fs::rename(&tmp, &path) {
+        tracing::warn!(error = %e, path = %path.display(), "failed to store claude catalog snapshot");
+        let _ = std::fs::remove_file(&tmp);
+    }
+}
+
 fn process_catalog() -> &'static ModelCatalog {
     static CATALOG: OnceLock<ModelCatalog> = OnceLock::new();
     CATALOG.get_or_init(ModelCatalog::new)
@@ -129,11 +386,23 @@ fn process_catalog() -> &'static ModelCatalog {
 
 /// Refresh the process catalog from every registered provider (blocking).
 ///
-/// Safe to call more than once: providers memoize discovery; empty results clear
-/// that harness’s catalog slice. Prefer the iced subscription that calls this
-/// and then emits `ModelCatalogReady` so the UI re-reads the catalog.
+/// Safe to call more than once. Grok and Codex keep their first discovery and
+/// clear on an empty result. Claude runs a new handshake and the last-good
+/// ladder. Prefer the iced subscription that calls this and then emits
+/// `ModelCatalogReady` so the UI re-reads the catalog.
 pub fn refresh_model_catalog() {
     process_catalog().refresh_registered();
+}
+
+/// Refresh only the Claude slice (blocking). The expiry wake and the
+/// five-minute retry use this so Grok and Codex stay on their startup discovery.
+pub(crate) fn refresh_claude_catalog() {
+    process_catalog().refresh_claude();
+}
+
+/// Schedule for the process Claude slice at `now`.
+pub(crate) fn claude_catalog_schedule() -> ClaudeRefreshSchedule {
+    process_catalog().claude_refresh_schedule(OffsetDateTime::now_utc())
 }
 
 /// Models offered for pickers / meters: contents of the process model catalog.
@@ -183,6 +452,12 @@ pub fn seed_global_default_if_unset(
 /// Lookup helper used by the usage meter (catalog entry for the selected model).
 pub fn model_context_window(model: &ModelRef) -> Option<usize> {
     process_catalog().context_window(model)
+}
+
+/// Effort scale for a model in the process catalog. `None` when the model is
+/// missing or its row has no effort.
+pub fn model_effort(model: &ModelRef) -> Option<ModelEffort> {
+    process_catalog().effort(model)
 }
 
 /// Catalog slice for one harness (oneshot settings pickers, etc.).
@@ -463,7 +738,63 @@ mod tests {
             id: id.into(),
             display: id.into(),
             context_window: window,
+            effort: None,
         }
+    }
+
+    fn mi_effort(id: &str, default_level: &str, levels: &[&str]) -> ModelInfo {
+        ModelInfo {
+            harness: "claude-code".into(),
+            id: id.into(),
+            display: id.into(),
+            context_window: Some(1_000_000),
+            effort: Some(super::ModelEffort {
+                default_level: default_level.into(),
+                levels: levels.iter().map(|level| (*level).to_string()).collect(),
+            }),
+        }
+    }
+
+    /// Redirect `config_dir` for this thread so snapshot reads and writes stay
+    /// out of `~/.config/duckboard`.
+    struct ConfigGuard {
+        dir: std::path::PathBuf,
+    }
+
+    impl ConfigGuard {
+        fn enter() -> Self {
+            use std::sync::atomic::{AtomicU64, Ordering};
+            static N: AtomicU64 = AtomicU64::new(0);
+            let n = N.fetch_add(1, Ordering::Relaxed);
+            let nanos = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0);
+            let mut dir = std::env::temp_dir();
+            dir.push(format!("duckboard-claude-catalog-{nanos}-{n}"));
+            std::fs::create_dir_all(&dir).unwrap();
+            crate::config::set_config_dir_override(dir.clone());
+            Self { dir }
+        }
+
+        fn path(&self) -> &std::path::Path {
+            &self.dir
+        }
+    }
+
+    impl Drop for ConfigGuard {
+        fn drop(&mut self) {
+            crate::config::clear_config_dir_override();
+            let _ = std::fs::remove_dir_all(&self.dir);
+        }
+    }
+
+    fn write_snapshot(dir: &std::path::Path, body: &str) {
+        std::fs::write(dir.join("claude-catalog.json"), body).unwrap();
+    }
+
+    fn snapshot_bytes(dir: &std::path::Path) -> Vec<u8> {
+        std::fs::read(dir.join("claude-catalog.json")).unwrap()
     }
 
     // @spec harness/selection Harness dispatch: A model's harness selects the provider that runs its turn
@@ -560,7 +891,8 @@ mod tests {
     /// @spec harness/model-catalog Clear slice on empty rediscovery: Empty rediscovery clears the prior harness list
     #[test]
     fn empty_rediscovery_clears_the_prior_harness_list() {
-        // GIVEN a harness whose catalog slice is non-empty
+        // GIVEN a harness that does not keep a last-good catalog
+        // AND that harness’s catalog slice is non-empty
         let cat = ModelCatalog::new();
         cat.apply_harness("grok", vec![mi("grok", "grok-4.5", Some(256_000))]);
 
@@ -575,16 +907,251 @@ mod tests {
     /// @spec harness/model-catalog Clear slice on empty rediscovery: Cold failure leaves that harness empty without panic
     #[test]
     fn cold_failure_leaves_that_harness_empty_without_panic() {
-        // GIVEN a harness with no prior successful discovery
+        // GIVEN a harness that does not keep a last-good catalog
+        // AND that harness has no prior successful discovery
         let cat = ModelCatalog::new();
 
         // AND discovery for that harness failing or yielding an empty set
         // WHEN the catalog is refreshed for that harness
-        cat.apply_harness("claude-code", Vec::new());
+        cat.apply_harness("openai-codex", Vec::new());
 
         // THEN the harness’s catalog slice is empty
         // AND the refresh completes without panicking
+        assert!(cat.for_harness("openai-codex").is_empty());
+    }
+
+    /// @spec harness/model-catalog Claude catalog retention: Failed Claude refresh keeps the last good catalog
+    #[test]
+    fn failed_claude_refresh_keeps_the_last_good_catalog() {
+        let guard = ConfigGuard::enter();
+
+        // GIVEN a failed refresh and a non-empty provider memo
+        // WHEN the process catalog applies that result
+        // THEN the memo is kept (the snapshot on disk is not installed over it)
+        let cat = ModelCatalog::new();
+        let memo = vec![mi("claude-code", "from-memo", Some(100))];
+        cat.apply_claude_refresh(super::ClaudeHandshake::Ready {
+            models: memo.clone(),
+            expires_at: Some("2099-01-01T00:00:00Z".into()),
+        });
+        write_snapshot(
+            guard.path(),
+            r#"{
+                "expires_at": "2099-06-01T00:00:00Z",
+                "models": [{ "id": "from-file", "display": "From file" }]
+            }"#,
+        );
+        cat.apply_claude_refresh(super::ClaudeHandshake::Failed);
+        let kept = cat.for_harness("claude-code");
+        assert_eq!(kept.len(), 1);
+        assert_eq!(kept[0].id, "from-memo");
+        assert_eq!(cat.claude_memo_models()[0].id, "from-memo");
+
+        // AND otherwise a slice already applied this process is kept
+        // AND otherwise the snapshot is installed as stored, with effort,
+        // under claude-code, even past its expiry
+        std::fs::remove_file(guard.path().join("claude-catalog.json")).unwrap();
+        let cat = ModelCatalog::new();
+        write_snapshot(
+            guard.path(),
+            r#"{
+                "expires_at": "2020-01-01T00:00:00Z",
+                "models": [
+                    {
+                        "id": "claude-sonnet-5-5",
+                        "display": "Sonnet 5.5",
+                        "context_window": 1000000,
+                        "harness": "grok",
+                        "effort": { "default_level": "high", "levels": ["low", "high"] }
+                    },
+                    { "id": "claude-plain", "display": "Plain" }
+                ]
+            }"#,
+        );
+        cat.apply_claude_refresh(super::ClaudeHandshake::Failed);
+        let installed = cat.for_harness("claude-code");
+        assert!(cat.claude_memo_models().is_empty());
+        assert_eq!(installed.len(), 2);
+        assert!(installed.iter().all(|m| m.harness == "claude-code"));
+        assert_eq!(installed[0].id, "claude-sonnet-5-5");
+        assert_eq!(installed[0].display, "Sonnet 5.5");
+        assert_eq!(installed[0].context_window, Some(1_000_000));
+        let effort = installed[0].effort.as_ref().expect("stored effort");
+        assert_eq!(effort.default_level, "high");
+        assert_eq!(effort.levels, ["low", "high"]);
+        assert_eq!(installed[1].id, "claude-plain");
+        assert_eq!(installed[1].display, "Plain");
+        assert!(installed[1].context_window.is_none());
+        assert!(installed[1].effort.is_none());
+        assert_eq!(
+            cat.claude_expires_at().as_deref(),
+            Some("2020-01-01T00:00:00Z")
+        );
+        write_snapshot(
+            guard.path(),
+            r#"{
+                "expires_at": "2099-06-01T00:00:00Z",
+                "models": [{ "id": "replaced-file", "display": "Replaced" }]
+            }"#,
+        );
+        cat.apply_claude_refresh(super::ClaudeHandshake::Failed);
+        let still = cat.for_harness("claude-code");
+        assert_eq!(still[0].id, "claude-sonnet-5-5");
+        assert_eq!(still[1].id, "claude-plain");
+        assert!(cat.claude_memo_models().is_empty());
+
+        // AND otherwise the Claude slice stays empty
+        // AND a missing snapshot installs nothing
+        std::fs::remove_file(guard.path().join("claude-catalog.json")).unwrap();
+        let cat = ModelCatalog::new();
+        cat.apply_claude_refresh(super::ClaudeHandshake::Failed);
         assert!(cat.for_harness("claude-code").is_empty());
+        assert!(!cat.slice_applied("claude-code"));
+        assert!(!guard.path().join("claude-catalog.json").exists());
+
+        // AND an unreadable snapshot installs nothing
+        write_snapshot(guard.path(), "not json");
+        let cat = ModelCatalog::new();
+        cat.apply_claude_refresh(super::ClaudeHandshake::Failed);
+        assert!(cat.for_harness("claude-code").is_empty());
+        assert!(!cat.slice_applied("claude-code"));
+        assert_eq!(
+            std::fs::read_to_string(guard.path().join("claude-catalog.json")).unwrap(),
+            "not json"
+        );
+    }
+
+    /// @spec harness/model-catalog Claude catalog retention: Successful Claude refresh replaces the catalog
+    #[test]
+    fn successful_claude_refresh_replaces_the_catalog() {
+        let guard = ConfigGuard::enter();
+        write_snapshot(
+            guard.path(),
+            r#"{
+                "expires_at": "2020-01-01T00:00:00Z",
+                "models": [{ "id": "stale-snapshot", "display": "Stale" }]
+            }"#,
+        );
+        let cat = ModelCatalog::new();
+
+        // GIVEN a successful Claude catalog with models
+        // WHEN the process catalog applies that result
+        // THEN it replaces the slice, the memo, and the snapshot
+        let models = vec![mi_effort(
+            "claude-sonnet-5-5",
+            "medium",
+            &["low", "medium", "high"],
+        )];
+        cat.apply_claude_refresh(super::ClaudeHandshake::Ready {
+            models: models.clone(),
+            expires_at: Some("2099-01-01T00:00:00Z".into()),
+        });
+        let slice = cat.for_harness("claude-code");
+        assert_eq!(slice.len(), 1);
+        assert_eq!(slice[0].id, "claude-sonnet-5-5");
+        assert_eq!(
+            slice[0].effort.as_ref().map(|e| e.default_level.as_str()),
+            Some("medium")
+        );
+        assert_eq!(cat.claude_memo_models()[0].id, "claude-sonnet-5-5");
+        let stored: serde_json::Value =
+            serde_json::from_slice(&snapshot_bytes(guard.path())).unwrap();
+        assert_eq!(stored["expires_at"], "2099-01-01T00:00:00Z");
+        assert_eq!(stored["models"][0]["id"], "claude-sonnet-5-5");
+        assert_eq!(stored["models"][0]["effort"]["default_level"], "medium");
+        assert_eq!(
+            stored["models"][0]["effort"]["levels"],
+            serde_json::json!(["low", "medium", "high"])
+        );
+
+        // AND a successful empty catalog clears the slice and the memo and
+        // leaves the snapshot file in place
+        let bytes = snapshot_bytes(guard.path());
+        cat.apply_claude_refresh(super::ClaudeHandshake::Ready {
+            models: Vec::new(),
+            expires_at: Some("2099-02-01T00:00:00Z".into()),
+        });
+        assert!(cat.for_harness("claude-code").is_empty());
+        assert!(cat.claude_memo_models().is_empty());
+        assert!(cat.slice_applied("claude-code"));
+        assert_eq!(snapshot_bytes(guard.path()), bytes);
+
+        // AND a later failed refresh after that empty success leaves the slice empty
+        cat.apply_claude_refresh(super::ClaudeHandshake::Failed);
+        assert!(cat.for_harness("claude-code").is_empty());
+        assert!(cat.claude_memo_models().is_empty());
+        assert_eq!(snapshot_bytes(guard.path()), bytes);
+    }
+
+    /// @spec harness/model-catalog Claude refresh schedule: Claude is refreshed again only when its catalog is due
+    #[test]
+    fn claude_is_refreshed_again_only_when_its_catalog_is_due() {
+        let _guard = ConfigGuard::enter();
+        let now = time::OffsetDateTime::parse(
+            "2026-10-09T12:00:00Z",
+            &time::format_description::well_known::Rfc3339,
+        )
+        .unwrap();
+        let later = time::OffsetDateTime::parse(
+            "2026-10-16T08:03:29Z",
+            &time::format_description::well_known::Rfc3339,
+        )
+        .unwrap();
+        let retry = std::time::Duration::from_secs(5 * 60);
+
+        // GIVEN a fresh Claude catalog with an expiry
+        // WHEN the refresh schedule is evaluated
+        // THEN it arms one wake at that expiry and does not poll
+        // AND the wake refreshes Claude only
+        let fresh = ModelCatalog::new();
+        fresh.apply_claude_refresh(super::ClaudeHandshake::Ready {
+            models: vec![mi("claude-code", "sonnet", None)],
+            expires_at: Some("2026-10-16T08:03:29Z".into()),
+        });
+        let wake = fresh.claude_refresh_schedule(now);
+        assert_eq!(wake, super::ClaudeRefreshSchedule::Wake { at: later });
+        assert!(!wake.polls());
+        assert_eq!(wake.harness(), Some(super::CLAUDE_HARNESS));
+
+        // AND a fresh Claude catalog with no expiry arms neither wake nor retry
+        let open = ModelCatalog::new();
+        open.apply_claude_refresh(super::ClaudeHandshake::Ready {
+            models: vec![mi("claude-code", "sonnet", None)],
+            expires_at: None,
+        });
+        let idle = open.claude_refresh_schedule(now);
+        assert_eq!(idle, super::ClaudeRefreshSchedule::Idle);
+        assert!(!idle.polls());
+        assert_eq!(idle.harness(), None);
+
+        // AND an empty slice retries every five minutes, Claude only,
+        // even when an expiry is still in the future
+        let empty = ModelCatalog::new();
+        empty.apply_claude_refresh(super::ClaudeHandshake::Ready {
+            models: Vec::new(),
+            expires_at: Some("2026-10-16T08:03:29Z".into()),
+        });
+        let empty_retry = empty.claude_refresh_schedule(now);
+        assert_eq!(
+            empty_retry,
+            super::ClaudeRefreshSchedule::Retry { every: retry }
+        );
+        assert!(empty_retry.polls());
+        assert_eq!(empty_retry.harness(), Some(super::CLAUDE_HARNESS));
+
+        // AND a catalog past its expiry retries every five minutes, Claude only
+        let stale = ModelCatalog::new();
+        stale.apply_claude_refresh(super::ClaudeHandshake::Ready {
+            models: vec![mi("claude-code", "sonnet", None)],
+            expires_at: Some("2020-01-01T00:00:00Z".into()),
+        });
+        let past_retry = stale.claude_refresh_schedule(now);
+        assert_eq!(
+            past_retry,
+            super::ClaudeRefreshSchedule::Retry { every: retry }
+        );
+        assert!(past_retry.polls());
+        assert_eq!(past_retry.harness(), Some(super::CLAUDE_HARNESS));
     }
 
     /// @spec harness/model-catalog Catalog is the selection source: Offered selectable models are the catalog contents
@@ -715,6 +1282,9 @@ mod tests {
     #[test]
     fn refresh_model_catalog_is_safe_to_call() {
         // App-start path (subscription) calls this then emits ModelCatalogReady.
+        // Redirect the snapshot so a live Claude handshake cannot write
+        // `~/.config/duckboard/claude-catalog.json`.
+        let _guard = ConfigGuard::enter();
         refresh_model_catalog();
         let _ = available_models();
     }

@@ -6,6 +6,13 @@ bind Claude's native ids for resume, the main path keeps a duplex-hot Claude pro
 possible after that bind, and the agent streams profile-compatible `session/update`
 notifications (text, tools, and thinking) for the shared ACP client.
 
+The Claude harness drives Claude Code through an owned ACP agent child over the official
+`claude` CLI: the official process starts on the first user prompt (not at open), sessions
+bind Claude's native ids for resume, the main path keeps a duplex-hot Claude process after
+that bind while the prompt's model and effort still match, the agent advertises the Claude
+Code catalog on initialize, and the agent streams profile-compatible `session/update`
+notifications (text, tools, and thinking) for the shared ACP client.
+
 ## Requirement: Owned ACP agent over official Claude CLI
 
 A Claude turn SHALL be driven by the shared ACP client against the owned Claude ACP agent
@@ -23,7 +30,7 @@ run Claude turns.
 - **AND** the host does not drive Claude via an in-host stream-json client
 
 > test: code
-> - crates/duckchat/src/claude_code.rs:308
+> - crates/duckchat/src/claude_code.rs:356
 
 ### Scenario: The agent uses the official claude CLI as its backend
 
@@ -32,7 +39,7 @@ run Claude turns.
 - **THEN** the backend process is the official `claude` CLI
 
 > test: code
-> - crates/duckchat-claude-acp/src/claude/spawn.rs:105
+> - crates/duckchat-claude-acp/src/claude/spawn.rs:113
 
 ## Requirement: Session lifecycle and native session ids
 
@@ -52,7 +59,7 @@ Claude Code native session id.
 - **THEN** the open completes without starting the official `claude` process
 
 > test: code
-> - crates/duckchat-claude-acp/src/agent.rs:673
+> - crates/duckchat-claude-acp/src/agent.rs:756
 
 ### Scenario: A turn without a prior session opens a new session and surfaces Claude's native session id
 
@@ -62,7 +69,7 @@ Claude Code native session id.
 - **AND** it surfaces Claude Code's native session id
 
 > test: code
-> - crates/duckchat-claude-acp/src/agent.rs:710
+> - crates/duckchat-claude-acp/src/agent.rs:793
 
 ### Scenario: A turn with a prior Claude session id resumes that id
 
@@ -71,30 +78,14 @@ Claude Code native session id.
 - **THEN** it opens the session by resuming that same id
 
 > test: code
-> - crates/duckchat-claude-acp/src/agent.rs:748
+> - crates/duckchat-claude-acp/src/agent.rs:831
 
 ## Requirement: Duplex main heat
 
-When the Claude main path is duplex-hot, a subsequent main turn SHALL reuse the inner
-`claude` process rather than spawning a new one for that turn. Cancelling an in-flight
-Claude turn SHALL end that heat; a later turn SHALL be allowed to start Claude again and,
-when a prior session id is supplied, resume that id.
+The main path reuses the inner `claude` process only while it is still that session and
+was spawned with this prompt's model and effort.
 
 > test: code
-
-### Scenario: A second main turn reuses the inner Claude process when duplex-hot
-
-- **GIVEN** a completed Claude main turn that left the inner Claude process duplex-hot
-
-- **WHEN** a second main turn is run on the same path
-
-- **THEN** the agent does not spawn a new `claude` process for that turn
-
-- **AND** the turn still opens or resumes the conversation session as required by the
-  session id
-
-> test: code
-> - crates/duckchat-claude-acp/src/agent.rs:801
 
 ### Scenario: After cancel, a later turn may start Claude again and resume a prior session id
 
@@ -105,7 +96,46 @@ when a prior session id is supplied, resume that id.
 - **AND** it opens the session by resuming that id
 
 > test: code
-> - crates/duckchat-claude-acp/src/agent.rs:855
+> - crates/duckchat-claude-acp/src/agent.rs:938
+
+### Scenario: Hot process follows the prompt's model and effort
+
+- **GIVEN** a duplex-hot Claude process for a native session, spawned with a model and an
+  effort level
+
+- **WHEN** a later main prompt matches that spawn, another changes the model or effort,
+  and another has no effort level
+
+- **THEN** the matching prompt reuses the hot process
+
+- **AND** a changed model or effort kills that process and resumes the same native session
+  id with `--model` for the prompt
+
+- **AND** `--effort` is passed for a prompt that has a level and omitted for a prompt that
+  has none
+
+> test: code
+> - crates/duckchat-claude-acp/src/agent.rs:1076
+> - crates/duckchat-claude-acp/src/agent.rs:884
+
+### Scenario: A model or effort change during an in-flight turn does not cancel that turn
+
+- **GIVEN** an in-flight Claude main turn
+- **WHEN** the chat's model or effort changes
+- **THEN** that turn is not cancelled
+
+> test: code
+> - crates/duckchat-claude-acp/src/agent.rs:1219
+
+### Scenario: A title or reply oneshot leaves the main hot process in place
+
+- **GIVEN** a duplex-hot Claude main process
+- **WHEN** a title-summary or reply-suggestion oneshot runs
+- **THEN** that main hot process is still in place
+- **AND** the oneshot does not pass an effort flag
+
+> test: code
+> - crates/duckchat-claude-acp/src/agent.rs:1302
 
 ## Requirement: Profile-compatible event emission
 
@@ -147,7 +177,7 @@ rather than only after the turn has completed.
   prompt result
 
 > test: code
-> - crates/duckchat-claude-acp/src/agent.rs:930
+> - crates/duckchat-claude-acp/src/agent.rs:1013
 
 ### Scenario: A Claude tool call surfaces as profile tool use then result
 
@@ -215,7 +245,7 @@ turn.
 - **THEN** it does not include `AskUserQuestion`
 
 > test: code
-> - crates/duckchat-claude-acp/src/claude/spawn.rs:146
+> - crates/duckchat-claude-acp/src/claude/spawn.rs:154
 
 ## Requirement: Mid-prompt parent choice
 
@@ -319,7 +349,7 @@ required to use this preferred oneshot model (session model selection is separat
 - **THEN** it selects the preferred oneshot model
 
 > test: code
-> - crates/duckchat/src/acp/runtime.rs:1028
+> - crates/duckchat/src/acp/runtime.rs:1145
 
 ### Scenario: Oneshot model falls back when preferred is absent
 
@@ -331,81 +361,93 @@ required to use this preferred oneshot model (session model selection is separat
 - **THEN** it selects another advertised model rather than failing
 
 > test: code
-> - crates/duckchat/src/acp/runtime.rs:1044
+> - crates/duckchat/src/acp/runtime.rs:1161
 
 ## Requirement: Model discovery
 
-Listing Claude models on the host SHALL return the models the owned Claude agent
-advertises on initialize, each tagged with the Claude harness. Each listed model SHALL
-carry a human-readable display name. When the agent advertises a context window for a
-model, that listing SHALL carry the same window; when it does not, the listing SHALL leave
-the window unknown. When discovery cannot obtain an advertised set, listing SHALL return
-an empty list without panicking.
+The host's Claude model list is the set the agent advertised on initialize, carried
+through with the same name, window, and effort.
 
 > test: code
 
-### Scenario: Listed models come from the agent advertise set
+### Scenario: Listed models follow the agent advertise set
 
-- **GIVEN** the owned Claude agent advertising a set of available models on initialize
+- **GIVEN** the owned Claude agent advertising two models on initialize
+- **AND** one model has a display name, a context window, and an effort scale
+- **AND** the other model has a display name and neither a window nor an effort scale
 - **WHEN** the harness lists models
 - **THEN** the listed models are exactly that advertised set
 - **AND** each listed model is tagged with the Claude harness
+- **AND** the first model carries that display name, context window, and effort scale
+- **AND** the second model carries its display name and no context window or effort scale
 
 > test: code
-> - crates/duckchat/src/claude_code.rs:382
-
-### Scenario: Each listed model carries a display name
-
-- **GIVEN** the owned Claude agent advertising models with display names
-- **WHEN** the harness lists models
-- **THEN** each listed model carries a non-empty display name
-
-> test: code
-> - crates/duckchat/src/claude_code.rs:410
-
-### Scenario: A model with a known context window carries that window
-
-- **GIVEN** the owned Claude agent advertising a model with a known context window
-- **WHEN** the harness lists models
-- **THEN** that listed model carries the same context window
-
-> test: code
-> - crates/duckchat/src/claude_code.rs:436
-
-### Scenario: Discovery failure yields an empty host list without panic
-
-- **GIVEN** an environment where Claude model discovery cannot obtain an advertised set
-- **WHEN** the harness lists models
-- **THEN** the model list is empty
-- **AND** the listing completes without panicking
-
-> test: code
-> - crates/duckchat/src/claude_code.rs:453
+> - crates/duckchat/src/claude_code.rs:430
 
 ## Requirement: Agent model advertise
 
-On initialize, the owned Claude ACP agent SHALL advertise its available models to the
-host. When live discovery of Claude models succeeds, that advertise set SHALL be the live
-catalog. When live discovery fails, the agent SHALL advertise a curated alias fallback set
-rather than an empty advertise set.
+Initialize advertises the current Claude Code catalog's selectable rows and reports
+whether that fetch succeeded.
 
 > test: code
 
-### Scenario: Successful live discovery advertises those models on initialize
+### Scenario: Admitted catalog rows carry name, window, and effort
 
-- **GIVEN** live Claude model discovery succeeding with a non-empty catalog
+- **GIVEN** a Claude Code catalog and a `claude` binary whose leading version triple
+  satisfies one main row and is older than another main row's minimum
+
+- **AND** the satisfied main row has a display name, a context window, and an effort scale
+
+- **AND** another main row the version satisfies has no effort scale
+
+- **AND** the catalog also contains a row outside the main section
+
 - **WHEN** the agent completes initialize
-- **THEN** the initialize result advertises that live catalog
+
+- **THEN** the satisfied row is advertised with that display name, that context window,
+  and that effort scale's levels in catalog order plus its default level
+
+- **AND** the row with no effort scale is advertised without effort
+
+- **AND** the too-new row and the non-main row are not advertised
 
 > test: code
-> - crates/duckchat-claude-acp/src/models.rs:262
+> - crates/duckchat-claude-acp/src/models.rs:355
 
-### Scenario: Failed live discovery advertises the curated alias fallback
+### Scenario: An unreadable binary version drops rows that require a minimum
 
-- **GIVEN** live Claude model discovery failing
+- **GIVEN** a `claude` binary whose version cannot be read as a leading `N.N.N`
+
+- **AND** a catalog with a main row that requires a minimum version and a main row that
+  does not
+
 - **WHEN** the agent completes initialize
-- **THEN** the initialize result advertises the curated alias fallback set
-- **AND** the advertise set is non-empty
+
+- **THEN** the row without a minimum is advertised
+
+- **AND** the row that requires a minimum is not advertised
 
 > test: code
-> - crates/duckchat-claude-acp/src/models.rs:296
+> - crates/duckchat-claude-acp/src/models.rs:424
+
+### Scenario: A failed catalog fetch advertises no models
+
+- **GIVEN** a catalog fetch that fails
+- **WHEN** the agent completes initialize
+- **THEN** initialize succeeds
+- **AND** the catalog is reported failed
+- **AND** no models are advertised
+
+> test: code
+> - crates/duckchat-claude-acp/src/models.rs:459
+
+### Scenario: Catalog expiry is reported only when the document has one
+
+- **GIVEN** one successful catalog whose document includes an expiry time
+- **AND** another successful catalog whose document includes none
+- **WHEN** the agent completes initialize for each catalog
+- **THEN** both report the catalog ok
+- **AND** only the document that has an expiry time is reported with that expiry
+
+> test: code
+> - crates/duckchat-claude-acp/src/models.rs:476

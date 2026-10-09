@@ -37,6 +37,14 @@ session/prompt                 stream session/update → agent events
 process stays up               (until cancel or handle shutdown)
 ```
 
+Initialize models may carry an effort scale, a default level plus the levels the agent
+sent. An optional catalog object on the handshake reports whether the agent's catalog
+fetch succeeded and, when the agent sent one, when that catalog expires. A handshake with
+no catalog object is a normal model list with no expiry.
+
+`session/prompt` includes `effort` when the turn request has a level, and omits it
+otherwise. `reasoningEffort` remains the reasoning-mode field.
+
 Cancel kills the main agent child. The next turn may spawn again and still resume a
 conversation session id when one is supplied.
 

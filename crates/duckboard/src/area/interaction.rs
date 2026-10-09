@@ -349,7 +349,7 @@ pub struct AgentSession {
     /// Global main-chat default. Transient — refreshed from `Config` by the
     /// main loop. Used when pin and project override are unset.
     pub global_model_default: Option<ModelRef>,
-    /// Set when the user changes the per-chat model via the picker; consumed
+    /// Set when the user changes the per-chat model or effort pin; consumed
     /// by `update_with_side_effects` to persist the session. Transient.
     pub model_dirty: bool,
     pub agent_input_tokens: usize,
@@ -3090,6 +3090,14 @@ fn handle_agent_chat(
             // Persisted by `update_with_side_effects`, which has `project_root`.
             ax.model_dirty = true;
         }
+        agent_chat::Msg::EffortSelected(choice) => {
+            // Choosing any offered level, including today's catalog default,
+            // pins that level for the model the next turn will run.
+            if let Some(model) = ax.preferred_model() {
+                ax.session.effort_pin = Some(agent_chat::effort_pin_for_choice(model, choice.id));
+                ax.model_dirty = true;
+            }
+        }
         agent_chat::Msg::ChatScrolled(viewport) => {
             let bounds = viewport.bounds();
             let content = viewport.content_bounds();
@@ -3348,6 +3356,7 @@ pub fn recover_from_lost_session(ax: &mut AgentSession, highlighter: &SyntaxHigh
     req.system_additions = system_additions;
     // Preferred cascade model id (send gate blocks when not available).
     req.model = ax.preferred_model().map(|m| m.model);
+    set_main_turn_effort(&mut req, ax);
     // Attachments already went out with the failed attempt (or were empty).
     // Don't re-take from input — leave as empty for the recovery turn.
     handle.send_turn(req);
@@ -3608,6 +3617,7 @@ pub fn send_prompt_text(ax: &mut AgentSession, text: String, highlighter: &Synta
         // default.
         // Same cascade as main send so priming stays on the preferred model.
         req.model = ax.preferred_model().map(|m| m.model);
+        set_main_turn_effort(&mut req, ax);
         // Selection / image attachments and idea-description blurb all
         // belong to the user's intended turn — leave them on `ax` so the
         // follow-up dispatch picks them up.
@@ -3729,6 +3739,7 @@ pub fn send_prompt_text(ax: &mut AgentSession, text: String, highlighter: &Synta
     req.system_additions = system_additions;
     // Preferred cascade model id (send gate blocks when not available).
     req.model = ax.preferred_model().map(|m| m.model);
+    set_main_turn_effort(&mut req, ax);
     req.attachments = std::mem::take(&mut ax.input_attachments);
     handle.send_turn(req);
 
@@ -3739,6 +3750,17 @@ pub fn send_prompt_text(ax: &mut AgentSession, text: String, highlighter: &Synta
     // Pinned attachments persist across messages until Cmd-R clears them.
     ax.selection_tentative = None;
     materialize_chat_ui(ax, highlighter);
+}
+
+/// Copy the composer's resolved effort onto a main-chat turn. Oneshot title
+/// and reply sends do not go through here and leave `effort` unset.
+fn set_main_turn_effort(req: &mut duckchat::TurnRequest, ax: &AgentSession) {
+    let Some(model) = ax.preferred_model() else {
+        return;
+    };
+    let scale = crate::agent::model_effort(&model);
+    req.effort =
+        agent_chat::main_send_effort(scale.as_ref(), ax.session.effort_pin.as_ref(), &model);
 }
 
 /// Re-run markdown syntax highlighting on the chat input.
@@ -4509,7 +4531,7 @@ pub fn update_with_side_effects(
         rebalance_uncustomized(state, window_w);
     }
 
-    // Persist a just-changed per-chat model selection. Done here (not in
+    // Persist a just-changed per-chat model or effort pin. Done here (not in
     // `handle_agent_chat`) because this is the layer that has `project_root`.
     if let Some(ax) = state.active_mut()
         && ax.model_dirty
@@ -4768,6 +4790,37 @@ pub fn reconcile_display_names(sessions: &mut [AgentSession], scope_label: &str)
 
 // ── Shared area layout ────────────────────────────────────────────────────
 
+/// Effort control for the composer footer. Hidden when the effective model is
+/// Missing or the available row has no effort scale.
+fn effort_footer(
+    effective: &EffectiveModel,
+    pin: Option<&crate::chat_store::EffortPin>,
+) -> (
+    bool,
+    Vec<agent_chat::EffortChoice>,
+    Option<agent_chat::EffortChoice>,
+) {
+    let (available, model, scale) = match effective {
+        EffectiveModel::Available(model) => (true, Some(model), crate::agent::model_effort(model)),
+        EffectiveModel::Missing { .. } | EffectiveModel::Unconfigured => (false, None, None),
+    };
+    let has_scale = scale.as_ref().is_some_and(|s| !s.levels.is_empty());
+    if !agent_chat::show_effort_control(available, has_scale) {
+        return (false, Vec::new(), None);
+    }
+    let (Some(model), Some(scale)) = (model, scale) else {
+        return (false, Vec::new(), None);
+    };
+    let choices = agent_chat::effort_menu(&scale.levels);
+    let level = agent_chat::shown_effort_level(&scale.default_level, &scale.levels, pin, model);
+    let selected = choices
+        .iter()
+        .find(|choice| choice.id == level)
+        .cloned()
+        .unwrap_or_else(|| agent_chat::effort_choice(&level));
+    (true, choices, Some(selected))
+}
+
 // ── View ────────────────────────────────────────────────────────────────────
 
 /// View the interaction column content (mode tabs + session controls + terminal/agent chat).
@@ -4822,12 +4875,17 @@ pub fn view_column<'a, M: 'a + Clone>(
                 let context_max = effective
                     .available_ref()
                     .and_then(agent_chat::model_context_window);
+                let (show_effort, effort_choices, selected_effort) =
+                    effort_footer(&effective, ax.session.effort_pin.as_ref());
                 let status = agent_chat::StatusInfo {
                     is_streaming: ax.session.is_streaming,
                     is_awaiting_user: ax.is_awaiting_user,
                     esc_count: ax.esc_count,
                     model_choices,
                     selected_model,
+                    show_effort,
+                    effort_choices,
+                    selected_effort,
                     // Foreign/stored-but-unresumable id (e.g. harness switch).
                     // Unbound first bind and post-recovery clear stay false.
                     unresumable_stored_session: agent_chat::unresumable_stored_session(

@@ -22,7 +22,7 @@ Thinking, Activity, User, and System segments SHALL NOT receive this band.
 - **AND** every earlier Answer is not a band target
 
 > test: code
-> - crates/duckboard/src/widget/agent_chat.rs:2984
+> - crates/duckboard/src/widget/agent_chat.rs:3357
 
 ### Scenario: Empty latest Answer is not a band target
 
@@ -33,7 +33,7 @@ Thinking, Activity, User, and System segments SHALL NOT receive this band.
 - **AND** the latest non-empty Answer is the band target
 
 > test: code
-> - crates/duckboard/src/widget/agent_chat.rs:3004
+> - crates/duckboard/src/widget/agent_chat.rs:3377
 
 ## Requirement: Answer reply anchors
 
@@ -59,7 +59,7 @@ SHALL yield no target. Navigation SHALL NOT wrap.
 - **AND** no Thinking, Activity, or User segment is an anchor
 
 > test: code
-> - crates/duckboard/src/widget/agent_chat.rs:3033
+> - crates/duckboard/src/widget/agent_chat.rs:3406
 
 ### Scenario: Prev and next step to adjacent Answer anchors
 
@@ -70,7 +70,7 @@ SHALL yield no target. Navigation SHALL NOT wrap.
 - **AND** next is the Answer immediately after the current one
 
 > test: code
-> - crates/duckboard/src/widget/agent_chat.rs:3054
+> - crates/duckboard/src/widget/agent_chat.rs:3427
 
 ### Scenario: Prev at first and next at last yield no target
 
@@ -84,7 +84,7 @@ SHALL yield no target. Navigation SHALL NOT wrap.
 - **AND** there is no next target
 
 > test: code
-> - crates/duckboard/src/widget/agent_chat.rs:3079
+> - crates/duckboard/src/widget/agent_chat.rs:3452
 
 ## Requirement: Viewport current for reply jumps
 
@@ -104,7 +104,7 @@ SHALL be no current Answer.
 - **THEN** the current Answer is the last Answer anchor
 
 > test: code
-> - crates/duckboard/src/widget/agent_chat.rs:3100
+> - crates/duckboard/src/widget/agent_chat.rs:3473
 
 ### Scenario: Scroll offset selects the Answer at or above the viewport top
 
@@ -115,7 +115,7 @@ SHALL be no current Answer.
 - **THEN** the current Answer is the last Answer whose top is at or above the viewport top
 
 > test: code
-> - crates/duckboard/src/widget/agent_chat.rs:3115
+> - crates/duckboard/src/widget/agent_chat.rs:3488
 
 ## Requirement: History end jumps
 
@@ -152,7 +152,7 @@ NOT re-align to the current Answer; it SHALL always use the next Answer anchor r
 - **THEN** the target is the current Answer
 
 > test: code
-> - crates/duckboard/src/widget/agent_chat.rs:3134
+> - crates/duckboard/src/widget/agent_chat.rs:3507
 
 ### Scenario: At current top previous targets prior Answer
 
@@ -163,7 +163,7 @@ NOT re-align to the current Answer; it SHALL always use the next Answer anchor r
 - **THEN** the target is the Answer immediately before the current one
 
 > test: code
-> - crates/duckboard/src/widget/agent_chat.rs:3152
+> - crates/duckboard/src/widget/agent_chat.rs:3525
 
 ### Scenario: Next ignores re-align when below current top
 
@@ -174,4 +174,4 @@ NOT re-align to the current Answer; it SHALL always use the next Answer anchor r
 - **THEN** the target is the Answer immediately after the current one
 
 > test: code
-> - crates/duckboard/src/widget/agent_chat.rs:3170
+> - crates/duckboard/src/widget/agent_chat.rs:3543

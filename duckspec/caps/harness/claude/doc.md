@@ -20,8 +20,9 @@ Selecting the Claude harness only changes the provider launch (the agent binary)
 lifecycle, event mapping, and main heat for the **agent** process are the shared ACP
 client. This capability owns Claude-specific behavior: agent binary discovery, when the
 inner `claude` process starts, Claude-native session ids after the first prompt, duplex
-heat of that process, translating Claude's stream into the client's dialect profile, and
-bridging AskUserQuestion to the parent's user-choice loop.
+heat of that process while the prompt's model and effort still match, catalog
+advertisement on initialize, translating Claude's stream into the client's dialect
+profile, and bridging AskUserQuestion to the parent's user-choice loop.
 
 ## Session ids
 
@@ -35,8 +36,13 @@ client's session-not-found path.
 
 After the first prompt has started Claude, the agent keeps a long-lived `claude` duplex
 session (`--input-format stream-json` and `--output-format stream-json`) for the main path
-when possible. A second main turn reuses that process. Cancel ends heat; the next turn may
-start Claude again and still resume a prior native session id.
+while that process is still the session and was spawned with the prompt's model and
+effort. A matching prompt reuses the process. A prompt whose model or effort differs ends
+it and starts Claude again with `--resume` for the same native session id, `--model`, and
+`--effort` when the prompt has a level. Cancel ends heat; the next turn may start Claude
+again and still resume a prior native session id. Changing model or effort during an
+in-flight turn waits for the following prompt. Title and reply oneshots do not use this
+process.
 
 ## Profile emission
 
@@ -97,17 +103,27 @@ forced onto the oneshot preference.
 
 ## Model discovery
 
-The host does not own a static Claude model table. Claude models offered for selection
-come from what the owned agent advertises on ACP initialize: each entry is tagged as the
-Claude harness, carries a human-readable display name, and may carry a context window when
-the agent knows one.
+The host does not fetch the catalog and does not keep a static Claude model table. During
+initialize the owned agent fetches the public Claude Code catalog
+(`https://downloads.claude.ai/model-catalog/v1/catalog.json`) with no auth and advertises
+the rows a reader can select.
 
 ```
-live discovery succeeds  →  advertise live catalog on initialize
-live discovery fails     →  advertise curated alias fallback
-host list_models         →  that advertise set (or empty if discovery cannot run)
+catalog document
+   │  main section, and minimum version absent or met by this claude binary
+   ▼
+initialize advertise set
+   │  name, context window, effort scale when the row has one
+   ▼
+host model list
 ```
 
-Live discovery uses credentials available to the official `claude` install. The host only
-reads the initialize result; it does not call the model catalog API itself. When the host
-cannot obtain an advertise set at all, the listed set is empty and the app does not panic.
+The binary version is the leading `N.N.N` from `claude --version`, compared
+component-wise. When that version cannot be read, only rows with no minimum stay. A row's
+effort scale is its levels in catalog order plus the default level, and only when the row
+defines one. Initialize also says whether the fetch succeeded, and includes the document's
+expiry when the document has one. A failed fetch still finishes initialize and advertises
+no models.
+
+The host lists whatever that initialize result advertised. Keeping a prior Claude slice
+when a later fetch fails belongs to the harness model catalog.
